@@ -90,8 +90,7 @@ async def _user(
                 status=SubscriptionStatus.ACTIVE,
                 limits=default_limits(PlanType.BASIC),
                 stripe_subscription_id=sub_id,
-                stripe_customer_id="cus_fake",
-                **fields,
+                **{"stripe_customer_id": "cus_fake", **fields},
             )
         )
         await s.commit()
@@ -701,6 +700,29 @@ async def test_every_stripe_op_refuses_a_subscription_of_another_customer(
     assert await _row(maker, uid) == before_row
     async with maker() as s:
         assert await s.scalar(select(func.count()).select_from(DataEvent)) == 0
+
+
+@pytest.mark.parametrize(("op", "kwargs"), _CUSTOMER_OPS)
+@pytest.mark.parametrize("missing", ["stripe", "local", "both"])
+async def test_every_stripe_op_refuses_when_a_customer_id_is_missing(
+    maker: Maker, cfg: Settings, op: str, kwargs: dict[str, Any], missing: str
+) -> None:
+    """None == None must never count as 'the same customer'."""
+    fake = FakeStripeGateway()
+    fake.seed_subscription(
+        SUB,
+        price_id=BASIC_P,
+        customer_id=None if missing in ("stripe", "both") else "cus_fake",
+        coupon_id="solus-comp-forever",
+        metadata={COMP_PREV_PRICE_METADATA_KEY: BASIC_P},
+    )
+    local: dict[str, Any] = {"stripe_customer_id": None} if missing in ("local", "both") else {}
+    uid = await _user(maker, consent=True, **local)
+    before_row = await _row(maker, uid)
+    with pytest.raises(InvalidOperation):
+        await _run(maker, cfg, fake, op, uid, **kwargs, **_audit())
+    assert [c for c in fake.calls if c.method in _WRITES] == []
+    assert await _row(maker, uid) == before_row
 
 
 # --------------------------------------------- M-2: comp state vs plan changes

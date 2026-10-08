@@ -418,7 +418,8 @@ class AdminBillingOperations:
 
     @staticmethod
     def _verify_customer(t: Target, snap: SubscriptionSnapshot) -> None:
-        if snap.customer_id != t.sub.stripe_customer_id:
+        local = t.sub.stripe_customer_id
+        if local is None or snap.customer_id is None or snap.customer_id != local:
             raise InvalidOperation(
                 "the Stripe subscription does not belong to the target's customer",
                 target_user_id=str(t.sub.user_id),
