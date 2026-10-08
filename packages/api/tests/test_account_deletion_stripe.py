@@ -105,6 +105,7 @@ async def test_the_stripe_customer_is_never_deleted(app: FastAPI, db: AsyncSessi
     fake = _fake()
     await _service(app, db, fake).delete_account(user)
     assert {c.method for c in fake.calls} <= {
+        "list_customer_subscriptions",
         "cancel_subscription",
         "release_subscription_schedule",
     }
@@ -121,17 +122,42 @@ async def test_no_customer_id_means_no_row_and_no_call(app: FastAPI, db: AsyncSe
     assert fake.calls == []
 
 
-async def test_local_canceled_subscription_enqueues_customer_only_tombstone(
+async def test_stale_local_canceled_status_still_cancels_the_live_stripe_subscription(
     app: FastAPI, db: AsyncSession
 ) -> None:
+    """L-5: our local row says CANCELED but Stripe still has a live subscription (a re-sub
+    whose webhook has not landed). The customer tombstone finds it by listing."""
     user = await _user(db, status=SubscriptionStatus.CANCELED)
-    fake = _fake()
+    fake = _fake()  # SUB is live in Stripe for CUS
 
     await _service(app, db, fake).delete_account(user)
 
     [row] = await _rows(db)
     assert row.stripe_customer_id == CUS and row.stripe_subscription_id is None
-    assert fake.calls_to("cancel_subscription") == []
+    assert [c.args for c in fake.calls_to("cancel_subscription")] == [(SUB,)]
+    assert fake.subscriptions[SUB].status == "canceled"
+    assert row.completed_at is not None
+
+
+async def test_the_inline_run_only_processes_the_deleted_accounts_customer(
+    app: FastAPI, db: AsyncSession
+) -> None:
+    from datetime import UTC, datetime
+
+    from solus_api.services.stripe_cancel import enqueue_stripe_cancel
+
+    await enqueue_stripe_cancel(
+        db, customer_id="cus_unrelated", subscription_id="sub_unrelated", now=datetime.now(UTC)
+    )
+    await db.commit()
+    user = await _user(db)
+    fake = _fake()
+    fake.seed_subscription("sub_unrelated", customer_id="cus_unrelated")
+
+    await _service(app, db, fake).delete_account(user)
+
+    assert fake.subscriptions[SUB].status == "canceled"
+    assert fake.subscriptions["sub_unrelated"].status == "active"
 
 
 async def test_customer_only_subscription_row_enqueues_tombstone(

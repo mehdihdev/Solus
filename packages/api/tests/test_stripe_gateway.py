@@ -742,3 +742,114 @@ async def test_release_rejects_bad_id(st: _Stripe) -> None:
     with pytest.raises(ValueError):
         await gw().release_subscription_schedule("cus_1", "a", "s")
     assert st.calls == []
+
+
+# ---- FIX-A: per-call timeout + list_customer_subscriptions ------------------ #
+
+
+async def test_every_network_call_is_bounded_by_a_retryable_timeout(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from solus_api.billing import stripe_gateway
+
+    async def hang(*args: Any, **params: Any) -> Any:
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(stripe.Subscription, "retrieve_async", hang)
+    monkeypatch.setattr(stripe_gateway, "STRIPE_CALL_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(StripeOperationError) as err:
+        await gw().retrieve_subscription("sub_1")
+    assert err.value.retryable is True and err.value.code == "timeout"
+
+
+def _list_page(ids_status: list[tuple[str, str]], *, has_more: bool = False) -> dict[str, Any]:
+    return {"data": [{"id": i, "status": s} for i, s in ids_status], "has_more": has_more}
+
+
+async def test_list_customer_subscriptions_filters_dead_and_scopes_to_the_customer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict[str, Any]] = []
+
+    async def fake_list(**params: Any) -> dict[str, Any]:
+        seen.append(params)
+        return _list_page(
+            [
+                ("sub_live", "active"),
+                ("sub_dead", "canceled"),
+                ("sub_exp", "incomplete_expired"),
+                ("sub_due", "past_due"),
+                ("sub_inc", "incomplete"),
+                ("bad-id", "active"),
+            ]
+        )
+
+    monkeypatch.setattr(stripe.Subscription, "list_async", fake_list)
+    ids = await gw().list_customer_subscriptions("cus_1")
+    assert ids == ["sub_live", "sub_due", "sub_inc"]
+    [params] = seen
+    assert params["customer"] == "cus_1" and params["status"] == "all"
+    assert params["api_key"] == KEY and 0 < params["limit"] <= 100
+    assert "idempotency_key" not in params
+
+
+async def test_list_customer_subscriptions_paginates(monkeypatch: pytest.MonkeyPatch) -> None:
+    pages = [
+        _list_page([("sub_a", "active")], has_more=True),
+        _list_page([("sub_b", "trialing")]),
+    ]
+    cursors: list[Any] = []
+
+    async def fake_list(**params: Any) -> dict[str, Any]:
+        cursors.append(params.get("starting_after"))
+        return pages.pop(0)
+
+    monkeypatch.setattr(stripe.Subscription, "list_async", fake_list)
+    assert await gw().list_customer_subscriptions("cus_1") == ["sub_a", "sub_b"]
+    assert cursors == [None, "sub_a"]
+
+
+async def test_list_customer_subscriptions_hard_caps_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.billing import stripe_gateway
+
+    calls = 0
+
+    async def endless(**params: Any) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return _list_page([(f"sub_{calls}", "active")], has_more=True)
+
+    monkeypatch.setattr(stripe.Subscription, "list_async", endless)
+    with pytest.raises(StripeOperationError) as err:
+        await gw().list_customer_subscriptions("cus_1")
+    assert calls == stripe_gateway.MAX_LIST_PAGES and err.value.retryable is False
+
+
+@pytest.mark.parametrize("bad", ["", "sub_1", "cus_", "cus_a b", None])
+async def test_list_customer_subscriptions_rejects_bad_ids_before_any_call(
+    st: _Stripe, bad: Any
+) -> None:
+    with pytest.raises(ValueError):
+        await gw().list_customer_subscriptions(bad)
+    assert st.calls == []
+
+
+async def test_list_customer_subscriptions_translates_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def boom(**params: Any) -> Any:
+        raise stripe.APIConnectionError("x")
+
+    monkeypatch.setattr(stripe.Subscription, "list_async", boom)
+    with pytest.raises(StripeOperationError) as err:
+        await gw().list_customer_subscriptions("cus_1")
+    assert err.value.retryable is True
+
+
+async def test_list_customer_subscriptions_without_key_is_unconfigured() -> None:
+    with pytest.raises(BillingUnconfiguredError):
+        await StripeGateway(_FakeStore(None)).list_customer_subscriptions("cus_1")

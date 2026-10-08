@@ -16,9 +16,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from solus_api.billing.stripe_gateway import (
+    _CUSTOMER_ID_RE,
     _PRICE_ID_RE,
     _SCHEDULE_ID_RE,
     _SUB_ID_RE,
+    _TERMINAL_SUBSCRIPTION_STATUSES,
     CancelMode,
     CancelResult,
     CompDuration,
@@ -175,6 +177,15 @@ class FakeStripeGateway:
         _check_id(sub_id, _SUB_ID_RE, "subscription id")
         self._enter("retrieve_subscription", (sub_id,), {})
         return self._get(sub_id)
+
+    async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        self._enter("list_customer_subscriptions", (customer_id,), {})
+        return [
+            s.subscription_id
+            for s in self.subscriptions.values()
+            if s.customer_id == customer_id and s.status not in _TERMINAL_SUBSCRIPTION_STATUSES
+        ]
 
     async def change_subscription_price(
         self,

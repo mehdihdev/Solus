@@ -259,7 +259,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         await run_startup_cad_purges(
             served.state.sessionmaker, served.state.integration_cache.durable_store
         )
-        # SOLUSDEV-313: Stripe cancels due while no process ran. Never blocks or fails startup.
+        # SOLUSDEV-313: Stripe cancels due while no process ran. This IS awaited at boot, but
+        # bounded: the drain runs under run_stripe_cancels_after_commit's INLINE_TIMEOUT_SECONDS
+        # (15s) and never raises, so a slow or down Stripe delays startup by at most that
+        # long and never fails it. Leftover rows keep their lease and are retried by the cron.
         try:
             await run_startup_stripe_cancels(
                 served.state.sessionmaker, StripeGateway(served.state.secret_store)

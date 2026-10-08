@@ -187,3 +187,24 @@ async def test_customer_and_checkout_parity(fake: FakeStripeGateway) -> None:
     assert (await fake.create_portal_session(customer="cus_1", return_url="https://x")).startswith(
         "https://"
     )
+
+
+async def test_list_customer_subscriptions_returns_only_live_ones_of_that_customer() -> None:
+    fake = FakeStripeGateway()
+    fake.seed_subscription("sub_a", customer_id="cus_1")
+    fake.seed_subscription("sub_b", customer_id="cus_1", status="canceled")
+    fake.seed_subscription("sub_c", customer_id="cus_2")
+    fake.seed_subscription("sub_d", customer_id="cus_1", status="incomplete_expired")
+    fake.seed_subscription("sub_e", customer_id="cus_1", status="past_due")
+    assert await fake.list_customer_subscriptions("cus_1") == ["sub_a", "sub_e"]
+    assert [c.args for c in fake.calls_to("list_customer_subscriptions")] == [("cus_1",)]
+
+
+async def test_list_customer_subscriptions_validates_and_injects_failures() -> None:
+    fake = FakeStripeGateway()
+    with pytest.raises(ValueError):
+        await fake.list_customer_subscriptions("sub_1")
+    fake.fail_next("list_customer_subscriptions", FakeStripeGateway.connection_error())
+    with pytest.raises(StripeOperationError):
+        await fake.list_customer_subscriptions("cus_1")
+    assert await fake.list_customer_subscriptions("cus_1") == []
