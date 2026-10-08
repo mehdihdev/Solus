@@ -11,6 +11,7 @@ requests never race on it). Absent key ⇒ BillingUnconfiguredError, which the r
 maps to 503, mirroring the webhook's `billing_unconfigured`.
 """
 
+import asyncio
 import logging
 import re
 from collections.abc import Mapping
@@ -44,12 +45,20 @@ _MAX_METADATA_KEYS = 10
 _MAX_METADATA_KEY_LEN = 40
 _MAX_METADATA_VALUE_LEN = 500
 _RESERVED_METADATA_KEYS = frozenset({ADMIN_ACTION_METADATA_KEY, ADMIN_ACTOR_METADATA_KEY})
+#: Hard bound on any single Stripe network call (a hung connection must not pin a caller).
+STRIPE_CALL_TIMEOUT_SECONDS = 30.0
+#: Subscription statuses that can never bill again; everything else is "live" for a cancel.
+_TERMINAL_SUBSCRIPTION_STATUSES = frozenset({"canceled", "incomplete_expired"})
+LIST_PAGE_SIZE = 100
+#: Hard pagination cap for `list_customer_subscriptions` (LIST_PAGE_SIZE * MAX_LIST_PAGES subs).
+MAX_LIST_PAGES = 10
 _DEAD_SCHEDULE_STATUSES = frozenset({"released", "canceled", "completed"})
 
 # Ids/actors flow into Stripe idempotency keys + metadata: safe charset only, no PII
 # (no '@', spaces). Length bounded well under Stripe's 255-char key / 500-char value.
 _AUDIT_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 _SUB_ID_RE = re.compile(r"sub_[A-Za-z0-9]{1,64}")
+_CUSTOMER_ID_RE = re.compile(r"cus_[A-Za-z0-9]{1,64}")
 _SCHEDULE_ID_RE = re.compile(r"sub_sched_[A-Za-z0-9]{1,64}")
 _PRICE_ID_RE = re.compile(r"price_[A-Za-z0-9]{1,64}")
 _COMP_COUPON_RE = re.compile(r"solus-comp-(once|forever|repeating-([1-9][0-9]?))")
@@ -346,7 +355,11 @@ class StripeGateway:
     async def _call(self, operation: str, fn: Any, *args: Any, **params: Any) -> Any:
         key = await self._api_key()
         try:
-            return await fn(*args, api_key=key, **params)
+            async with asyncio.timeout(STRIPE_CALL_TIMEOUT_SECONDS):
+                return await fn(*args, api_key=key, **params)
+        except TimeoutError as exc:
+            logger.warning("stripe %s timed out after %ss", operation, STRIPE_CALL_TIMEOUT_SECONDS)
+            raise StripeOperationError(operation, code="timeout", retryable=True) from exc
         except stripe.StripeError as exc:
             logger.warning(
                 "stripe %s failed code=%s status=%s type=%s",
@@ -367,6 +380,38 @@ class StripeGateway:
             expand=["discounts"],
         )
         return snapshot_from_stripe(sub)
+
+    async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
+        """Ids of every NON-terminal subscription of the customer (not canceled /
+        incomplete_expired), oldest page first. Used by the account-deletion cancel runner,
+        which treats its row as a customer tombstone. Paginated up to a hard cap; exceeding
+        it raises a non-retryable error rather than silently missing subscriptions."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        live: list[str] = []
+        cursor: str | None = None
+        for _ in range(MAX_LIST_PAGES):
+            params: dict[str, Any] = {
+                "customer": customer_id,
+                "status": "all",
+                "limit": LIST_PAGE_SIZE,
+            }
+            if cursor is not None:
+                params["starting_after"] = cursor
+            page = await self._call("subscription.list", stripe.Subscription.list_async, **params)
+            data = list(_g(page, "data") or [])
+            for item in data:
+                sub_id = _g(item, "id")
+                if (
+                    isinstance(sub_id, str)
+                    and _SUB_ID_RE.fullmatch(sub_id)
+                    and _g(item, "status") not in _TERMINAL_SUBSCRIPTION_STATUSES
+                ):
+                    live.append(sub_id)
+            last = _g(data[-1], "id") if data else None
+            if not _g(page, "has_more") or not isinstance(last, str):
+                return live
+            cursor = last
+        raise StripeOperationError("subscription.list", code="list_cap_exceeded", retryable=False)
 
     async def _modify_subscription(
         self, sub_id: str, op: str, audit_action_id: str, actor: str | None, **params: Any
