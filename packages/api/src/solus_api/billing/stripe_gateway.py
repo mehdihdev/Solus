@@ -638,6 +638,9 @@ class StripeGateway:
         phase_two = {
             "items": [{"price": revert_price_id, "quantity": items[0]["quantity"] if items else 1}],
             "proration_behavior": "none",
+            # The comp ends here: clear its markers so they cannot outlive it and
+            # mislead a later remove_comp / comp_upgrade (empty string unsets a key).
+            "metadata": {COMP_PREV_PRICE_METADATA_KEY: "", COMP_PLAN_METADATA_KEY: ""},
         }
         schedule_id = str(_g(schedule, "id"))
         await self._call(

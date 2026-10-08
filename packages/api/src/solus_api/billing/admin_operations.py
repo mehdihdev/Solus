@@ -129,12 +129,13 @@ __all__ = [
 logger = logging.getLogger("solus.billing.admin_operations")
 
 EVENT_TYPE = "subscription.admin_changed"
-# Worst case of one operation is ~6 sequential Stripe calls (retrieve, coupon, release,
-# price change, schedule find/create/modify); the per-call bound is the gateway's own
-# timeout, assumed here to be 20 s. The whole run (and so the FOR UPDATE lock) is capped.
-_ASSUMED_STRIPE_CALL_TIMEOUT_SECONDS = 20.0
-_WORST_CASE_SEQUENTIAL_CALLS = 6
-OPERATION_TIMEOUT_SECONDS = _ASSUMED_STRIPE_CALL_TIMEOUT_SECONDS * _WORST_CASE_SEQUENTIAL_CALLS
+# Hard cap on one operation, and so on how long the target's FOR UPDATE lock can be held.
+# An operation is up to ~6 sequential Stripe calls (retrieve, coupon, release, price
+# change, schedule find/create/modify), each bounded by the gateway's own
+# STRIPE_CALL_TIMEOUT_SECONDS (30 s). A run that would exceed this cap is aborted and
+# rolled back; retrying with the same audit_action_id is safe (Stripe idempotency keys
+# plus the replay detection) and resumes any half-finished work.
+OPERATION_TIMEOUT_SECONDS = 120.0
 _CLEARED_COMP_MARKERS = {COMP_PREV_PRICE_METADATA_KEY: "", COMP_PLAN_METADATA_KEY: ""}
 
 

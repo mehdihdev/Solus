@@ -663,6 +663,9 @@ async def test_create_revert_schedule_two_phases(st: _Stripe) -> None:
     assert p1["discounts"] == [{"coupon": "solus-comp-once"}]
     assert p2["items"] == [{"price": "price_orig", "quantity": 1}]
     assert "duration" not in p2 and "end_date" not in p2
+    # Phase 2 is the natural end of the comp: the comp markers must not outlive it,
+    # or a later remove_comp could re-price the customer from stale metadata.
+    assert p2["metadata"] == {COMP_PREV_PRICE_METADATA_KEY: "", COMP_PLAN_METADATA_KEY: ""}
     assert mp["metadata"][ADMIN_ACTION_METADATA_KEY] == "act5"
     assert res.schedule_id == "sub_sched_1"
     assert res.revert_price_id == "price_orig"
@@ -842,7 +845,7 @@ async def test_list_customer_subscriptions_translates_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def boom(**params: Any) -> Any:
-        raise stripe.APIConnectionError("x")
+        raise stripe.APIConnectionError("x")  # type: ignore[no-untyped-call]
 
     monkeypatch.setattr(stripe.Subscription, "list_async", boom)
     with pytest.raises(StripeOperationError) as err:
