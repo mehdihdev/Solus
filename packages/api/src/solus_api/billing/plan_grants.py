@@ -14,7 +14,7 @@ from solus_api.models import (
 )
 from solus_api.services.notifications import notify_user
 
-_LIVE_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
+LIVE_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
 
 
 async def grant_plan_credits(
@@ -28,7 +28,7 @@ async def grant_plan_credits(
     (every renewal after the first), which would discard this event's pending
     subscription updates — so those are committed first, and `local` is not
     touched afterward (the instance expires on commit)."""
-    if local.status not in _LIVE_STATUSES:
+    if local.status not in LIVE_STATUSES:
         return
     plan_value = local.plan.value
     amount = grants.get(plan_value)

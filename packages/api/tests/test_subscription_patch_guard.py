@@ -85,3 +85,16 @@ async def test_only_affects_own_subscription(
     bob_sub = await _sub(db, bob["id"])
     assert bob_sub.plan is PlanType.BASIC
     assert bob_sub.limits == default_limits(PlanType.BASIC)
+
+
+@pytest.mark.parametrize("plan", ["enterprise", "free", "", None])
+async def test_trial_cannot_self_select_non_checkoutable_plan(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], plan: str | None
+) -> None:
+    alice = await me(client, alice_headers)
+    resp = await client.patch(URL, json={"plan": plan}, headers=alice_headers)
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "validation_error"
+    after = await _sub(db, alice["id"])
+    assert after.plan is PlanType.BASIC
+    assert after.limits == default_limits(PlanType.BASIC)

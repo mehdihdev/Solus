@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 from solus_api.billing.entitlements import effective_limits
+from solus_api.billing.plans import CHECKOUTABLE_PLANS
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
@@ -740,7 +741,16 @@ class SubscriptionRead(_SoftDeletable):
 
 
 class SubscriptionUpdate(StrictModel):
+    """Trial plan pick: self-serve plans only (enterprise is contact-sales)."""
+
     plan: PlanType
+
+    @field_validator("plan")
+    @classmethod
+    def _checkoutable(cls, plan: PlanType) -> PlanType:
+        if plan not in CHECKOUTABLE_PLANS:
+            raise ValueError("plan must be one of: basic, pro")
+        return plan
 
 
 class CheckoutSessionCreate(StrictModel):

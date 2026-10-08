@@ -293,6 +293,59 @@ async def test_terminal_first_link_does_not_clear_comp(
     assert (await _sub(db, uid)).comp_plan is PlanType.PRO
 
 
+async def _setup_canceled_with_comp(db: AsyncSession, uid: uuid.UUID, old_sub: str) -> None:
+    await _setup(db, uid, linked=True, override=OVERRIDE, comp=True)
+    row = await _sub(db, uid)
+    row.stripe_subscription_id = old_sub
+    row.status = SubscriptionStatus.CANCELED
+    await db.commit()
+
+
+async def test_resubscribe_new_sub_id_event_clears_comp(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _provision(client)
+    await _setup_canceled_with_comp(db, uid, "sub_old")
+    await _run(db, _sub_event("evt_re", price="price_pro", sub_id="sub_new"))
+    row = await _sub(db, uid)
+    assert row.stripe_subscription_id == "sub_new"
+    assert row.comp_plan is None and row.comp_expires_at is None
+    assert row.limits_override == OVERRIDE
+
+
+async def test_resubscribe_new_sub_id_checkout_clears_comp(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _provision(client)
+    await _setup_canceled_with_comp(db, uid, "sub_old")
+    await _run(db, _checkout("evt_re_co", uid, sub="sub_new"))
+    row = await _sub(db, uid)
+    assert row.stripe_subscription_id == "sub_new"
+    assert row.comp_plan is None and row.comp_expires_at is None
+
+
+async def test_same_sub_id_replay_does_not_clear_a_later_comp(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _provision(client)
+    await _setup_canceled_with_comp(db, uid, SUB)
+    await _run(db, _sub_event("evt_same", sub_id=SUB, created=2000))
+    await _run(db, _checkout("evt_same_co", uid, sub=SUB))
+    row = await _sub(db, uid)
+    assert row.comp_plan is PlanType.PRO and row.comp_expires_at is not None
+
+
+async def test_terminal_event_with_new_sub_id_does_not_clear_comp(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _provision(client)
+    await _setup_canceled_with_comp(db, uid, "sub_old")
+    await _run(
+        db, _sub_event("evt_term", "customer.subscription.deleted", status="canceled", sub_id=SUB)
+    )
+    assert (await _sub(db, uid)).comp_plan is PlanType.PRO
+
+
 # ------------------------------------------------ 3. admin-originated wording
 
 
