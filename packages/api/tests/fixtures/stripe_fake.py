@@ -16,9 +16,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from solus_api.billing.stripe_gateway import (
+    _CUSTOMER_ID_RE,
     _PRICE_ID_RE,
     _SCHEDULE_ID_RE,
-    _CUSTOMER_ID_RE,
     _SUB_ID_RE,
     _TERMINAL_SUBSCRIPTION_STATUSES,
     CancelMode,

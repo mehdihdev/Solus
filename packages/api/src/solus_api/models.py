@@ -610,15 +610,29 @@ class StripeCancelRequest(UuidPkMixin, Base):
     UNIQUE: one row per customer. A later subscription for the same customer re-arms the
     existing row (reset `completed_at`/`attempts`, update the subscription id) instead of
     inserting, which keeps the tombstone lookup a single-row read and makes a concurrent
-    double-enqueue a harmless unique violation rather than a duplicate duty."""
+    double-enqueue a harmless unique violation rather than a duplicate duty.
+
+    The row is a CUSTOMER tombstone: the runner cancels every live subscription Stripe
+    lists for the customer; `stripe_subscription_id` is only a hint.
+
+    RETENTION IS AN OPEN HUMAN DECISION: completed tombstones are retained indefinitely
+    (they hold only Stripe ids). There is deliberately no purge job."""
 
     __tablename__ = "stripe_cancel_requests"
+    __table_args__ = (
+        # The runner only ever scans pending rows: keep the index to them.
+        Index(
+            "ix_stripe_cancel_requests_pending_next_attempt",
+            "next_attempt_at",
+            postgresql_where=text("completed_at IS NULL"),
+        ),
+    )
 
     stripe_customer_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), default=None)
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+        DateTime(timezone=True), nullable=False, default=utcnow
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(

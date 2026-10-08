@@ -119,3 +119,43 @@ def test_cancel_request_is_unique_per_customer_and_holds_no_user_data(
     migration_db.execute(insert, {"id": uuid.uuid4()})
     with pytest.raises(IntegrityError):
         migration_db.execute(insert, {"id": uuid.uuid4()})
+
+
+def _indexes(db: MigrationDatabase) -> dict[str, str]:
+    rows = db.rows(
+        "SELECT indexname, indexdef FROM pg_indexes WHERE tablename='stripe_cancel_requests'"
+    )
+    return {r["indexname"]: r["indexdef"] for r in rows}
+
+
+def test_due_index_is_partial_on_pending_rows_and_customer_index_is_unique(
+    migration_db: MigrationDatabase,
+) -> None:
+    migration_db.upgrade(_revision())
+    indexes = _indexes(migration_db)
+    due = indexes["ix_stripe_cancel_requests_pending_next_attempt"]
+    assert "(next_attempt_at)" in due and "WHERE (completed_at IS NULL)" in due
+    assert "ix_stripe_cancel_requests_next_attempt_at" not in indexes
+    assert "UNIQUE" in indexes["ix_stripe_cancel_requests_stripe_customer_id"]
+
+
+def test_model_declares_the_same_partial_index() -> None:
+    from solus_api.models import StripeCancelRequest
+
+    declared = {i.name: i for i in StripeCancelRequest.__table__.indexes}
+    due = declared["ix_stripe_cancel_requests_pending_next_attempt"]
+    assert [c.name for c in due.columns] == ["next_attempt_at"]
+    assert "completed_at IS NULL" in str(due.dialect_options["postgresql"]["where"])
+    assert "ix_stripe_cancel_requests_next_attempt_at" not in declared
+
+
+def test_comp_plan_check_is_validated_and_rejects_bad_plans_and_downgrade_drops_indexes(
+    migration_db: MigrationDatabase,
+) -> None:
+    migration_db.upgrade(_revision())
+    rows = migration_db.rows(
+        "SELECT convalidated FROM pg_constraint WHERE conname='subscription_comp_plan'"
+    )
+    assert rows == [{"convalidated": True}]
+    command.downgrade(migration_db.config, PREVIOUS)
+    assert _indexes(migration_db) == {}
