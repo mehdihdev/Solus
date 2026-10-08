@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solus_api.billing import credits
 from solus_api.billing.plan_grants import grant_plan_credits
 from solus_api.billing.plans import plan_for_price_id
+from solus_api.billing.stripe_gateway import ADMIN_ACTION_METADATA_KEY
 from solus_api.models import (
     CreditTxnType,
     NotificationType,
@@ -36,6 +37,7 @@ from solus_api.models import (
     default_limits,
 )
 from solus_api.services.notifications import notify_user
+from solus_api.services.stripe_cancel import enqueue_stripe_cancel, is_tombstoned_customer
 
 logger = logging.getLogger("solus.billing.stripe")
 
@@ -59,6 +61,20 @@ _STATUS_MAP: dict[str, SubscriptionStatus] = {
     "canceled": SubscriptionStatus.CANCELED,
     "incomplete_expired": SubscriptionStatus.CANCELED,
 }
+
+
+# Subscription statuses that mean "this subscription is over" — never worth cancelling.
+_TERMINAL_STRIPE_STATUSES = frozenset({"canceled", "incomplete_expired"})
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    """`value` if it is a dict, else {} — signed payloads are still schema-loose."""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_id(value: object) -> str | None:
+    """A non-empty string id, else None (Stripe ids are strings; anything else is junk)."""
+    return value if isinstance(value, str) and value else None
 
 
 def _event_dt(created: int) -> datetime:
@@ -88,12 +104,59 @@ async def _sub_by(
 
 def _subscription_price_id(obj: dict[str, Any]) -> str | None:
     """The first line item's Stripe Price id on a subscription object, or None."""
-    items = (obj.get("items") or {}).get("data") or []
-    if not items:
+    items = _as_dict(obj.get("items")).get("data")
+    if not isinstance(items, list) or not items:
         return None
-    price = items[0].get("price") or {}
-    pid = price.get("id")
+    pid = _as_dict(_as_dict(items[0]).get("price")).get("id")
     return str(pid) if pid else None
+
+
+def _is_admin_originated(obj: dict[str, Any], previous: dict[str, Any]) -> bool:
+    """True only when THIS event changed the staff-action marker in subscription metadata.
+
+    Metadata persists on the subscription, so a stale marker on a later customer-initiated
+    change must not count: the marker has to appear in `previous_attributes.metadata`
+    (Stripe lists only changed keys there) with a different current value. Used for
+    notification wording ONLY — never for authorization or entitlement."""
+    previous_meta = _as_dict(previous.get("metadata"))
+    if ADMIN_ACTION_METADATA_KEY not in previous_meta:
+        return False
+    current = _as_id(_as_dict(obj.get("metadata")).get(ADMIN_ACTION_METADATA_KEY))
+    return current is not None and current != previous_meta[ADMIN_ACTION_METADATA_KEY]
+
+
+async def _cancel_if_tombstoned(
+    session: AsyncSession, customer: object, subscription: object
+) -> None:
+    """Late-checkout race: a live subscription arrived for a customer whose account is
+    already deleted. Enqueue the durable cancel (the runner calls Stripe, never this
+    handler) for the subscription id in the SIGNED payload only; non-tombstoned customers
+    are untouched, so a spoofed customer id cannot cancel anyone else's subscription."""
+    customer_id = _as_id(customer)
+    if customer_id is None or not await is_tombstoned_customer(session, customer_id):
+        return
+    try:
+        await enqueue_stripe_cancel(
+            session, customer_id=customer_id, subscription_id=_as_id(subscription)
+        )
+    except ValueError:
+        logger.warning(
+            "tombstoned customer %s: malformed Stripe id; no cancel enqueued", customer_id
+        )
+        return
+    logger.warning("late Stripe subscription for deleted customer %s; cancel enqueued", customer_id)
+
+
+async def _handle_unmatched(
+    session: AsyncSession, obj: dict[str, Any], etype: str, customer: str | None, sub_id: str | None
+) -> None:
+    """A subscription event with no live local row: a safe no-op, except that a LIVE
+    subscription for an already-tombstoned customer is queued for cancellation."""
+    if etype == "customer.subscription.deleted":
+        return
+    if str(obj.get("status")) in _TERMINAL_STRIPE_STATUSES:
+        return
+    await _cancel_if_tombstoned(session, customer, sub_id)
 
 
 async def _apply_subscription(
@@ -103,19 +166,22 @@ async def _apply_subscription(
     created: datetime,
     plan_prices: dict[str, str],
     plan_credit_grants: dict[str, int],
+    previous: dict[str, Any],
 ) -> None:
-    sub_id = obj.get("id")
-    customer = obj.get("customer")
+    sub_id = _as_id(obj.get("id"))
+    customer = _as_id(obj.get("customer"))
     local = await _sub_by(session, customer=customer, sub_id=sub_id)
     if local is None:
         logger.warning(
             "stripe subscription event with no local match sub=%s cus=%s", sub_id, customer
         )
+        await _handle_unmatched(session, obj, etype, customer, sub_id)
         return
     # Out-of-order guard: ignore an event older than the last one applied.
     if local.stripe_event_at is not None and created < local.stripe_event_at:
         return
     old_plan, old_status = local.plan, local.status
+    first_link = sub_id is not None and local.stripe_subscription_id is None
     if sub_id:
         local.stripe_subscription_id = sub_id
     if customer:
@@ -135,12 +201,27 @@ async def _apply_subscription(
                 local.limits = default_limits(plan)
         local.cancel_at = _cancel_at_dt(obj)
     local.stripe_event_at = created
+    if first_link and local.status is not SubscriptionStatus.CANCELED:
+        _clear_comp(local)
     if local.status is SubscriptionStatus.CANCELED and old_status in _LIVE_STATUSES:
         _apply_term_end(session, local)
     else:
         _notify_cancel_transition(session, local, old_cancel_at)
-    _notify_if_entitlement_changed(session, local, old_plan=old_plan, old_status=old_status)
+    _notify_if_entitlement_changed(
+        session,
+        local,
+        old_plan=old_plan,
+        old_status=old_status,
+        by_support=_is_admin_originated(obj, previous),
+    )
     await grant_plan_credits(session, local, plan_credit_grants)
+
+
+def _clear_comp(local: Subscription) -> None:
+    """A paid Stripe subscription was linked for the first time: it supersedes any local
+    staff comp (plan/limits come from what was bought). `limits_override` is untouched."""
+    local.comp_plan = None
+    local.comp_expires_at = None
 
 
 def _cancel_at_dt(obj: dict[str, Any]) -> datetime | None:
@@ -216,6 +297,7 @@ def _notify_if_entitlement_changed(
     *,
     old_plan: object,
     old_status: SubscriptionStatus,
+    by_support: bool = False,
 ) -> None:
     """One in-app notification when a payment takes effect: entering a live
     (active/trialing) status, or switching plans while live. Routine renewals
@@ -228,12 +310,16 @@ def _notify_if_entitlement_changed(
     if not (became_live or plan_changed):
         return
     plan_label = local.plan.value.capitalize()
+    body = f"You're on the {plan_label} plan."
+    if by_support and plan_changed and not became_live:
+        # Honest wording only; no staff identity or action id leaves the server.
+        body = f"Your plan was changed by Solus support. {body}"
     notify_user(
         session,
         user_id=local.user_id,
         notification_type=NotificationType.PAYMENT_SUCCEEDED,
         title="Payment successful" if became_live else "Plan updated",
-        body=f"You're on the {plan_label} plan.",
+        body=body,
         attrs={"plan": local.plan.value, "subscription": local.stripe_subscription_id},
     )
 
@@ -241,42 +327,57 @@ def _notify_if_entitlement_changed(
 async def _apply_checkout(
     session: AsyncSession, obj: dict[str, Any], event_id: str, pack_credits: dict[str, int]
 ) -> None:
-    metadata = obj.get("metadata") or {}
-    raw_user = obj.get("client_reference_id") or metadata.get("solus_user_id")
-    if not raw_user:
-        logger.warning("checkout.session.completed with no user reference")
-        return
-    try:
-        user_id = uuid.UUID(str(raw_user))
-    except ValueError:
-        logger.warning("checkout.session.completed with bad user reference %r", raw_user)
-        return
+    metadata = _as_dict(obj.get("metadata"))
+    is_subscription = obj.get("mode") == "subscription"
+    user_id = _checkout_user_id(obj, metadata)
     # Guard against a spoofed/stale user reference: never touch credits for a user
     # that doesn't exist (also avoids an FK crash from the grant).
-    if await session.get(User, user_id) is None:
-        logger.warning("checkout.session.completed for unknown user %s", user_id)
+    if user_id is None or await session.get(User, user_id) is None:
+        if user_id is not None:
+            logger.warning("checkout.session.completed for unknown user %s", user_id)
+        if is_subscription:
+            await _cancel_if_tombstoned(session, obj.get("customer"), obj.get("subscription"))
         return
 
-    if obj.get("mode") == "subscription":
-        await _link_subscription_customer(session, obj, user_id)
+    if is_subscription:
+        if not await _link_subscription_customer(session, obj, user_id):
+            await _cancel_if_tombstoned(session, obj.get("customer"), obj.get("subscription"))
     elif obj.get("mode") == "payment":
         await _grant_credit_pack(session, obj, event_id, user_id, metadata, pack_credits)
 
 
+def _checkout_user_id(obj: dict[str, Any], metadata: dict[str, Any]) -> uuid.UUID | None:
+    raw_user = obj.get("client_reference_id") or metadata.get("solus_user_id")
+    if not raw_user:
+        logger.warning("checkout.session.completed with no user reference")
+        return None
+    try:
+        return uuid.UUID(str(raw_user))
+    except ValueError:
+        logger.warning("checkout.session.completed with bad user reference %r", raw_user)
+        return None
+
+
 async def _link_subscription_customer(
     session: AsyncSession, obj: dict[str, Any], user_id: uuid.UUID
-) -> None:
+) -> bool:
+    """Link the Stripe customer/subscription to the user's local row. Returns False when
+    there is no live local subscription to link."""
     local = await session.scalar(
         select(Subscription).where(
             Subscription.user_id == user_id, Subscription.deleted_at.is_(None)
         )
     )
     if local is None:
-        return
-    if obj.get("customer"):
-        local.stripe_customer_id = str(obj["customer"])
-    if obj.get("subscription"):
-        local.stripe_subscription_id = str(obj["subscription"])
+        return False
+    customer, stripe_sub = _as_id(obj.get("customer")), _as_id(obj.get("subscription"))
+    if customer:
+        local.stripe_customer_id = customer
+    if stripe_sub:
+        if local.stripe_subscription_id is None:
+            _clear_comp(local)  # first paid link supersedes a local comp
+        local.stripe_subscription_id = stripe_sub
+    return True
 
 
 async def _grant_credit_pack(
@@ -294,7 +395,7 @@ async def _grant_credit_pack(
     if obj.get("payment_status") != "paid":
         logger.info("checkout payment not settled (status=%r); no grant", obj.get("payment_status"))
         return
-    price_id = metadata.get("price_id")
+    price_id = _as_id(metadata.get("price_id"))
     amount = pack_credits.get(price_id) if price_id else None
     if not amount:
         logger.warning("checkout payment with unknown credit pack price=%r", price_id)
@@ -321,7 +422,7 @@ async def _grant_credit_pack(
 
 
 async def _apply_invoice_failed(session: AsyncSession, obj: dict[str, Any]) -> None:
-    customer = obj.get("customer")
+    customer = _as_id(obj.get("customer"))
     if not customer:
         return
     local = await session.scalar(
@@ -352,11 +453,19 @@ class _EventMeta:
     pack_credits: dict[str, int]
     plan_prices: dict[str, str]
     plan_credit_grants: dict[str, int]
+    # `data.previous_attributes` of the (signed) event; {} when absent/malformed.
+    previous_attributes: dict[str, Any]
 
 
 async def _on_subscription(session: AsyncSession, obj: dict[str, Any], meta: _EventMeta) -> None:
     await _apply_subscription(
-        session, obj, meta.etype, meta.created, meta.plan_prices, meta.plan_credit_grants
+        session,
+        obj,
+        meta.etype,
+        meta.created,
+        meta.plan_prices,
+        meta.plan_credit_grants,
+        meta.previous_attributes,
     )
 
 
@@ -407,7 +516,8 @@ async def process_event(
     if seen is not None:
         return False
 
-    obj = event.get("data", {}).get("object", {})
+    data = _as_dict(event.get("data"))
+    obj = _as_dict(data.get("object"))
     created = _event_dt(int(event.get("created") or 0))
 
     handler = _HANDLERS.get(etype)
@@ -419,6 +529,7 @@ async def process_event(
             pack_credits=pack_credits,
             plan_prices=plan_prices,
             plan_credit_grants=plan_credit_grants,
+            previous_attributes=_as_dict(data.get("previous_attributes")),
         )
         await handler(session, obj, meta)
     else:
