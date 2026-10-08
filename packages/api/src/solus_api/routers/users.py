@@ -48,14 +48,6 @@ from solus_api.services.account_deletion import (
     OwnershipTransferRequired,
     team_memberships,
 )
-
-# Re-exported for routers/teams.py and routers/projects.py (SOLUSDEV-313 moved them out).
-from solus_api.services.account_deletion import (
-    delete_projects_cascade as delete_projects_cascade,
-)
-from solus_api.services.account_deletion import (
-    delete_team_cascade as delete_team_cascade,
-)
 from solus_api.services.events import emit_event
 
 router = APIRouter(prefix="/api/v1/users/me")

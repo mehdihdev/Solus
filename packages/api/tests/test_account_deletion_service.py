@@ -322,7 +322,10 @@ async def test_self_delete_request_body_never_carries_transfers(
     assert resp.status_code == 409  # the body is ignored
 
 
-async def test_cascade_helpers_stay_importable_from_the_router_module() -> None:
-    from solus_api.routers.users import delete_projects_cascade, delete_team_cascade
+async def test_cascade_helpers_live_in_the_service_not_the_router_module() -> None:
+    from solus_api.routers import users
+    from solus_api.services.account_deletion import delete_projects_cascade, delete_team_cascade
 
     assert callable(delete_team_cascade) and callable(delete_projects_cascade)
+    assert not hasattr(users, "delete_team_cascade")
+    assert not hasattr(users, "delete_projects_cascade")
