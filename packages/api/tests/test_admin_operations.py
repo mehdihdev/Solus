@@ -17,6 +17,7 @@ from solus_api.billing.admin_operations import (
     TargetNotFound,
     UnsupportedForNonStripe,
 )
+from solus_api.billing.admin_validation import MAX_LIMIT_OVERRIDE
 from solus_api.billing.entitlements import effective_limits, effective_plan
 from solus_api.billing.plan_grants import grant_plan_credits
 from solus_api.core.config import Settings
@@ -385,6 +386,7 @@ async def test_set_and_clear_limits_override(maker: Maker, settings: Settings) -
         {"max_projects": True},
         {"max_projects": "5"},
         {"max_projects": 1.5},
+        {"max_projects": MAX_LIMIT_OVERRIDE + 1},
         {1: 2},
     ],
 )
@@ -533,3 +535,57 @@ async def test_stripe_backed_row_that_is_canceled_is_handled_locally(
         res = await _ops(s, settings, gateway).change_plan(uid, plan=PlanType.PRO, **_audit())
     assert not res.converges_via_webhook and gateway.calls == []
     assert (await _sub(maker, uid)).plan is PlanType.PRO
+
+
+async def test_limits_override_accepts_the_cap_and_zero(maker: Maker, settings: Settings) -> None:
+    uid = await _user(maker)
+    limits = {"max_projects": MAX_LIMIT_OVERRIDE, "max_teams": 0}
+    async with maker() as s:
+        await _ops(s, settings).set_limits_override(uid, limits=limits, **_audit())
+    assert (await _sub(maker, uid)).limits_override == limits
+
+
+async def test_credit_grant_failure_after_commit_is_logged_and_result_still_returned(
+    maker: Maker,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    uid = await _user(maker)
+
+    async def boom(*_: Any) -> None:
+        raise RuntimeError("ledger down")
+
+    monkeypatch.setattr(admin_operations, "grant_plan_credits", boom)
+    with caplog.at_level("ERROR", logger="solus.billing.admin_operations"):
+        async with maker() as s:
+            res = await _ops(s, settings).comp_upgrade(
+                uid, plan=PlanType.PRO, duration="forever", **_audit()
+            )
+    assert not res.noop and res.after.comp_plan == "pro"
+    assert (await _sub(maker, uid)).comp_plan is PlanType.PRO  # durable
+    record = next(r for r in caplog.records if "credit grant failed" in r.getMessage())
+    assert str(uid) in record.getMessage() and "audit-1" in record.getMessage()
+    assert record.exc_info is not None
+
+
+async def test_a_retry_after_a_failed_grant_recovers_it(
+    maker: Maker, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    uid = await _user(maker)
+    real = grant_plan_credits
+    calls = {"n": 0}
+
+    async def flaky(session: AsyncSession, local: Subscription, grants: dict[str, int]) -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("ledger down")
+        await real(session, local, grants)
+
+    monkeypatch.setattr(admin_operations, "grant_plan_credits", flaky)
+    for _ in range(2):
+        async with maker() as s:
+            await _ops(s, settings).comp_upgrade(
+                uid, plan=PlanType.PRO, duration="forever", **_audit()
+            )
+    assert await _count(maker, CreditLedger, user_id=uid) == 1
