@@ -2,7 +2,6 @@
 
 import uuid
 from collections.abc import Sequence
-from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
@@ -20,7 +19,6 @@ from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import (
-    TRIAL_DAYS,
     CurrentUser,
     IntegrationCacheDep,
     RequireVerified,
@@ -399,13 +397,21 @@ async def get_subscription(user: CurrentUser, session: SessionDep) -> dict[str, 
 async def update_subscription(
     body: SubscriptionUpdate, user: CurrentUser, session: SessionDep
 ) -> dict[str, Any]:
-    """Pick/change the plan during onboarding: (re)starts a 14-day trial of the chosen plan
-    with that plan's limits (ADR-032). Enforcement reads `limits`; real billing is deferred."""
+    """Pick/change the trial plan during onboarding (ADR-032): sets the plan and that plan's
+    default limits while the subscription stays TRIALING. Allowed ONLY for an unpaid local
+    trial (status TRIALING and no Stripe subscription); otherwise 409, because paid plan
+    changes go through Billing/Stripe. `expires_at` is never touched, so repeated calls
+    cannot restart the trial."""
     sub = await _live_subscription(session, user)
+    if sub.status != SubscriptionStatus.TRIALING or sub.stripe_subscription_id is not None:
+        raise APIError(
+            409,
+            "subscription_change_not_allowed",
+            "Your plan can only be changed here during the free trial. "
+            "Use Billing to change or manage your subscription.",
+        )
     sub.plan = body.plan
     sub.limits = default_limits(body.plan)
-    sub.status = SubscriptionStatus.TRIALING
-    sub.expires_at = utcnow() + timedelta(days=TRIAL_DAYS)
     emit_event(
         session, user=user, event_type="subscription.updated", payload={"plan": body.plan.value}
     )
