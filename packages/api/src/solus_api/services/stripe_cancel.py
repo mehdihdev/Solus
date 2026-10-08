@@ -42,7 +42,15 @@ from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.billing.stripe_gateway import CancelMode, CancelResult, StripeOperationError
+from solus_api.billing.stripe_gateway import (
+    _TERMINAL_SUBSCRIPTION_STATUSES,
+    CancelMode,
+    CancelResult,
+    StripeOperationError,
+    StripeResourceMissingError,
+    SubscriptionListTruncatedError,
+    SubscriptionSnapshot,
+)
 from solus_api.models import StripeCancelRequest
 
 logger = logging.getLogger("solus.services.stripe_cancel")
@@ -55,9 +63,12 @@ TERMINAL_BACKOFF_SECONDS = 24 * 3600
 BATCH = 5
 #: Upper bound on ONE row's Stripe work (list + every cancel).
 ROW_TIMEOUT_SECONDS = 50.0
-#: How long a claimed row is hidden from other runners; must exceed ROW_TIMEOUT_SECONDS. A
-#: crash mid-call is retried once this elapses.
-LEASE_SECONDS = 120
+#: Slack on top of a whole batch's worst case (DB round trips, scheduling).
+LEASE_MARGIN_SECONDS = 60
+#: How long a claimed row is hidden from other runners. ALL of a batch's rows are leased up
+#: front but worked one after another, so the lease must outlive the whole batch
+#: (BATCH * ROW_TIMEOUT_SECONDS), not one row. A crash mid-call is retried once it elapses.
+LEASE_SECONDS = int(BATCH * ROW_TIMEOUT_SECONDS) + LEASE_MARGIN_SECONDS
 #: The inline attempt after a commit must not hold the user's response hostage.
 INLINE_TIMEOUT_SECONDS = 15.0
 
@@ -70,6 +81,8 @@ class CancelGateway(Protocol):
     """The slice of `StripeGateway` this service needs (real and fake both satisfy it)."""
 
     async def list_customer_subscriptions(self, customer_id: str) -> list[str]: ...
+
+    async def retrieve_subscription(self, sub_id: str) -> SubscriptionSnapshot: ...
 
     async def cancel_subscription(
         self,
@@ -199,13 +212,37 @@ async def _claim_due(
     return claims
 
 
+async def _verified_hint(claim: _Claim, gateway: CancelGateway) -> str | None:
+    """The stored hint, only if Stripe confirms it is a live subscription of THIS customer.
+    The customer's own listing is authoritative; a hint it lacks (listing lag) is trusted
+    only after a retrieve proves ownership, so a stale or foreign id is never canceled."""
+    if claim.hint is None:
+        return None
+    try:
+        snap = await gateway.retrieve_subscription(claim.hint)
+    except StripeResourceMissingError:
+        return None
+    owned = snap.customer_id == claim.customer_id
+    return claim.hint if owned and snap.status not in _TERMINAL_SUBSCRIPTION_STATUSES else None
+
+
 async def _cancel_customer(claim: _Claim, gateway: CancelGateway) -> None:
-    """Cancel every live subscription of the customer (plus the hint). Every target is
-    attempted; the first failure is raised afterwards so the row is retried."""
-    targets = await gateway.list_customer_subscriptions(claim.customer_id)
-    if claim.hint is not None and claim.hint not in targets:
-        targets = [*targets, claim.hint]
+    """Cancel every live subscription of the customer. Every target is attempted; the first
+    failure (including a truncated listing, after its collected ids) is raised afterwards so
+    the row is retried."""
     first_error: Exception | None = None
+    try:
+        targets = await gateway.list_customer_subscriptions(claim.customer_id)
+    except SubscriptionListTruncatedError as exc:
+        targets, first_error = exc.partial, exc
+    if claim.hint is not None and claim.hint not in targets:
+        try:
+            verified = await _verified_hint(claim, gateway)
+        except Exception as exc:  # noqa: BLE001 — unverifiable now: retry, never cancel blind
+            first_error = first_error or exc
+            verified = None
+        if verified is not None:
+            targets = [*targets, verified]
     for subscription_id in targets:
         try:
             await gateway.cancel_subscription(
@@ -222,11 +259,11 @@ async def _cancel_customer(claim: _Claim, gateway: CancelGateway) -> None:
         raise first_error
 
 
-def _record_failure(row: StripeCancelRequest, exc: Exception, stamp: datetime) -> None:
+def _record_failure(row: StripeCancelRequest, exc: Exception, at: datetime) -> None:
     row.attempts += 1
     terminal = isinstance(exc, StripeOperationError) and not exc.retryable
     delay = TERMINAL_BACKOFF_SECONDS if terminal else _backoff_seconds(row.attempts)
-    row.next_attempt_at = stamp + timedelta(seconds=delay)
+    row.next_attempt_at = at + timedelta(seconds=delay)
     # Never the message or traceback of an unknown error (it could echo request data, keys or
     # ids): the type name, plus the allow-listed code/status of a typed Stripe error.
     detail = type(exc).__name__
@@ -245,7 +282,7 @@ def _record_failure(row: StripeCancelRequest, exc: Exception, stamp: datetime) -
 
 
 async def _record_outcome(
-    session: AsyncSession, claim: _Claim, error: Exception | None, stamp: datetime
+    session: AsyncSession, claim: _Claim, error: Exception | None, at: datetime
 ) -> None:
     """One short transaction per row (re-selected by id, committed immediately)."""
     row = await session.scalar(
@@ -257,14 +294,19 @@ async def _record_outcome(
     if row is None:  # pragma: no cover — rows are never deleted
         await session.rollback()
         return
+    if row.completed_at is not None:
+        # Another runner finished this row while we worked (our lease had lapsed): its
+        # result stands; a late failure of ours must not bump attempts or raise an alarm.
+        await session.rollback()
+        return
     if error is not None:
-        _record_failure(row, error, stamp)
+        _record_failure(row, error, at)
     elif row.stripe_subscription_id != claim.hint:
         # Re-armed for a new subscription while Stripe was being called: the listing may
         # predate it, so leave the row open and due now.
-        row.next_attempt_at = stamp
+        row.next_attempt_at = at
     else:
-        row.completed_at = stamp
+        row.completed_at = at
     await session.commit()
 
 
@@ -282,6 +324,7 @@ async def run_due_stripe_cancels(
     gateway: CancelGateway,
     *,
     now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
     limit: int = BATCH,
     customer_ids: Collection[str] | None = None,
 ) -> CancelRunSummary:
@@ -289,13 +332,16 @@ async def run_due_stripe_cancels(
 
     Claims and leases rows, commits, then calls Stripe with NO lock held and records each
     row's outcome in its own transaction. A failing row backs off and is retried; Stripe
-    errors never escape. Safe under concurrent runners (`SKIP LOCKED` + the lease)."""
-    stamp = now or datetime.now(UTC)
-    claims = await _claim_due(session, stamp, limit, customer_ids)
+    errors never escape. Safe under concurrent runners (`SKIP LOCKED` + the lease).
+
+    Time: `clock` (or a fixed `now`, for tests) is read afresh when each outcome is recorded,
+    so a later row's backoff counts from when IT failed, not from the run's start."""
+    tick = clock or ((lambda: now) if now is not None else (lambda: datetime.now(UTC)))
+    claims = await _claim_due(session, tick(), limit, customer_ids)
     completed = failed = 0
     for claim in claims:
         error = await _run_claim(claim, gateway)
-        await _record_outcome(session, claim, error, stamp)
+        await _record_outcome(session, claim, error, tick())
         if error is None:
             completed += 1
         else:
@@ -319,12 +365,18 @@ async def run_stripe_cancels_after_commit(
     try:
         async with asyncio.timeout(timeout_seconds):
             await run_due_stripe_cancels(session, gateway, customer_ids=customer_ids)
-    except Exception:  # noqa: BLE001 — the deletion already succeeded; the row retries
-        logger.warning("inline Stripe cancel did not finish; it will be retried", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — the deletion already succeeded; the row retries
+        # Type name only: a SQLAlchemy error would echo statement parameters.
+        logger.warning(
+            "inline Stripe cancel did not finish (%s); it will be retried", type(exc).__name__
+        )
         try:
             await session.rollback()
-        except Exception:  # noqa: BLE001
-            logger.warning("could not roll back after a failed inline Stripe cancel")
+        except Exception as rollback_exc:  # noqa: BLE001
+            logger.warning(
+                "could not roll back after a failed inline Stripe cancel (%s)",
+                type(rollback_exc).__name__,
+            )
 
 
 async def run_startup_stripe_cancels(
@@ -336,5 +388,5 @@ async def run_startup_stripe_cancels(
     try:
         async with sessionmaker() as session:
             await run_stripe_cancels_after_commit(session, gateway)
-    except Exception:  # noqa: BLE001
-        logger.warning("startup Stripe cancel could not run", exc_info=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("startup Stripe cancel could not run (%s)", type(exc).__name__)
