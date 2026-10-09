@@ -49,9 +49,19 @@ class FakeCall:
     kwargs: Mapping[str, Any]
 
 
+@dataclass(frozen=True)
+class FakeCustomer:
+    """The slice of a Stripe Customer that redaction may touch (or must leave alone)."""
+
+    name: str = ""
+    email: str = ""
+    metadata: Mapping[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class FakeStripeGateway:
     subscriptions: dict[str, SubscriptionSnapshot] = field(default_factory=dict)
+    customers: dict[str, FakeCustomer] = field(default_factory=dict)
     coupons: set[str] = field(default_factory=set)
     schedules: dict[str, ScheduleResult] = field(default_factory=dict)
     calls: list[FakeCall] = field(default_factory=list)
@@ -98,6 +108,19 @@ class FakeStripeGateway:
         )
         self.subscriptions[sub_id] = snap
         return snap
+
+    def seed_customer(
+        self,
+        customer_id: str,
+        *,
+        name: str = "",
+        email: str = "",
+        metadata: Mapping[str, str] | None = None,
+    ) -> FakeCustomer:
+        """A Stripe Customer record, so tests can assert what redaction touched."""
+        customer = FakeCustomer(name=name, email=email, metadata=dict(metadata or {}))
+        self.customers[customer_id] = customer
+        return customer
 
     def hide_from_listing(self, sub_id: str) -> None:
         """Retrievable but absent from `list_customer_subscriptions` (listing lag)."""
@@ -338,6 +361,25 @@ class FakeStripeGateway:
         return self._once(  # type: ignore[no-any-return]
             _idem(audit_action_id, "cancel"), (sub_id, kwargs), run
         )
+
+    # ---- customer redaction --------------------------------------------- #
+
+    async def redact_customer(self, customer_id: str, *, audit_action_id: str) -> None:
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_token(audit_action_id, "audit_action_id")
+        try:
+            self._enter("redact_customer", (customer_id,), {"audit_action_id": audit_action_id})
+        except StripeResourceMissingError:
+            return  # the real gateway treats an already-gone customer as success
+
+        def run() -> None:
+            current = self.customers.get(customer_id)
+            if current is None:
+                return
+            meta = {k: v for k, v in current.metadata.items() if k != "solus_user_id"}
+            self.customers[customer_id] = replace(current, name="", metadata=meta)
+
+        self._once(_idem(audit_action_id, "redact-customer"), (customer_id,), run)
 
     # ---- schedules ------------------------------------------------------ #
 
