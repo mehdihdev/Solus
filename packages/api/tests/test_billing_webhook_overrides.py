@@ -602,8 +602,15 @@ async def _snapshot(db: AsyncSession, uid: uuid.UUID) -> tuple[Any, ...]:
     )
 
 
+MARKER = "billing.tombstoned_customer_refused"
+
+
+def _refusals(caplog: pytest.LogCaptureFixture) -> list[Any]:
+    return [r for r in caplog.records if r.levelname == "ERROR" and MARKER in r.getMessage()]
+
+
 async def test_checkout_for_a_live_user_naming_a_tombstoned_customer_does_not_relink(
-    client: AsyncClient, db: AsyncSession
+    client: AsyncClient, db: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
     uid = await _live_user_b(client, db)
     await _tombstone(db, cus="cus_dead")
@@ -614,13 +621,17 @@ async def test_checkout_for_a_live_user_naming_a_tombstoned_customer_does_not_re
 
     assert await _snapshot(db, uid) == before
     assert len(await _notes(db, uid)) == len(ledger_before)
-    [tomb] = await _cancel_rows(db)  # nothing enqueued: B's subscription is not canceled
+    [tomb] = await _cancel_rows(db)  # nothing enqueued by the checkout itself
     assert tomb.completed_at is not None and tomb.stripe_subscription_id is None
+    [record] = _refusals(caplog)  # ERROR, stable marker, ids only (no PII)
+    assert "cus_dead" in record.getMessage() and "live-b@example.com" not in record.getMessage()
 
 
-async def test_subscription_event_matching_b_by_sub_id_but_a_tombstoned_customer_is_ignored(
-    client: AsyncClient, db: AsyncSession
+async def test_legacy_row_holding_a_sub_id_of_a_tombstoned_customer_is_ignored_and_logged(
+    client: AsyncClient, db: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """Defensive/legacy (Stripe cannot send a live user's own sub under the dead customer):
+    if a row already holds a sub id whose event names a tombstoned customer, it is ignored."""
     uid = await _live_user_b(client, db)
     await _tombstone(db, cus="cus_dead")
     before = await _snapshot(db, uid)
@@ -630,27 +641,42 @@ async def test_subscription_event_matching_b_by_sub_id_but_a_tombstoned_customer
     assert await _snapshot(db, uid) == before
     [tomb] = await _cancel_rows(db)
     assert tomb.completed_at is not None
+    assert len(_refusals(caplog)) == 1
 
 
-async def test_the_runner_never_cancels_b_after_a_refused_tombstone_link(
-    client: AsyncClient, db: AsyncSession
+async def test_a_refused_checkout_then_the_dead_customers_own_new_sub_is_canceled_not_bs(
+    client: AsyncClient, db: AsyncSession, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """The realistic sequence: B's checkout names cus_dead (refused), then Stripe sends
+    customer.subscription.created for a NEW sub of cus_dead (no local row), which is
+    canceled through `_handle_unmatched`; B's row and ledger are untouched."""
     from fixtures.stripe_fake import FakeStripeGateway
     from solus_api.services.stripe_cancel import run_due_stripe_cancels
 
     uid = await _live_user_b(client, db)
     await _tombstone(db, cus="cus_dead")
+    before = await _snapshot(db, uid)
+    ledger_before = await _notes(db, uid)
+
     await _run(db, _checkout("evt_a", uid, sub="sub_new", customer="cus_dead"))
-    await _run(db, _sub_event("evt_b", sub_id=SUB, customer="cus_dead", created=2000))
+    assert len(_refusals(caplog)) == 1
+    assert await _snapshot(db, uid) == before
+    created = _sub_event(
+        "evt_b", "customer.subscription.created", sub_id="sub_new", customer="cus_dead"
+    )
+    await _run(db, created)
+    [queued] = await _cancel_rows(db)
+    assert queued.completed_at is None and queued.stripe_subscription_id == "sub_new"
+
     fake = FakeStripeGateway()
     fake.seed_subscription("sub_new", customer_id="cus_dead")
-
     summary = await run_due_stripe_cancels(db, fake, now=datetime.now(UTC) + timedelta(days=2))
 
-    assert summary.attempted == 0
-    assert fake.calls_to("cancel_subscription") == []
-    assert fake.subscriptions["sub_new"].status != "canceled"
-    assert (await _sub(db, uid)).stripe_customer_id == CUS
+    assert summary.completed == 1
+    assert fake.subscriptions["sub_new"].status == "canceled"
+    assert [c.args for c in fake.calls_to("cancel_subscription")] == [("sub_new",)]
+    assert await _snapshot(db, uid) == before
+    assert len(await _notes(db, uid)) == len(ledger_before)
 
 
 async def test_a_live_users_own_customer_still_links_normally(

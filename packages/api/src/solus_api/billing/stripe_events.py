@@ -153,14 +153,23 @@ async def _refuses_tombstoned_customer(
     """True when `customer` is a deleted account's tombstoned Stripe customer that the live
     local row does not already own. A live user's own customer is never tombstoned, so this
     only trips on a mis-attributed signed event (Dashboard/Payment Link checkout, staff
-    error); the link is refused so the live user's subscription is never canceled or
-    redacted along with the dead customer. Ids only in the log (no PII)."""
+    error).
+
+    What the refusal does and does NOT do: it only stops the live user's LOCAL row being
+    relinked to the dead customer (so the row is never canceled or redacted along with it).
+    The dead customer's subscription is canceled through its own
+    `customer.subscription.created` event (`_handle_unmatched`), and the live user was
+    therefore billed for a first period without getting entitlement: that needs a MANUAL
+    refund. Hence the ERROR log with a stable marker for operator alerting (ids only, no PII).
+    """
     if not customer or customer == local.stripe_customer_id:
         return False
     if not await is_tombstoned_customer(session, customer):
         return False
-    logger.warning(
-        "refusing to attach tombstoned customer %s to live subscription row %s",
+    logger.error(
+        "billing.tombstoned_customer_refused: not attaching tombstoned customer %s to live "
+        "subscription row %s; the live user may have been charged without entitlement and "
+        "need a manual refund",
         customer,
         local.id,
     )
@@ -405,7 +414,9 @@ async def _link_subscription_customer(
         return False
     customer, stripe_sub = _as_id(obj.get("customer")), _as_id(obj.get("subscription"))
     if await _refuses_tombstoned_customer(session, local, customer):
-        return True  # handled (ignored): never fall through to the tombstone cancel for B
+        # Handled (ignored): the local row stays as it was. The dead customer's own
+        # subscription is canceled via its subscription event, not here.
+        return True
     if customer:
         local.stripe_customer_id = customer
     if stripe_sub:
