@@ -11,7 +11,9 @@ Same shape as `services/cad_purge.py`: the duty is a DATABASE RECORD.
    startup (`run_startup_stripe_cancels`).
 
 Business rule: on account deletion every subscription is canceled IMMEDIATELY with a FINAL
-invoice and NO proration. The Stripe Customer is never deleted.
+invoice and NO proration. The Stripe Customer is never deleted (invoice / tax records), but once
+every cancel succeeded its PII is REDACTED (`name`, `metadata.solus_user_id`; the email stays).
+A redaction failure retries the row like any other failure (idempotent end to end).
 
 The row is a CUSTOMER tombstone: the run lists the customer's subscriptions in Stripe and
 cancels EVERY non-terminal one (the stored subscription id is only a hint, so a re-arm for a
@@ -61,7 +63,7 @@ BACKOFF_MAX_SECONDS = 3600
 TERMINAL_BACKOFF_SECONDS = 24 * 3600
 #: Rows claimed per run. BATCH * ROW_TIMEOUT_SECONDS (250s) stays inside ARQ's 300s job timeout.
 BATCH = 5
-#: Upper bound on ONE row's Stripe work (list + every cancel).
+#: Upper bound on ONE row's Stripe work (list + every cancel + the PII redaction).
 ROW_TIMEOUT_SECONDS = 50.0
 #: Slack on top of a whole batch's worst case (DB round trips, scheduling).
 LEASE_MARGIN_SECONDS = 60
@@ -94,6 +96,8 @@ class CancelGateway(Protocol):
         audit_action_id: str,
         actor: str | None,
     ) -> CancelResult: ...
+
+    async def redact_customer(self, customer_id: str, *, audit_action_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -226,6 +230,11 @@ async def _verified_hint(claim: _Claim, gateway: CancelGateway) -> str | None:
     return claim.hint if owned and snap.status not in _TERMINAL_SUBSCRIPTION_STATUSES else None
 
 
+def _redaction_id(row_id: uuid.UUID) -> str:
+    """Stable per row (a retry or re-arm replays the same, idempotent, Stripe request)."""
+    return f"acctdel-redact-{row_id.hex}"
+
+
 async def _cancel_customer(claim: _Claim, gateway: CancelGateway) -> None:
     """Cancel every live subscription of the customer. Every target is attempted; the first
     failure (including a truncated listing, after its collected ids) is raised afterwards so
@@ -317,6 +326,11 @@ async def _run_claim(claim: _Claim, gateway: CancelGateway) -> Exception | None:
     try:
         async with asyncio.timeout(ROW_TIMEOUT_SECONDS):
             await _cancel_customer(claim, gateway)
+            # Only after EVERY subscription is canceled: clear the PII Solus put on the
+            # Customer (name, solus_user_id). The email and the Customer are kept.
+            await gateway.redact_customer(
+                claim.customer_id, audit_action_id=_redaction_id(claim.row_id)
+            )
     except Exception as exc:  # noqa: BLE001 — retried with backoff; the row is the safety net
         return exc
     return None
