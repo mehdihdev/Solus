@@ -24,8 +24,9 @@ Business rules to verify against:
 - Comps: Stripe-backed = 100%-off coupon `solus-comp-once` / `solus-comp-repeating-<N>` / `solus-comp-forever`
   plus a revert schedule (returns to the previous price when the coupon ends). Non-Stripe = local comp with
   expiry (`once` = 1 month, `repeating N` = N months, N 1–36, `forever` = no expiry).
-- Account deletion: immediate cancel, **final invoice created, no proration**; the Stripe Customer is NOT deleted;
-  deletion never blocked by Stripe being down.
+- Account deletion: immediate cancel, **final invoice created, no proration**; the Stripe Customer is NOT deleted but,
+  once the cancel completes, its **name and `metadata.solus_user_id` are cleared (email is kept)**; deletion never
+  blocked by Stripe being down. Completed `stripe_cancel_requests` rows are kept indefinitely (Stripe ids only).
 
 ## 1. Required setup
 
@@ -214,7 +215,12 @@ Setup: U-paid with an active Stripe subscription (test card).
    - [ ] Deletion succeeds (204 / app returns to signed-out state) **regardless of Stripe**.
    - [ ] In Stripe Dashboard (test): the subscription is **canceled immediately**; a **final invoice exists**; there is
          **no proration/credit note** for unused time; the **Customer still exists**.
+   - [ ] **PII redaction:** on that Customer in the Dashboard (test) the **name is empty** and `metadata.solus_user_id`
+         is **gone**, while the **email is unchanged**. Check this on a customer that had a name set (Checkout collects
+         one) so the "name cleared" assertion is meaningful, and record whether Stripe really cleared `name`.
    - [ ] DB: `stripe_cancel_requests` has one row for the customer with `completed_at` set; it contains only Stripe ids.
+   - [ ] If redaction fails (e.g. the key lacks **Customers: write**) the subscription is still canceled but the row stays
+         pending and retries; the worker log shows `Stripe cancel failed ... (<ErrorType> ...)` with no customer data.
 2. **Stripe down:** make Stripe unreachable (e.g. store a temporarily wrong key with `uv run stripe-setup put-key`),
    then delete another paid user.
    - [ ] Deletion still succeeds; row remains with `completed_at` NULL and `attempts` ≥ 1.
@@ -288,5 +294,7 @@ For a user with override `{"max_integrations": 1}` on a PRO plan:
   from the start of the **current billing cycle**, not the day the comp was applied); immediate cancel carries no metadata
   (audit trail is the idempotency key only).
 - The Billing Portal must **not** allow plan switching for `forever`-comped customers (a forever coupon is not product-restricted).
-- The Stripe Customer (email, `solus_user_id` metadata) remains after account deletion — retention policy is an open human decision.
-- `stripe_cancel_requests` tombstones are retained indefinitely (no purge job yet).
+- Decided 2026-10-09: after a deletion cancel the Stripe Customer is kept (invoices/tax) with only `name` and
+  `metadata.solus_user_id` redacted; the **email remains** in Stripe. Whether Stripe clears `name` when sent as an empty
+  string is **unverified against live Stripe** (the SDK documents the unset only for metadata keys): confirm in §4.
+- Decided 2026-10-09: `stripe_cancel_requests` tombstones are retained indefinitely (Stripe ids only, no purge job).
