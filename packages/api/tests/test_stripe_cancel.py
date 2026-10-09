@@ -1003,3 +1003,88 @@ async def test_a_redaction_error_with_a_leaky_message_logs_only_its_type(
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "KeyError" in text
     assert NAME_SENTINEL not in text and EMAIL_SENTINEL not in text
+
+
+# ------------------------------------------- FIX-G: lease overwrite + idempotency conflict
+
+
+class _ReArmThenFail(FakeStripeGateway):
+    """Re-arms the row for a NEW subscription mid-run, then fails non-retryably."""
+
+    def __init__(self, maker: async_sessionmaker[AsyncSession], at: datetime) -> None:
+        super().__init__()
+        self._maker, self._at = maker, at
+
+    async def cancel_subscription(self, *a: Any, **k: Any) -> Any:
+        async with self._maker() as other:
+            await enqueue_stripe_cancel(
+                other, customer_id="cus_A", subscription_id="sub_B", now=self._at
+            )
+            await other.commit()
+        raise StripeOperationError("x", code="invalid", retryable=False)
+
+
+async def test_a_failure_after_a_mid_run_re_arm_is_due_now_not_backed_off(
+    engine: AsyncEngine,
+) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as setup:
+        await _enqueue(setup, sub="sub_A")
+    recorded_at = NOW + timedelta(seconds=7)
+    fake = _ReArmThenFail(maker, NOW)
+    fake.seed_subscription("sub_A", customer_id="cus_A")
+
+    async with maker() as s:
+        summary = await run_due_stripe_cancels(s, fake, clock=lambda: recorded_at)
+
+    assert summary.failed == 1
+    async with maker() as check:
+        [row] = await _rows(check)
+    assert row.stripe_subscription_id == "sub_B"
+    assert row.attempts == 1
+    assert row.next_attempt_at == recorded_at
+    assert row.completed_at is None
+
+
+@pytest.mark.parametrize("method", ["cancel_subscription", "redact_customer"])
+async def test_an_idempotency_conflict_gets_the_short_backoff_and_no_operator_alarm(
+    db: AsyncSession, caplog: pytest.LogCaptureFixture, method: str
+) -> None:
+    """Fixed keys + fixed parameters: a conflict only means the key is in use concurrently."""
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_always(method, FakeStripeGateway.idempotency_conflict())
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert summary.failed == 1
+    [row] = await _rows(db)
+    assert row.attempts == 1
+    assert row.next_attempt_at == NOW + timedelta(seconds=BACKOFF_BASE_SECONDS)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "NON-RETRYABLE" not in text
+    assert not any(r.levelname == "ERROR" for r in caplog.records)
+    assert "idempotency_error" in text
+
+
+async def test_a_pending_backed_off_row_with_no_hint_is_due_now_for_a_new_subscription(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, sub=None)
+    fake = _fake()
+    fake.fail_always(
+        "list_customer_subscriptions", StripeOperationError("x", code="invalid", retryable=False)
+    )
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    [before] = await _rows(db)
+    assert before.stripe_subscription_id is None and before.attempts == 1
+    assert before.next_attempt_at == NOW + timedelta(seconds=TERMINAL_BACKOFF_SECONDS)
+    later = NOW + timedelta(minutes=5)
+
+    await enqueue_stripe_cancel(db, customer_id="cus_A", subscription_id="sub_B", now=later)
+    await db.commit()
+
+    [after] = await _rows(db)
+    assert after.next_attempt_at == later
+    assert after.attempts == 1 and after.stripe_subscription_id == "sub_B"
+    assert after.completed_at is None

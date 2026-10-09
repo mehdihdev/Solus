@@ -48,6 +48,7 @@ from solus_api.billing.stripe_gateway import (
     _TERMINAL_SUBSCRIPTION_STATUSES,
     CancelMode,
     CancelResult,
+    StripeIdempotencyConflictError,
     StripeOperationError,
     StripeResourceMissingError,
     SubscriptionListTruncatedError,
@@ -281,10 +282,27 @@ async def _cancel_customer(claim: _Claim, gateway: CancelGateway) -> None:
         raise first_error
 
 
-def _record_failure(row: StripeCancelRequest, exc: Exception, at: datetime) -> None:
+def _is_terminal(exc: Exception) -> bool:
+    """A non-retryable Stripe refusal. An idempotency CONFLICT is not one here: this runner
+    sends fixed keys with fixed parameters, so a conflict can only mean the key is in use by
+    a concurrent runner (never a parameter mismatch); it is retried with the short backoff.
+    (The gateway still maps it non-retryable: admin operations rely on that.)"""
+    if isinstance(exc, StripeIdempotencyConflictError):
+        return False
+    return isinstance(exc, StripeOperationError) and not exc.retryable
+
+
+def _record_failure(
+    row: StripeCancelRequest, exc: Exception, at: datetime, *, re_armed: bool = False
+) -> None:
+    """Count the attempt and schedule the retry. `re_armed`: the row got a new subscription
+    id while this run was in flight, so the retry is due NOW (no backoff) like the success
+    branch: the failure belongs to the old work and must not delay the fresh subscription."""
     row.attempts += 1
-    terminal = isinstance(exc, StripeOperationError) and not exc.retryable
+    terminal = _is_terminal(exc) and not re_armed
     delay = TERMINAL_BACKOFF_SECONDS if terminal else _backoff_seconds(row.attempts)
+    if re_armed:
+        delay = 0
     row.next_attempt_at = at + timedelta(seconds=delay)
     # Never the message or traceback of an unknown error (it could echo request data, keys or
     # ids): the type name, plus the allow-listed code/status of a typed Stripe error.
@@ -325,7 +343,7 @@ async def _record_outcome(
         await session.rollback()
         return
     if error is not None:
-        _record_failure(row, error, at)
+        _record_failure(row, error, at, re_armed=row.stripe_subscription_id != claim.hint)
     elif row.stripe_subscription_id != claim.hint:
         # Re-armed for a new subscription while Stripe was being called: the listing may
         # predate it, so leave the row open and due now.

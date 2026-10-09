@@ -187,6 +187,52 @@ async def test_the_inline_run_only_processes_the_deleted_accounts_customer(
     assert fake.subscriptions["sub_unrelated"].status == "active"
 
 
+async def test_a_customer_shared_with_another_live_user_is_not_tombstoned(
+    app: FastAPI, db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """L3: a legacy mislink shares cus_X between A and B. Tombstoning it would later cancel
+    B's live subscription, so it is skipped (ERROR marker, ids only); deletion succeeds and
+    an unshared customer of the same account is still enqueued as before."""
+    user_a = await _user(db, customer="cus_X", sub="sub_X")
+    user_b = await _user(db, customer="cus_X", sub="sub_B")
+    a_id, b_id = user_a.id, user_b.id
+    fake = _fake()
+
+    await _service(app, db, fake).delete_account(user_a)
+
+    db.expire_all()
+    assert await db.scalar(select(User).where(User.id == a_id)) is None
+    assert [r for r in await _rows(db) if r.stripe_customer_id == "cus_X"] == []
+    still = await db.scalar(select(Subscription).where(Subscription.user_id == b_id))
+    assert still is not None
+    assert (still.stripe_customer_id, still.stripe_subscription_id) == ("cus_X", "sub_B")
+    assert still.status is SubscriptionStatus.ACTIVE
+    assert fake.calls_to("cancel_subscription") == []
+    hits = [
+        r
+        for r in caplog.records
+        if r.levelname == "ERROR" and "billing.shared_customer_not_tombstoned" in r.getMessage()
+    ]
+    assert len(hits) == 1 and "cus_X" in hits[0].getMessage()
+    assert "@example.com" not in hits[0].getMessage()
+
+
+async def test_an_unshared_customer_is_still_enqueued_next_to_a_live_other_user(
+    app: FastAPI, db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    user_a = await _user(db)
+    await _user(db, customer="cus_other", sub="sub_other")
+
+    await _service(app, db, _fake()).delete_account(user_a)
+
+    assert [(r.stripe_customer_id, r.stripe_subscription_id) for r in await _rows(db)] == [
+        (CUS, SUB)
+    ]
+    assert not any(
+        "billing.shared_customer_not_tombstoned" in r.getMessage() for r in caplog.records
+    )
+
+
 async def test_customer_only_subscription_row_enqueues_tombstone(
     app: FastAPI, db: AsyncSession
 ) -> None:
