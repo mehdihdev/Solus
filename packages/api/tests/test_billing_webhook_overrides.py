@@ -89,9 +89,9 @@ def _sub_event(
 
 
 def _checkout(
-    eid: str, user_id: uuid.UUID | str | None, *, sub: str | None = SUB
+    eid: str, user_id: uuid.UUID | str | None, *, sub: str | None = SUB, customer: str = CUS
 ) -> dict[str, Any]:
-    obj: dict[str, Any] = {"mode": "subscription", "customer": CUS}
+    obj: dict[str, Any] = {"mode": "subscription", "customer": customer}
     if user_id is not None:
         obj["client_reference_id"] = str(user_id)
     if sub is not None:
@@ -582,6 +582,85 @@ async def test_spoofed_customer_cannot_cancel_another_subscription(
     ]
     row = await _sub(db, uid)
     assert row.stripe_subscription_id == SUB and row.status is not SubscriptionStatus.CANCELED
+
+
+async def _live_user_b(client: AsyncClient, db: AsyncSession) -> uuid.UUID:
+    uid = await _provision(client, "live-b@example.com")
+    await _setup(db, uid)
+    return uid
+
+
+async def _snapshot(db: AsyncSession, uid: uuid.UUID) -> tuple[Any, ...]:
+    row = await _sub(db, uid)
+    return (
+        row.stripe_customer_id,
+        row.stripe_subscription_id,
+        row.plan,
+        row.status,
+        row.limits,
+        row.stripe_event_at,
+    )
+
+
+async def test_checkout_for_a_live_user_naming_a_tombstoned_customer_does_not_relink(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _live_user_b(client, db)
+    await _tombstone(db, cus="cus_dead")
+    before = await _snapshot(db, uid)
+    ledger_before = await _notes(db, uid)
+
+    assert await _run(db, _checkout("evt_a", uid, sub="sub_new", customer="cus_dead"))
+
+    assert await _snapshot(db, uid) == before
+    assert len(await _notes(db, uid)) == len(ledger_before)
+    [tomb] = await _cancel_rows(db)  # nothing enqueued: B's subscription is not canceled
+    assert tomb.completed_at is not None and tomb.stripe_subscription_id is None
+
+
+async def test_subscription_event_matching_b_by_sub_id_but_a_tombstoned_customer_is_ignored(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _live_user_b(client, db)
+    await _tombstone(db, cus="cus_dead")
+    before = await _snapshot(db, uid)
+
+    assert await _run(db, _sub_event("evt_a", sub_id=SUB, customer="cus_dead", created=2000))
+
+    assert await _snapshot(db, uid) == before
+    [tomb] = await _cancel_rows(db)
+    assert tomb.completed_at is not None
+
+
+async def test_the_runner_never_cancels_b_after_a_refused_tombstone_link(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    from fixtures.stripe_fake import FakeStripeGateway
+    from solus_api.services.stripe_cancel import run_due_stripe_cancels
+
+    uid = await _live_user_b(client, db)
+    await _tombstone(db, cus="cus_dead")
+    await _run(db, _checkout("evt_a", uid, sub="sub_new", customer="cus_dead"))
+    await _run(db, _sub_event("evt_b", sub_id=SUB, customer="cus_dead", created=2000))
+    fake = FakeStripeGateway()
+    fake.seed_subscription("sub_new", customer_id="cus_dead")
+
+    summary = await run_due_stripe_cancels(db, fake, now=datetime.now(UTC) + timedelta(days=2))
+
+    assert summary.attempted == 0
+    assert fake.calls_to("cancel_subscription") == []
+    assert fake.subscriptions["sub_new"].status != "canceled"
+    assert (await _sub(db, uid)).stripe_customer_id == CUS
+
+
+async def test_a_live_users_own_customer_still_links_normally(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    uid = await _provision(client, "relink@example.com")
+    await _tombstone(db, cus="cus_dead")
+    assert await _run(db, _checkout("evt_a", uid, sub="sub_ok", customer="cus_fresh"))
+    row = await _sub(db, uid)
+    assert (row.stripe_customer_id, row.stripe_subscription_id) == ("cus_fresh", "sub_ok")
 
 
 async def test_deleted_user_event_is_safe_noop(client: AsyncClient, db: AsyncSession) -> None:

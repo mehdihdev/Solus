@@ -147,6 +147,26 @@ async def _cancel_if_tombstoned(
     logger.warning("late Stripe subscription for deleted customer %s; cancel enqueued", customer_id)
 
 
+async def _refuses_tombstoned_customer(
+    session: AsyncSession, local: Subscription, customer: str | None
+) -> bool:
+    """True when `customer` is a deleted account's tombstoned Stripe customer that the live
+    local row does not already own. A live user's own customer is never tombstoned, so this
+    only trips on a mis-attributed signed event (Dashboard/Payment Link checkout, staff
+    error); the link is refused so the live user's subscription is never canceled or
+    redacted along with the dead customer. Ids only in the log (no PII)."""
+    if not customer or customer == local.stripe_customer_id:
+        return False
+    if not await is_tombstoned_customer(session, customer):
+        return False
+    logger.warning(
+        "refusing to attach tombstoned customer %s to live subscription row %s",
+        customer,
+        local.id,
+    )
+    return True
+
+
 async def _handle_unmatched(
     session: AsyncSession, obj: dict[str, Any], etype: str, customer: str | None, sub_id: str | None
 ) -> None:
@@ -159,6 +179,23 @@ async def _handle_unmatched(
     await _cancel_if_tombstoned(session, customer, sub_id)
 
 
+async def _matched_subscription(
+    session: AsyncSession, obj: dict[str, Any], etype: str, customer: str | None, sub_id: str | None
+) -> Subscription | None:
+    """The live local row this event applies to, or None when it must be ignored (no match,
+    or a match whose customer is a refused tombstoned one)."""
+    local = await _sub_by(session, customer=customer, sub_id=sub_id)
+    if local is None:
+        logger.warning(
+            "stripe subscription event with no local match sub=%s cus=%s", sub_id, customer
+        )
+        await _handle_unmatched(session, obj, etype, customer, sub_id)
+        return None
+    if await _refuses_tombstoned_customer(session, local, customer):
+        return None
+    return local
+
+
 async def _apply_subscription(
     session: AsyncSession, obj: dict[str, Any], meta: "_EventMeta"
 ) -> None:
@@ -166,12 +203,8 @@ async def _apply_subscription(
     plan_prices, plan_credit_grants = meta.plan_prices, meta.plan_credit_grants
     sub_id = _as_id(obj.get("id"))
     customer = _as_id(obj.get("customer"))
-    local = await _sub_by(session, customer=customer, sub_id=sub_id)
+    local = await _matched_subscription(session, obj, etype, customer, sub_id)
     if local is None:
-        logger.warning(
-            "stripe subscription event with no local match sub=%s cus=%s", sub_id, customer
-        )
-        await _handle_unmatched(session, obj, etype, customer, sub_id)
         return
     # Out-of-order guard: ignore an event older than the last one applied.
     if local.stripe_event_at is not None and created < local.stripe_event_at:
@@ -371,6 +404,8 @@ async def _link_subscription_customer(
     if local is None:
         return False
     customer, stripe_sub = _as_id(obj.get("customer")), _as_id(obj.get("subscription"))
+    if await _refuses_tombstoned_customer(session, local, customer):
+        return True  # handled (ignored): never fall through to the tombstone cancel for B
     if customer:
         local.stripe_customer_id = customer
     if stripe_sub:
