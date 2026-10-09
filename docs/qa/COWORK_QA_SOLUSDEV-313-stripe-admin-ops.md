@@ -50,22 +50,63 @@ Business rules to verify against:
 
 ### 1.3 Dev harness for staff operations
 
-Run from `packages/api` with the same env as the API (python snippet; no route exists yet):
+No staff route exists yet (SOLUSDEV-314), so call the service layer with this throwaway script. Save it as
+`packages/api/qa_ops.py` (**do not commit it**; delete it after QA) and run it from `packages/api`, where
+`Settings()` finds the root `.env`:
 
 ```python
-# uv run python - <<'EOF'
-import asyncio, uuid
+import asyncio, json, sys, uuid
 from solus_api.billing.admin_operations import AdminBillingOperations
-# build session, StripeGateway(secret_store), settings exactly as the app does (see deps.py)
-# ops = AdminBillingOperations(session, gateway, settings)
-# result = await ops.change_plan(TARGET_USER_ID, plan=PlanType.PRO, interval="month",
-#     proration="create_prorations", actor_staff_user_id=uuid.uuid4(),
-#     audit_action_id="qa-0001", reason="QA run")
-# print(result.to_dict())
-# EOF
+from solus_api.billing.comp_expiry import sweep_expired_comps
+from solus_api.billing.stripe_gateway import StripeGateway
+from solus_api.connectors.secrets import build_secret_store
+from solus_api.core.config import Settings
+from solus_api.core.db import build_engine, build_sessionmaker
+from solus_api.models import PlanType
+
+
+async def run(operation, target, kwargs):
+    settings = Settings()
+    engine = build_engine(settings.database_url)
+    maker = build_sessionmaker(engine)
+    try:
+        async with maker() as session:
+            if operation == "sweep":
+                print("reverted:", [str(u) for u in await sweep_expired_comps(session)])
+                return
+            ops = AdminBillingOperations(
+                session, StripeGateway(build_secret_store(settings, maker)), settings
+            )
+            audit = kwargs.pop("audit")
+            if "plan" in kwargs:
+                kwargs["plan"] = PlanType(kwargs["plan"])
+            result = await getattr(ops, operation)(
+                uuid.UUID(target), actor_staff_user_id=uuid.uuid4(),
+                audit_action_id=audit, reason="QA run", **kwargs,
+            )
+            print(json.dumps(result.to_dict(), indent=2, default=str))
+    finally:
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(run(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "",
+                    json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}))
 ```
 
-Use a **fresh unique `audit_action_id` per action** (Stripe idempotency keys are derived from it).
+Usage: `uv run python qa_ops.py <operation> <target_user_uuid> '<json kwargs>'`. Operations: `change_plan`,
+`comp_upgrade`, `remove_comp`, `set_limits_override`, `cancel_subscription`, and `sweep` (runs the comp-expiry
+sweep once; needs no target). Examples:
+
+```bash
+uv run python qa_ops.py change_plan <uuid> '{"audit":"qa-001","plan":"pro","interval":"month"}'
+uv run python qa_ops.py comp_upgrade <uuid> '{"audit":"qa-002","plan":"pro","duration":"repeating","months":3,"interval":"month"}'
+uv run python qa_ops.py set_limits_override <uuid> '{"audit":"qa-003","limits":{"max_projects":99}}'
+uv run python qa_ops.py cancel_subscription <uuid> '{"audit":"qa-004","immediate":false}'
+```
+
+Use a **fresh unique `audit` id per action** (Stripe idempotency keys are derived from it; reuse one only to test
+idempotent retries).
 Every result has `before`, `after`, `stripe_refs`, `converges_via_webhook`, `noop`.
 
 ## 2. Staff operations — flows
@@ -174,9 +215,14 @@ Setup: U-paid with an active Stripe subscription (test card).
    - [ ] In Stripe Dashboard (test): the subscription is **canceled immediately**; a **final invoice exists**; there is
          **no proration/credit note** for unused time; the **Customer still exists**.
    - [ ] DB: `stripe_cancel_requests` has one row for the customer with `completed_at` set; it contains only Stripe ids.
-2. **Stripe down:** stop `stripe`/block network or remove the Stripe key, then delete another paid user.
+2. **Stripe down:** make Stripe unreachable (e.g. store a temporarily wrong key with `uv run stripe-setup put-key`),
+   then delete another paid user.
    - [ ] Deletion still succeeds; row remains with `completed_at` NULL and `attempts` ≥ 1.
-   - [ ] Restore Stripe; within ~1–2 minutes (cron) the subscription is canceled and the row completes.
+   - [ ] Restore the good key. **Note:** a wrong key is a non-retryable Stripe error, so the row backs off for
+         **24 hours**. Release it immediately with
+         `update stripe_cancel_requests set next_attempt_at = now() where completed_at is null;`
+         (a pure network outage backs off only 60 s, doubling up to 1 h, and needs no manual release).
+   - [ ] Within ~1–2 minutes (cron) the subscription is canceled and the row completes.
    - [ ] Restart the API with a pending row → startup drain cancels it.
 3. **Already canceled** subscription (cancel in Stripe first, then delete the account) → [ ] row completes, no error.
 4. **No Stripe customer** (U-trial deleted) → [ ] no `stripe_cancel_requests` row.
