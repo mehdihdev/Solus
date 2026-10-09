@@ -108,8 +108,35 @@ async def test_the_stripe_customer_is_never_deleted(app: FastAPI, db: AsyncSessi
         "list_customer_subscriptions",
         "cancel_subscription",
         "release_subscription_schedule",
+        "redact_customer",
     }
     assert not any("customer" in c.method and "delete" in c.method for c in fake.calls)
+
+
+async def test_deletion_cancels_then_redacts_the_customer_pii_but_keeps_email(
+    app: FastAPI, db: AsyncSession
+) -> None:
+    user = await _user(db)
+    fake = _fake()
+    fake.seed_customer(
+        CUS,
+        name="Grace Sentinel",
+        email="grace-sentinel@example.com",
+        metadata={"solus_user_id": str(user.id), "note": "keep"},
+    )
+
+    await _service(app, db, fake).delete_account(user)
+
+    order = [c.method for c in fake.calls]
+    assert order.index("cancel_subscription") < order.index("redact_customer")
+    [call] = fake.calls_to("redact_customer")
+    assert call.args == (CUS,)
+    cust = fake.customers[CUS]
+    assert cust.name == "" and cust.metadata == {"note": "keep"}
+    assert cust.email == "grace-sentinel@example.com"  # kept: invoice / tax records
+    assert not [c for c in fake.calls if "delete" in c.method]
+    [row] = await _rows(db)
+    assert row.completed_at is not None
 
 
 async def test_no_customer_id_means_no_row_and_no_call(app: FastAPI, db: AsyncSession) -> None:

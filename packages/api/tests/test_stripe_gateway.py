@@ -225,6 +225,7 @@ def st(monkeypatch: pytest.MonkeyPatch) -> _Stripe:
         "sub.retrieve": (stripe.Subscription, "retrieve_async", _sub()),
         "sub.modify": (stripe.Subscription, "modify_async", _sub(price="price_new")),
         "sub.cancel": (stripe.Subscription, "cancel_async", _sub(status="canceled")),
+        "cus.modify": (stripe.Customer, "modify_async", {"id": "cus_1"}),
         "coupon.create": (stripe.Coupon, "create_async", {"id": "x"}),
         "sched.create": (stripe.SubscriptionSchedule, "create_async", sched),
         "sched.modify": (stripe.SubscriptionSchedule, "modify_async", sched),
@@ -885,3 +886,79 @@ async def test_without_a_comp_the_first_coupon_is_the_primary(st: _Stripe) -> No
     st.results["sub.retrieve"] = _sub(discounts=[])
     snap = await gw().retrieve_subscription("sub_1")
     assert (snap.coupon_id, snap.coupon_ids) == (None, ())
+
+
+# ---- redact_customer (account-deletion PII redaction) ---------------------- #
+
+
+async def test_redact_customer_clears_only_name_and_solus_user_id(st: _Stripe) -> None:
+    await gw().redact_customer("cus_1", audit_action_id="acctdel-redact-ab12")
+    args, p = st.one("cus.modify")
+    assert args == ("cus_1",)
+    assert p == {
+        "name": "",
+        "metadata": {"solus_user_id": ""},
+        "api_key": KEY,
+        "idempotency_key": "solus-admin-acctdel-redact-ab12-redact-customer",
+    }
+    assert "email" not in p
+
+
+async def test_redact_customer_resource_missing_is_success(st: _Stripe) -> None:
+    st.errors["cus.modify"] = [_invalid("resource_missing")]
+    await gw().redact_customer("cus_1", audit_action_id="a")
+
+
+@pytest.mark.parametrize("customer_id", ["", "sub_1", "cus_", "cus_a b", "cus_1;x", 5])
+async def test_redact_customer_rejects_bad_customer_id_before_any_call(
+    st: _Stripe, customer_id: Any
+) -> None:
+    with pytest.raises(ValueError, match="customer id"):
+        await gw().redact_customer(customer_id, audit_action_id="a")
+    assert st.calls == []
+
+
+@pytest.mark.parametrize("audit", ["", "a b", "x@y.co", "a" * 65, None])
+async def test_redact_customer_rejects_bad_audit_id_before_any_call(
+    st: _Stripe, audit: Any
+) -> None:
+    with pytest.raises(ValueError, match="audit_action_id"):
+        await gw().redact_customer("cus_1", audit_action_id=audit)
+    assert st.calls == []
+
+
+async def test_redact_customer_without_key_is_unconfigured(st: _Stripe) -> None:
+    with pytest.raises(BillingUnconfiguredError):
+        await StripeGateway(_FakeStore(None)).redact_customer("cus_1", audit_action_id="a")
+    assert st.calls == []
+
+
+async def test_redact_customer_translates_errors_without_leaking(st: _Stripe) -> None:
+    st.errors["cus.modify"] = [stripe.APIConnectionError(f"net down {KEY}")]  # type: ignore[no-untyped-call]
+    with pytest.raises(StripeOperationError) as err:
+        await gw().redact_customer("cus_1", audit_action_id="a")
+    assert err.value.retryable is True and KEY not in str(err.value)
+    st.errors["cus.modify"] = [stripe.IdempotencyError("reused")]
+    with pytest.raises(StripeIdempotencyConflictError):
+        await gw().redact_customer("cus_1", audit_action_id="a")
+    st.errors["cus.modify"] = [_invalid("parameter_invalid_empty")]
+    with pytest.raises(StripeOperationError) as bad:
+        await gw().redact_customer("cus_1", audit_action_id="a")
+    assert bad.value.retryable is False
+
+
+async def test_redact_customer_is_bounded_by_a_retryable_timeout(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    from solus_api.billing import stripe_gateway
+
+    async def hang(*args: Any, **params: Any) -> Any:
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(stripe.Customer, "modify_async", hang)
+    monkeypatch.setattr(stripe_gateway, "STRIPE_CALL_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(StripeOperationError) as err:
+        await gw().redact_customer("cus_1", audit_action_id="a")
+    assert err.value.retryable is True and err.value.code == "timeout"

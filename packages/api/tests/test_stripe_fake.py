@@ -235,3 +235,48 @@ async def test_seeded_coupon_ids_and_coupon_changes_stay_in_sync() -> None:
     cleared = await fake.remove_comp_coupon("sub_1", "a2", "s")
     assert cleared.coupon_ids == () and cleared.coupon_id is None
     assert fake.seed_subscription("sub_3", customer_id=None).customer_id is None
+
+
+# ---- redact_customer -------------------------------------------------------- #
+
+
+async def test_redact_customer_clears_name_and_solus_user_id_only() -> None:
+    fake = FakeStripeGateway()
+    fake.seed_customer(
+        "cus_1",
+        name="Ada Lovelace",
+        email="ada@example.com",
+        metadata={"solus_user_id": "u-1", "other": "keep"},
+    )
+
+    await fake.redact_customer("cus_1", audit_action_id="r1")
+
+    cust = fake.customers["cus_1"]
+    assert cust.name == "" and cust.email == "ada@example.com"
+    assert cust.metadata == {"other": "keep"}
+    [call] = fake.calls_to("redact_customer")
+    assert call.args == ("cus_1",) and call.kwargs == {"audit_action_id": "r1"}
+
+
+async def test_redact_customer_is_idempotent_per_key_and_validates() -> None:
+    fake = FakeStripeGateway()
+    fake.seed_customer("cus_1", name="Ada", email="a@b.co")
+    await fake.redact_customer("cus_1", audit_action_id="r1")
+    await fake.redact_customer("cus_1", audit_action_id="r1")
+    with pytest.raises(StripeIdempotencyConflictError):
+        await fake.redact_customer("cus_2", audit_action_id="r1")
+    with pytest.raises(ValueError):
+        await fake.redact_customer("bad", audit_action_id="r2")
+    with pytest.raises(ValueError):
+        await fake.redact_customer("cus_1", audit_action_id="a b")
+    assert len(fake.calls_to("redact_customer")) == 3
+
+
+async def test_redact_customer_missing_customer_is_success_and_failures_inject() -> None:
+    fake = FakeStripeGateway()
+    await fake.redact_customer("cus_gone", audit_action_id="r1")
+    fake.fail_next("redact_customer", FakeStripeGateway.resource_missing())
+    await fake.redact_customer("cus_gone", audit_action_id="r2")
+    fake.fail_next("redact_customer", FakeStripeGateway.connection_error())
+    with pytest.raises(StripeOperationError):
+        await fake.redact_customer("cus_gone", audit_action_id="r3")

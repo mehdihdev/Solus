@@ -783,3 +783,172 @@ async def test_inline_and_startup_db_errors_log_only_the_type(
     text = " ".join(r.getMessage() for r in caplog.records)
     assert "RuntimeError" in text and "hunter2" not in text
     assert all(r.exc_info is None for r in caplog.records)
+
+
+# ---------------------------------------------------------------- PII redaction (FIX-E)
+
+NAME_SENTINEL = "Ada-Sentinel-Lovelace"
+EMAIL_SENTINEL = "ada-sentinel@example.com"
+
+
+def _fake_with_customer(*subs: str, customer: str = "cus_A") -> FakeStripeGateway:
+    fake = _fake(*subs, customer=customer)
+    fake.seed_customer(
+        customer, name=NAME_SENTINEL, email=EMAIL_SENTINEL, metadata={"solus_user_id": "u-1"}
+    )
+    return fake
+
+
+async def test_redaction_follows_a_successful_cancel(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert (summary.completed, summary.failed) == (1, 0)
+    [call] = fake.calls_to("redact_customer")
+    assert call.args == ("cus_A",)
+    audit = call.kwargs["audit_action_id"]
+    [row] = await _rows(db)
+    assert audit == f"acctdel-redact-{row.id.hex}" and len(audit) <= 64
+    cust = fake.customers["cus_A"]
+    assert cust.name == "" and cust.metadata == {}
+    assert cust.email == EMAIL_SENTINEL
+    assert row.completed_at == NOW
+    order = [c.method for c in fake.calls]
+    assert order.index("redact_customer") > order.index("cancel_subscription")
+
+
+async def test_a_customer_with_no_live_subscription_is_still_redacted(db: AsyncSession) -> None:
+    await _enqueue(db, sub=None)
+    fake = _fake_with_customer()
+
+    await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert fake.calls_to("cancel_subscription") == []
+    assert fake.customers["cus_A"].name == ""
+    [row] = await _rows(db)
+    assert row.completed_at == NOW
+
+
+async def test_a_failed_cancel_skips_redaction(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_always("cancel_subscription", FakeStripeGateway.connection_error())
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert summary.failed == 1
+    assert fake.calls_to("redact_customer") == []
+    assert fake.customers["cus_A"].name == NAME_SENTINEL
+
+
+async def test_a_failed_redaction_retries_without_cancelling_again(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_next("redact_customer", FakeStripeGateway.connection_error())
+
+    first = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert first.failed == 1
+    [row] = await _rows(db)
+    assert row.completed_at is None and row.attempts == 1
+    assert row.next_attempt_at == NOW + timedelta(seconds=BACKOFF_BASE_SECONDS)
+    assert fake.customers["cus_A"].name == NAME_SENTINEL
+
+    second = await run_due_stripe_cancels(db, fake, now=row.next_attempt_at)
+
+    assert second.completed == 1
+    assert len(fake.calls_to("cancel_subscription")) == 1  # the retry found nothing live
+    assert len(fake.calls_to("redact_customer")) == 2
+    assert fake.customers["cus_A"].name == ""
+    [done] = await _rows(db)
+    assert done.completed_at is not None
+
+
+async def test_a_non_retryable_redaction_error_backs_off_for_a_day(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_always("redact_customer", StripeOperationError("x", code="invalid", retryable=False))
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    [row] = await _rows(db)
+    assert row.attempts == 1
+    assert row.next_attempt_at == NOW + timedelta(seconds=TERMINAL_BACKOFF_SECONDS)
+
+
+async def test_an_already_deleted_customer_completes(db: AsyncSession) -> None:
+    await _enqueue(db, sub=None)
+    fake = FakeStripeGateway()
+    fake.fail_next("redact_customer", FakeStripeGateway.resource_missing())
+
+    summary = await run_due_stripe_cancels(db, fake, now=NOW)
+
+    assert (summary.completed, summary.failed) == (1, 0)
+    assert len(fake.calls_to("redact_customer")) == 1
+
+
+async def test_redaction_runs_on_the_inline_after_commit_path(db: AsyncSession) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    await run_stripe_cancels_after_commit(db, fake, customer_ids=["cus_A"])
+    assert fake.customers["cus_A"].name == ""
+
+
+async def test_redaction_runs_on_the_startup_path(engine: AsyncEngine) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as setup:
+        await _enqueue(setup)
+    fake = _fake_with_customer("sub_A")
+    await run_startup_stripe_cancels(maker, fake)
+    assert fake.customers["cus_A"].name == ""
+
+
+async def test_a_re_armed_row_redacts_again_with_the_same_idempotency_key(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    await _enqueue(db, sub="sub_B")
+    fake.seed_subscription("sub_B", customer_id="cus_A")
+
+    await run_due_stripe_cancels(db, fake, now=NOW)
+
+    calls = fake.calls_to("redact_customer")
+    assert len(calls) == 2
+    assert calls[0].kwargs["audit_action_id"] == calls[1].kwargs["audit_action_id"]
+    assert fake.subscriptions["sub_B"].status == "canceled"
+
+
+async def test_redaction_logs_never_carry_customer_fields(
+    db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_next(
+        "redact_customer",
+        StripeOperationError("x", code="rate_limit", http_status=429, retryable=True),
+    )
+    caplog.set_level("DEBUG")
+
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    [row] = await _rows(db)
+    await run_due_stripe_cancels(db, fake, now=row.next_attempt_at)
+
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "rate_limit" in text and "429" in text
+    assert NAME_SENTINEL not in text and EMAIL_SENTINEL not in text
+    assert all(r.exc_info is None for r in caplog.records)
+
+
+async def test_a_redaction_error_with_a_leaky_message_logs_only_its_type(
+    db: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    await _enqueue(db)
+    fake = _fake_with_customer("sub_A")
+    fake.fail_next("redact_customer", KeyError(f"{NAME_SENTINEL} {EMAIL_SENTINEL}"))
+    caplog.set_level("DEBUG")
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "KeyError" in text
+    assert NAME_SENTINEL not in text and EMAIL_SENTINEL not in text

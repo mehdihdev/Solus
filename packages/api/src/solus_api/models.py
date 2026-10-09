@@ -615,8 +615,9 @@ class StripeCancelRequest(UuidPkMixin, Base):
     The row is a CUSTOMER tombstone: the runner cancels every live subscription Stripe
     lists for the customer; `stripe_subscription_id` is only a hint.
 
-    RETENTION IS AN OPEN HUMAN DECISION: completed tombstones are retained indefinitely
-    (they hold only Stripe ids). There is deliberately no purge job."""
+    RETENTION (decided by the humans, 2026-10-09): completed tombstones are retained
+    INDEFINITELY — they hold only Stripe ids, and the marker must outlive any late webhook.
+    There is deliberately no purge job."""
 
     __tablename__ = "stripe_cancel_requests"
     __table_args__ = (

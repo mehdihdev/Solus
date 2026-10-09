@@ -39,6 +39,9 @@ ADMIN_ACTOR_METADATA_KEY = "solus_actor"
 COMP_PREV_PRICE_METADATA_KEY = "solus_comp_prev_price"
 COMP_PLAN_METADATA_KEY = "solus_comp_plan"
 
+#: Customer metadata key `get_or_create_customer` writes (cleared again on redaction).
+_USER_ID_METADATA_KEY = "solus_user_id"
+
 MIN_COMP_MONTHS = 1
 MAX_COMP_MONTHS = 36
 _MAX_METADATA_KEYS = 10
@@ -585,6 +588,25 @@ class StripeGateway:
             if (existing := await self._canceled_snapshot(sub_id)) is None:
                 raise
             return CancelResult(True, existing, sub_id)
+
+    async def redact_customer(self, customer_id: str, *, audit_action_id: str) -> None:
+        """Clear the PII Solus put on a deleted account's Stripe Customer: `name` and
+        `metadata.solus_user_id` (Stripe unsets a field / metadata key sent as an empty
+        string). The email and the Customer itself are KEPT (invoice / tax records) and no
+        other field is sent. An already-deleted customer (`resource_missing`) is success."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_token(audit_action_id, "audit_action_id")
+        try:
+            await self._call(
+                "customer.redact",
+                stripe.Customer.modify_async,
+                customer_id,
+                name="",
+                metadata={_USER_ID_METADATA_KEY: ""},
+                idempotency_key=_idem(audit_action_id, "redact-customer"),
+            )
+        except StripeResourceMissingError:
+            return
 
     async def _canceled_snapshot(self, sub_id: str) -> SubscriptionSnapshot | None:
         """After a failed cancel: the snapshot if the subscription is already
