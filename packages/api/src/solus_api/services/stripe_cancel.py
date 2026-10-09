@@ -147,10 +147,15 @@ async def enqueue_stripe_cancel(
 ) -> StripeCancelRequest:
     """Record the duty in the caller's transaction (flush only, never commits).
 
-    One row per customer. An existing COMPLETED row is re-armed (attempts reset, due now);
-    an existing PENDING row keeps its attempts and backoff (a re-arm must not defeat the
-    backoff). The subscription id is a hint only: the run cancels every live subscription
-    of the customer."""
+    One row per customer. An existing COMPLETED row is re-armed (attempts reset, due now).
+    An existing PENDING row keeps its attempts, and keeps its backoff for a re-arm that
+    brings the same (or no) subscription id, so a repeat cannot defeat the backoff. A pending
+    row re-armed with a DIFFERENT, non-null subscription id is made due now: a late live
+    subscription must not wait out a long (e.g. 24h terminal) backoff left by an earlier
+    failure such as a refused PII redaction. Attempts is deliberately NOT reset there, so the
+    failure history and the exponential growth survive and a flood of new ids cannot be used
+    to hammer Stripe faster than the per-run batch allows. The subscription id is a hint
+    only: the run cancels every live subscription of the customer."""
     _check(customer_id, _CUSTOMER_ID_RE, "customer")
     if subscription_id is not None:
         _check(subscription_id, _SUBSCRIPTION_ID_RE, "subscription")
@@ -164,6 +169,12 @@ async def enqueue_stripe_cancel(
         created_at=stamp,
     )
     pending = StripeCancelRequest.completed_at.is_(None)
+    new_subscription = insert.excluded.stripe_subscription_id.is_not(None) & (
+        StripeCancelRequest.stripe_subscription_id.is_distinct_from(
+            insert.excluded.stripe_subscription_id
+        )
+    )
+    keep_backoff = pending & ~new_subscription
     upsert = insert.on_conflict_do_update(
         index_elements=[StripeCancelRequest.stripe_customer_id],
         set_={
@@ -172,7 +183,9 @@ async def enqueue_stripe_cancel(
                 StripeCancelRequest.stripe_subscription_id,
             ),
             "attempts": case((pending, StripeCancelRequest.attempts), else_=0),
-            "next_attempt_at": case((pending, StripeCancelRequest.next_attempt_at), else_=stamp),
+            "next_attempt_at": case(
+                (keep_backoff, StripeCancelRequest.next_attempt_at), else_=stamp
+            ),
             "completed_at": None,
         },
     ).returning(StripeCancelRequest)

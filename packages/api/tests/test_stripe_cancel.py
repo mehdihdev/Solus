@@ -87,7 +87,11 @@ async def test_enqueue_re_arms_an_existing_row(db: AsyncSession) -> None:
     assert again.completed_at is None and again.attempts == 0
 
 
-async def test_re_arming_a_pending_row_keeps_attempts_and_backoff(db: AsyncSession) -> None:
+@pytest.mark.parametrize("rearm_sub", ["sub_A", None])
+async def test_re_arming_a_pending_row_keeps_attempts_and_backoff(
+    db: AsyncSession, rearm_sub: str | None
+) -> None:
+    """A re-arm bringing the SAME (or no) subscription id must not defeat the backoff."""
     await _enqueue(db, sub="sub_A")
     fake = _fake("sub_A")
     fake.fail_always(
@@ -98,11 +102,58 @@ async def test_re_arming_a_pending_row_keeps_attempts_and_backoff(db: AsyncSessi
     due_at = before.next_attempt_at
     assert before.attempts == 1 and due_at == NOW + timedelta(seconds=TERMINAL_BACKOFF_SECONDS)
 
-    await _enqueue(db, sub="sub_B")
+    await _enqueue(db, sub=rearm_sub)
 
     [after] = await _rows(db)
     assert after.attempts == 1 and after.next_attempt_at == due_at
     assert after.completed_at is None
+
+
+async def test_re_arming_a_pending_row_with_a_new_subscription_is_due_now_but_keeps_attempts(
+    db: AsyncSession,
+) -> None:
+    """A NEW subscription id must not wait out the backoff (a live sub would stay live), yet
+    attempts is kept so the failure history and the exponential growth are not reset."""
+    await _enqueue(db, sub="sub_A")
+    fake = _fake("sub_A")
+    fake.fail_always(
+        "cancel_subscription", StripeOperationError("x", code="invalid", retryable=False)
+    )
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    later = NOW + timedelta(minutes=5)
+
+    await enqueue_stripe_cancel(db, customer_id="cus_A", subscription_id="sub_B", now=later)
+    await db.commit()
+
+    [after] = await _rows(db)
+    assert after.next_attempt_at == later
+    assert after.attempts == 1 and after.stripe_subscription_id == "sub_B"
+    assert after.completed_at is None
+
+
+async def test_a_late_subscription_after_a_non_retryable_redaction_failure_is_canceled_promptly(
+    db: AsyncSession,
+) -> None:
+    await _enqueue(db, sub="sub_A")
+    fake = _fake_with_customer("sub_A")
+    fake.fail_always("redact_customer", StripeOperationError("x", code="invalid", retryable=False))
+    await run_due_stripe_cancels(db, fake, now=NOW)
+    [parked] = await _rows(db)
+    assert parked.next_attempt_at == NOW + timedelta(seconds=TERMINAL_BACKOFF_SECONDS)
+    assert fake.subscriptions["sub_A"].status == "canceled"
+
+    fake.seed_subscription("sub_B", customer_id="cus_A")
+    late = NOW + timedelta(minutes=10)
+    await enqueue_stripe_cancel(db, customer_id="cus_A", subscription_id="sub_B", now=late)
+    await db.commit()
+    summary = await run_due_stripe_cancels(db, fake, now=late)
+
+    assert summary.attempted == 1
+    assert fake.subscriptions["sub_B"].status == "canceled"
+    assert [c.args[0] for c in fake.calls_to("cancel_subscription")] == ["sub_A", "sub_B"]
+    [row] = await _rows(db)
+    assert row.attempts == 2  # kept (1) + this run's failed redaction
+    assert row.next_attempt_at == late + timedelta(seconds=TERMINAL_BACKOFF_SECONDS)
 
 
 async def test_re_arming_a_pending_row_cancels_both_subscriptions(db: AsyncSession) -> None:
