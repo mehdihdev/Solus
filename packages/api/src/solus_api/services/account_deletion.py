@@ -446,11 +446,37 @@ class AccountDeletionService:
                 else None
             )
             by_customer[customer_id] = live or by_customer.get(customer_id)
-        for customer_id, subscription_id in by_customer.items():
+        shared = await self._customers_of_other_live_users(user, by_customer)
+        for customer_id in shared:
+            # Legacy mislink: tombstoning it would later cancel the OTHER live user's
+            # subscription. Ids only (no PII).
+            logger.error(
+                "billing.shared_customer_not_tombstoned: customer %s is also referenced by "
+                "another live subscription; not enqueueing its cancel (deleting user %s)",
+                customer_id,
+                user.id,
+            )
+        enqueue = {c: s for c, s in by_customer.items() if c not in shared}
+        for customer_id, subscription_id in enqueue.items():
             await enqueue_stripe_cancel(
                 self._session, customer_id=customer_id, subscription_id=subscription_id
             )
-        self._cancel_customers = tuple(by_customer)
+        self._cancel_customers = tuple(enqueue)
+
+    async def _customers_of_other_live_users(
+        self, user: User, customers: dict[str, str | None]
+    ) -> set[str]:
+        """Of these Stripe customers, those a DIFFERENT user's live subscription row holds."""
+        if not customers:
+            return set()
+        rows = await self._session.scalars(
+            select(Subscription.stripe_customer_id).where(
+                Subscription.user_id != user.id,
+                Subscription.deleted_at.is_(None),
+                Subscription.stripe_customer_id.in_(list(customers)),
+            )
+        )
+        return {customer for customer in rows.all() if customer is not None}
 
     # -- after the commit (best-effort, never blocking)
     async def _after_commit(self, supabase_user_id: str) -> None:
