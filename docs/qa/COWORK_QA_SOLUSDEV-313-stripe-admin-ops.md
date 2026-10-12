@@ -243,6 +243,16 @@ Setup: U-paid with an active Stripe subscription (test card).
    `ownership_transfers` is exercised by automated tests; no UI.)
 9. Deleting an account that is **not** a sole owner of any team → [ ] teams/membership/credits/connections cleaned up
    exactly as before this change (compare with a pre-change deletion; credits forfeited, ledger entry present).
+10. **Shared Stripe customer (legacy mislink):** in the dev DB, point two live users' subscriptions at the same
+    `stripe_customer_id` (`update subscriptions set stripe_customer_id = '<cus_X>' where user_id in ('<A>','<B>');`), then
+    delete user A. → [ ] A's deletion succeeds; **no** `stripe_cancel_requests` row for `<cus_X>`; B's subscription is
+    **not** canceled in Stripe and B's row is untouched; the API log has one ERROR line with the marker
+    `billing.shared_customer_not_tombstoned` (ids only).
+11. **Tombstoned customer on a live user's checkout (cannot be produced from the app; needs a Stripe Dashboard or Payment Link
+    checkout):** with a deleted user's customer `<cus_dead>` still in `stripe_cancel_requests`, complete a Dashboard checkout
+    for live user B that names `<cus_dead>`. → [ ] B's local subscription is **not** relinked to `<cus_dead>`; the API log has an
+    ERROR line `billing.tombstoned_customer_refused`; Stripe's new subscription on `<cus_dead>` is canceled by the cron
+    (B was billed a first period with no entitlement and needs a **manual refund**: record that you saw the ERROR line).
 
 ## 5. Self-serve `PATCH /users/me/subscription`
 
