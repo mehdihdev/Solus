@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from solus_api.billing.entitlements import effective_limits
+from solus_api.billing.plans import CHECKOUTABLE_PLANS
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
 from solus_api.core.config import Settings
@@ -38,6 +40,7 @@ from solus_api.models import (
     SolMode,
     Source,
     SourceType,
+    Subscription,
     SubscriptionStatus,
     Sync,
     Team,
@@ -725,9 +728,29 @@ class SubscriptionRead(_SoftDeletable):
     seat_count: int | None
     custom_price_per_seat: int | None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _serve_effective_limits(cls, data: Any) -> Any:
+        """`limits` on the wire is what enforcement uses: the stored limits (or active staff
+        comp) with the staff `limits_override` merged on top (ADR-023). Staff-only fields
+        (`limits_override`, `comp_*`) are deliberately not exposed."""
+        if isinstance(data, Subscription):
+            values = {name: getattr(data, name) for name in cls.model_fields}
+            return {**values, "limits": effective_limits(data)}
+        return data
+
 
 class SubscriptionUpdate(StrictModel):
+    """Trial plan pick: self-serve plans only (enterprise is contact-sales)."""
+
     plan: PlanType
+
+    @field_validator("plan")
+    @classmethod
+    def _checkoutable(cls, plan: PlanType) -> PlanType:
+        if plan not in CHECKOUTABLE_PLANS:
+            raise ValueError("plan must be one of: basic, pro")
+        return plan
 
 
 class CheckoutSessionCreate(StrictModel):

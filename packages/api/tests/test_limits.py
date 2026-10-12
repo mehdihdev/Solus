@@ -5,10 +5,14 @@ block fires at invite acceptance, and the count-then-create is race-safe.
 """
 
 import asyncio
+import inspect
 import uuid
+from datetime import timedelta
 
+import pytest
 from conftest import BOB, create_project, create_team, me
 from httpx import AsyncClient
+from solus_api.core.errors import APIError
 from solus_api.models import (
     PlanType,
     Project,
@@ -18,8 +22,16 @@ from solus_api.models import (
     Subscription,
     SubscriptionStatus,
     User,
+    default_limits,
+    utcnow,
 )
-from solus_api.services.limits import check_can_add_integration
+from solus_api.services import limits as limits_module
+from solus_api.services.limits import (
+    check_can_accept_team_invite,
+    check_can_add_integration,
+    check_can_use_byo_tool,
+    user_has_byo_entitlement,
+)
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -196,3 +208,134 @@ async def test_patch_subscription_changes_plan_and_limits(
         "byo_paid_tools": None,  # MCP-05: explicit null = unlimited on PRO
     }
     assert data["expires_at"] is not None
+
+
+# --- SOLUSDEV-313: staff override / comp honoured on every check -------------------------
+
+
+async def _user(db: AsyncSession, user_id: str) -> User:
+    user = await db.get(User, uuid.UUID(user_id))
+    assert user is not None
+    return user
+
+
+async def test_override_honoured_on_team_check(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.limits_override = {"max_teams": 1}  # stored BASIC limit is 2
+    await db.commit()
+    await create_team(client, alice_headers, "T1")
+    resp = await client.post("/api/v1/teams", json={"name": "T2"}, headers=alice_headers)
+    assert resp.status_code == 409
+    assert resp.json()["error"]["details"][0]["max"] == 1
+
+
+async def test_override_honoured_on_project_check(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.limits_override = {"max_projects": 0}
+    await db.commit()
+    team = await create_team(client, alice_headers, "T")
+    resp = await client.post(
+        f"/api/v1/teams/{team['id']}/projects", json={"name": "P"}, headers=alice_headers
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["details"][0]["limit"] == "max_projects"
+
+
+async def test_override_honoured_on_integration_check(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.limits_override = {"max_integrations": 0}
+    await db.commit()
+    with pytest.raises(APIError) as exc:
+        await check_can_add_integration(db, await _user(db, alice["id"]))
+    assert exc.value.code == "plan_limit_reached"
+
+
+async def test_override_honoured_on_invite_acceptance(
+    client: AsyncClient, db: AsyncSession, bob_headers: dict[str, str]
+) -> None:
+    bob = await me(client, bob_headers)
+    sub = await _subscription(db, bob["id"])
+    sub.limits_override = {"max_teams": 0}
+    await db.commit()
+    with pytest.raises(APIError) as exc:
+        await check_can_accept_team_invite(db, await _user(db, bob["id"]))
+    assert exc.value.code == "plan_limit_reached"
+
+
+async def test_override_honoured_on_byo_checks(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    user = await _user(db, alice["id"])
+    # BASIC stored limits block BYO ...
+    assert await user_has_byo_entitlement(db, user.id) is False
+    with pytest.raises(APIError):
+        await check_can_use_byo_tool(db, user, "altium")
+    # ... a staff override grants it on both the locked and the non-locking path.
+    sub = await _subscription(db, alice["id"])
+    sub.limits_override = {"byo_paid_tools": 1}
+    await db.commit()
+    assert await user_has_byo_entitlement(db, user.id) is True
+    await check_can_use_byo_tool(db, user, "altium")
+
+
+async def test_override_can_revoke_byo(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.limits = default_limits(PlanType.PRO)
+    sub.limits_override = {"byo_paid_tools": 0}
+    await db.commit()
+    assert await user_has_byo_entitlement(db, uuid.UUID(alice["id"])) is False
+
+
+async def test_explicit_null_override_is_unlimited(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.limits_override = {"max_teams": None}  # explicit null beats BASIC's 2
+    await db.commit()
+    for i in range(3):
+        await create_team(client, alice_headers, f"T{i}")
+
+
+async def test_active_comp_plan_defaults_honoured(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.comp_plan = PlanType.PRO
+    sub.comp_expires_at = None
+    await db.commit()
+    assert await user_has_byo_entitlement(db, uuid.UUID(alice["id"])) is True
+    for i in range(3):
+        await create_team(client, alice_headers, f"T{i}")
+
+
+async def test_expired_comp_is_ignored(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _subscription(db, alice["id"])
+    sub.comp_plan = PlanType.PRO
+    sub.comp_expires_at = utcnow() - timedelta(days=1)
+    await db.commit()
+    assert await user_has_byo_entitlement(db, uuid.UUID(alice["id"])) is False
+
+
+def test_limits_module_never_branches_on_plan_names() -> None:
+    source = inspect.getsource(limits_module)
+    assert "PlanType" not in source
+    assert ".plan" not in source
+    assert "sub.limits" not in source  # every read goes through effective_limits

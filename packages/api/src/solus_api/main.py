@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from solus_api.agent.feeds import DbSolSystems
 from solus_api.agent.perf import SemanticCache
 from solus_api.agent.runtime import LlmRunner
+from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
@@ -92,6 +93,7 @@ from solus_api.routers import (
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
 from solus_api.services.cad_purge import run_startup_cad_purges
+from solus_api.services.stripe_cancel import run_startup_stripe_cancels
 from solus_api.services.supabase_admin import build_supabase_admin
 from solus_api.services.upload_budget import UploadBudget
 from solus_api.storage import build_artifact_store
@@ -257,6 +259,16 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         await run_startup_cad_purges(
             served.state.sessionmaker, served.state.integration_cache.durable_store
         )
+        # SOLUSDEV-313: Stripe cancels due while no process ran. This IS awaited at boot, but
+        # bounded: the drain runs under run_stripe_cancels_after_commit's INLINE_TIMEOUT_SECONDS
+        # (15s) and never raises, so a slow or down Stripe delays startup by at most that
+        # long and never fails it. Leftover rows keep their lease and are retried by the cron.
+        try:
+            await run_startup_stripe_cancels(
+                served.state.sessionmaker, StripeGateway(served.state.secret_store)
+            )
+        except Exception:
+            logging.getLogger("solus.main").exception("startup stripe cancel drain failed")
         # SOLUSDEV-167: begin relaying cross-process graph frames. No-op without
         # Redis, in which case the hub still fans out within this process.
         async with AsyncExitStack() as cleanup:

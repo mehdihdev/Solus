@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, get_args
 from sqlalchemy import DateTime, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.connectors.contracts import (
     AuthKind,
     ConnectorError,
@@ -1117,6 +1118,38 @@ async def purge_cad_accounts(ctx: dict[str, Any]) -> int:
         return await run_due_cad_purges(session, ctx.get("cad_store"))
 
 
+async def cancel_stripe_subscriptions(ctx: dict[str, Any]) -> int:
+    """ARQ cron (every minute and at start): cancel Stripe subscriptions of deleted accounts.
+
+    Drains the durable StripeCancelRequest rows (SOLUSDEV-313); a failing row backs off and is
+    retried by the next run. Never raises to ARQ — the rows are the safety net."""
+    from solus_api.services.stripe_cancel import run_due_stripe_cancels
+
+    try:
+        gateway = ctx.get("stripe_gateway") or StripeGateway(ctx["secret_store"])
+        async with ctx["sessionmaker"]() as session:
+            summary = await run_due_stripe_cancels(session, gateway)
+    except Exception as exc:  # noqa: BLE001 — logged; the durable rows are retried next minute
+        # Type name only: DB tracebacks carry bound parameters (customer/subscription ids).
+        logger.error("stripe cancel cron failed: %s", type(exc).__name__)
+        return 0
+    return summary.completed
+
+
+async def expire_comps(ctx: dict[str, Any]) -> int:
+    """ARQ cron (every 15 minutes): clear expired staff comps and notify the users.
+
+    Returns how many subscriptions were reverted; never raises to ARQ."""
+    from solus_api.billing.comp_expiry import sweep_expired_comps
+
+    try:
+        async with ctx["sessionmaker"]() as session:
+            return len(await sweep_expired_comps(session))
+    except Exception as exc:  # noqa: BLE001 — logged; the sweep is idempotent and runs again
+        logger.error("comp expiry sweep failed: %s", type(exc).__name__)
+        return 0
+
+
 async def source_revision(
     ctx: dict[str, Any], source_id: str, user_id: str, generation: str
 ) -> None:
@@ -1234,6 +1267,10 @@ def build_worker_settings(settings: Settings) -> type:
             cron(sweep_artifacts, minute=None, run_at_startup=False),
             # ADR-038 §1: retries the durable CAD purges revocation queued.
             cron(purge_cad_accounts, minute=None, run_at_startup=True),
+            # SOLUSDEV-313: durable Stripe cancels for deleted accounts (retry with backoff),
+            # and materialising expired staff comps.
+            cron(cancel_stripe_subscriptions, minute=None, run_at_startup=True),
+            cron(expire_comps, minute={0, 15, 30, 45}, run_at_startup=False),
         ]
         on_startup = _on_startup
         on_shutdown = _on_shutdown

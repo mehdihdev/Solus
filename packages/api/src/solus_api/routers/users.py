@@ -1,67 +1,34 @@
 """§2.1 Users & settings — /users/me, /users/me/settings, account deletion."""
 
 import uuid
-from collections.abc import Sequence
-from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits, usage
 from solus_api.billing.development import is_development_unlimited
 from solus_api.bridge.service import ConnectRateLimiter
-from solus_api.connectors.hosted_oauth import hosted_refs
-from solus_api.connectors.integration_cache import IntegrationCache
-from solus_api.connectors.runtime import refresh_secret_ref
-from solus_api.connectors.secrets import SecretStore
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import (
-    TRIAL_DAYS,
     CurrentUser,
     IntegrationCacheDep,
     RequireVerified,
     SecretStoreDep,
     SessionDep,
     SettingsDep,
+    StripeGatewayDep,
     SupabaseAdminDep,
 )
-from solus_api.graph.live_publisher import (
-    queue_account_removed,
-    queue_member_removed,
-    queue_project_removed,
-    queue_source_removed,
-    queue_team_removed,
-)
 from solus_api.models import (
-    AccountConnection,
-    Activity,
-    ConnectionStatus,
-    CreditBalance,
-    CreditLedger,
-    CreditTxnType,
-    DeletedAccount,
-    GraphEdge,
-    GraphEntity,
-    Invite,
-    Job,
-    Membership,
-    Notification,
-    NotificationType,
-    OAuthState,
     PanelBinding,
     PanelPairing,
-    Project,
-    Role,
     SolMode,
-    Source,
     Subscription,
     SubscriptionStatus,
-    Sync,
-    Team,
     User,
     default_limits,
     ensure_utc,
@@ -76,43 +43,21 @@ from solus_api.schemas import (
     serialize_team_summary,
     serialize_user,
 )
-from solus_api.services.cad_purge import run_cad_purges_after_commit
-from solus_api.services.connections import (
-    delete_legacy_family_if_retired,
-    is_connection_owned,
-    revoke_connection,
-    schedule_legacy_grant_purge,
+from solus_api.services.account_deletion import (
+    AccountDeletionService,
+    OwnershipTransferRequired,
+    team_memberships,
 )
 from solus_api.services.events import emit_event
-from solus_api.services.notifications import notify_team
 
 router = APIRouter(prefix="/api/v1/users/me")
-
-
-async def _team_memberships(session: AsyncSession, user: User) -> list[tuple[Team, Membership]]:
-    rows = await session.execute(
-        select(Team, Membership)
-        .join(Membership, Membership.team_id == Team.id)
-        .where(Membership.user_id == user.id, Membership.deleted_at.is_(None))
-        .order_by(Team.created_at)
-    )
-    return [(team, membership) for team, membership in rows.all()]
-
-
-async def _live_members(session: AsyncSession, team_id: uuid.UUID) -> list[Membership]:
-    """Live (non-soft-deleted) members of a team — the set that counts for the
-    sole-owner guard and the leave-vs-cascade decision (SOLUSDEV-82 sec review M1)."""
-    rows = await session.scalars(
-        select(Membership).where(Membership.team_id == team_id, Membership.deleted_at.is_(None))
-    )
-    return list(rows.all())
 
 
 @router.get("")
 async def get_me(user: CurrentUser, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
     teams = [
         serialize_team_summary(team, membership.role, settings)
-        for team, membership in await _team_memberships(session, user)
+        for team, membership in await team_memberships(session, user)
     ]
     return envelope(serialize_user(user, teams))
 
@@ -130,136 +75,9 @@ async def update_me(
     await session.refresh(user)
     teams = [
         serialize_team_summary(team, membership.role, settings)
-        for team, membership in await _team_memberships(session, user)
+        for team, membership in await team_memberships(session, user)
     ]
     return envelope(serialize_user(user, teams))
-
-
-async def _sole_owner_blockers(session: AsyncSession, user: User) -> list[uuid.UUID]:
-    """Teams the user solely owns that still have other members."""
-    blockers: list[uuid.UUID] = []
-    for team, membership in await _team_memberships(session, user):
-        if membership.role is not Role.OWNER:
-            continue
-        members = await _live_members(session, team.id)
-        owners = [m for m in members if m.role is Role.OWNER]
-        if len(owners) == 1 and len(members) > 1:
-            blockers.append(team.id)
-    return blockers
-
-
-async def _delete_source_secrets(
-    secret_store: SecretStore, rows: Sequence[Source], refs: Sequence[str | None]
-) -> None:
-    """The credentials each torn-down source owns (never a connection's shared ones)."""
-    # Families retired by a move but not yet swept go with the rows
-    # (SOLUSDEV-242) — after this, nothing could derive them.
-    for owed in rows:
-        await delete_legacy_family_if_retired(secret_store, owed)
-    for ref in refs:
-        # SOLUSDEV-241: a connection-owned ref is the account's, shared by
-        # every project bound to it — the connection's own lifecycle deletes
-        # it (revoke / account deletion), never a project teardown.
-        if ref and not is_connection_owned(ref):
-            await secret_store.delete(ref)
-            # The OAuth refresh token has its own ref (SOLUS-CAD-01); without
-            # this, deleting an account would leave a live grant against the
-            # user's GitLab/Onshape data. `delete` no-ops when absent.
-            await secret_store.delete(refresh_secret_ref(ref))
-            # SOLUSDEV-168: hosted add-on grants hang off the same ref.
-            # Deleting an account must not leave a live FeatureScript
-            # OAuth2Write token against the user's Onshape documents.
-            for hosted_ref in hosted_refs(ref):
-                await secret_store.delete(hosted_ref)
-
-
-async def delete_projects_cascade(
-    session: AsyncSession,
-    project_ids: list[uuid.UUID],
-    secret_store: SecretStore | None = None,
-    cache: IntegrationCache | None = None,
-) -> None:
-    """Remove projects and everything hanging off them — jobs plus the graph
-    tables (sources/entities/relations/syncs, SOLUSDEV-103) and their stored
-    credentials. Explicit, not FK-cascade (portable across PG/SQLite)."""
-    if not project_ids:
-        return
-    rows = (await session.scalars(select(Source).where(Source.project_id.in_(project_ids)))).all()
-    sources = [(row.id, row.secret_ref) for row in rows]
-    if cache is not None:
-        # ADR-038 §1: legacy per-source grants die with their rows, and so must the CAD
-        # derived through them (the caller runs the purge after its commit).
-        await schedule_legacy_grant_purge(
-            session, cache, rows, deleting_ids={row.id for row in rows}
-        )
-    # Bulk deletes below bypass ORM events, so the live hints are queued by hand
-    # (ADR-037 §3) — published only if the caller's transaction commits.
-    for owed in rows:
-        queue_source_removed(session, project_id=owed.project_id, source_id=owed.id)
-    for project_id, team_id in (
-        await session.execute(
-            select(Project.id, Project.team_id).where(Project.id.in_(project_ids))
-        )
-    ).all():
-        queue_project_removed(session, team_id=team_id, project_id=project_id)
-    if secret_store is not None:
-        await _delete_source_secrets(secret_store, rows, [ref for _sid, ref in sources])
-    source_ids = [sid for sid, _ref in sources]
-    if source_ids:
-        await session.execute(delete(OAuthState).where(OAuthState.source_id.in_(source_ids)))
-    await session.execute(delete(Sync).where(Sync.project_id.in_(project_ids)))
-    await session.execute(delete(GraphEdge).where(GraphEdge.project_id.in_(project_ids)))
-    await session.execute(delete(GraphEntity).where(GraphEntity.project_id.in_(project_ids)))
-    await session.execute(delete(Source).where(Source.project_id.in_(project_ids)))
-    await session.execute(delete(Job).where(Job.project_id.in_(project_ids)))
-    await session.execute(delete(Project).where(Project.id.in_(project_ids)))
-
-
-async def delete_team_cascade(
-    session: AsyncSession,
-    team_id: uuid.UUID,
-    secret_store: SecretStore | None = None,
-    cache: IntegrationCache | None = None,
-) -> None:
-    """Explicit cascade (portable across PG/SQLite FK enforcement)."""
-    project_ids = list(
-        (await session.scalars(select(Project.id).where(Project.team_id == team_id))).all()
-    )
-    await delete_projects_cascade(session, project_ids, secret_store, cache)
-    for member_id in (
-        await session.scalars(
-            select(Membership.user_id).where(
-                Membership.team_id == team_id, Membership.deleted_at.is_(None)
-            )
-        )
-    ).all():
-        queue_member_removed(session, team_id=team_id, user_id=member_id)
-    queue_team_removed(session, team_id=team_id)
-    await session.execute(delete(Activity).where(Activity.team_id == team_id))
-    await session.execute(delete(Invite).where(Invite.team_id == team_id))
-    await session.execute(delete(Membership).where(Membership.team_id == team_id))
-    await session.execute(delete(Team).where(Team.id == team_id))
-
-
-async def _forfeit_credits(session: AsyncSession, user: User) -> None:
-    """Forfeit the user's credits on deletion (ADR-024). The append-only ledger is
-    preserved (its user_id is nulled by the FK on delete); a forfeiture ADJUSTMENT
-    entry records the zeroing, retaining the user id in `attrs`. The cached balance
-    row is removed."""
-    balance = await session.scalar(select(CreditBalance).where(CreditBalance.user_id == user.id))
-    current = balance.balance if balance is not None else 0
-    if current:
-        session.add(
-            CreditLedger(
-                user_id=user.id,
-                amount=-current,
-                type=CreditTxnType.ADJUSTMENT,
-                balance_after=0,
-                attrs={"reason": "account_deleted", "user_id": str(user.id)},
-            )
-        )
-    if balance is not None:
-        await session.delete(balance)
 
 
 @router.delete("", status_code=204)
@@ -269,68 +87,26 @@ async def delete_me(
     secret_store: SecretStoreDep,
     supabase_admin: SupabaseAdminDep,
     cache: IntegrationCacheDep,
+    gateway: StripeGatewayDep,
     _verified: RequireVerified,
 ) -> Response:
-    blockers = await _sole_owner_blockers(session, user)
-    if blockers:
+    """Self-service deletion. Never accepts `ownership_transfers` (staff-only, SOLUSDEV-314)."""
+    service = AccountDeletionService(
+        session,
+        secret_store=secret_store,
+        supabase_admin=supabase_admin,
+        cache=cache,
+        gateway=gateway,
+    )
+    try:
+        await service.delete_account(user)
+    except OwnershipTransferRequired as exc:
         raise APIError(
             409,
-            "ownership_transfer_required",
+            exc.code,
             "Transfer ownership of your teams before deleting your account",
-            [{"team_id": str(team_id)} for team_id in blockers],
-        )
-
-    display = user.display_name or user.email.split("@")[0] or "A teammate"
-    emit_event(session, user=user, event_type="user.deleted")
-    for team, _membership in await _team_memberships(session, user):
-        members = await _live_members(session, team.id)
-        if len(members) == 1:
-            await delete_team_cascade(session, team.id, secret_store, cache)
-        else:
-            # Let the remaining members know a teammate left before we drop the row.
-            await notify_team(
-                session,
-                team_id=team.id,
-                notification_type=NotificationType.MEMBER_LEFT,
-                title=f"{display} left {team.name}",
-                exclude_user_id=user.id,
-                attrs={"team_id": str(team.id)},
-            )
-            await session.execute(
-                delete(Membership).where(
-                    Membership.team_id == team.id, Membership.user_id == user.id
-                )
-            )
-            queue_member_removed(session, team_id=team.id, user_id=user.id)
-    await _forfeit_credits(session, user)
-    # SOLUSDEV-241: the account-scoped grants are the USER's, not any team's, so
-    # no team cascade reaches them. REVOKE each one before the row goes: the
-    # secrets are deleted, the account's cache is dropped, and every source
-    # bound to it — including sources in teams that survive this user — is
-    # disconnected rather than left CONNECTED on a dangling ref.
-    for connection in (
-        await session.scalars(
-            select(AccountConnection).where(
-                AccountConnection.user_id == user.id,
-                AccountConnection.status != ConnectionStatus.REVOKED,
-            )
-        )
-    ).all():
-        await revoke_connection(session, secret_store, connection, cache)
-    # Tombstone the identity so a still-valid token cannot re-provision (durable delete).
-    session.add(DeletedAccount(supabase_user_id=user.supabase_user_id))
-    await session.execute(delete(Notification).where(Notification.user_id == user.id))
-    supabase_user_id = user.supabase_user_id
-    await session.execute(delete(User).where(User.id == user.id))
-    queue_account_removed(session, user_id=user.id)
-    await session.commit()
-    # ADR-038 §1: purge the durable CAD of every grant this deletion ended (best-effort
-    # here; the committed purge records are retried by the worker / next request).
-    await run_cad_purges_after_commit(session, cache.durable_store)
-    # Best-effort remote revoke AFTER the local commit: kills the Supabase session /
-    # auth user. A failure here is logged, not fatal — the tombstone already blocks
-    # re-provision and local data is gone.
-    await supabase_admin.delete_user(supabase_user_id)
+            [{"team_id": str(team_id)} for team_id in exc.team_ids],
+        ) from exc
     return Response(status_code=204)
 
 
@@ -399,13 +175,21 @@ async def get_subscription(user: CurrentUser, session: SessionDep) -> dict[str, 
 async def update_subscription(
     body: SubscriptionUpdate, user: CurrentUser, session: SessionDep
 ) -> dict[str, Any]:
-    """Pick/change the plan during onboarding: (re)starts a 14-day trial of the chosen plan
-    with that plan's limits (ADR-032). Enforcement reads `limits`; real billing is deferred."""
+    """Pick/change the trial plan during onboarding (ADR-032): sets the plan and that plan's
+    default limits while the subscription stays TRIALING. Allowed ONLY for an unpaid local
+    trial (status TRIALING and no Stripe subscription); otherwise 409, because paid plan
+    changes go through Billing/Stripe. `expires_at` is never touched, so repeated calls
+    cannot restart the trial."""
     sub = await _live_subscription(session, user)
+    if sub.status != SubscriptionStatus.TRIALING or sub.stripe_subscription_id is not None:
+        raise APIError(
+            409,
+            "subscription_change_not_allowed",
+            "Your plan can only be changed here during the free trial. "
+            "Use Billing to change or manage your subscription.",
+        )
     sub.plan = body.plan
     sub.limits = default_limits(body.plan)
-    sub.status = SubscriptionStatus.TRIALING
-    sub.expires_at = utcnow() + timedelta(days=TRIAL_DAYS)
     emit_event(
         session, user=user, event_type="subscription.updated", payload={"plan": body.plan.value}
     )

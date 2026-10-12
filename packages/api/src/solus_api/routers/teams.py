@@ -17,8 +17,8 @@ from solus_api.deps import (
     require_role,
 )
 from solus_api.models import Membership, Role, Team, TeamKind
-from solus_api.routers.users import delete_team_cascade
 from solus_api.schemas import TeamCreate, TeamUpdate, serialize_team_detail
+from solus_api.services.account_deletion import delete_team_cascade
 from solus_api.services.activity import record_activity
 from solus_api.services.cad_purge import run_cad_purges_after_commit
 from solus_api.services.events import emit_event

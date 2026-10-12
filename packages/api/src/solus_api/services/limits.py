@@ -1,7 +1,9 @@
 """Per-user plan-limit enforcement (ADR-023/032, SOLUSDEV-72 Decisions C-E).
 
-Every check is against the ACTING USER'S OWN subscription and reads `limits` as DATA
-(null / absent key = unlimited) — NEVER branches on plan name. The count and the caller's
+Every check is against the ACTING USER'S OWN subscription and reads the EFFECTIVE limits
+(`billing.entitlements.effective_limits`: stored limits or active staff comp, with the staff
+`limits_override` merged on top) as DATA (null / absent key = unlimited) — NEVER branches on
+plan name. The count and the caller's
 insert run in the SAME transaction, and the acting user's subscription row is locked
 `FOR UPDATE`, so a double-click can't slip past the limit (a limit that races is a limit that
 leaks). The personal team is always exempt from the team count.
@@ -10,10 +12,12 @@ leaks). The personal team is always exempt from the team count.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.billing.entitlements import effective_limits
 from solus_api.core.errors import APIError
 from solus_api.models import (
     Membership,
@@ -30,7 +34,7 @@ _UPGRADE_URL = "/settings/billing"
 _TEAMS_URL = "/settings/teams"
 
 
-async def _locked_limits(session: AsyncSession, user_id: uuid.UUID) -> dict[str, object]:
+async def _locked_limits(session: AsyncSession, user_id: uuid.UUID) -> Mapping[str, object]:
     """The user's subscription limits, with the row locked `FOR UPDATE` so the check and the
     caller's insert serialize within this transaction. No subscription → not-yet-allowed
     (defensive: onboarding provisions one, so this is a safety net, not the normal path)."""
@@ -43,10 +47,10 @@ async def _locked_limits(session: AsyncSession, user_id: uuid.UUID) -> dict[str,
         raise APIError(
             402, "subscription_required", "Choose a plan to finish onboarding before creating this."
         )
-    return sub.limits
+    return effective_limits(sub)
 
 
-def _limit(limits: dict[str, object], key: str) -> int | None:
+def _limit(limits: Mapping[str, object], key: str) -> int | None:
     """The numeric cap for a key, or None (unlimited) when the key is absent or explicitly null."""
     value = limits.get(key)
     return value if isinstance(value, int) and not isinstance(value, bool) else None
@@ -153,7 +157,7 @@ async def user_has_byo_entitlement(session: AsyncSession, user_id: uuid.UUID) ->
     )
     if sub is None:
         return False
-    cap = _limit(sub.limits, "byo_paid_tools")
+    cap = _limit(effective_limits(sub), "byo_paid_tools")
     return cap is None or cap > 0
 
 

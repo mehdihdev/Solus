@@ -191,6 +191,7 @@ Concretely: outbound provider calls are counted per **provider account** (not pe
 **Cross-plan invite enforcement:** when a user is invited to (or tries to join) a project/team, the limit check is against the **invitee's own** plan limits — e.g. a BASIC user already at their project limit cannot be invited/join. This is a **HARD BLOCK** with a clear message, never an overflow-and-warn.
 
 **Limits are stored as data on the subscription**, not in code: a `limits` JSONB (`max_integrations`, `max_projects`, `max_teams`; `null` = unlimited), populated from plan defaults and **overridable for Enterprise**. Enforcement reads this field and **never hardcodes plan names** (ADR-018/019 budget-and-limit machinery is the enforcement home).
+**Clarified (2026-10-07, SOLUSDEV-313, founder-approved in-chat):** Limits remain stored as data. A subscription may carry a staff-set `limits_override`, merged per key over plan defaults (explicit `null` = unlimited; an absent key falls through to the plan default). Billing events never write or clear the override. Enforcement reads only the effective limits (override merged over plan defaults) and never plan names.
 **Rejected:** Individual/Team-seat pricing (ADR-017; conflated segment with plan); hardcoding plan names in enforcement branches (blocks Enterprise overrides and per-plan tuning); overflow-and-warn on invites (ambiguous billing, silent overage).
 **Revisit when:** Real usage data allows tuning limit values and prices; if a plan between BASIC and PRO proves needed.
 
