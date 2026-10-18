@@ -30,7 +30,7 @@
 ## `sources.installation_id`
 
 - Nullable FK to `team_installations.id`, ON DELETE SET NULL, with an index.
-- When set, `secret_ref = "github-app/installation/{external_installation_id}"` and `connection_id` is NULL.
+- When set, `secret_ref = "github-app/installation/{team_installation_id}"` and `connection_id` is NULL.
 - A source carries either an installation or a connection, never both. This is enforced in the service layer and backed by a CHECK constraint.
 
 ## `invites` (extended)

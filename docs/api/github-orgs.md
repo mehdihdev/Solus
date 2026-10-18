@@ -17,7 +17,7 @@ This is the route plan and wire shapes. It is tier-1 under ADR-032: agents may e
 A COLLABORATIVE team links one GitHub account through the **Solus GitHub App**. The account is normally an organization, but it can be a user account. Once linked:
 
 - Any member+ of the team binds the installation's repos to the team's projects. Nobody needs a personal OAuth.
-- Those sources resolve credentials through the reserved `secret_ref` scheme `github-app/installation/{github_installation_id}`. `connectors/runtime.py::resolve_credentials` mints a 1-hour installation token from the App JWT and caches it for at most 55 minutes. The token is never stored, logged or returned.
+- Those sources resolve credentials through the reserved `secret_ref` scheme `github-app/installation/{team_installation_id}`. `connectors/runtime.py::resolve_credentials` mints a 1-hour installation token from the App JWT and caches it for at most 55 minutes. The token is never stored, logged or returned.
 - The sources keep syncing when the member who linked the org leaves. The installation belongs to the team, not to a person.
 - Freshness comes from the App's single signed webhook. The hourly ETag sweep stays as the backstop.
 - Admins see the org roster and can **suggest** invites. GitHub membership never grants Solus access.
@@ -165,7 +165,7 @@ The existing route gains `installation: true`. It is mutually exclusive with `co
 - The project's team must hold a live, active installation. Otherwise `409 installation_missing`.
 - The caller must be member+ on the project's team.
 - `config.repo` must be visible to the installation, checked against the repo listing. Otherwise `400 repo_not_in_installation`.
-- On success, the Source is created with `installation_id` set (FK to `team_installations.id`) and `secret_ref = "github-app/installation/{github_installation_id}"`.
+- On success, the Source is created with `installation_id` set (FK to `team_installations.id`) and `secret_ref = "github-app/installation/{team_installation_id}"`.
 - It emits data event `github_org.repo_bound`.
 
 A project from **another** team can never reach this team's installation. Lookup is `project.team_id` → installation, never caller input.
@@ -264,3 +264,4 @@ Places that must never treat the reserved ref as a SecretStore key: source disco
 - **GHES limitation.** The per-installation `api_base_url` is honoured by the minter, the App client and the connector. `read_code_file`, `code_content` and `git_revisions` still call `api.github.com` (known limitation, follow-up). The base URL only ever comes from GitHub's installation record, which the App JWT fetches. It is never taken from request input or a webhook payload.
 - **GitHub identity sources.** The trusted sources are a live GitHub `AccountConnection.account_external_id`, or the Supabase admin identity when the service-role key is configured. JWT `user_metadata` is never trusted. Without the service-role key, only a linked GitHub account proves identity.
 - **Install state passthrough.** We assume `state` survives `installations/new?state=…` through to the callback when user authorization during install is enabled. This is to be confirmed against a live App. If it doesn't survive, `install/start` falls back to a second `login/oauth/authorize?client_id=<app>&state=…` step.
+- **The ref names our row, not GitHub's id** (security review, 2026-10-17). `{team_installation_id}` is the `team_installations.id` UUID. A re-link is always a new row, even of the same GitHub installation by another team. So a stale or copied ref (for example on a revision source) points at a soft-deleted row and the status gate refuses it. A ref can never resolve against another tenant's link. Minting and the token cache stay keyed by GitHub's installation id.

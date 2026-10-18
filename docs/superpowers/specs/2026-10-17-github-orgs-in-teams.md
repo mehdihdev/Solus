@@ -90,7 +90,7 @@ Ticket: SOLUSDEV-**_ (to be assigned). Branch: `SOLUSDEV-_**-github-orgs-in-team
   - plan accounting.
 - **`packages/contracts/`: NO CHANGE (confirmed 2026-10-17).**
   - The contract only carries the resolved `Credentials` inside `SyncContext`. Resolution itself lives in `solus_api/connectors/runtime.py::resolve_credentials(secret_store, secret_ref)` (L314), which ~6 callers share: sync, worker, `read_code_file`, source_revisions, document_tree.
-  - The seam is a reserved ref scheme, `github-app/installation/{installation_id}`, that `resolve_credentials` dispatches to the installation-token minter instead of the SecretStore. Every caller inherits it.
+  - The seam is a reserved ref scheme, `github-app/installation/{team_installation_id}`, that `resolve_credentials` dispatches to the installation-token minter instead of the SecretStore. Every caller inherits it.
   - GitHub doesn't override `refresh_credentials`, so `call_with_refresh` never writes a minted token back to the store.
   - Live hints reuse `team.updated`, so the frame contract is unchanged.
 
