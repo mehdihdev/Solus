@@ -30,6 +30,7 @@ from typing import Protocol
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.connectors.github_app import invalidate_installation_token
 from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.runtime import refresh_secret_ref
@@ -64,6 +65,7 @@ from solus_api.models import (
     SubscriptionStatus,
     Sync,
     Team,
+    TeamInstallation,
     TeamKind,
     User,
 )
@@ -81,6 +83,7 @@ from solus_api.services.stripe_cancel import (
     enqueue_stripe_cancel,
     run_stripe_cancels_after_commit,
 )
+from solus_api.services.team_installations import invalidate_installation_caches
 
 logger = logging.getLogger("solus.services.account_deletion")
 
@@ -236,6 +239,19 @@ async def delete_team_cascade(
         (await session.scalars(select(Project.id).where(Project.team_id == team_id))).all()
     )
     await delete_projects_cascade(session, project_ids, secret_store, cache)
+    # ADR-039: the installation row goes with the team (freeing its unique GitHub id), and
+    # its process-local token and cached listings must not outlive it. Projects (and their
+    # sources, which reference installations ON DELETE SET NULL) are already gone.
+    for external_id in (
+        await session.scalars(
+            select(TeamInstallation.external_installation_id).where(
+                TeamInstallation.team_id == team_id
+            )
+        )
+    ).all():
+        invalidate_installation_token(external_id)
+        await invalidate_installation_caches(external_id, cache)
+    await session.execute(delete(TeamInstallation).where(TeamInstallation.team_id == team_id))
     for member_id in (
         await session.scalars(
             select(Membership.user_id).where(

@@ -29,6 +29,7 @@ from solus_api.models import (
     TeamKind,
     User,
 )
+from solus_api.services.team_installations import link_counts_for_user
 
 _UPGRADE_URL = "/settings/billing"
 _TEAMS_URL = "/settings/teams"
@@ -162,18 +163,26 @@ async def user_has_byo_entitlement(session: AsyncSession, user_id: uuid.UUID) ->
 
 
 async def check_can_add_integration(session: AsyncSession, user: User) -> None:
+    """Refuse when the user is at `max_integrations`. The count is the user's own live
+    sources plus the GitHub App installations they linked (ADR-039 section 8). Sources
+    bound through an installation are free: the link is what counts."""
     cap = _limit(await _locked_limits(session, user.id), "max_integrations")
     if cap is None:
         return
-    current = await session.scalar(
+    sources = await session.scalar(
         select(func.count())
         .select_from(Source)
-        .where(Source.created_by == user.id, Source.status != SourceStatus.DISCONNECTED)
+        .where(
+            Source.created_by == user.id,
+            Source.status != SourceStatus.DISCONNECTED,
+            Source.installation_id.is_(None),
+        )
     )
-    if (current or 0) >= cap:
+    current = (sources or 0) + await link_counts_for_user(session, user.id)
+    if current >= cap:
         raise _limit_error(
             "max_integrations",
-            current or 0,
+            current,
             cap,
             "You're at your integration limit. Disconnect a source or upgrade your plan.",
         )
