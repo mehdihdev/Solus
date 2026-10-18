@@ -24,6 +24,7 @@ import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
+import { GitHubOrgCard } from './GitHubOrgCard'
 import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
 import { ProjectGrid } from './ProjectGrid'
 import { TeamActivityPanel } from './TeamActivityPanel'
@@ -163,6 +164,7 @@ function SideColumn({
           onInvite={() => openModal('invite')}
         />
       )}
+      <GitHubSlot home={home} team={team} canManage={canManage} onNavigate={onNavigate} />
       {/* The current project's working copy on THIS machine (moved here from the
           Project Overview): machine-local, re-scoped by "Switch to" on a card. */}
       <LocalFolderSection currentProject={currentProject} />
@@ -178,6 +180,27 @@ function SideColumn({
         projectName={currentProject?.name ?? null}
       />
     </div>
+  )
+}
+
+/** ADR-039: a GitHub organization belongs to a COLLABORATIVE team only. */
+function GitHubSlot({
+  home,
+  team,
+  canManage,
+  onNavigate
+}: Pick<LiveProps, 'home' | 'team' | 'onNavigate'> & {
+  canManage: boolean
+}): React.JSX.Element | null {
+  const active = home.team
+  if (!active || active.is_personal || team.status !== 'ready') return null
+  return (
+    <GitHubOrgCard
+      key={active.team_id}
+      teamId={active.team_id}
+      canManage={canManage}
+      onUpgrade={onNavigate ? () => onNavigate('billing') : undefined}
+    />
   )
 }
 

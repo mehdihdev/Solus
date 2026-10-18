@@ -1,0 +1,429 @@
+// Home's GITHUB ORGANIZATION card (SOLUSDEV-216 / ADR-039, home.md). A team-owned
+// GitHub App installation: link it once and everyone on the team can add the
+// org's repos with no personal sign-in. Every state of the wireflow lives here:
+// unlinked (admin / member), unconfigured, linking, requested, linked,
+// suspended. Collaborative teams only — Home does not mount it on the personal
+// team. Strings come from githubOrgCopy (Guide/Expert); anything the server or
+// GitHub supplies (logins, URLs) is rendered as text, and URLs only when https.
+import { useState } from 'react'
+import { Button } from '../../components/ui/Button'
+import { Card } from '../../components/ui/Card'
+import { Mono } from '../../components/ui/Mono'
+import { Spinner } from '../../components/ui/Spinner'
+import { Icons } from '../../components/ui/icons.constants'
+import { relativeTime } from '../../lib/relativeTime'
+import type { TeamInstallation } from '../../lib/api/resources.teamGithub'
+import { useSettingsStore, type SolMode } from '../../store/settingsStore'
+import { safeHttpsUrl } from './githubInstallFlow'
+import { githubText, refusalCopyKey, type GithubCopyKey } from './githubOrgCopy'
+import { GitHubRosterModal } from './GitHubRosterModal'
+import { ModalShell } from './modals'
+import { PlanLimitNotice } from './PlanLimitNotice'
+import { useTeamGithub, type LinkNotice, type TeamGithub } from './useTeamGithub'
+
+export interface GitHubOrgCardProps {
+  teamId: string
+  /** Owner or admin: may link, unlink and open the roster. */
+  canManage: boolean
+  onUpgrade?: () => void
+}
+
+const NOTE_STYLE: React.CSSProperties = { fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }
+
+export function GitHubOrgCard({
+  teamId,
+  canManage,
+  onUpgrade
+}: GitHubOrgCardProps): React.JSX.Element {
+  const github = useTeamGithub(teamId)
+  const mode = useSettingsStore((s) => s.solMode)
+  // The unlink dialog lives HERE, not in the linked view: a successful unlink
+  // refetches the card to "unlinked", which must not tear the dialog down before
+  // it offers "Uninstall on GitHub".
+  const [unlinking, setUnlinking] = useState(false)
+  return (
+    <div style={{ minWidth: 0 }} data-testid="github-org-card">
+      <div style={{ margin: '0 0 10px' }}>
+        <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+          GITHUB ORGANIZATION
+        </Mono>
+      </div>
+      <Card pad={16}>
+        <CardBody
+          github={github}
+          mode={mode}
+          canManage={canManage}
+          onUpgrade={onUpgrade}
+          onUnlink={() => setUnlinking(true)}
+        />
+      </Card>
+      {unlinking && <UnlinkModal github={github} mode={mode} onClose={() => setUnlinking(false)} />}
+    </div>
+  )
+}
+
+interface BodyProps {
+  github: TeamGithub
+  mode: SolMode
+  canManage: boolean
+  onUpgrade?: () => void
+  onUnlink: () => void
+}
+
+function CardBody({
+  github,
+  mode,
+  canManage,
+  onUpgrade,
+  onUnlink
+}: BodyProps): React.JSX.Element | null {
+  if (github.status === 'idle') return null
+  if (github.status === 'loading') return <Spinner size={14} />
+  if (github.status === 'offline') return null
+  if (github.unconfigured) return <div style={NOTE_STYLE}>{githubText('unconfigured', mode)}</div>
+  if (github.installation) {
+    return (
+      <LinkedView
+        github={github}
+        installation={github.installation}
+        mode={mode}
+        canManage={canManage}
+        onUnlink={onUnlink}
+      />
+    )
+  }
+  return (
+    <UnlinkedView
+      github={github}
+      mode={mode}
+      canManage={canManage}
+      onUpgrade={onUpgrade}
+      onUnlink={onUnlink}
+    />
+  )
+}
+
+function UnlinkedView({ github, mode, canManage, onUpgrade }: BodyProps): React.JSX.Element {
+  const { linking, notice } = github
+  const requested = notice?.kind === 'requested'
+  return (
+    <div>
+      <div style={NOTE_STYLE}>
+        {linking
+          ? githubText('linking', mode)
+          : requested
+            ? githubText('requested', mode)
+            : githubText(canManage ? 'unlinked_admin' : 'unlinked_member', mode)}
+      </div>
+      {canManage && (
+        <div style={{ marginTop: 12 }}>
+          <Button
+            kind="primary"
+            size="sm"
+            disabled={linking}
+            onClick={() => void github.actions.link()}
+          >
+            {linking ? 'Waiting for GitHub…' : 'Link organization'}
+          </Button>
+        </div>
+      )}
+      {notice && <NoticeLine notice={notice} mode={mode} onUpgrade={onUpgrade} />}
+    </div>
+  )
+}
+
+function noticeKey(notice: LinkNotice): GithubCopyKey | null {
+  switch (notice.kind) {
+    case 'requested':
+      return null
+    case 'cancelled':
+      return 'cancelled'
+    case 'refused':
+      return refusalCopyKey(notice.code) ?? 'failed'
+    case 'failed':
+      return notice.reason === 'no_bridge' ? 'no_bridge' : 'failed'
+  }
+}
+
+function NoticeLine({
+  notice,
+  mode,
+  onUpgrade
+}: {
+  notice: LinkNotice
+  mode: SolMode
+  onUpgrade?: () => void
+}): React.JSX.Element | null {
+  if (notice.kind === 'refused' && notice.code === 'plan_limit_reached') {
+    const message = notice.limit?.message ?? githubText('plan_limit_reached', mode)
+    return <PlanLimitNotice message={message} onUpgrade={onUpgrade} />
+  }
+  const key = noticeKey(notice)
+  if (!key) return null
+  const detail = notice.kind === 'failed' ? notice.message : null
+  return (
+    <div
+      role="alert"
+      style={{ marginTop: 10, fontSize: 11.5, color: 'var(--err)', lineHeight: 1.5 }}
+    >
+      {detail ?? githubText(key, mode)}
+    </div>
+  )
+}
+
+function ExternalLink({
+  href,
+  label
+}: {
+  href: string | null
+  label: string
+}): React.JSX.Element | null {
+  if (!href) return null
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 12,
+        color: 'var(--tx)',
+        textDecoration: 'none',
+        border: '1px solid var(--bd)',
+        borderRadius: 3,
+        padding: '6px 12px'
+      }}
+    >
+      {label}
+      <Icons.external size={11} />
+    </a>
+  )
+}
+
+function Avatar({ url }: { url: string | null }): React.JSX.Element {
+  const src = safeHttpsUrl(url)
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 28,
+        height: 28,
+        borderRadius: 6,
+        background: 'var(--sur2)',
+        border: '1px solid var(--bd)',
+        overflow: 'hidden',
+        flexShrink: 0
+      }}
+    >
+      {src && (
+        <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+      )}
+    </span>
+  )
+}
+
+function repoCountText(count: number | null): string | null {
+  if (count === null) return null
+  return `${count} ${count === 1 ? 'repo' : 'repos'}`
+}
+
+function LinkedView({
+  github,
+  installation,
+  mode,
+  canManage,
+  onUnlink
+}: {
+  github: TeamGithub
+  installation: TeamInstallation
+  mode: SolMode
+  canManage: boolean
+  onUnlink: () => void
+}): React.JSX.Element {
+  const [roster, setRoster] = useState(false)
+  const [menu, setMenu] = useState(false)
+  const count = repoCountText(github.repoCount)
+  const linkedBy = installation.linked_by?.name ?? githubText('former_member', mode)
+  const scope = githubText(
+    installation.repository_selection === 'all' ? 'scope_all' : 'scope_selected',
+    mode
+  )
+  const showRoster = canManage && installation.account_type === 'Organization'
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Avatar url={installation.account_avatar_url} />
+        <div style={{ minWidth: 0, fontSize: 12.5 }}>
+          <span style={{ fontWeight: 600, wordBreak: 'break-all' }}>
+            {installation.account_login}
+          </span>
+          <span style={{ color: 'var(--mut)' }}>
+            {' · '}
+            {installation.account_type}
+            {count ? ` · ${count}` : ''}
+          </span>
+        </div>
+      </div>
+      <div style={{ ...NOTE_STYLE, marginTop: 8, fontSize: 11.5 }}>
+        {`Linked by ${linkedBy} · ${relativeTime(installation.linked_at)} · ${scope}`}
+      </div>
+      {installation.status === 'suspended' && (
+        <div
+          role="status"
+          style={{ marginTop: 8, fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}
+        >
+          {githubText('suspended', mode)}
+        </div>
+      )}
+      <div
+        style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}
+      >
+        {showRoster && (
+          <Button kind="soft" size="sm" onClick={() => setRoster(true)}>
+            Members on GitHub
+          </Button>
+        )}
+        <ExternalLink href={safeHttpsUrl(installation.manage_url)} label="Manage on GitHub" />
+        {canManage && (
+          <OverflowMenu
+            open={menu}
+            onToggle={() => setMenu((v) => !v)}
+            onUnlink={() => {
+              setMenu(false)
+              onUnlink()
+            }}
+          />
+        )}
+      </div>
+      {roster && (
+        <GitHubRosterModal
+          actions={github.actions}
+          login={installation.account_login}
+          onClose={() => setRoster(false)}
+        />
+      )}
+    </div>
+  )
+}
+
+function OverflowMenu({
+  open,
+  onToggle,
+  onUnlink
+}: {
+  open: boolean
+  onToggle: () => void
+  onUnlink: () => void
+}): React.JSX.Element {
+  return (
+    <span style={{ position: 'relative' }}>
+      <Button
+        kind="bare"
+        size="sm"
+        aria-label="More actions"
+        aria-haspopup="menu"
+        onClick={onToggle}
+      >
+        ⋯
+      </Button>
+      {open && (
+        <div
+          role="menu"
+          style={{
+            position: 'absolute',
+            right: 0,
+            top: '100%',
+            zIndex: 20,
+            background: 'var(--sur)',
+            border: '1px solid var(--bd)',
+            borderRadius: 4,
+            minWidth: 120
+          }}
+        >
+          <button
+            role="menuitem"
+            onClick={onUnlink}
+            className="interactive"
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '8px 12px',
+              fontSize: 12.5,
+              color: 'var(--err)',
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            Unlink
+          </button>
+        </div>
+      )}
+    </span>
+  )
+}
+
+type UnlinkStep =
+  | { phase: 'confirm'; busy: boolean; failed: boolean }
+  | { phase: 'done'; sources: number; manageUrl: string }
+
+function UnlinkModal({
+  github,
+  mode,
+  onClose
+}: {
+  github: TeamGithub
+  mode: SolMode
+  onClose: () => void
+}): React.JSX.Element {
+  const [step, setStep] = useState<UnlinkStep>({ phase: 'confirm', busy: false, failed: false })
+  const unlink = async (): Promise<void> => {
+    setStep({ phase: 'confirm', busy: true, failed: false })
+    const outcome = await github.actions.unlink()
+    setStep(
+      outcome.ok
+        ? { phase: 'done', sources: outcome.disabledSources, manageUrl: outcome.manageUrl }
+        : { phase: 'confirm', busy: false, failed: true }
+    )
+  }
+  return (
+    <ModalShell onClose={onClose} width={400}>
+      <div role="dialog" aria-modal="true" aria-label="Unlink GitHub organization">
+        <div style={{ fontSize: 16, fontWeight: 600 }}>Unlink GitHub organization</div>
+        {step.phase === 'confirm' ? (
+          <>
+            <div style={{ ...NOTE_STYLE, marginTop: 8 }}>{githubText('unlink_confirm', mode)}</div>
+            {step.failed && (
+              <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
+                {githubText('unlink_failed', mode)}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button kind="ghost" size="sm" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button kind="danger" size="sm" disabled={step.busy} onClick={() => void unlink()}>
+                Unlink
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ ...NOTE_STYLE, marginTop: 8 }}>
+              {githubText('unlink_done', mode, { n: step.sources })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <ExternalLink href={safeHttpsUrl(step.manageUrl)} label="Uninstall on GitHub" />
+              <Button kind="primary" size="sm" onClick={onClose}>
+                Done
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+    </ModalShell>
+  )
+}

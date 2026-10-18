@@ -37,6 +37,17 @@ vi.mock('./ConnectedAccountsCard', () => ({
   )
 }))
 
+// The GitHub organization card is its own feature (SOLUSDEV-216); Home only hosts it.
+vi.mock('./GitHubOrgCard', () => ({
+  GitHubOrgCard: (props: { teamId: string; canManage: boolean }) => (
+    <div
+      data-testid="github-org-card"
+      data-team={props.teamId}
+      data-manage={String(props.canManage)}
+    />
+  )
+}))
+
 const READY_ME = { status: 'ready' as const, me: null, name: 'Maya', email: 'maya@example.dev' }
 
 const TEAM: TeamSummary = {
@@ -166,6 +177,36 @@ describe('HomeScreen — connected accounts wiring', () => {
     useWorkspaceStore.setState({ project: { id: 'p1', name: 'Rover MK2', teamId: 't1' } })
     render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
     expect(screen.getByTestId('connected-accounts')).toHaveAttribute('data-project', 'Rover MK2')
+  })
+})
+
+describe('HomeScreen — GitHub organization card', () => {
+  it('mounts for a collaborative team, scoped to it, with admin gating from the role', () => {
+    mockHome()
+    mockTeam({ myRole: 'member' })
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    const card = screen.getByTestId('github-org-card')
+    expect(card).toHaveAttribute('data-team', 't1')
+    expect(card).toHaveAttribute('data-manage', 'false')
+  })
+
+  it('lets an owner manage', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    expect(screen.getByTestId('github-org-card')).toHaveAttribute('data-manage', 'true')
+  })
+
+  it('is absent on the personal team', () => {
+    mockHome({ team: PERSONAL })
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    expect(screen.queryByTestId('github-org-card')).toBeNull()
+  })
+
+  it('is absent until the team layer is ready', () => {
+    mockHome()
+    mockTeam({ status: 'loading' })
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    expect(screen.queryByTestId('github-org-card')).toBeNull()
   })
 })
 
