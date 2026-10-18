@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -48,7 +49,9 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 INSTALL_ID = 1001
-REF = f"github-app/installation/{INSTALL_ID}"
+#: The seeded `team_installations` row; refs name OUR row, never GitHub's id.
+ROW_ID = uuid.UUID("0190f0e0-0000-7000-8000-000000000001")
+REF = f"github-app/installation/{ROW_ID}"
 NOW = datetime(2026, 10, 17, 12, 0, 0, tzinfo=UTC)
 
 
@@ -105,6 +108,7 @@ async def seed_installation(
     maker: async_sessionmaker[Any],
     *,
     external_id: int = INSTALL_ID,
+    row_id: uuid.UUID = ROW_ID,
     status: InstallationStatus = InstallationStatus.ACTIVE,
     deleted: bool = False,
     team_deleted: bool = False,
@@ -117,6 +121,7 @@ async def seed_installation(
         session.add(team)
         await session.flush()
         row = TeamInstallation(
+            id=row_id,
             team_id=team.id,
             external_installation_id=external_id,
             account_login="acme-robotics",
@@ -417,7 +422,7 @@ async def test_unavailable_installations_are_refused(
 
 async def test_unknown_installation_is_refused(gh: FakeGitHubApp) -> None:
     with pytest.raises(ConnectorError) as exc:
-        await resolve_installation_credentials("github-app/installation/31337")
+        await resolve_installation_credentials(f"github-app/installation/{uuid.uuid4()}")
     assert exc.value.code == "installation_unavailable"
     assert gh.mint_calls == []
 
@@ -471,6 +476,7 @@ async def test_resolve_populates_credentials_metadata(
     assert creds.metadata == {
         "kind": "github_app_installation",
         "installation_id": INSTALL_ID,
+        "team_installation_id": str(ROW_ID),
         "api_base": API,
         "account_login": "acme-robotics",
     }
@@ -755,9 +761,9 @@ async def test_malformed_link_headers_are_ignored(gh: FakeGitHubApp, link: str) 
 
 def test_ref_helpers_round_trip() -> None:
     assert github_app.INSTALLATION_REF_PREFIX == "github-app/installation/"
-    assert github_app.installation_secret_ref(42) == "github-app/installation/42"
-    assert github_app.is_installation_ref("github-app/installation/42")
-    assert github_app.parse_installation_ref("github-app/installation/42") == 42
+    assert github_app.installation_secret_ref(ROW_ID) == REF
+    assert github_app.is_installation_ref(REF)
+    assert github_app.parse_installation_ref(REF) == ROW_ID
 
 
 @pytest.mark.parametrize(
@@ -765,13 +771,14 @@ def test_ref_helpers_round_trip() -> None:
     [
         "github-app/installation/abc",
         "github-app/installation/../1",
-        "github-app/installation/1/refresh",
-        "github-app/installation/1/hosted/x",
-        "github-app/installation/01",
-        "github-app/installation/0",
-        "github-app/installation/-1",
-        "github-app/installation/+1",
-        "github-app/installation/1 ",
+        "github-app/installation/1001",
+        f"{REF}/refresh",
+        f"{REF}/hosted/x",
+        f"github-app/installation/{str(ROW_ID).upper()}",
+        f"github-app/installation/{ROW_ID.hex}",
+        f"github-app/installation/{{{ROW_ID}}}",
+        f"{REF} ",
+        f" {REF}",
         "github-app/installation/",
         "github-app/installation",
         "/github-app/installation/1",
@@ -785,10 +792,11 @@ def test_parse_installation_ref_refuses_anything_but_the_exact_form(ref: str) ->
         github_app.parse_installation_ref(ref)
 
 
-@pytest.mark.parametrize("bad", [0, -5])
-def test_installation_secret_ref_refuses_non_positive_ids(bad: int) -> None:
+@pytest.mark.parametrize("bad", [0, 1001, str(ROW_ID)])
+def test_installation_secret_ref_needs_the_row_uuid(bad: object) -> None:
+    # GitHub's numeric id is refused: a ref must name OUR row (re-link isolation).
     with pytest.raises(ValueError):
-        github_app.installation_secret_ref(bad)
+        github_app.installation_secret_ref(bad)  # type: ignore[arg-type]
 
 
 def test_is_installation_ref_is_prefix_based_and_none_safe() -> None:
@@ -805,3 +813,22 @@ async def test_status_gate_reads_a_fresh_row_each_time(
     async with maker() as session:
         rows = (await session.scalars(select(TeamInstallation))).all()
         assert len(rows) == 1 and rows[0].id == seeded.id
+
+
+async def test_a_stale_ref_never_resolves_against_another_teams_relink(
+    gh: FakeGitHubApp, maker: async_sessionmaker[Any]
+) -> None:
+    """Team A unlinks; team B links the SAME GitHub installation. A's copied ref (e.g. a
+    revision source) must not mint a token for B's link (cross-tenant, ADR-039 §3-4)."""
+    await seed_installation(maker, deleted=True, status=InstallationStatus.REVOKED)
+    relink = uuid.UUID("0190f0e0-0000-7000-8000-000000000002")
+    await seed_installation(maker, row_id=relink)
+
+    with pytest.raises(ConnectorError) as exc:
+        await resolve_installation_credentials(REF)
+    assert exc.value.code == "installation_unavailable"
+    assert gh.mint_calls == []
+
+    creds = await resolve_installation_credentials(github_app.installation_secret_ref(relink))
+    assert creds.metadata["installation_id"] == INSTALL_ID
+    assert creds.metadata["team_installation_id"] == str(relink)

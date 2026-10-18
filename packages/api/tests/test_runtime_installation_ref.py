@@ -1,6 +1,6 @@
 """SOLUSDEV-216 T2 — runtime dispatch of the reserved installation ref (ADR-039 §3).
 
-`resolve_credentials` hands `github-app/installation/{id}` to the App minter and never
+`resolve_credentials` hands `github-app/installation/{row uuid}` to the App minter and never
 touches the SecretStore for it; `call_with_refresh` never writes a refreshed token back.
 """
 
@@ -59,8 +59,10 @@ async def test_installation_ref_dispatches_without_touching_the_store(
     resolved: list[str],
 ) -> None:
     store = SpyStore()
-    creds = await resolve_credentials(store, "github-app/installation/7")
-    assert resolved == ["github-app/installation/7"]
+    creds = await resolve_credentials(
+        store, "github-app/installation/0190f0e0-0000-7000-8000-00000000000a"
+    )
+    assert resolved == ["github-app/installation/0190f0e0-0000-7000-8000-00000000000a"]
     assert store.calls == []
     assert creds.token == "ghs_fake" and creds.refresh_token is None
     assert creds.metadata["installation_id"] == 7
@@ -102,7 +104,9 @@ async def test_the_real_resolver_is_reached_through_the_dispatch(settings: Setti
     github_app.configure_github_app(settings)
     store = SpyStore()
     with pytest.raises(ConnectorError) as exc:
-        await resolve_credentials(store, "github-app/installation/7")
+        await resolve_credentials(
+            store, "github-app/installation/0190f0e0-0000-7000-8000-00000000000a"
+        )
     assert exc.value.code == "github_app_unconfigured"
     assert store.calls == []
 
@@ -152,7 +156,7 @@ async def test_call_with_refresh_never_puts_for_an_installation_ref(attempts: li
             connector=_RefreshingConnector(),
             credentials=creds,
             secret_store=store,
-            secret_ref="github-app/installation/7",
+            secret_ref="github-app/installation/0190f0e0-0000-7000-8000-00000000000a",
             run=run,
         )
     assert exc.value.code == "invalid_credentials"

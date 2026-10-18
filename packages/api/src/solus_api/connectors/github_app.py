@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -61,7 +62,7 @@ DEFAULT_MAX_PAGES: Final = 10
 
 #: Every secret_ref under this prefix is reserved: it is never a SecretStore key.
 INSTALLATION_REF_PREFIX: Final = "github-app/installation/"
-_REF_PATTERN: Final = re.compile(r"[1-9][0-9]{0,18}")
+_REF_PATTERN: Final = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _LOGIN_PATTERN: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,38}")
 _LINK_PART: Final = re.compile(r"\s*<([^>]*)>(.*)")
 
@@ -115,11 +116,15 @@ def _utcnow() -> datetime:
 # ---------------------------------------------------------------- reserved refs
 
 
-def installation_secret_ref(installation_id: int) -> str:
-    """The `Source.secret_ref` of a source bound to GitHub installation `installation_id`."""
-    if installation_id <= 0:
-        raise InvalidInstallationRefError("installation id must be a positive integer")
-    return f"{INSTALLATION_REF_PREFIX}{installation_id}"
+def installation_secret_ref(team_installation_id: uuid.UUID) -> str:
+    """The `Source.secret_ref` of a source bound to the `team_installations` row.
+
+    The ref names OUR row, never GitHub's installation id: a re-link (even of the same
+    GitHub installation, by another team) is a new row, so a stale or copied ref can never
+    resolve against another tenant's link (ADR-039 §3-4)."""
+    if not isinstance(team_installation_id, uuid.UUID):
+        raise InvalidInstallationRefError("installation ref needs the team installation row id")
+    return f"{INSTALLATION_REF_PREFIX}{team_installation_id}"
 
 
 def is_installation_ref(ref: str | None) -> bool:
@@ -127,17 +132,17 @@ def is_installation_ref(ref: str | None) -> bool:
     return bool(ref) and str(ref).startswith(INSTALLATION_REF_PREFIX)
 
 
-def parse_installation_ref(ref: str) -> int:
-    """The installation id of an exact `github-app/installation/{id}` ref.
+def parse_installation_ref(ref: str) -> uuid.UUID:
+    """The team installation row id of an exact `github-app/installation/{uuid}` ref.
 
-    Refuses everything else: non-digits (including non-ASCII digits), leading zeros or
-    signs, whitespace, traversal, and extra segments such as `/refresh`."""
+    Refuses everything else: non-canonical UUIDs (upper case, braces, no hyphens),
+    whitespace, traversal, and extra segments such as `/refresh`."""
     if not ref.startswith(INSTALLATION_REF_PREFIX):
         raise InvalidInstallationRefError("not an installation ref")
     tail = ref[len(INSTALLATION_REF_PREFIX) :]
     if _REF_PATTERN.fullmatch(tail) is None:
         raise InvalidInstallationRefError("malformed installation ref")
-    return int(tail)
+    return uuid.UUID(tail)
 
 
 # ---------------------------------------------------------------- the App JWT
@@ -637,19 +642,18 @@ def _unavailable() -> ConnectorError:
     )
 
 
-async def _live_installation(installation_id: int) -> TeamInstallation:
-    """The ACTIVE, live row for this installation whose team is live, or refuse."""
+async def _live_installation(team_installation_id: uuid.UUID) -> TeamInstallation:
+    """The ACTIVE, live row the ref names, whose team is live, or refuse."""
     async with _session() as session:
         row = await session.scalar(
             select(TeamInstallation)
             .join(Team, Team.id == TeamInstallation.team_id)
             .where(
+                TeamInstallation.id == team_installation_id,
                 TeamInstallation.provider == "github",
-                TeamInstallation.external_installation_id == installation_id,
                 TeamInstallation.deleted_at.is_(None),
                 Team.deleted_at.is_(None),
             )
-            .limit(1)
         )
     if row is None or row.status is not InstallationStatus.ACTIVE:
         raise _unavailable()
@@ -662,19 +666,21 @@ async def resolve_installation_credentials(ref: str) -> Credentials:
     Order matters: the ref is parsed strictly, the App must be configured, and the status
     gate runs on EVERY call before the cache is consulted."""
     try:
-        installation_id = parse_installation_ref(ref)
+        row_id = parse_installation_ref(ref)
     except InvalidInstallationRefError as exc:
         raise ConnectorError(
             "invalid_secret_ref", "The installation reference is invalid."
         ) from exc
     _require_settings()
-    row = await _live_installation(installation_id)
+    row = await _live_installation(row_id)
+    installation_id = row.external_installation_id
     minted = await mint_installation_token(installation_id, api_base_url=row.api_base_url)
     return Credentials(
         token=minted.token,
         metadata={
             "kind": "github_app_installation",
             "installation_id": installation_id,
+            "team_installation_id": str(row.id),
             "api_base": row.api_base_url,
             "account_login": row.account_login,
         },

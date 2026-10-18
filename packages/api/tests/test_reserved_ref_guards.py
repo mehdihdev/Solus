@@ -44,8 +44,8 @@ from solus_api.services.connections import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-REF = "github-app/installation/1001"
-RESERVED_REFS = [REF, "github-app/installation/1001/refresh", "github-app/anything", "github-app/"]
+REF = "github-app/installation/0190f0e0-0000-7000-8000-000000000001"
+RESERVED_REFS = [REF, f"{REF}/refresh", "github-app/anything", "github-app/"]
 
 
 # ------------------------------------------------------------------ every backend
@@ -144,7 +144,9 @@ async def test_ordinary_refs_still_work(ref: str) -> None:
 # ------------------------------------------------------------------ ownership
 
 
-@pytest.mark.parametrize("ref", [REF, "github-app/installation/2"])
+@pytest.mark.parametrize(
+    "ref", [REF, "github-app/installation/0190f0e0-0000-7000-8000-000000000002"]
+)
 def test_installation_refs_are_connection_owned(ref: str) -> None:
     assert is_connection_owned(ref) is True
 
