@@ -39,6 +39,15 @@ export type {
 interface OAuthCallbackResult {
   code?: string
   error?: string
+  /** GitHub App install redirect only (SOLUSDEV-216). */
+  installationId?: number
+  setupAction?: 'install' | 'update' | 'request'
+}
+
+/** `install: true` asks main for the longer GitHub App install wait (an org
+ *  owner may take minutes). A flag, not a number: main owns the actual timeout. */
+interface OAuthAwaitOptions {
+  install?: boolean
 }
 
 interface CloneResult {
@@ -75,8 +84,12 @@ const api = {
       ipcRenderer.invoke('oauth:github:await', authorizeUrl),
     getConnectorRedirectUrl: (): Promise<string> =>
       ipcRenderer.invoke('oauth:connector:redirect-url'),
-    awaitOAuth: (authorizeUrl: string, expectedState: string): Promise<OAuthCallbackResult> =>
-      ipcRenderer.invoke('oauth:connector:await', authorizeUrl, expectedState),
+    awaitOAuth: (
+      authorizeUrl: string,
+      expectedState: string,
+      options?: OAuthAwaitOptions
+    ): Promise<OAuthCallbackResult> =>
+      ipcRenderer.invoke('oauth:connector:await', authorizeUrl, expectedState, options),
     // Settle the in-flight connector handshake NOW (wizard closed mid-flow).
     cancelOAuth: (): Promise<boolean> => ipcRenderer.invoke('oauth:connector:cancel')
   },

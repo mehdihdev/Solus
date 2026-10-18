@@ -22,6 +22,7 @@ import {
   awaitGithubCallback,
   awaitOAuthCallback,
   cancelActiveOAuth,
+  INSTALL_OAUTH_TIMEOUT_MS,
   getConnectorRedirectUrl,
   getRedirectUrl
 } from './oauthLoopback'
@@ -731,10 +732,19 @@ function registerOAuthHandlers(): void {
   // WITH THE AUTHORIZATION CODE, so any other webContents that gained IPC reach
   // could open a provider consent screen and read the code out of the result.
   // The state check inside is a CSRF defence, not a caller check.
-  ipcMain.handle('oauth:connector:await', (event, authorizeUrl: string, expectedState: string) =>
-    isMainRendererSender(event)
-      ? awaitOAuthCallback(authorizeUrl, expectedState)
-      : Promise.reject(new Error('unauthorized sender'))
+  // SOLUSDEV-216: a GitHub App install waits on an org owner, so the renderer
+  // may ask for the longer install window; main owns the actual value.
+  ipcMain.handle(
+    'oauth:connector:await',
+    (event, authorizeUrl: string, expectedState: string, options?: { install?: boolean }) =>
+      isMainRendererSender(event)
+        ? awaitOAuthCallback(
+            authorizeUrl,
+            expectedState,
+            undefined,
+            options?.install === true ? { timeoutMs: INSTALL_OAUTH_TIMEOUT_MS } : undefined
+          )
+        : Promise.reject(new Error('unauthorized sender'))
   )
   // Cancel seam (SOLUSDEV-165): closing the connect wizard mid-handshake
   // settles the parked flow now instead of leaving the loopback armed for

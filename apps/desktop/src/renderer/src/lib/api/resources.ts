@@ -827,6 +827,9 @@ export function createSource(
     name: string
     config?: Record<string, unknown>
     connection_id?: string
+    /** Bind through the team's GitHub App installation (SOLUSDEV-216). Mutually
+     *  exclusive with `connection_id` and a token. */
+    installation?: true
   },
   client: ApiClient = api
 ): Promise<Source> {
@@ -964,7 +967,11 @@ export type InviteStatus = 'pending' | 'accepted' | 'revoked'
 export interface InviteApi {
   id: string
   team_id: string
-  email: string
+  /** Null for a GitHub-suggested invite (SOLUSDEV-216). */
+  email: string | null
+  /** Optional so pre-216 fixtures keep compiling; the API always sends them. */
+  github_user_id?: number | null
+  github_login?: string | null
   role: TeamRole
   status: InviteStatus
   created_at: string
@@ -1048,9 +1055,17 @@ export function listInvites(teamId: string, client: ApiClient = api): Promise<In
   return client.request<InviteApi[]>(`/teams/${teamId}/invites`)
 }
 
+type InviteRole = Exclude<TeamRole, 'owner'>
+
+/** Exactly one target: an email, or a GitHub org member by numeric id
+ *  (`github_login` is display-only; the server matches on the id). */
+export type CreateInviteInput =
+  | { email: string; role?: InviteRole }
+  | { github_user_id: number; github_login: string; role?: InviteRole }
+
 export function createInvite(
   teamId: string,
-  input: { email: string; role?: Exclude<TeamRole, 'owner'> },
+  input: CreateInviteInput,
   client: ApiClient = api
 ): Promise<InviteApi> {
   return client.request<InviteApi>(`/teams/${teamId}/invites`, { method: 'POST', body: input })

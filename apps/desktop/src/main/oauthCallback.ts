@@ -53,9 +53,17 @@ export function isValidAuthorizeUrl(authorizeUrl: string): boolean {
   }
 }
 
+/** What GitHub reports about a GitHub App install redirect (SOLUSDEV-216). */
+export type SetupAction = 'install' | 'update' | 'request'
+const SETUP_ACTIONS: readonly string[] = ['install', 'update', 'request']
+
 export interface OAuthCallbackResult {
   code?: string
   error?: string
+  /** GitHub App install only: numeric installation id (absent on `request`). */
+  installationId?: number
+  /** GitHub App install only. */
+  setupAction?: SetupAction
 }
 
 /** Which query param carries the nonce: our own for sign-in, the provider's
@@ -87,7 +95,32 @@ export function parseOAuthCallback(
   if (error) return { error }
 
   const code = url.searchParams.get('code')
-  if (code) return { code }
+  if (code) {
+    const install = parseInstallParams(url.searchParams)
+    return 'error' in install ? install : { code, ...install }
+  }
 
   return { error: 'No authorization code in callback' }
+}
+
+/** Optional GitHub App install params. Untrusted: a numeric id and a closed
+ *  action set, or an error; absent params are simply omitted. */
+function parseInstallParams(
+  params: URLSearchParams
+): { installationId?: number; setupAction?: SetupAction } | { error: string } {
+  const out: { installationId?: number; setupAction?: SetupAction } = {}
+  const rawId = params.get('installation_id')
+  if (rawId !== null) {
+    const id = Number(rawId)
+    if (!/^[0-9]+$/.test(rawId) || !Number.isSafeInteger(id) || id <= 0) {
+      return { error: 'Invalid installation_id in callback' }
+    }
+    out.installationId = id
+  }
+  const rawAction = params.get('setup_action')
+  if (rawAction !== null) {
+    if (!SETUP_ACTIONS.includes(rawAction)) return { error: 'Invalid setup_action in callback' }
+    out.setupAction = rawAction as SetupAction
+  }
+  return out
 }
