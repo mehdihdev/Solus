@@ -395,7 +395,13 @@ function UnlinkModal({
         <div style={{ fontSize: 16, fontWeight: 600 }}>Unlink GitHub organization</div>
         {step.phase === 'confirm' ? (
           <>
-            <div style={{ ...NOTE_STYLE, marginTop: 8 }}>{githubText('unlink_confirm', mode)}</div>
+            <div style={{ ...NOTE_STYLE, marginTop: 8 }}>
+              {typeof github.installation?.bound_source_count === 'number'
+                ? githubText('unlink_confirm_count', mode, {
+                    n: github.installation.bound_source_count
+                  })
+                : githubText('unlink_confirm', mode)}
+            </div>
             {step.failed && (
               <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
                 {githubText('unlink_failed', mode)}

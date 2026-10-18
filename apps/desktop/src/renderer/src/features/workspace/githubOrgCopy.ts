@@ -61,6 +61,11 @@ const COPY = {
       'Unlinking disconnects every project source that reads through this organization. Your repositories and the GitHub App itself are untouched, and you can relink later.',
     Expert: 'Unlink: disconnects every project source using this org.'
   },
+  unlink_confirm_count: {
+    Guide:
+      'Unlinking disconnects {n} project sources that read through this organization. Your repositories and the GitHub App itself are untouched, and you can relink later.',
+    Expert: 'Unlink: disconnects {n} project sources using this org.'
+  },
   unlink_done: {
     Guide:
       'Unlinked — {n} project sources were disconnected. To fully remove Solus from the organization, uninstall the app on GitHub too.',

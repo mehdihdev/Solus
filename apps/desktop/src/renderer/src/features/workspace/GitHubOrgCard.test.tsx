@@ -215,6 +215,16 @@ describe('GitHubOrgCard', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('unlink confirm names how many sources it disconnects when the API says', async () => {
+    mockGithub({ installation: { ...INSTALLATION, bound_source_count: 4 } })
+    renderCard()
+    await userEvent.click(screen.getByRole('button', { name: /more actions/i }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /unlink/i }))
+    expect(
+      within(screen.getByRole('dialog')).getByText(/disconnects 4 project sources/i)
+    ).toBeInTheDocument()
+  })
+
   it('unlink: cancel does nothing; a failure is named', async () => {
     const github = mockGithub({ installation: INSTALLATION })
     vi.mocked(github.actions.unlink).mockResolvedValue({ ok: false })

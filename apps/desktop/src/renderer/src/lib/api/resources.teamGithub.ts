@@ -20,6 +20,8 @@ export interface TeamInstallation {
   html_url: string
   /** GitHub page to change repo access or uninstall. */
   manage_url: string
+  /** Live project sources reading through it; the unlink confirm names it. */
+  bound_source_count?: number
 }
 
 export type SolusMemberStatus = 'member' | 'invited' | 'not_on_solus'
