@@ -63,23 +63,27 @@ def test_worker_cron_includes_prune_github_deliveries() -> None:
 async def test_worker_startup_configures_the_github_app(monkeypatch: pytest.MonkeyPatch) -> None:
     from solus_api.connectors import worker
 
-    seen: list[Settings] = []
-    monkeypatch.setattr(worker, "configure_github_app", seen.append)
+    seen: list[tuple[Settings, object]] = []
+    monkeypatch.setattr(worker, "configure_github_app", lambda s, sm=None: seen.append((s, sm)))
     monkeypatch.setenv("SOLUS_SUPABASE_JWT_SECRET", "test-only")
     monkeypatch.setenv("SOLUS_DATABASE_URL", "postgresql+asyncpg://u:p@localhost/none")
     ctx: dict[str, object] = {}
     await worker._on_startup(ctx)
     await worker._on_shutdown(ctx)
-    assert len(seen) == 1 and isinstance(seen[0], Settings)
+    assert len(seen) == 1 and isinstance(seen[0][0], Settings)
+    # The worker's own sessionmaker is handed over, not the NullPool fallback.
+    assert seen[0][1] is not None and seen[0][1] is ctx["sessionmaker"]
 
 
 def test_create_app_configures_the_github_app(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> None:
-    seen: list[Settings] = []
-    monkeypatch.setattr(main, "configure_github_app", seen.append)
-    create_app(settings=settings)
-    assert seen == [settings]
+    seen: list[tuple[Settings, object]] = []
+    monkeypatch.setattr(main, "configure_github_app", lambda s, sm=None: seen.append((s, sm)))
+    app = create_app(settings=settings)
+    assert len(seen) == 1 and seen[0][0] is settings
+    # The app's own sessionmaker is handed over, not the NullPool fallback.
+    assert seen[0][1] is not None and seen[0][1] is app.state.sessionmaker
 
 
 def _configured(**overrides: str | None) -> Settings:

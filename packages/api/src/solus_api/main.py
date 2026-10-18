@@ -373,7 +373,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         cache=app.state.integration_cache,
     )
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
-    configure_github_app(resolved_settings)
+    configure_github_app(resolved_settings, app.state.sessionmaker)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
     app.state.supabase_admin = build_supabase_admin(resolved_settings)
     # JWKS client for verifying Supabase's asymmetric (ES256) access tokens

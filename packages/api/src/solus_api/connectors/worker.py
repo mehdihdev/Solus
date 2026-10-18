@@ -1221,7 +1221,7 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     )
     ctx["registry"] = build_registry(settings, redis=redis, cache=ctx["integration_cache"])
     ctx["secret_store"] = build_secret_store(settings, sessionmaker)
-    configure_github_app(settings)
+    configure_github_app(settings, sessionmaker)
     ctx["artifact_store"] = build_artifact_store(settings)
 
 

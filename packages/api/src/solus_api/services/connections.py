@@ -30,6 +30,7 @@ from solus_api.connectors.contracts import (
     Credentials,
     OAuthConnector,
 )
+from solus_api.connectors.github_app import is_installation_ref
 from solus_api.connectors.hosted_oauth import hosted_refs
 from solus_api.connectors.integration_cache import Fetched, IntegrationCache
 from solus_api.connectors.registry import ConnectorRegistry, UnknownConnectorError
@@ -95,7 +96,12 @@ def connection_secret_ref(connection_id: uuid.UUID, provider: str) -> str:
 
 
 def is_connection_owned(secret_ref: str | None) -> bool:
-    return bool(secret_ref) and str(secret_ref).startswith(CONNECTION_REF_PREFIX)
+    """True when the ref is NOT the source's to delete: a connection's shared credential,
+    or the reserved GitHub App installation ref (SOLUSDEV-216), which names no stored
+    secret at all. Disconnect, teardown and account deletion all key off this."""
+    return bool(secret_ref) and (
+        str(secret_ref).startswith(CONNECTION_REF_PREFIX) or is_installation_ref(secret_ref)
+    )
 
 
 ONSHAPE_APPLICATION_KEY = "_onshape_oauth_application"
@@ -383,6 +389,7 @@ async def reusable_source(
                 Source.created_by == pending_user_id,
                 Source.status == SourceStatus.PENDING,
                 Source.connection_id.is_(None),
+                Source.installation_id.is_(None),
                 Source.account_external_id.is_(None),
                 Source.secret_ref.is_(None),
             )
@@ -401,6 +408,9 @@ async def reusable_source(
                 Source.project_id == project.id,
                 Source.type == source_type,
                 Source.status != SourceStatus.DISCONNECTED,
+                # A team installation is the team's, never an account's: even a User
+                # installation whose account id equals the caller's GitHub id.
+                Source.installation_id.is_(None),
             )
             .order_by(Source.created_at, Source.id)
             .with_for_update()
@@ -632,6 +642,7 @@ def _own_token_sources(user: User) -> Any:
         select(Source)
         .where(
             Source.connection_id.is_(None),
+            Source.installation_id.is_(None),
             Source.secret_ref.is_not(None),
             Source.status.in_((SourceStatus.CONNECTED, SourceStatus.ERROR)),
             Source.id.in_(_live_member_projects().where(Membership.user_id == user.id)),
@@ -641,7 +652,7 @@ def _own_token_sources(user: User) -> Any:
 
 
 def _is_oauth_source(registry: ConnectorRegistry, source: Source) -> bool:
-    if is_connection_owned(source.secret_ref):
+    if source.installation_id is not None or is_connection_owned(source.secret_ref):
         return False
     try:
         connector = registry.create(source.type.value)
