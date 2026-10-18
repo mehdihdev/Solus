@@ -141,30 +141,44 @@ def _invalid_state() -> APIError:
     return APIError(404, "install_state_invalid", "Unknown or expired install state.")
 
 
-async def _prove_access(client: GitHubAppClient, code: str, installation_id: int) -> None:
-    """Exchange the code and check the user can reach `installation_id`. The token is
-    revoked at GitHub on every path once obtained, and never leaves this function."""
+async def _prove_access(
+    client: GitHubAppClient, code: str, installation_id: int
+) -> InstallationInfo:
+    """Exchange the code, then prove the installer can reach `installation_id` AND is an
+    admin of its account (installation membership alone is granted to any org member who
+    can see one covered repo). The token is revoked at GitHub on every path once obtained,
+    and never leaves this function. Returns the installation's record."""
     try:
         token = await client.exchange_user_code(code)
     except ConnectorError as exc:
         raise _upstream_error(exc) from exc
     try:
         accessible = await client.user_installation_ids(token)
+        if installation_id not in accessible:
+            raise APIError(
+                403, "installation_not_accessible", "You cannot access that GitHub installation."
+            )
+        info = await client.get_installation(installation_id)
+        if not await _is_account_admin(client, token, info):
+            raise APIError(
+                403,
+                "installation_admin_required",
+                "Only an admin of the GitHub account can link its installation.",
+            )
+        return info
     except ConnectorError as exc:
         raise _upstream_error(exc) from exc
     finally:
         await client.revoke_user_token(token)
-    if installation_id not in accessible:
-        raise APIError(
-            403, "installation_not_accessible", "You cannot access that GitHub installation."
-        )
 
 
-async def _fetch_info(client: GitHubAppClient, installation_id: int) -> InstallationInfo:
-    try:
-        return await client.get_installation(installation_id)
-    except ConnectorError as exc:
-        raise _upstream_error(exc) from exc
+async def _is_account_admin(client: GitHubAppClient, token: str, info: InstallationInfo) -> bool:
+    if info.account_type == "Organization":
+        membership = await client.org_membership_role(token, info.account_login)
+        return membership is not None and membership == ("admin", "active")
+    if info.account_type == "User":
+        return await client.user_id(token) == info.account_id
+    return False
 
 
 def _linked_elsewhere() -> APIError:
@@ -188,8 +202,7 @@ async def complete_install(
     """Run steps 1-7 of docs/api/github-orgs.md. Any failure leaves nothing bound."""
     await consume_state(session, state=state, user=user, team=team)
     client = client or GitHubAppClient()
-    await _prove_access(client, code, installation_id)
-    info = await _fetch_info(client, installation_id)
+    info = await _prove_access(client, code, installation_id)
 
     existing = await find_by_external_id(session, installation_id)
     if existing is not None and existing.team_id != team.id:

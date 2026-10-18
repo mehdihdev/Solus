@@ -348,6 +348,44 @@ class GitHubAppClient:
         )
         return {item["id"] for item in items if isinstance(item.get("id"), int)}
 
+    async def org_membership_role(self, user_token: str, org_login: str) -> tuple[str, str] | None:
+        """The token's user's `(role, state)` in the org (`GET /user/memberships/orgs/{org}`),
+        or None when GitHub says they are not a member (404/403)."""
+        if _LOGIN_PATTERN.fullmatch(org_login) is None:
+            raise ConnectorError("invalid_org", "The organization login is not valid.")
+        response = await self._get_as_user(f"/user/memberships/orgs/{org_login}", user_token)
+        rate_limited = response.headers.get("x-ratelimit-remaining") == "0"
+        if response.status_code == httpx.codes.NOT_FOUND or (
+            response.status_code == httpx.codes.FORBIDDEN and not rate_limited
+        ):
+            return None
+        self._check(response)
+        body = self._json(response)
+        role = body.get("role") if isinstance(body, dict) else None
+        state = body.get("state") if isinstance(body, dict) else None
+        if not isinstance(role, str) or not isinstance(state, str):
+            raise ConnectorError("github_error", "Unexpected GitHub membership response.")
+        return role, state
+
+    async def user_id(self, user_token: str) -> int:
+        """The numeric id of the token's user (`GET /user`)."""
+        response = await self._get_as_user("/user", user_token)
+        self._check(response)
+        body = self._json(response)
+        uid = body.get("id") if isinstance(body, dict) else None
+        if not isinstance(uid, int) or isinstance(uid, bool):
+            raise ConnectorError("github_error", "Unexpected GitHub user response.")
+        return uid
+
+    async def _get_as_user(self, path: str, user_token: str) -> httpx.Response:
+        async with self._http() as http:
+            return await self._send(
+                http,
+                "GET",
+                f"{self._api}{path}",
+                headers=self._headers({"Authorization": f"Bearer {user_token}"}),
+            )
+
     async def get_installation(self, installation_id: int) -> InstallationInfo:
         """The installation's record, read with the App JWT."""
         async with self._http() as http:

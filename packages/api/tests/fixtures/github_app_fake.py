@@ -121,6 +121,16 @@ class FakeGitHubApp:
         self.repo_pages: list[list[dict[str, Any]]] = [[]]
         self.member_pages: list[list[dict[str, Any]]] = [[]]
         self.list_requests: list[httpx.Request] = []
+        #: `/user/memberships/orgs/{org}`: default is an active admin (the happy-path installer)
+        self.membership_status = 200
+        self.membership_body: Any = {"state": "active", "role": "admin"}
+        self.membership_network_error = False
+        self.membership_requests: list[httpx.Request] = []
+        #: `/user`: default id matches `installation_record`'s default account id
+        self.user_status = 200
+        self.user_body: Any = {"id": 777, "login": "installer"}
+        self.user_network_error = False
+        self.user_profile_requests: list[httpx.Request] = []
         self._counter = itertools.count(1)
         self._install_routes()
 
@@ -143,6 +153,8 @@ class FakeGitHubApp:
         r.post(f"{WEB}/login/oauth/access_token").mock(side_effect=self._exchange)
         r.delete(url__regex=rf"{API}/applications/[^/]+/token$").mock(side_effect=self._revoke)
         r.get(url__regex=rf"{API}/installation/repositories(\?.*)?$").mock(side_effect=self._repos)
+        r.get(url__regex=rf"{API}/user/memberships/orgs/[^/]+$").mock(side_effect=self._membership)
+        r.get(url__regex=rf"{API}/user$").mock(side_effect=self._user_profile)
         r.get(url__regex=rf"{API}/orgs/[^/]+/members(\?.*)?$").mock(side_effect=self._members)
 
     @staticmethod
@@ -203,6 +215,18 @@ class FakeGitHubApp:
             headers["Link"] = f'<{nxt}>; rel="next"'
         body: Any = {"total_count": len(items), key: items} if key else items
         return httpx.Response(200, json=body, headers=headers)
+
+    def _membership(self, request: httpx.Request) -> httpx.Response:
+        self.membership_requests.append(request)
+        if self.membership_network_error:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(self.membership_status, json=self.membership_body)
+
+    def _user_profile(self, request: httpx.Request) -> httpx.Response:
+        self.user_profile_requests.append(request)
+        if self.user_network_error:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(self.user_status, json=self.user_body)
 
     def _repos(self, request: httpx.Request) -> httpx.Response:
         return self._paged(request, self.repo_pages, "repositories")

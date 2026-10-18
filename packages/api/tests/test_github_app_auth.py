@@ -716,6 +716,79 @@ async def test_org_login_is_validated_before_any_request(gh: FakeGitHubApp) -> N
     assert gh.list_requests == []
 
 
+async def test_org_membership_role_returns_role_and_state(gh: FakeGitHubApp) -> None:
+    gh.membership_body = {"state": "active", "role": "admin"}
+    result = await GitHubAppClient().org_membership_role("ghu_t", "acme-robotics")
+    assert result == ("admin", "active")
+    request = gh.membership_requests[0]
+    assert request.url.path == "/user/memberships/orgs/acme-robotics"
+    assert request.headers["authorization"] == "Bearer ghu_t"
+
+
+@pytest.mark.parametrize("status", [403, 404])
+async def test_org_membership_role_is_none_when_not_a_member(
+    gh: FakeGitHubApp, status: int
+) -> None:
+    gh.membership_status = status
+    assert await GitHubAppClient().org_membership_role("ghu_t", "acme-robotics") is None
+
+
+@pytest.mark.parametrize("body", [[], "x", {"role": "admin"}, {"state": 1, "role": "admin"}])
+async def test_org_membership_role_malformed_body_is_github_error(
+    gh: FakeGitHubApp, body: Any
+) -> None:
+    gh.membership_body = body
+    with pytest.raises(ConnectorError) as exc:
+        await GitHubAppClient().org_membership_role("ghu_t", "acme-robotics")
+    assert exc.value.code == "github_error"
+
+
+async def test_org_membership_role_server_error_and_network_failure(gh: FakeGitHubApp) -> None:
+    gh.membership_status = 500
+    with pytest.raises(ConnectorError) as exc:
+        await GitHubAppClient().org_membership_role("ghu_t", "acme-robotics")
+    assert exc.value.code == "github_error"
+    gh.membership_status = 200
+    gh.membership_network_error = True
+    with pytest.raises(ConnectorError) as exc2:
+        await GitHubAppClient().org_membership_role("ghu_t", "acme-robotics")
+    assert exc2.value.code == "github_unreachable"
+
+
+async def test_org_membership_login_is_validated_before_any_request(gh: FakeGitHubApp) -> None:
+    for bad in ("../admin", "a/b", "", "a b", "x?y=1"):
+        with pytest.raises(ConnectorError) as exc:
+            await GitHubAppClient().org_membership_role("ghu_t", bad)
+        assert exc.value.code == "invalid_org"
+    assert gh.membership_requests == []
+
+
+async def test_user_id_reads_the_authenticated_user(gh: FakeGitHubApp) -> None:
+    gh.user_body = {"id": 31337, "login": "me"}
+    assert await GitHubAppClient().user_id("ghu_t") == 31337
+    assert gh.user_profile_requests[0].headers["authorization"] == "Bearer ghu_t"
+
+
+@pytest.mark.parametrize("body", [[], {}, {"id": "7"}, {"id": True}])
+async def test_user_id_malformed_body_is_github_error(gh: FakeGitHubApp, body: Any) -> None:
+    gh.user_body = body
+    with pytest.raises(ConnectorError) as exc:
+        await GitHubAppClient().user_id("ghu_t")
+    assert exc.value.code == "github_error"
+
+
+async def test_user_id_rejection_and_network_failure(gh: FakeGitHubApp) -> None:
+    gh.user_status = 401
+    with pytest.raises(ConnectorError) as exc:
+        await GitHubAppClient().user_id("ghu_t")
+    assert exc.value.code == "invalid_credentials"
+    gh.user_status = 200
+    gh.user_network_error = True
+    with pytest.raises(ConnectorError) as exc2:
+        await GitHubAppClient().user_id("ghu_t")
+    assert exc2.value.code == "github_unreachable"
+
+
 @pytest.mark.parametrize(
     "link",
     [

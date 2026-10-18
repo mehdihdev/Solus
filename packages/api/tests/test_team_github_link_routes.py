@@ -394,6 +394,132 @@ async def test_complete_failed_code_exchange_is_400_and_consumes_state(
     assert await db.get(OAuthState, state) is None
 
 
+async def _assert_admin_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp, state: str
+) -> None:
+    resp = await complete(client, world, complete_body(state))
+    assert (resp.status_code, resp.json()["error"]["code"]) == (403, "installation_admin_required")
+    assert await installations(db) == []
+    assert len(gh.revoke_requests) == 1  # the user token is still revoked
+
+
+async def test_complete_org_member_who_is_not_admin_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.membership_body = {"state": "active", "role": "member"}
+    await _assert_admin_refused(client, world, db, gh, await started_state(client, world))
+
+
+async def test_complete_pending_org_admin_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.membership_body = {"state": "pending", "role": "admin"}
+    await _assert_admin_refused(client, world, db, gh, await started_state(client, world))
+
+
+@pytest.mark.parametrize("status", [403, 404])
+async def test_complete_non_member_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp, status: int
+) -> None:
+    gh.membership_status = status
+    await _assert_admin_refused(client, world, db, gh, await started_state(client, world))
+
+
+@pytest.mark.parametrize("body", [[], "admin", {"role": "admin"}, {"state": "active"}])
+async def test_complete_malformed_membership_body_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp, body: Any
+) -> None:
+    gh.membership_body = body
+    resp = await complete(client, world, complete_body(await started_state(client, world)))
+    assert resp.status_code in (403, 502)
+    assert await installations(db) == []
+    assert len(gh.revoke_requests) == 1
+
+
+async def test_complete_active_org_admin_links(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    resp = await complete(client, world, complete_body(await started_state(client, world)))
+    assert resp.status_code == 201, resp.text
+    assert gh.membership_requests[0].url.path == "/user/memberships/orgs/acme-robotics"
+    assert len(await installations(db)) == 1
+
+
+async def test_complete_user_installation_checks_the_user_id(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.add_installation(INSTALL_ID, login="solo", account_id=555, account_type="User")
+    gh.user_body = {"id": 555}
+    ok = await complete(client, world, complete_body(await started_state(client, world)))
+    assert ok.status_code == 201, ok.text
+    assert gh.membership_requests == []
+
+
+async def test_complete_user_installation_with_other_user_id_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.add_installation(INSTALL_ID, login="solo", account_id=555, account_type="User")
+    gh.user_body = {"id": 556}
+    await _assert_admin_refused(client, world, db, gh, await started_state(client, world))
+
+
+async def test_complete_unknown_account_type_is_refused(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.add_installation(INSTALL_ID, account_type="Bot")
+    await _assert_admin_refused(client, world, db, gh, await started_state(client, world))
+
+
+@pytest.mark.parametrize("which", ["membership", "user"])
+async def test_complete_network_error_on_admin_proof_is_502_and_binds_nothing(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp, which: str
+) -> None:
+    if which == "membership":
+        gh.membership_network_error = True
+    else:
+        gh.add_installation(INSTALL_ID, account_id=555, account_type="User")
+        gh.user_network_error = True
+    resp = await complete(client, world, complete_body(await started_state(client, world)))
+    assert (resp.status_code, resp.json()["error"]["code"]) == (502, "github_unreachable")
+    assert await installations(db) == []
+    assert len(gh.revoke_requests) == 1
+
+
+async def test_complete_upstream_error_on_admin_proof_is_502(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.membership_status = 500
+    resp = await complete(client, world, complete_body(await started_state(client, world)))
+    assert (resp.status_code, resp.json()["error"]["code"]) == (502, "github_error")
+    assert await installations(db) == []
+
+
+async def test_complete_update_path_requires_admin_and_keeps_binding(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    first = await started_state(client, world)
+    assert (await complete(client, world, complete_body(first))).status_code == 201
+    gh.add_installation(INSTALL_ID, login="acme-renamed")
+    gh.membership_body = {"state": "active", "role": "member"}
+    db.add(
+        OAuthState(
+            state="update-state",
+            provider=PURPOSE,
+            user_id=world.users["admin"].id,
+            team_id=world.seeded.team.id,
+            redirect_uri="http://127.0.0.1:1/cb",
+            expires_at=utcnow() + timedelta(minutes=5),
+        )
+    )
+    await db.commit()
+
+    resp = await complete(client, world, complete_body("update-state", setup_action="update"))
+
+    assert (resp.status_code, resp.json()["error"]["code"]) == (403, "installation_admin_required")
+    rows = await installations(db)
+    assert [r.account_login for r in rows] == ["acme-robotics"]
+
+
 async def test_complete_linked_elsewhere_is_409(
     client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
 ) -> None:
