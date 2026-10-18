@@ -19,6 +19,7 @@ from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
+from solus_api.connectors.github_app import configure_github_app
 from solus_api.connectors.httpcache import InMemoryCacheStore, RedisCacheStore
 from solus_api.connectors.local_acquire import BridgeFolderAcquirer
 from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
@@ -84,9 +85,13 @@ from solus_api.routers import (
     solus_config,
     sources,
     sourcing,
+    team_github,
+    team_github_members,
+    team_github_repos,
     teams,
     users,
     webhooks,
+    webhooks_github_app,
     widgets,
     workspace_layout,
 )
@@ -368,6 +373,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         cache=app.state.integration_cache,
     )
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
+    configure_github_app(resolved_settings)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
     app.state.supabase_admin = build_supabase_admin(resolved_settings)
     # JWKS client for verifying Supabase's asymmetric (ES256) access tokens
@@ -553,6 +559,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(toolkb.router)
     app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
+    # SOLUSDEV-216 (ADR-039): team-owned GitHub App installations (route stubs for now).
+    app.include_router(team_github.router)
+    app.include_router(team_github_repos.router)
+    app.include_router(team_github_members.router)
+    app.include_router(webhooks_github_app.router)
     app.include_router(live.router)
     app.include_router(live.account_router)
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,

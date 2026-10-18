@@ -98,6 +98,12 @@ class InviteStatus(enum.StrEnum):
     REVOKED = "revoked"
 
 
+class InstallationStatus(enum.StrEnum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REVOKED = "revoked"
+
+
 class PlanType(enum.StrEnum):
     BASIC = "basic"
     PRO = "pro"
@@ -139,6 +145,8 @@ class NotificationType(enum.StrEnum):
     PROJECT_SHARED = "project.shared"
     CREDIT_LOW = "credit.low"
     MEMBER_LEFT = "member.left"
+    # SOLUSDEV-216 (ADR-039): a member was removed from the linked GitHub organization.
+    GITHUB_ORG_MEMBER_REMOVED = "github_org.member_removed"
 
 
 class Domain(enum.StrEnum):
@@ -392,11 +400,26 @@ class Membership(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
 class Invite(UuidPkMixin, Base):
     __tablename__ = "invites"
+    __table_args__ = (
+        # SOLUSDEV-216: an invite targets an email OR a GitHub user, never both/neither.
+        CheckConstraint(
+            "(email IS NOT NULL) <> (github_user_id IS NOT NULL)",
+            name="invites_email_xor_github_user",
+        ),
+        Index(
+            "ix_invites_team_github_user_pending",
+            "team_id",
+            "github_user_id",
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
 
     team_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("teams.id", ondelete="CASCADE"), index=True
     )
-    email: Mapped[str] = mapped_column(String(320), index=True)
+    email: Mapped[str | None] = mapped_column(String(320), index=True, default=None)
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    github_login: Mapped[str | None] = mapped_column(String(255), default=None)
     role: Mapped[Role] = mapped_column(_enum_column(Role), default=Role.MEMBER)
     token: Mapped[str] = mapped_column(String(64), unique=True, default=new_invite_token)
     status: Mapped[InviteStatus] = mapped_column(
@@ -407,6 +430,59 @@ class Invite(UuidPkMixin, Base):
         DateTime(timezone=True), nullable=False, default=utcnow
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TeamInstallation(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
+    """A GitHub App installation linked to a team (SOLUSDEV-216, ADR-039).
+
+    No secret, token or key lives here: installation tokens are minted on demand from
+    the App key. `account_login` is display-only and untrusted. `api_base_url` and
+    `web_base_url` are per-row so GitHub Enterprise Server is not foreclosed."""
+
+    __tablename__ = "team_installations"
+    __table_args__ = (
+        _partial_unique(
+            "uq_team_installations_provider_external", "provider", "external_installation_id"
+        ),
+        _partial_unique("uq_team_installations_team_provider", "team_id", "provider"),
+    )
+
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String(32), default="github")
+    external_installation_id: Mapped[int] = mapped_column(BigInteger)
+    account_login: Mapped[str] = mapped_column(String(255))
+    account_external_id: Mapped[int] = mapped_column(BigInteger)
+    account_type: Mapped[str] = mapped_column(String(32))
+    account_avatar_url: Mapped[str | None] = mapped_column(String(512), default=None)
+    repository_selection: Mapped[str] = mapped_column(String(16))
+    status: Mapped[InstallationStatus] = mapped_column(
+        _enum_column(InstallationStatus), default=InstallationStatus.ACTIVE
+    )
+    api_base_url: Mapped[str] = mapped_column(String(255), default="https://api.github.com")
+    web_base_url: Mapped[str] = mapped_column(String(255), default="https://github.com")
+    linked_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class GitHubWebhookDelivery(Base):
+    """`X-GitHub-Delivery` ids already handled, so redeliveries are idempotent.
+
+    Holds no payload; pruned after 7 days by the worker's hourly cron."""
+
+    __tablename__ = "github_webhook_deliveries"
+
+    delivery_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, index=True
+    )
 
 
 class Project(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
@@ -1176,6 +1252,13 @@ class Source(UuidPkMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "sources"
+    __table_args__ = (
+        # SOLUSDEV-216: a source carries a team installation OR an account connection.
+        CheckConstraint(
+            "installation_id IS NULL OR connection_id IS NULL",
+            name="sources_installation_xor_connection",
+        ),
+    )
 
     revision_base_source_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("sources.id", ondelete="CASCADE"), default=None, index=True
@@ -1183,6 +1266,12 @@ class Source(UuidPkMixin, TimestampMixin, Base):
 
     connection_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("account_connections.id", ondelete="SET NULL"), default=None, index=True
+    )
+
+    # SOLUSDEV-216 (ADR-039): set for sources backed by a team GitHub App installation,
+    # whose `secret_ref` is `github-app/installation/{external_installation_id}`.
+    installation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("team_installations.id", ondelete="SET NULL"), default=None, index=True
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
@@ -1387,6 +1476,10 @@ class OAuthState(Base):
     )
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=True
+    )
+    #: SOLUSDEV-216: the team an install handshake was started for (carries the install state).
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), nullable=True, default=None
     )
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid)
     redirect_uri: Mapped[str] = mapped_column(String(1024))

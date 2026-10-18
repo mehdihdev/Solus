@@ -28,6 +28,7 @@ from solus_api.connectors.contracts import (
     ConnectorError,
     Credentials,
 )
+from solus_api.connectors.github_app import configure_github_app
 from solus_api.connectors.httpcache import (
     _KEY_PREFIX,
     CacheStore,
@@ -1150,6 +1151,20 @@ async def expire_comps(ctx: dict[str, Any]) -> int:
         return 0
 
 
+async def prune_github_deliveries(ctx: dict[str, Any]) -> int:
+    """ARQ cron (hourly): drop GitHub webhook delivery ids past the retention window.
+
+    Returns how many rows were removed; never raises to ARQ (the next run retries)."""
+    from solus_api.services.github_webhook_deliveries import prune_deliveries
+
+    try:
+        async with ctx["sessionmaker"]() as session:
+            return await prune_deliveries(session)
+    except Exception as exc:  # noqa: BLE001 — logged; pruning is idempotent
+        logger.error("github delivery prune failed: %s", type(exc).__name__)
+        return 0
+
+
 async def source_revision(
     ctx: dict[str, Any], source_id: str, user_id: str, generation: str
 ) -> None:
@@ -1206,6 +1221,7 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     )
     ctx["registry"] = build_registry(settings, redis=redis, cache=ctx["integration_cache"])
     ctx["secret_store"] = build_secret_store(settings, sessionmaker)
+    configure_github_app(settings)
     ctx["artifact_store"] = build_artifact_store(settings)
 
 
@@ -1271,6 +1287,8 @@ def build_worker_settings(settings: Settings) -> type:
             # and materialising expired staff comps.
             cron(cancel_stripe_subscriptions, minute=None, run_at_startup=True),
             cron(expire_comps, minute={0, 15, 30, 45}, run_at_startup=False),
+            # SOLUSDEV-216: GitHub App webhook delivery-id retention.
+            cron(prune_github_deliveries, minute={0}, run_at_startup=False),
         ]
         on_startup = _on_startup
         on_shutdown = _on_shutdown

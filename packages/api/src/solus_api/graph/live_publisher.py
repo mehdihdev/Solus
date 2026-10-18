@@ -69,6 +69,7 @@ from solus_api.models import (
     ProjectMembership,
     Source,
     Team,
+    TeamInstallation,
     WorkspaceLayout,
 )
 
@@ -157,6 +158,11 @@ def _team(row: Team, kind: _Kind, at: str) -> _Derived:
             Channel.team(row.id),
             AccessRevoked(user_id=None, team_id=row.id, project_id=None, at=at),
         )
+
+
+def _team_installation(row: TeamInstallation, kind: _Kind, at: str) -> _Derived:
+    # Any insert, update or soft delete changes what the team's GitHub card shows.
+    yield Channel.team(row.team_id), TeamUpdated(team_id=row.team_id, at=at)
 
 
 def _membership(row: Membership, kind: _Kind, at: str) -> _Derived:
@@ -254,6 +260,7 @@ _DERIVERS: dict[type, Callable[[Any, _Kind, str], _Derived]] = {
     Activity: _activity,
     Notification: _notification,
     Team: _team,
+    TeamInstallation: _team_installation,
     Membership: _membership,
     ProjectMembership: _project_membership,
     Invite: _invite,

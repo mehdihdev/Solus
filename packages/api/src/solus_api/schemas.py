@@ -44,6 +44,7 @@ from solus_api.models import (
     SubscriptionStatus,
     Sync,
     Team,
+    TeamInstallation,
     TeamKind,
     User,
     ensure_utc,
@@ -222,6 +223,9 @@ class SourceCreate(StrictModel):
     # authorized (Home), instead of running a second OAuth. Exclusive with
     # `token`; must be the caller's own connection for this provider.
     connection_id: str | None = Field(default=None, max_length=64)
+    # SOLUSDEV-216: bind to the team's GitHub App installation instead of a personal
+    # token or connection. Accepted but unused until the source-binding task lands.
+    installation: bool = False
 
     _name_not_blank = field_validator("name")(_not_blank)
     _config_bounded = field_validator("config")(_bound_bulk_config)
@@ -544,6 +548,63 @@ def serialize_invite(invite: Invite, *, include_token: bool = False) -> dict[str
         # Secret shown once at creation (§2.1 pattern) — never on listings.
         data["token"] = invite.token
     return data
+
+
+class InstallationLinkedBy(BaseModel):
+    user_id: UUID
+    name: str
+
+
+class TeamInstallationRead(BaseModel):
+    """A team's linked GitHub App installation (docs/api/github-orgs.md §2). Never
+    carries a token, key or JWT."""
+
+    id: UUID
+    provider: str
+    account_login: str
+    account_type: str
+    account_avatar_url: str | None
+    repository_selection: str
+    status: str
+    linked_by: InstallationLinkedBy | None
+    linked_at: datetime
+    html_url: str
+    manage_url: str
+
+
+def _installation_manage_url(row: TeamInstallation) -> str:
+    base = row.web_base_url.rstrip("/")
+    if row.account_type == "Organization":
+        return (
+            f"{base}/organizations/{row.account_login}"
+            f"/settings/installations/{row.external_installation_id}"
+        )
+    return f"{base}/settings/installations/{row.external_installation_id}"
+
+
+def serialize_team_installation(
+    row: TeamInstallation, linked_by_user: User | None
+) -> TeamInstallationRead:
+    linked_by = (
+        InstallationLinkedBy(
+            user_id=linked_by_user.id, name=linked_by_user.display_name or linked_by_user.email
+        )
+        if linked_by_user is not None
+        else None
+    )
+    return TeamInstallationRead(
+        id=row.id,
+        provider=row.provider,
+        account_login=row.account_login,
+        account_type=row.account_type,
+        account_avatar_url=row.account_avatar_url,
+        repository_selection=row.repository_selection,
+        status=row.status.value,
+        linked_by=linked_by,
+        linked_at=ensure_utc(row.linked_at),
+        html_url=f"{row.web_base_url.rstrip('/')}/{row.account_login}",
+        manage_url=_installation_manage_url(row),
+    )
 
 
 def serialize_project(
