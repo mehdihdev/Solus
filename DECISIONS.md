@@ -1111,7 +1111,7 @@ verification), annual allowance 2,500, quiet period 90 s.
 
 ## ADR-039: Team-owned provider installations — GitHub App linked to a team
 
-**Status:** Accepted (2026-10-17, SOLUSDEV-315 design; approved in-chat against the concrete text below). Implementation ticket TBD.
+**Status:** Accepted (2026-10-17, SOLUSDEV-315 design; approved in-chat against the concrete text below). Implementation: SOLUSDEV-216.
 
 **Context:**
 - GitHub access today is a user-owned OAuth App grant (ADR-035 amendment 2026-09-12), so a team has no GitHub identity of its own.

@@ -314,6 +314,35 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 - **Later joiners** get the team's existing projects automatically (the
   ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
   and its grid shows those projects without any per-project sharing.
+- **GITHUB ORGANIZATION card** (SOLUSDEV-216 / ADR-039). It sits in the right column under MEMBERS, and appears on COLLABORATIVE teams only. On the personal team it is absent.
+
+  ```
+  ┌ GITHUB ORGANIZATION ─────────────────────────────┐
+  │ [avatar] fsae-ev · Organization · 6 repos        │
+  │ Linked by Maya K · 3d ago · all repositories     │
+  │ [Members on GitHub (12)]  [Manage on GitHub ↗] ⋯ │
+  └──────────────────────────────────────────────────┘
+  ```
+
+  - **Unlinked, admin+:** "Link your GitHub organization so everyone on the team can add its repos — no personal sign-in" and a **Link organization** button.
+    - The button calls `install/start`, opens the install URL in the system browser, waits on the loopback, then calls `install/complete`.
+    - Progress copy says the org owner approves on GitHub.
+    - Refusals are named: `plan_limit_reached` (with **Upgrade**), `already_linked`, `installation_linked_elsewhere` ("This organization is linked to another Solus team — unlink it there first"), and `installation_not_accessible`.
+    - `github_app_unconfigured` hides the button with the honest note "GitHub organizations aren't set up on this server".
+  - **Unlinked, member or viewer:** "No GitHub organization linked — ask a team admin". No button.
+  - **Linked:**
+    - Shows the login, type, and repo count (from `/github/repos` meta).
+    - Shows who linked it and when (`linked_by` null → "Linked by a former member").
+    - Shows the access scope ("all repositories" or "selected repositories").
+    - **Manage on GitHub ↗** opens `manage_url`.
+    - The **⋯** menu (admin+) holds **Unlink** behind a confirm naming the count of project sources it disconnects. After the unlink, the dialog offers **Uninstall on GitHub ↗**.
+  - **Suspended:** a warn row, "Suspended on GitHub — syncs paused until an org owner unsuspends Solus".
+  - **Members on GitHub** (admin+, Organization only) opens a roster modal.
+    - Each row: avatar, login, and one of: **On team**, **Invited**, or an **Invite** button. The invite posts `{github_user_id, github_login, role: member}`.
+    - The invitee is told how to join: the one-time token is shown, as for email invites. When they accept, Solus checks their GitHub identity matches.
+    - There is no bulk add and no auto-join (ADR-039 §6).
+  - **A member left the org** (`github_org.member_removed_notice`): an in-app notification to admins and an activity row. Solus does not remove anyone.
+  - Live: `team.updated` refetches the card.
 - **TEAM ACTIVITY** (left column, under the grid; `TeamActivityPanel`): the
   humanised team feed, six rows with actor attribution, `View all activity (N)
 →` opening the dialog with `Load more` (`activity-feed.md`). Per-project rows

@@ -191,6 +191,26 @@ Teammates never see another member's accounts (they are owner-only); they use th
 grant through the project's source exactly as before, and the picker they open is served
 from the same account-keyed cache.
 
+## A team's GitHub organization skips the sign-in (SOLUSDEV-216 / ADR-039)
+
+When the project's team has an ACTIVE GitHub installation, the GitHub wizard opens on a two-section picker:
+
+```
+Pick a repository
+FROM FSAE-EV (TEAM)                         ← installation repos, /teams/{t}/github/repos
+  fsae-ev/vcu-firmware        private
+  fsae-ev/bms                 private
+YOUR ACCOUNT · maya-k                       ← only when the caller has a linked GitHub account
+  maya-k/scratch              public
+```
+
+- **Picking a team repo** skips `access` and `authorize` entirely. `begin()` calls `POST /projects/{p}/sources {type: "github", installation: true, config: {repo, branch}}`. The engine stage is `link`. Then the configure and index steps run unchanged.
+- **Picking an account repo** uses the existing I1 path (`connection_id`).
+- **No linked account:** the account section shows *Use my own GitHub account* and starts the normal sign-in.
+- **Suspended installation:** the team section reads "Suspended on GitHub" and lists nothing.
+- **No installation:** the wizard is exactly as before.
+- This is available to every member+. A teammate never needs the admin's account (the team installation is the shared grant).
+
 ## Guards (honest, never faked)
 
 - No linked project → tile errors "Solus API unreachable — retry once you are

@@ -17,10 +17,12 @@ GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
 | -------------------------- | -------------------------------------- |
 | Application name           | `Solus (local dev)`                    |
 | Homepage URL               | `http://localhost:5173`                |
-| Authorization callback URL | `http://127.0.0.1:53682/auth/callback` |
+| Authorization callback URL | `http://localhost:53682/auth/callback` |
 
 The callback URL above is the **desktop loopback** address the Electron app
-listens on (`apps/desktop/src/main/oauthLoopback.ts`, port `53682`). This is the
+listens on (`apps/desktop/src/main/oauthLoopback.ts`, port `53682`). The host must be
+`localhost`, not `127.0.0.1`: the connector flow sends `connectorRedirectUrl()` from
+`apps/desktop/src/main/oauthCallback.ts`, and GitHub matches the host exactly (SOLUSDEV-216). This is the
 flow onboarding uses. After creating the app, click **Generate a new client
 secret** and copy the **Client ID** and **Client secret**.
 
@@ -106,3 +108,71 @@ step — see the completion report.
   STEP (`.step`/`.stp`), netlist (`.net`, …), or SPICE (`.cir`, …) extensions are
   surfaced as `design_export` entities (electrical/mechanical domain) for the
   EDA/CAD connectors to parse later.
+
+
+## GitHub App for team organizations (SOLUSDEV-216, ADR-039)
+
+Linking an organization to a Solus team uses a **GitHub App**, which is separate from the OAuth App above. Register one App per environment: dev, staging and prod.
+
+GitHub → **Settings → Developer settings → GitHub Apps → New GitHub App**. For a company-owned App, register it under the Solus org's own settings instead.
+
+| Field | Value |
+|---|---|
+| GitHub App name | `Solus` (or `Solus (dev)`). The slug becomes `SOLUS_GITHUB_APP_SLUG` |
+| Homepage URL | `https://solus.dev` (anything public) |
+| Callback URL(s) | `http://localhost:53682/auth/callback` (desktop loopback). Add the API host's URL for web later. |
+| Expire user authorization tokens | ✅ on. Solus uses the user token only once, at install, and never stores it |
+| **Request user authorization (OAuth) during installation** | ✅ **required**. It gives the `code` that proves the installer can access the installation (ADR-039 §2) |
+| Enable Device Flow | off |
+| Setup URL | leave empty. With the box above checked, GitHub redirects to the callback URL |
+| Redirect on update | ✅ on |
+| Webhook → Active | ✅ |
+| Webhook URL | `${SOLUS_PUBLIC_API_BASE_URL}/api/v1/webhooks/github/app`. It must be public HTTPS. For local dev, use a tunnel (`cloudflared` / `ngrok`) or leave inactive; the hourly sweep still syncs |
+| Webhook secret | A random 32+ byte string becomes `SOLUS_GITHUB_APP_WEBHOOK_SECRET`. Generate it with `openssl rand -hex 32` |
+| SSL verification | Enabled |
+
+**Permissions.** Read-only, and nothing else. ADR-039 §9 requires a new ADR for any write permission.
+
+| Scope | Permission | Access |
+|---|---|---|
+| Repository | Contents | Read-only |
+| Repository | Metadata | Read-only (mandatory) |
+| Organization | Members | Read-only |
+
+**Subscribe to events:**
+- Push
+- Repository
+- Organization
+- Member
+
+`installation` and `installation_repositories` are always delivered, so they don't need a checkbox.
+
+**Where can this GitHub App be installed?** Choose **Any account**. Customers install it on their own orgs.
+
+After creating the App:
+1. Note the **App ID** and the **Client ID**.
+2. Click **Generate a new client secret**.
+3. Under *Private keys*, click **Generate a private key**. This downloads a `.pem`. Keep it out of the repo.
+
+### Env block for the App (paste into `packages/api/.env`; in prod, use Secrets Manager)
+
+```bash
+# --- GitHub App: team organizations (SOLUSDEV-216) ---
+SOLUS_GITHUB_APP_ID=123456
+SOLUS_GITHUB_APP_SLUG=solus-dev
+SOLUS_GITHUB_APP_CLIENT_ID=Iv23li...
+SOLUS_GITHUB_APP_CLIENT_SECRET=...
+SOLUS_GITHUB_APP_WEBHOOK_SECRET=...
+# The PEM on one line with literal \n escapes, OR a path via SOLUS_GITHUB_APP_PRIVATE_KEY_PATH
+SOLUS_GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+```
+
+If any of these is missing, the org feature reports `github_app_unconfigured` and stays hidden. The OAuth App flow above keeps working regardless.
+
+### Try it
+
+1. Create a test org on GitHub with one or two private repos.
+2. In Solus, open a collaborative team → Home → **GITHUB ORGANIZATION** → **Link organization**.
+3. Install the App on the test org, then approve the authorization.
+4. A second team member opens a project → Connect → GitHub, and picks a repo under the org section. They need no GitHub sign-in.
+5. Push to that repo. With a public webhook URL, a sync starts within seconds.

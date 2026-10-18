@@ -143,7 +143,7 @@ T7 Phase 4: review + security + /quality-gate + COWORK_QA
 
 > **SOLUSDEV-\_\_\_: GitHub Organizations in Teams**
 >
-> You are the orchestrator for this ticket under `/Users/mehdihdev/Solus/CLAUDE.md`. Create and work only on branch `SOLUSDEV-___-github-orgs-in-teams`, cut from `main`.
+> You are the orchestrator for this ticket under `/Users/mehdihdev/Solus/CLAUDE.md`. Create and work only on branch `SOLUSDEV-216-github-orgs-in-teams`, cut from `main`.
 >
 > **Goal.** Let a Solus COLLABORATIVE team link a GitHub organization through a **GitHub App installation that the team owns**. Once linked:
 >
