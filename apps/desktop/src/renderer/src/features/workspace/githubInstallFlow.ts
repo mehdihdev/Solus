@@ -1,3 +1,4 @@
+import type { OAuthBridge } from '../auth/githubOAuth'
 // SOLUSDEV-216 / ADR-039: the "Link organization" orchestration.
 //   install/start → system browser (install URL) → loopback with the install
 //   wait → install/complete.
@@ -10,25 +11,12 @@ import {
   type GithubInstallResult,
   type GithubInstallStart,
   type GithubOrgErrorCode,
-  type GithubSetupAction,
   type TeamInstallation
 } from '../../lib/api/resources.teamGithub'
 
 /** The slice of the preload OAuth bridge the install flow uses. Main opens the
  *  install URL in the system browser and owns the (longer) install timeout. */
-export interface InstallBridge {
-  getConnectorRedirectUrl: () => Promise<string>
-  awaitOAuth: (
-    authorizeUrl: string,
-    expectedState: string,
-    options: { install: true }
-  ) => Promise<{
-    code?: string
-    error?: string
-    installationId?: number
-    setupAction?: GithubSetupAction
-  }>
-}
+export type InstallBridge = Pick<OAuthBridge, 'getConnectorRedirectUrl' | 'awaitOAuth'>
 
 export interface InstallFlowDeps {
   start: (teamId: string, redirectUri: string) => Promise<GithubInstallStart>

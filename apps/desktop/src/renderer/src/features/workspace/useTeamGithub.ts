@@ -19,7 +19,7 @@ import {
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { liveKeys } from '../../store/liveRevisionStore'
 import { useLiveRefetch } from '../live/useLiveRefetch'
-import { runGithubInstall, type InstallBridge, type InstallOutcome } from './githubInstallFlow'
+import { runGithubInstall, type InstallOutcome } from './githubInstallFlow'
 
 export type TeamGithubStatus = 'idle' | 'loading' | 'ready' | 'offline'
 
@@ -97,7 +97,11 @@ export function useTeamGithub(teamId: string | null): TeamGithub {
   const [notice, setNotice] = useState<LinkNotice | null>(null)
   const loadSeq = useRef(0)
   const teamIdRef = useRef(teamId)
-  teamIdRef.current = teamId
+  useEffect(() => {
+    teamIdRef.current = teamId
+  }, [teamId])
+  // Read lazily (after an await), so a team switch mid-flight drops the result.
+  const currentTeamId = useCallback(() => teamIdRef.current, [])
 
   /** `quiet` keeps what is on screen while refetching (a live hint, a link). */
   const load = useCallback(
@@ -131,13 +135,13 @@ export function useTeamGithub(teamId: string | null): TeamGithub {
   }, [load])
   useLiveRefetch([teamId ? liveKeys.team(teamId) : null], () => void load(true), teamId !== null)
 
-  const actions = createActions({ teamId, teamIdRef, load, setLinking, setNotice })
+  const actions = createActions({ teamId, currentTeamId, load, setLinking, setNotice })
   return { status, ...snapshot, linking, notice, actions }
 }
 
 interface ActionContext {
   teamId: string | null
-  teamIdRef: { current: string | null }
+  currentTeamId: () => string | null
   load: (quiet: boolean) => Promise<void>
   setLinking: (value: boolean) => void
   setNotice: (value: LinkNotice | null) => void
@@ -145,7 +149,7 @@ interface ActionContext {
 
 function createActions({
   teamId,
-  teamIdRef,
+  currentTeamId,
   load,
   setLinking,
   setNotice
@@ -155,12 +159,12 @@ function createActions({
       if (!teamId) return
       setNotice(null)
       setLinking(true)
-      const bridge = getDesktopOAuthBridge() as unknown as InstallBridge | null
+      const bridge = getDesktopOAuthBridge()
       const outcome = await runGithubInstall(
         { start: startGithubInstall, complete: completeGithubInstall, bridge },
         teamId
       )
-      if (teamIdRef.current !== teamId) return
+      if (currentTeamId() !== teamId) return
       setLinking(false)
       if (outcome.kind === 'linked') await load(true)
       else setNotice(outcome)
