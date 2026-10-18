@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import type { SelectableItem } from '../../lib/api/resources'
+import type { PickerSection } from './teamRepoSection'
 
 export const PICKER_FIELD_STYLE = {
   width: '100%',
@@ -32,6 +33,57 @@ export interface SelectionPickerProps {
   onRefresh?: () => Promise<SelectableItem[]>
   refreshLabel?: string
   disabled?: boolean
+  /** SOLUSDEV-216: headed groups of one-click choices (team repos, then your
+   *  account). Present, they replace `items`; each click reports one item. */
+  sections?: readonly PickerSection[]
+}
+
+/** Headed groups of one-click choices. */
+function SectionedPicker({ sections = [], onSelect }: SelectionPickerProps): React.JSX.Element {
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ display: 'grid', gap: 10, textAlign: 'left' }}
+    >
+      {sections.map((section) => (
+        <div key={section.header} role="group" aria-label={section.header}>
+          <div style={{ ...SUB, color: 'var(--mut)', letterSpacing: 0.4 }}>{section.header}</div>
+          {section.notice && (
+            <div role="status" style={{ fontSize: 11.5, marginTop: 4 }}>
+              {section.notice}
+            </div>
+          )}
+          <div style={{ display: 'grid', gap: 2, marginTop: 4, maxHeight: 148, overflowY: 'auto' }}>
+            {section.items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className="interactive"
+                onClick={() => onSelect?.([item])}
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  justifyContent: 'space-between',
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--tx)',
+                  padding: '4px 0',
+                  fontSize: 11.5,
+                  textAlign: 'left',
+                  cursor: 'pointer'
+                }}
+              >
+                <span>{item.name}</span>
+                {item.subtitle && (
+                  <span style={{ ...SUB, color: 'var(--mut)' }}>{item.subtitle}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 /** Single-select: one item, chosen from a dropdown. */
@@ -137,6 +189,11 @@ function useRefreshedItems(props: SelectionPickerProps) {
   return { items, busy, error, refresh }
 }
 
+function PickerBody(props: SelectionPickerProps): React.JSX.Element {
+  if (props.sections) return <SectionedPicker {...props} />
+  return props.mode === 'multi' ? <MultiPicker {...props} /> : <SinglePicker {...props} />
+}
+
 export function SelectionPicker(props: SelectionPickerProps): React.JSX.Element {
   const listing = useRefreshedItems(props)
   const pickerProps = { ...props, items: listing.items }
@@ -146,11 +203,7 @@ export function SelectionPicker(props: SelectionPickerProps): React.JSX.Element 
         disabled={listing.busy || props.disabled}
         style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}
       >
-        {props.mode === 'multi' ? (
-          <MultiPicker {...pickerProps} />
-        ) : (
-          <SinglePicker {...pickerProps} />
-        )}
+        <PickerBody {...pickerProps} />
         {props.onRefresh && (
           <Button kind="ghost" size="sm" onClick={() => void listing.refresh()}>
             {listing.busy ? 'Refreshing…' : (props.refreshLabel ?? 'Refresh list')}
@@ -158,7 +211,9 @@ export function SelectionPicker(props: SelectionPickerProps): React.JSX.Element 
         )}
       </fieldset>
       {listing.error && <div role="alert">{listing.error}</div>}
-      {!listing.busy && listing.items.length === 0 && <div role="status">No items found.</div>}
+      {!props.sections && !listing.busy && listing.items.length === 0 && (
+        <div role="status">No items found.</div>
+      )}
     </>
   )
 }

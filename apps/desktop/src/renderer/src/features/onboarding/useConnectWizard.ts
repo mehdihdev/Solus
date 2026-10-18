@@ -12,9 +12,13 @@
 // Home's connected-accounts card, where the confirmed Disconnect already lives. And a flow that
 // completed successfully despite the cancel keeps its source and is reported —
 // finished work is never silently discarded.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { create } from 'zustand'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { listSelectable, type Connection, type SelectableItem } from '../../lib/api/resources'
+import { getTeamInstallation, listTeamGithubRepos } from '../../lib/api/resources.teamGithub'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { teamRepoSections, type PickerSection } from './teamRepoSection'
 import { linkedAccountFor } from '../workspace/useAccountConnections'
 import type { WizardScope } from './connectSteps'
 import {
@@ -38,6 +42,56 @@ import { useEdaConnect } from './useEdaConnect'
 import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 export const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
+
+/** The team repo the user just clicked in the picker, staged for the next
+ *  `begin()` (SOLUSDEV-216). The modal's props are fixed by its callers, so the
+ *  pick travels through this one-slot store instead of a new prop: begin()
+ *  takes it exactly once, close() forgets it. */
+export const useTeamPick = create<{ picked: SelectableItem | null }>(() => ({ picked: null }))
+
+const takeTeamPick = (): SelectableItem | null => {
+  const { picked } = useTeamPick.getState()
+  if (picked) useTeamPick.setState({ picked: null })
+  return picked
+}
+
+/** The installation's first page of repos; none for a suspended installation. */
+async function loadTeamGithub(teamId: string) {
+  const installation = await getTeamInstallation(teamId)
+  const repos = installation?.status === 'active' ? (await listTeamGithubRepos(teamId)).items : []
+  return { installation, repos }
+}
+
+/**
+ * SOLUSDEV-216: the GitHub picker's team section, for a project whose team has
+ * an installation. null for every other provider/scope, for a team with no
+ * installation, and when the lookup fails — each of which is the legacy wizard.
+ */
+export function useTeamPicker(
+  entry: Pick<CatalogEntry, 'id'>,
+  scope: WizardScope,
+  linkedLogin: string | null
+): readonly PickerSection[] | null {
+  const teamId = useWorkspaceStore((s) => s.project?.teamId ?? s.teamId)
+  const enabled = scope === 'project' && entry.id === 'github' && !!teamId
+  const [data, setData] = useState<Awaited<ReturnType<typeof loadTeamGithub>> | null>(null)
+  useEffect(() => {
+    if (!enabled || !teamId) return
+    let live = true
+    loadTeamGithub(teamId).then(
+      (loaded) => live && setData(loaded),
+      () => live && setData(null)
+    )
+    return () => {
+      live = false
+      setData(null)
+    }
+  }, [enabled, teamId])
+  return useMemo(
+    () => (enabled && data ? teamRepoSections({ ...data, linkedLogin }) : null),
+    [enabled, data, linkedLogin]
+  )
+}
 
 /** One begin/pickFiles invocation for one entry. Latches are PER ATTEMPT so a
  * late-settling abandoned flow is never governed by a newer attempt's cancel. */
@@ -147,6 +201,7 @@ function useWizardAttempt(options: UseConnectWizardOptions) {
   const close = (): void => {
     const entry = active
     setActive(null)
+    useTeamPick.setState({ picked: null })
     if (!entry) return
     const attempt = attempts.current[entry.id]
     // Settled (done, error, or never started): keep the tile state — an error
@@ -200,7 +255,11 @@ function beginOAuthAttempt(
     context
   return async (): Promise<void> => {
     const entry = active
-    if (!entry || !guard(entry)) return
+    if (!entry) return
+    // Taken BEFORE the guard: a team bind needs no desktop bridge, and a pick
+    // must never outlive the click that made it.
+    const pickedTeamRepo = takeTeamPick()
+    if (!guard(entry, pickedTeamRepo !== null)) return
     const attempt = beginAttempt(entry)
     if (scope === 'account') {
       const bound = await oauth.startAccount(entry.id, connectOptions(entry))
@@ -210,7 +269,8 @@ function beginOAuthAttempt(
     const linked = linkedAccountFor(linkedConnections, entry.id)
     const result = await oauth.start(projectId!, entry.id, {
       ...connectOptions(entry),
-      linkedConnection: linked ? { id: linked.id, login: linked.account_login } : null
+      linkedConnection: linked ? { id: linked.id, login: linked.account_login } : null,
+      teamRepo: pickedTeamRepo
     })
     settle(entry, attempt, result)
   }
@@ -261,14 +321,15 @@ function wizardAvailability(
   projectId: string | null,
   linkedConnections: readonly Connection[]
 ) {
-  const guard = (entry: CatalogEntry): boolean => {
+  const guard = (entry: CatalogEntry, bindsThroughTeam = false): boolean => {
     const { failConnect } = useOnboardingStore.getState()
     if (scope === 'project' && !projectId) {
       failConnect(entry.id, NOT_LINKED_ERROR)
       return false
     }
     const reusesAccount = scope === 'project' && linkedAccountFor(linkedConnections, entry.id)
-    if (entry.mode === 'oauth' && !reusesAccount && !getDesktopOAuthBridge()) {
+    const needsBridge = entry.mode === 'oauth' && !reusesAccount && !bindsThroughTeam
+    if (needsBridge && !getDesktopOAuthBridge()) {
       failConnect(entry.id, noBridgeError(entry.name))
       return false
     }

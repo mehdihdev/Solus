@@ -25,6 +25,8 @@ import type { CatalogEntry } from './integrationCatalog'
 import { integrationLogo } from './integrationLogos'
 import { allowsMultipleFiles, exportFileAccept, exportFilePrompt } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
+import { ACCOUNT_ENTRY_ID, SIGN_IN_ENTRY_ID, type PickerSection } from './teamRepoSection'
+import { useTeamPick, useTeamPicker } from './useConnectWizard'
 
 const LINK_DOTS = 6
 
@@ -355,14 +357,32 @@ function ExportFilePick({
 function IdleAction({
   entry,
   linkedAccount,
+  teamSections,
   onBegin,
   onPickFiles,
   onClose
 }: Pick<
   ConnectWizardModalProps,
   'entry' | 'linkedAccount' | 'onBegin' | 'onPickFiles' | 'onClose'
->): React.JSX.Element {
+> & { teamSections: readonly PickerSection[] | null }): React.JSX.Element {
   if (entry.mode === 'local-bridge') return <BridgeAction entry={entry} onClose={onClose} />
+  if (entry.mode === 'oauth' && teamSections) {
+    // A team repo is staged for begin(); the account entries are the unchanged
+    // linked-account / sign-in paths, which begin() already resolves.
+    return (
+      <SelectionPicker
+        items={[]}
+        sections={teamSections}
+        onSelect={(items) => {
+          const item = items?.[0]
+          if (!item) return
+          const isAccountEntry = item.id === ACCOUNT_ENTRY_ID || item.id === SIGN_IN_ENTRY_ID
+          if (!isAccountEntry) useTeamPick.setState({ picked: item })
+          onBegin()
+        }}
+      />
+    )
+  }
   if (entry.mode !== 'export-file') {
     return (
       <>
@@ -430,7 +450,10 @@ function BusyAction({
 
 /** Whatever the current moment needs from the user. */
 function ActionArea(
-  props: ConnectWizardModalProps & { status: 'idle' | 'busy' | 'done' | 'error' }
+  props: ConnectWizardModalProps & {
+    status: 'idle' | 'busy' | 'done' | 'error'
+    teamSections: readonly PickerSection[] | null
+  }
 ): React.JSX.Element {
   if (props.status === 'done') {
     return (
@@ -442,7 +465,8 @@ function ActionArea(
   if (props.status === 'error') {
     // A committed-export connector retries by picking the file again — its
     // begin() is the OAuth path and would honestly (but uselessly) fail.
-    if (props.entry.mode === 'export-file') return <IdleAction {...props} />
+    // Likewise a team-picker connector: picking again IS the retry.
+    if (props.entry.mode === 'export-file' || props.teamSections) return <IdleAction {...props} />
     return (
       <Button kind="primary" size="sm" onClick={props.onBegin}>
         Retry
@@ -502,10 +526,26 @@ function CloseButton({ onClose }: { onClose: () => void }): React.JSX.Element {
   )
 }
 
+/** The derived rail, plus the team sections whose presence changes it. The team
+ *  path skips the grant and sign-in like a linked account does — until the user
+ *  actually chooses to sign in with their own account. */
+function useWizardRail(
+  entry: CatalogEntry,
+  scope: WizardScope,
+  linkedAccount: { login: string | null } | null,
+  state: ConnectionState | undefined
+): { steps: readonly WizardStep[]; teamSections: readonly PickerSection[] | null } {
+  const teamSections = useTeamPicker(entry, scope, linkedAccount?.login ?? null)
+  const signingIn =
+    state?.phase === 'busy' && (state.stage === 'access' || state.stage === 'authorize')
+  const skipsSignIn = linkedAccount !== null || (teamSections !== null && !signingIn)
+  return { steps: wizardSteps({ ...entry, scope, linkedAccount: skipsSignIn }), teamSections }
+}
+
 export function ConnectWizardModal(props: ConnectWizardModalProps): React.JSX.Element {
   const { entry, state, onClose, scope = 'project', linkedAccount = null } = props
   const solMode = useSettingsStore((s) => s.solMode)
-  const steps = wizardSteps({ ...entry, scope, linkedAccount: linkedAccount !== null })
+  const { steps, teamSections } = useWizardRail(entry, scope, linkedAccount, state)
   const { status, stepIndex } = wizardPosition(steps, state)
   const step = steps[Math.min(stepIndex, steps.length - 1)]
   const { headline, instruction } = wizardCopy(status, step, entry, state, solMode)
@@ -544,7 +584,7 @@ export function ConnectWizardModal(props: ConnectWizardModalProps): React.JSX.El
             }}
           >
             <div style={{ width: 320, maxWidth: '100%' }}>
-              <ActionArea {...props} status={status} />
+              <ActionArea {...props} status={status} teamSections={teamSections} />
             </div>
           </div>
         </div>

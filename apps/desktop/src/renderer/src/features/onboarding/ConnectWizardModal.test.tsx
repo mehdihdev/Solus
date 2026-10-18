@@ -3,11 +3,19 @@
 // action area (button / grant choice / picker / details form / file pick /
 // progress / done / error). Assertions avoid provider ids on purpose.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ConnectWizardModal, isSecretField } from './ConnectWizardModal'
 import type { CatalogEntry } from './integrationCatalog'
 import type { ConnectionState } from './onboardingStore'
 import { useSettingsStore } from '../../store/settingsStore'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as teamGithub from '../../lib/api/resources.teamGithub'
+import { useTeamPick } from './useConnectWizard'
+
+vi.mock('../../lib/api/resources.teamGithub', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources.teamGithub')>()
+  return { ...actual, getTeamInstallation: vi.fn(), listTeamGithubRepos: vi.fn() }
+})
 
 const OAUTH_PICK: CatalogEntry = {
   id: 'github',
@@ -403,3 +411,141 @@ function registerWizardModesTests(): void {
     expect(guideCopy.length).toBeGreaterThan(expertCopy.length)
   })
 }
+
+describe('ConnectWizardModal — team GitHub organization (SOLUSDEV-216)', () => {
+  const INSTALLATION = {
+    id: 'i1',
+    provider: 'github',
+    account_login: 'fsae-ev',
+    account_type: 'Organization',
+    status: 'active'
+  } as teamGithub.TeamInstallation
+  const REPO = { id: 'fsae-ev/vcu', name: 'fsae-ev/vcu', subtitle: 'private' }
+
+  beforeEach(() => {
+    vi.mocked(teamGithub.getTeamInstallation).mockReset()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockReset()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValue({
+      items: [REPO],
+      total: 1,
+      cursor: null
+    })
+    useTeamPick.setState({ picked: null })
+    useWorkspaceStore.setState({ teamId: 't1', project: { id: 'p1', name: 'Rover', teamId: 't1' } })
+  })
+
+  function renderTeam(
+    entry: CatalogEntry,
+    linkedAccount: { login: string | null } | null = null
+  ): Handlers {
+    const handlers: Handlers = {
+      onBegin: vi.fn(),
+      onPickFiles: vi.fn(),
+      onSelect: vi.fn(),
+      onSubmitConfig: vi.fn(),
+      onChooseAccess: vi.fn(),
+      onClose: vi.fn()
+    }
+    render(<ConnectWizardModal entry={entry} linkedAccount={linkedAccount} {...handlers} />)
+    return handlers
+  }
+
+  it('shows the team and account sections and a rail without a sign-in', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    renderTeam(OAUTH_PICK, { login: 'maya-k' })
+
+    expect(await screen.findByRole('group', { name: 'FROM FSAE-EV (TEAM)' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'YOUR ACCOUNT · maya-k' })).toBeInTheDocument()
+    const rail = screen.getByLabelText('Connect steps')
+    expect(rail).toHaveTextContent('Pick repositoriesBuild graph')
+    expect(rail).not.toHaveTextContent('Sign in')
+  })
+
+  it('picking a team repo stages it and begins', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    const handlers = renderTeam(OAUTH_PICK, { login: 'maya-k' })
+
+    fireEvent.click(await screen.findByRole('button', { name: /fsae-ev\/vcu/ }))
+
+    expect(useTeamPick.getState().picked).toEqual(REPO)
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('picking the account entry begins without staging a team repo', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    const handlers = renderTeam(OAUTH_PICK)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use my own GitHub account' }))
+
+    expect(useTeamPick.getState().picked).toBeNull()
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('a suspended installation reads "Suspended on GitHub" and lists nothing', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue({
+      ...INSTALLATION,
+      status: 'suspended'
+    })
+    renderTeam(OAUTH_PICK)
+
+    expect(await screen.findByText('Suspended on GitHub')).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /fsae-ev\/vcu/ })).not.toBeInTheDocument()
+  })
+
+  it('offers the picker again after a failed team bind instead of a dead Retry', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        state={{ phase: 'error', error: 'That repository is not shared.' }}
+        onBegin={vi.fn()}
+        onPickFiles={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('cw-instruction')).toHaveTextContent('That repository is not shared.')
+    expect(await screen.findByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
+  })
+
+  it('with no installation the wizard is exactly the legacy one', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(null)
+    renderTeam(OAUTH_PICK)
+
+    await waitFor(() => expect(teamGithub.getTeamInstallation).toHaveBeenCalledWith('t1'))
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+    expect(screen.queryByRole('group')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the legacy wizard when the installation lookup fails', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    renderTeam(OAUTH_PICK)
+
+    await waitFor(() => expect(teamGithub.getTeamInstallation).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+  })
+
+  it('never looks up a team installation for another provider', () => {
+    renderTeam(OAUTH_FIELDS)
+    expect(teamGithub.getTeamInstallation).not.toHaveBeenCalled()
+  })
+
+  it('never looks up an installation in account scope', () => {
+    render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        scope="account"
+        onBegin={vi.fn()}
+        onPickFiles={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(teamGithub.getTeamInstallation).not.toHaveBeenCalled()
+  })
+})

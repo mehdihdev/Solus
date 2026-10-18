@@ -8,7 +8,7 @@
 // and is reported: real work is never thrown away silently.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useConnectWizard, NOT_LINKED_ERROR } from './useConnectWizard'
+import { useConnectWizard, useTeamPick, NOT_LINKED_ERROR } from './useConnectWizard'
 import {
   EMPTY_EXPORT_ERROR,
   FILE_READ_ERROR,
@@ -47,6 +47,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
   return {
     ...actual,
     listSelectable: vi.fn(async () => []),
+    createSource: vi.fn(async () => ({ id: 's1' })),
     disconnectSource: vi.fn(async () => ({ id: 's1', retained_entities: false }))
   }
 })
@@ -155,6 +156,8 @@ describe('useConnectWizard', () => {
   registerWizardCancellationTests()
 
   registerWizardSettlementTests()
+
+  registerTeamRepoDispatchTests()
 })
 
 it('reopens a failed browser connect as a fresh linked-account project picker', async () => {
@@ -670,5 +673,65 @@ function registerWizardSettlementTests(): void {
       error: 'GitHub sign-in was cancelled.'
     })
     expect(cancelOAuth).not.toHaveBeenCalled()
+  })
+}
+
+function registerTeamRepoDispatchTests(): void {
+  const TEAM_REPO = { id: 'o/vcu', name: 'o/vcu', config: { repo: 'o/vcu', branch: 'main' } }
+
+  beforeEach(() => useTeamPick.setState({ picked: null }))
+
+  it('a picked team repo is handed to the connect, works without the desktop bridge, and is consumed', async () => {
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(GITHUB))
+    act(() => useTeamPick.setState({ picked: TEAM_REPO }))
+    mockedOAuth.mockImplementation(async (deps) => {
+      await deps.api.createSource('p1', { type: 'github', name: 'GitHub', connection_id: 'x' })
+      return { ok: true, sourceId: 's1' }
+    })
+
+    await act(async () => result.current.begin())
+
+    expect(mockedOAuth).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(resources.createSource)).toHaveBeenCalledWith('p1', {
+      type: 'github',
+      name: 'GitHub',
+      installation: true,
+      config: { repo: 'o/vcu', branch: 'main' }
+    })
+    expect(useTeamPick.getState().picked).toBeNull()
+    expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+  })
+
+  it('without a pick and without the bridge, begin still refuses honestly', async () => {
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue(null)
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(GITHUB))
+
+    await act(async () => result.current.begin())
+
+    expect(mockedOAuth).not.toHaveBeenCalled()
+    expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
+  })
+
+  it('closing the wizard forgets an unconsumed pick', () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => result.current.open(GITHUB))
+    act(() => useTeamPick.setState({ picked: TEAM_REPO }))
+    act(() => result.current.close())
+    expect(useTeamPick.getState().picked).toBeNull()
+  })
+
+  it('an account pick (nothing staged) keeps the linked-account path', async () => {
+    withBridge()
+    const { result } = renderHook(() =>
+      useConnectWizard({ projectId: 'p1', linkedConnections: [LINKED_GITHUB] })
+    )
+    act(() => result.current.open(GITHUB))
+    await act(async () => result.current.begin())
+    expect(mockedOAuth.mock.calls[0][3]).toMatchObject({
+      linkedConnection: { id: 'c1', login: 'octocat' }
+    })
   })
 }

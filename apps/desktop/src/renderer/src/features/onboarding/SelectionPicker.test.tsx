@@ -138,3 +138,44 @@ it('ignores a late refresh after the picker closes or changes source', async () 
   expect(screen.getByLabelText('Other source')).toBeInTheDocument()
   unmount()
 })
+
+describe('SelectionPicker — sections (SOLUSDEV-216)', () => {
+  const SECTIONS = [
+    { header: 'FROM FSAE-EV (TEAM)', items: [{ id: 'o/vcu', name: 'o/vcu', subtitle: 'private' }] },
+    {
+      header: 'YOUR ACCOUNT · maya-k',
+      items: [{ id: 'solus:account', name: 'Pick from my repositories' }]
+    }
+  ]
+
+  it('renders one header per section with that section’s items beneath it', () => {
+    render(<SelectionPicker items={[]} sections={SECTIONS} onSelect={vi.fn()} />)
+
+    expect(screen.getByRole('group', { name: 'FROM FSAE-EV (TEAM)' })).toHaveTextContent('o/vcu')
+    expect(screen.getByRole('group', { name: 'YOUR ACCOUNT · maya-k' })).toHaveTextContent(
+      'Pick from my repositories'
+    )
+    expect(screen.getByText('private')).toBeInTheDocument()
+    expect(screen.queryByText('No items found.')).not.toBeInTheDocument()
+  })
+
+  it('reports the clicked item as the single choice', async () => {
+    const onSelect = vi.fn()
+    render(<SelectionPicker items={[]} sections={SECTIONS} onSelect={onSelect} />)
+
+    await userEvent.click(screen.getByRole('button', { name: /o\/vcu/ }))
+
+    expect(onSelect).toHaveBeenCalledWith([SECTIONS[0].items[0]])
+  })
+
+  it('shows a section notice and no items for a suspended section', () => {
+    render(
+      <SelectionPicker
+        items={[]}
+        sections={[{ header: 'FROM FSAE-EV (TEAM)', items: [], notice: 'Suspended on GitHub' }]}
+      />
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Suspended on GitHub')
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
+})
