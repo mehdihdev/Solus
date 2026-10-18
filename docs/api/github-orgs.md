@@ -199,13 +199,13 @@ This is the App's single webhook. There is no Bearer token. The signature is the
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `push`                                           | Enqueue `sync_source` for each CONNECTED Source with this `installation_id` whose `config.repo` equals `repository.full_name` and whose `config.branch` equals the pushed branch |
 | `installation.deleted`                           | Revoke and disable sources, as for DELETE above, with activity actor `null`                                                                                                      |
-| `installation.suspend` / `unsuspend`             | Set status and `suspended_at`. Sources are marked DEGRADED with `last_error {code: "installation_suspended"}`, then restored on unsuspend                                        |
+| `installation.suspend` / `unsuspend`             | Set status and `suspended_at`. Sources are marked ERROR with `last_error {code: "installation_suspended"}`, then restored on unsuspend                                        |
 | `installation_repositories.removed`              | Disable only the Sources tracking the removed repos (`last_error {code: "repo_access_removed"}`) and invalidate the repo cache                                                   |
 | `installation_repositories.added`                | Invalidate the repo cache                                                                                                                                                        |
 | `installation.new_permissions_accepted`          | Refresh the stored fields                                                                                                                                                        |
 | `organization.member_removed`                    | If that GitHub id maps to a team member: notify admins, record activity `github_org.member_removed_notice`, and emit a data event. **No removal** (ADR-039 §6)                   |
 | `organization.member_added` / `member.*`         | Invalidate the roster cache                                                                                                                                                      |
-| `repository.renamed` / `transferred` / `deleted` | Mark matching Sources DEGRADED with an honest `last_error`; never rewrite config silently                                                                                        |
+| `repository.renamed` / `transferred` / `deleted` | Mark matching Sources ERROR with an honest `last_error`; never rewrite config silently                                                                                        |
 | anything else                                    | `204`, ignored                                                                                                                                                                   |
 
 All payload strings are untrusted data (CLAUDE.md §7). Only ids and the `full_name` / `ref` comparisons above are read.
@@ -227,7 +227,7 @@ Rules:
 - If any of these is absent, every route above returns `503 github_app_unconfigured`, and the webhook returns `503`.
 - The OAuth App settings (`SOLUS_GITHUB_CLIENT_ID/SECRET`) are separate and unchanged.
 - Token minting is `POST /app/installations/{id}/access_tokens`.
-- The cache key is the GitHub installation id, with expiry at `min(expires_at − 5 min, 55 min)`. The cache is process-local, with Redis when `redis_url` is set.
+- The cache key is the GitHub installation id, with expiry at `min(expires_at − 5 min, 55 min)`. The cache is **process-local only, never Redis**: a bearer token in Redis could reach disk through RDB/AOF snapshots. Every resolve also checks the `TeamInstallation` row is live and `active`, so an unlink in the API process is honoured by a worker that still holds a cached token.
 - A `404`/`403` from the mint marks the installation `revoked` and the sync fails with `installation_unavailable`.
 
 Places that must never treat the reserved ref as a SecretStore key: source disconnect, connection revoke, account deletion purge, and the refresh write-back in `call_with_refresh`. The rule is: **never `get`/`put`/`delete` a `github-app/` ref against the SecretStore.**
@@ -243,10 +243,24 @@ Places that must never treat the reserved ref as a SecretStore key: source disco
 - `github_org.repo_bound`
 - `github_org.invite_suggested`
 - `github_org.member_removed_notice`
-- `github_org.webhook_dropped` (system-actor; counts only, no payload text)
+- `github_org.webhook_dropped`: structured log line only. `emit_event` needs a consenting user, so system-actor outcomes (dropped deliveries, `installation.deleted` from GitHub) are logged and recorded as activity with `actor_id = null`, not as data events
 
 ## 5. Ride-along fixes (SOLUSDEV-216)
 
 - **Connector OAuth redirect host.** The connector OAuth redirect host is `localhost:53682` in the desktop (`main/oauthCallback.ts`). `docs/integrations/github-setup.md` now registers exactly that host, and the App's callback list does too.
 - **Soft-deleted memberships.** `GET /teams`, `GET /teams/{id}/members`, the team detail `member_count` and the `last_owner` count ignore memberships with `deleted_at` set.
 - **Repo pagination.** The OAuth picker's `GitHubConnector.list_repositories` follows the Link header, bounded, instead of stopping at 100.
+
+
+## 6. Decisions under delegated judgment (SOLUSDEV-216 Phase 2, 2026-10-17)
+
+- **No `DEGRADED` source status.** `SourceStatus` has no `DEGRADED`, so these cases use `ERROR` plus a `last_error.code`: `installation_suspended`, `repo_access_removed`, `repo_renamed`, `repo_transferred` or `repo_deleted`. Unsuspend restores only the sources whose code is `installation_suspended`.
+- **`setup_action=request`.** When a non-owner asks an org owner to approve the install, GitHub redirects with `setup_action=request` and **no** `installation_id`. `install/complete` accepts `{state, code, setup_action: "request"}`, consumes the state, binds nothing, and answers `202 {status: "requested"}`. The card then says "Waiting for an org owner to approve Solus on GitHub — link again once they do".
+- **User-to-server token.** After the proof step (§2 complete, step 3), the token is revoked at GitHub on a best-effort basis (`DELETE /applications/{client_id}/token`), so it doesn't stay live for 8 h.
+- **Repo count.** The card's repo count is `meta.total` from `GET /github/repos`. `TeamInstallationRead` has no count field.
+- **Plan accounting.** An installation counts against the linker only while the linker is a live member of the team. Sources bound through an installation never count against whoever created them.
+- **PATCH on installation sources.** Changing `config.repo` on an installation-bound source re-runs the `repo_not_in_installation` check. `secret_ref`, `installation_id` and `connection_id` are never patchable.
+- **Account id on installation sources.** These sources carry `account_external_id = "installation:{id}"`, so account-keyed caches key per installation, and the I1 account-reuse logic (`reusable_source`, legacy and own-token listings) never adopts or re-points them.
+- **GHES limitation.** The per-installation `api_base_url` is honoured by the minter, the App client and the connector. `read_code_file`, `code_content` and `git_revisions` still call `api.github.com` (known limitation, follow-up). The base URL only ever comes from GitHub's installation record, which the App JWT fetches. It is never taken from request input or a webhook payload.
+- **GitHub identity sources.** The trusted sources are a live GitHub `AccountConnection.account_external_id`, or the Supabase admin identity when the service-role key is configured. JWT `user_metadata` is never trusted. Without the service-role key, only a linked GitHub account proves identity.
+- **Install state passthrough.** We assume `state` survives `installations/new?state=…` through to the callback when user authorization during install is enabled. This is to be confirmed against a live App. If it doesn't survive, `install/start` falls back to a second `login/oauth/authorize?client_id=<app>&state=…` step.
