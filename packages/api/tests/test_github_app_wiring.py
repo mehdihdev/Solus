@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 from fastapi import APIRouter, FastAPI
+from fastapi.routing import APIRoute
 from solus_api import main
 from solus_api.connectors import github_app
 from solus_api.connectors.worker import build_worker_settings
@@ -42,9 +43,24 @@ def test_routers_are_included_in_the_app(
         assert mod.router in included
 
 
-def test_stub_routers_define_no_routes_yet() -> None:
-    for mod in (team_github, team_github_repos, team_github_members, webhooks_github_app):
-        assert mod.router.routes == []
+def test_every_planned_route_is_served(app: FastAPI) -> None:
+    """docs/api/github-orgs.md §2: each planned route is mounted with its method."""
+    served = {
+        (method, route.path)
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods
+    }
+    teams = "/api/v1/teams/{team_id}/github"
+    assert {
+        ("POST", f"{teams}/install/start"),
+        ("POST", f"{teams}/install/complete"),
+        ("GET", f"{teams}/installation"),
+        ("DELETE", f"{teams}/installation"),
+        ("GET", f"{teams}/repos"),
+        ("GET", f"{teams}/members"),
+        ("POST", "/api/v1/webhooks/github/app"),
+    } <= served
 
 
 def test_worker_cron_includes_prune_github_deliveries() -> None:
