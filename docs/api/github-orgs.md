@@ -100,7 +100,8 @@ TeamInstallationRead = {
   account_avatar_url, repository_selection: "all" | "selected",
   status: "active" | "suspended", linked_by: {user_id, name} | null,
   linked_at, html_url,            // https://github.com/<login>
-  manage_url                      // GitHub page to change repo access / uninstall
+  manage_url,                     // GitHub page to change repo access / uninstall
+  bound_source_count              // live project sources reading through it (unlink confirm names it)
 }
 ```
 
