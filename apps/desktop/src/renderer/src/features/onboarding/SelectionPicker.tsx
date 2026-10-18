@@ -6,6 +6,7 @@
 // selection, and the item's own `name`/`subtitle` are the only copy shown.
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
+import { Spinner } from '../../components/ui/Spinner'
 import type { SelectableItem } from '../../lib/api/resources'
 import type { PickerSection } from './teamRepoSection'
 
@@ -23,6 +24,21 @@ export const PICKER_FIELD_STYLE = {
 
 const SUB = { fontFamily: 'var(--font-mono)', fontSize: 10.5 } as const
 
+/** Search + "Load more" for the team section's repository listing. */
+export interface PickerPaging {
+  query: string
+  onSearch: (query: string) => void
+  /** Repositories currently listed, and the server's total when it reports one. */
+  shown: number
+  total: number | null
+  hasMore: boolean
+  /** A search or page fetch is in flight. */
+  busy: boolean
+  /** Mode-aware sentence when the last search/page fetch failed. */
+  error: string | null
+  onLoadMore: () => void
+}
+
 export interface SelectionPickerProps {
   items: readonly SelectableItem[]
   mode?: 'single' | 'multi'
@@ -36,18 +52,74 @@ export interface SelectionPickerProps {
   /** SOLUSDEV-216: headed groups of one-click choices (team repos, then your
    *  account). Present, they replace `items`; each click reports one item. */
   sections?: readonly PickerSection[]
+  /** Search + paging for the FIRST section (the team's repositories). */
+  paging?: PickerPaging
+}
+
+function PagingSearch({ paging }: { paging: PickerPaging }): React.JSX.Element {
+  return (
+    <input
+      type="search"
+      aria-label="Search repositories"
+      placeholder="Search repositories"
+      value={paging.query}
+      onChange={(e) => paging.onSearch(e.target.value)}
+      style={{ ...PICKER_FIELD_STYLE, marginTop: 6 }}
+    />
+  )
+}
+
+function PagingFooter({ paging }: { paging: PickerPaging }): React.JSX.Element {
+  const count =
+    paging.hasMore && paging.total !== null
+      ? `Showing ${paging.shown} of ${paging.total}`
+      : `Showing ${paging.shown}`
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+      {paging.busy && <Spinner size={11} />}
+      {paging.error && (
+        <div role="alert" style={{ fontSize: 11.5, color: 'var(--err)' }}>
+          {paging.error}
+        </div>
+      )}
+      {paging.hasMore && (
+        <>
+          <span data-testid="picker-showing" style={{ ...SUB, color: 'var(--mut)' }}>
+            {count}
+          </span>
+          <Button kind="ghost" size="sm" disabled={paging.busy} onClick={paging.onLoadMore}>
+            Load more
+          </Button>
+        </>
+      )}
+    </div>
+  )
 }
 
 /** Headed groups of one-click choices. */
-function SectionedPicker({ sections = [], onSelect }: SelectionPickerProps): React.JSX.Element {
+function SectionedPicker({
+  sections = [],
+  onSelect,
+  paging
+}: SelectionPickerProps): React.JSX.Element {
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{ display: 'grid', gap: 10, textAlign: 'left' }}
     >
-      {sections.map((section) => (
+      {sections.map((section, index) => (
         <div key={section.header} role="group" aria-label={section.header}>
-          <div style={{ ...SUB, color: 'var(--mut)', letterSpacing: 0.4 }}>{section.header}</div>
+          <div
+            style={{
+              ...SUB,
+              color: 'var(--mut)',
+              letterSpacing: 0.4,
+              textTransform: 'uppercase'
+            }}
+          >
+            {section.header}
+          </div>
+          {index === 0 && paging && <PagingSearch paging={paging} />}
           {section.notice && (
             <div role="status" style={{ fontSize: 11.5, marginTop: 4 }}>
               {section.notice}
@@ -80,6 +152,7 @@ function SectionedPicker({ sections = [], onSelect }: SelectionPickerProps): Rea
               </button>
             ))}
           </div>
+          {index === 0 && paging && <PagingFooter paging={paging} />}
         </div>
       ))}
     </div>

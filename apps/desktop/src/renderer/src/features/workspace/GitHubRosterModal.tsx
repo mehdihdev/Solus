@@ -3,7 +3,7 @@
 // or an Invite button for a login not on Solus. One invite at a time — no bulk
 // add, no auto-join. A successful invite shows the one-time join token ONCE
 // (mirroring the email InviteModal's reveal). Logins are text, never HTML.
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Spinner } from '../../components/ui/Spinner'
 import type { GithubOrgMember } from '../../lib/api/resources.teamGithub'
@@ -44,7 +44,7 @@ function Row({
 }): React.JSX.Element {
   const avatar = safeHttpsUrl(member.avatar_url)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
+    <li style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0' }}>
       <span
         aria-hidden
         style={{
@@ -74,7 +74,7 @@ function Row({
           Invite
         </Button>
       )}
-    </div>
+    </li>
   )
 }
 
@@ -108,38 +108,46 @@ function TokenView({
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
   const [armed, setArmed] = useState(false)
+  const revealRef = useRef<HTMLDivElement>(null)
+  // The reveal replaces the list the user was working in: move focus onto it
+  // (and let the status role announce it) rather than leaving focus on nothing.
+  useEffect(() => {
+    revealRef.current?.focus()
+  }, [])
   const done = (): void => {
     if (copied || armed || !token) onDone()
     else setArmed(true)
   }
   return (
     <div style={{ marginTop: 12 }}>
-      <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-        {githubText('invite_shown', mode)}
-      </div>
-      <div
-        data-testid="invite-token"
-        style={{
-          marginTop: 10,
-          padding: '9px 11px',
-          background: 'var(--bg)',
-          border: '1px solid var(--bd)',
-          borderRadius: 3,
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          wordBreak: 'break-all'
-        }}
-      >
-        {token ?? 'The token was not returned. Revoke this invite and send a new one.'}
+      <div ref={revealRef} role="status" tabIndex={-1} style={{ outline: 'none' }}>
+        <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
+          {githubText('invite_shown', mode)}
+        </div>
+        <div
+          data-testid="invite-token"
+          style={{
+            marginTop: 10,
+            padding: '9px 11px',
+            background: 'var(--bg)',
+            border: '1px solid var(--bd)',
+            borderRadius: 3,
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            wordBreak: 'break-all'
+          }}
+        >
+          {token ?? githubText('roster_token_missing', mode)}
+        </div>
       </div>
       {copyFailed && (
-        <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
-          Copy failed — select the token above and copy it by hand.
+        <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>
+          {githubText('roster_copy_failed', mode)}
         </div>
       )}
       {armed && (
         <div role="alert" style={{ marginTop: 8, fontSize: 11.5, color: 'var(--warn)' }}>
-          You won&apos;t see this token again. Copy it, or click Done once more to close anyway.
+          {githubText('roster_wont_see_again', mode)}
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
@@ -252,14 +260,18 @@ function RosterList({ roster, mode }: { roster: RosterState; mode: SolMode }): R
   const empty = !roster.loading && !roster.loadFailed && roster.members.length === 0
   return (
     <div style={{ marginTop: 12, maxHeight: 320, overflowY: 'auto' }}>
-      {roster.members.map((m) => (
-        <Row
-          key={m.github_id}
-          member={m}
-          busy={roster.inviting !== null}
-          onInvite={(x) => void roster.invite(x)}
-        />
-      ))}
+      {roster.members.length > 0 && (
+        <ul aria-label="Organization members" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {roster.members.map((m) => (
+            <Row
+              key={m.github_id}
+              member={m}
+              busy={roster.inviting !== null}
+              onInvite={(x) => void roster.invite(x)}
+            />
+          ))}
+        </ul>
+      )}
       {roster.loading && <Spinner size={14} />}
       {empty && (
         <div style={{ fontSize: 12, color: 'var(--mut)' }}>{githubText('roster_empty', mode)}</div>
@@ -277,10 +289,18 @@ export function GitHubRosterModal({
   const mode = useSettingsStore((s) => s.solMode)
   const roster = useRoster(actions, mode)
   const { problem } = roster
+  const titleId = useId()
   return (
-    <ModalShell onClose={onClose} width={420}>
-      <div role="dialog" aria-modal="true" aria-label={`Members of ${login} on GitHub`}>
-        <div style={{ fontSize: 16, fontWeight: 600, wordBreak: 'break-all' }}>
+    // While the one-time token is on screen Escape / click-out must not discard
+    // it: only Done (which asks twice when uncopied) closes.
+    <ModalShell
+      onClose={roster.token ? () => undefined : onClose}
+      width={420}
+      labelledBy={titleId}
+      closeOnEscape
+    >
+      <div>
+        <div id={titleId} style={{ fontSize: 16, fontWeight: 600, wordBreak: 'break-all' }}>
           Members of {login} on GitHub
         </div>
         {roster.token ? (

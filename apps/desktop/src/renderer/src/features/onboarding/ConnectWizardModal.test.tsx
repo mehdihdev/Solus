@@ -3,7 +3,7 @@
 // action area (button / grant choice / picker / details form / file pick /
 // progress / done / error). Assertions avoid provider ids on purpose.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ConnectWizardModal, isSecretField } from './ConnectWizardModal'
 import type { CatalogEntry } from './integrationCatalog'
 import type { ConnectionState } from './onboardingStore'
@@ -11,6 +11,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as teamGithub from '../../lib/api/resources.teamGithub'
 import { useTeamPick } from './useConnectWizard'
+import { pickerText } from './teamRepoSection'
 
 vi.mock('../../lib/api/resources.teamGithub', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources.teamGithub')>()
@@ -454,8 +455,8 @@ describe('ConnectWizardModal — team GitHub organization (SOLUSDEV-216)', () =>
     vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
     renderTeam(OAUTH_PICK, { login: 'maya-k' })
 
-    expect(await screen.findByRole('group', { name: 'FROM FSAE-EV (TEAM)' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'YOUR ACCOUNT · maya-k' })).toBeInTheDocument()
+    expect(await screen.findByRole('group', { name: 'From fsae-ev (team)' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Your account · maya-k' })).toBeInTheDocument()
     const rail = screen.getByLabelText('Connect steps')
     expect(rail).toHaveTextContent('Pick repositoriesBuild graph')
     expect(rail).not.toHaveTextContent('Sign in')
@@ -488,7 +489,7 @@ describe('ConnectWizardModal — team GitHub organization (SOLUSDEV-216)', () =>
     })
     renderTeam(OAUTH_PICK)
 
-    expect(await screen.findByText('Suspended on GitHub')).toBeInTheDocument()
+    expect(await screen.findByText(pickerText('suspended', 'Guide'))).toBeInTheDocument()
     expect(teamGithub.listTeamGithubRepos).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: /fsae-ev\/vcu/ })).not.toBeInTheDocument()
   })
@@ -526,6 +527,105 @@ describe('ConnectWizardModal — team GitHub organization (SOLUSDEV-216)', () =>
 
     await waitFor(() => expect(teamGithub.getTeamInstallation).toHaveBeenCalled())
     expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+  })
+
+  it('disables Connect behind a spinner while the team lookup is pending', async () => {
+    let resolve: (i: teamGithub.TeamInstallation | null) => void = () => undefined
+    vi.mocked(teamGithub.getTeamInstallation).mockReturnValue(
+      new Promise((r) => {
+        resolve = r
+      })
+    )
+    const handlers = renderTeam(OAUTH_PICK)
+
+    const connect = screen.getByRole('button', { name: 'Connect GitHub' })
+    expect(connect).toBeDisabled()
+    fireEvent.click(connect)
+    expect(handlers.onBegin).not.toHaveBeenCalled()
+    expect(screen.getByRole('status', { hidden: true })).toBeInTheDocument()
+
+    await act(async () => resolve(null))
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeEnabled()
+  })
+
+  it('a failed lookup shows a non-fatal notice and the legacy Connect action', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    const handlers = renderTeam(OAUTH_PICK)
+
+    const notice = await screen.findByText(pickerText('lookup_failed', 'Guide'))
+    expect(notice).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('words the failure notice in Expert mode', async () => {
+    useSettingsStore.getState().setSolMode('Expert')
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    renderTeam(OAUTH_PICK)
+    expect(await screen.findByText(pickerText('lookup_failed', 'Expert'))).toBeInTheDocument()
+  })
+
+  it('searches the team repos with a debounced q', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    vi.mocked(teamGithub.listTeamGithubRepos).mockClear()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValue({
+      items: [{ id: 'fsae-ev/bms', name: 'fsae-ev/bms' }],
+      total: 1,
+      cursor: null
+    })
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search repositories' }), {
+      target: { value: 'b' }
+    })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search repositories' }), {
+      target: { value: 'bms' }
+    })
+    expect(teamGithub.listTeamGithubRepos).not.toHaveBeenCalled()
+
+    expect(await screen.findByRole('button', { name: /fsae-ev\/bms/ })).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenCalledTimes(1)
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenCalledWith('t1', { q: 'bms' })
+  })
+
+  it('loads more with the cursor and says how many of the total are showing', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [REPO],
+      total: 2,
+      cursor: 'c2'
+    })
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    expect(screen.getByTestId('picker-showing')).toHaveTextContent('Showing 1 of 2')
+
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [{ id: 'fsae-ev/bms', name: 'fsae-ev/bms' }],
+      total: 2,
+      cursor: null
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+
+    expect(await screen.findByRole('button', { name: /fsae-ev\/bms/ })).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenLastCalledWith('t1', { cursor: 'c2' })
+    expect(screen.getByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+  })
+
+  it('surfaces a failed page fetch without losing the listed repos', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [REPO],
+      total: 2,
+      cursor: 'c2'
+    })
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    vi.mocked(teamGithub.listTeamGithubRepos).mockRejectedValueOnce(new Error('x'))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(pickerText('load_failed', 'Guide'))
+    expect(screen.getByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
   })
 
   it('never looks up a team installation for another provider', () => {

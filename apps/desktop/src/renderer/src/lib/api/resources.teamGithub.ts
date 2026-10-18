@@ -43,7 +43,8 @@ export type GithubSetupAction = 'install' | 'update' | 'request'
 
 export interface GithubInstallCompleteInput {
   state: string
-  code: string
+  /** GitHub may omit it on an owner-approval `request` redirect. */
+  code?: string
   /** Absent when `setup_action` is `request` (an owner has not approved yet). */
   installation_id?: number
   setup_action: GithubSetupAction

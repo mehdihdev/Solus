@@ -1,7 +1,8 @@
 // SOLUSDEV-216 / ADR-039: every string the GitHub organization card and its
 // roster show, in Guide and Expert variants (ADR-016 — SOL mode is universal).
 // Guide explains what an org link does and why the owner approves on GitHub;
-// Expert is terse. `{n}` is the only placeholder.
+// Expert is terse. Placeholders: `{n}` (a count) and, for linked_by, `{by}`,
+// `{when}`, `{scope}`.
 import type { GithubOrgErrorCode } from '../../lib/api/resources.teamGithub'
 import type { SolMode } from '../../store/settingsStore'
 
@@ -52,6 +53,29 @@ const COPY = {
   no_bridge: {
     Guide: 'Linking a GitHub organization needs the Solus desktop app, which opens your browser.',
     Expert: 'Linking needs the desktop app.'
+  },
+  linked_by: {
+    Guide: 'Linked by {by}, {when}. Solus can read {scope} in this organization.',
+    Expert: 'Linked by {by} · {when} · {scope}'
+  },
+  offline_note: {
+    Guide: "Couldn't load this team's GitHub organization. Check your connection and try again.",
+    Expert: "Couldn't load."
+  },
+  roster_token_missing: {
+    Guide:
+      "The invite was created, but the server didn't return its token, so there is nothing to share. Revoke this invite and send a new one.",
+    Expert: 'Token not returned. Revoke the invite and resend.'
+  },
+  roster_copy_failed: {
+    Guide:
+      "Copying didn't work here. Select the token above and copy it by hand before you close this.",
+    Expert: 'Copy failed — select and copy manually.'
+  },
+  roster_wont_see_again: {
+    Guide:
+      "You won't see this token again. Copy it first, or click Done once more to close without it.",
+    Expert: 'Token not shown again. Done again to discard.'
   },
   former_member: { Guide: 'a former member', Expert: 'a former member' },
   scope_all: { Guide: 'all repositories', Expert: 'all repos' },
@@ -135,10 +159,18 @@ export type GithubCopyKey = keyof typeof COPY
 
 export const GITHUB_COPY_KEYS = Object.keys(COPY) as readonly GithubCopyKey[]
 
-/** The copy for `key` in the user's SOL mode, with `{n}` filled when given. */
-export function githubText(key: GithubCopyKey, mode: SolMode, vars?: { n?: number }): string {
+/** The copy for `key` in the user's SOL mode, with `{name}` placeholders filled. */
+export function githubText(
+  key: GithubCopyKey,
+  mode: SolMode,
+  vars: Readonly<Record<string, string | number>> = {}
+): string {
   const text: string = COPY[key][mode]
-  return vars?.n === undefined ? text : text.replaceAll('{n}', String(vars.n))
+  // One pass, so a value that itself contains `{x}` (a login is user-supplied)
+  // is never re-expanded.
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    Object.hasOwn(vars, name) ? String(vars[name]) : whole
+  )
 }
 
 const REFUSAL_KEYS: ReadonlySet<string> = new Set([

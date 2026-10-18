@@ -4,14 +4,16 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { TeamInstallation } from '../../lib/api/resources.teamGithub'
 import { useSettingsStore } from '../../store/settingsStore'
+import { githubText } from './githubOrgCopy'
 import { GitHubOrgCard } from './GitHubOrgCard'
 import * as hook from './useTeamGithub'
 
 vi.mock('./useTeamGithub', () => ({ useTeamGithub: vi.fn() }))
 vi.mock('./GitHubRosterModal', () => ({
-  GitHubRosterModal: ({ onClose }: { onClose: () => void }) => (
+  GitHubRosterModal: ({ onClose, onUpgrade }: { onClose: () => void; onUpgrade?: () => void }) => (
     <div data-testid="roster-modal">
       <button onClick={onClose}>close-roster</button>
+      <button onClick={onUpgrade}>roster-upgrade</button>
     </div>
   )
 }))
@@ -199,7 +201,7 @@ describe('GitHubOrgCard', () => {
     const github = mockGithub({ installation: INSTALLATION })
     renderCard()
     await userEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    await userEvent.click(screen.getByRole('menuitem', { name: /unlink/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Unlink' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText(/disconnects every project source/i)).toBeInTheDocument()
     await userEvent.click(within(dialog).getByRole('button', { name: /^unlink$/i }))
@@ -219,7 +221,7 @@ describe('GitHubOrgCard', () => {
     mockGithub({ installation: { ...INSTALLATION, bound_source_count: 4 } })
     renderCard()
     await userEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    await userEvent.click(screen.getByRole('menuitem', { name: /unlink/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Unlink' }))
     expect(
       within(screen.getByRole('dialog')).getByText(/disconnects 4 project sources/i)
     ).toBeInTheDocument()
@@ -230,7 +232,7 @@ describe('GitHubOrgCard', () => {
     vi.mocked(github.actions.unlink).mockResolvedValue({ ok: false })
     renderCard()
     await userEvent.click(screen.getByRole('button', { name: /more actions/i }))
-    await userEvent.click(screen.getByRole('menuitem', { name: /unlink/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Unlink' }))
     await userEvent.click(screen.getByRole('button', { name: /^unlink$/i }))
     expect(await screen.findByText(/couldn't unlink/i)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
@@ -288,13 +290,111 @@ describe('GitHubOrgCard', () => {
     })
   })
 
-  it('shows a spinner while loading and nothing misleading when offline', () => {
+  it('shows a spinner while loading', () => {
     mockGithub({ status: 'loading' })
-    const first = render(<GitHubOrgCard teamId="t1" canManage />)
-    expect(screen.queryByRole('button', { name: /link organization/i })).toBeNull()
-    first.unmount()
-    mockGithub({ status: 'offline' })
     render(<GitHubOrgCard teamId="t1" canManage />)
     expect(screen.queryByRole('button', { name: /link organization/i })).toBeNull()
+  })
+
+  it.each(['Guide', 'Expert'] as const)(
+    'offline (%s): a one-line note with Retry that refreshes, and no link action',
+    async (mode) => {
+      useSettingsStore.setState({ solMode: mode })
+      const github = mockGithub({ status: 'offline' })
+      render(<GitHubOrgCard teamId="t1" canManage />)
+      expect(screen.getByRole('status')).toHaveTextContent(githubText('offline_note', mode))
+      expect(screen.queryByRole('button', { name: /link organization/i })).toBeNull()
+      await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(github.actions.refresh).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it('threads onUpgrade from the card into the roster modal', async () => {
+    mockGithub({ installation: INSTALLATION })
+    const onUpgrade = vi.fn()
+    renderCard(true, onUpgrade)
+    await userEvent.click(screen.getByRole('button', { name: /members on github/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'roster-upgrade' }))
+    expect(onUpgrade).toHaveBeenCalledTimes(1)
+  })
+
+  it('the Linked by line follows the SOL mode', () => {
+    mockGithub({ installation: INSTALLATION })
+    const { unmount } = render(<GitHubOrgCard teamId="t1" canManage />)
+    expect(screen.getByText(/Solus can read all repositories/)).toBeInTheDocument()
+    unmount()
+    useSettingsStore.setState({ solMode: 'Expert' })
+    render(<GitHubOrgCard teamId="t1" canManage />)
+    expect(screen.getByText(/^Linked by Maya K · 3d ago · all repos$/)).toBeInTheDocument()
+  })
+
+  describe('overflow disclosure', () => {
+    const open = async (): Promise<HTMLElement> => {
+      mockGithub({ installation: INSTALLATION })
+      render(
+        <>
+          <GitHubOrgCard teamId="t1" canManage />
+          <button>elsewhere</button>
+        </>
+      )
+      const trigger = screen.getByRole('button', { name: /more actions/i })
+      await userEvent.click(trigger)
+      return trigger
+    }
+
+    it('is a disclosure, not an ARIA menu', async () => {
+      const trigger = await open()
+      expect(trigger).toHaveAttribute('aria-expanded', 'true')
+      expect(trigger).not.toHaveAttribute('aria-haspopup')
+      const panel = document.getElementById(trigger.getAttribute('aria-controls') ?? '')
+      expect(panel).not.toBeNull()
+      expect(screen.queryByRole('menu')).toBeNull()
+      expect(screen.queryByRole('menuitem')).toBeNull()
+    })
+
+    it('closes on Escape and returns focus to the trigger', async () => {
+      const trigger = await open()
+      await userEvent.tab()
+      expect(screen.getByRole('button', { name: 'Unlink' })).toHaveFocus()
+      await userEvent.keyboard('{Escape}')
+      expect(screen.queryByRole('button', { name: 'Unlink' })).toBeNull()
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+      expect(trigger).toHaveFocus()
+    })
+
+    it('opens from the keyboard and closes again with Escape', async () => {
+      mockGithub({ installation: INSTALLATION })
+      renderCard()
+      const trigger = screen.getByRole('button', { name: /more actions/i })
+      trigger.focus()
+      await userEvent.keyboard('{Enter}')
+      expect(trigger).toHaveAttribute('aria-expanded', 'true')
+      await userEvent.keyboard('{Escape}')
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+      expect(trigger).toHaveFocus()
+    })
+
+    it('closes on an outside click', async () => {
+      const trigger = await open()
+      await userEvent.click(screen.getByRole('button', { name: 'elsewhere' }))
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('closes when focus tabs out of it', async () => {
+      const trigger = await open()
+      await userEvent.tab()
+      await userEvent.tab()
+      expect(screen.getByRole('button', { name: 'elsewhere' })).toHaveFocus()
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('Unlink closes the disclosure and opens a labelled confirm dialog', async () => {
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: 'Unlink' }))
+      expect(screen.getByRole('dialog', { name: 'Unlink GitHub organization' })).toBeInTheDocument()
+      await userEvent.keyboard('{Escape}')
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(screen.getByRole('button', { name: /more actions/i })).toHaveFocus()
+    })
   })
 })

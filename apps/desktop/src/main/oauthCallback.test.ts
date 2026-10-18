@@ -174,6 +174,30 @@ describe('parseOAuthCallback: GitHub App install params', () => {
     }
   )
 
+  it('accepts setup_action=request with no code as a success result', () => {
+    expect(at('setup_action=request')).toEqual({ setupAction: 'request' })
+    expect(at('installation_id=5&setup_action=request')).toEqual({
+      installationId: 5,
+      setupAction: 'request'
+    })
+  })
+
+  it.each(['install', 'update'])('still rejects a missing code for setup_action=%s', (action) => {
+    expect(at(`installation_id=1&setup_action=${action}`)).toEqual({
+      error: 'No authorization code in callback'
+    })
+  })
+
+  it('still rejects a missing code with no setup_action', () => {
+    expect(at('installation_id=1')).toEqual({ error: 'No authorization code in callback' })
+  })
+
+  it('rejects an invalid installation_id on a code-less request', () => {
+    expect(at('installation_id=abc&setup_action=request')).toEqual({
+      error: 'Invalid installation_id in callback'
+    })
+  })
+
   it('still ignores a mismatched state even with valid install params', () => {
     expect(
       parseOAuthCallback(

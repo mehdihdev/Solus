@@ -21,6 +21,36 @@ describe('githubOrgCopy', () => {
     expect(githubText('unlink_done', 'Guide', { n: 1 })).toContain('1 project')
   })
 
+  it.each([
+    'roster_token_missing',
+    'roster_copy_failed',
+    'roster_wont_see_again',
+    'offline_note'
+  ] as const)('%s reads differently in Guide and Expert', (key) => {
+    expect(githubText(key, 'Guide')).not.toBe(githubText(key, 'Expert'))
+    expect(githubText(key, 'Guide').length).toBeGreaterThan(githubText(key, 'Expert').length)
+  })
+
+  it('fills the linked-by line in both modes', () => {
+    const vars = { by: 'Maya K', when: '2d ago', scope: 'all repos' }
+    const guide = githubText('linked_by', 'Guide', vars)
+    const expert = githubText('linked_by', 'Expert', vars)
+    expect(expert).toBe('Linked by Maya K · 2d ago · all repos')
+    expect(guide).toContain('Maya K')
+    expect(guide).toContain('all repos')
+    expect(guide).not.toBe(expert)
+    expect(guide).not.toMatch(/[{}]/)
+  })
+
+  it('never re-expands a placeholder that arrives inside a value', () => {
+    const out = githubText('linked_by', 'Expert', { by: '{when}', when: 'now', scope: 's' })
+    expect(out).toBe('Linked by {when} · now · s')
+  })
+
+  it('leaves unknown placeholders alone and ignores unused vars', () => {
+    expect(githubText('unlink_done', 'Expert', { n: 2, extra: 'x' })).toContain('2 sources')
+  })
+
   it('names the organization-linked-elsewhere refusal', () => {
     expect(githubText('installation_linked_elsewhere', 'Expert')).toMatch(/another Solus team/)
   })

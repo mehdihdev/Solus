@@ -55,7 +55,11 @@ export function isValidAuthorizeUrl(authorizeUrl: string): boolean {
 
 /** What GitHub reports about a GitHub App install redirect (SOLUSDEV-216). */
 export type SetupAction = 'install' | 'update' | 'request'
-const SETUP_ACTIONS: readonly string[] = ['install', 'update', 'request']
+const SETUP_ACTIONS: readonly SetupAction[] = ['install', 'update', 'request']
+
+function isSetupAction(value: string): value is SetupAction {
+  return (SETUP_ACTIONS as readonly string[]).includes(value)
+}
 
 export interface OAuthCallbackResult {
   code?: string
@@ -91,14 +95,19 @@ export function parseOAuthCallback(
   if (url.pathname !== OAUTH_CALLBACK_PATH) return null
   if (url.searchParams.get(stateParam) !== expectedState) return null
 
-  const error = url.searchParams.get('error_description') ?? url.searchParams.get('error')
+  return callbackResult(url.searchParams)
+}
+
+function callbackResult(params: URLSearchParams): OAuthCallbackResult {
+  const error = params.get('error_description') ?? params.get('error')
   if (error) return { error }
 
-  const code = url.searchParams.get('code')
-  if (code) {
-    const install = parseInstallParams(url.searchParams)
-    return 'error' in install ? install : { code, ...install }
-  }
+  const install = parseInstallParams(params)
+  if ('error' in install) return install
+  const code = params.get('code')
+  if (code) return { code, ...install }
+  // GitHub omits the code when a non-owner only *requested* the install.
+  if (install.setupAction === 'request') return install
 
   return { error: 'No authorization code in callback' }
 }
@@ -119,8 +128,8 @@ function parseInstallParams(
   }
   const rawAction = params.get('setup_action')
   if (rawAction !== null) {
-    if (!SETUP_ACTIONS.includes(rawAction)) return { error: 'Invalid setup_action in callback' }
-    out.setupAction = rawAction as SetupAction
+    if (!isSetupAction(rawAction)) return { error: 'Invalid setup_action in callback' }
+    out.setupAction = rawAction
   }
   return out
 }

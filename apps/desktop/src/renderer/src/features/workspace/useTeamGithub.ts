@@ -97,9 +97,22 @@ export function useTeamGithub(teamId: string | null): TeamGithub {
   const [notice, setNotice] = useState<LinkNotice | null>(null)
   const loadSeq = useRef(0)
   const teamIdRef = useRef(teamId)
+  const statusRef = useRef(status)
+  const linkingRef = useRef(false)
   useEffect(() => {
     teamIdRef.current = teamId
   }, [teamId])
+  useEffect(() => {
+    statusRef.current = status
+    linkingRef.current = linking
+  }, [status, linking])
+  // Leaving mid-link aborts the browser handshake so main stops waiting.
+  useEffect(
+    () => () => {
+      if (linkingRef.current) void getDesktopOAuthBridge()?.cancelOAuth?.()
+    },
+    []
+  )
   // Read lazily (after an await), so a team switch mid-flight drops the result.
   const currentTeamId = useCallback(() => teamIdRef.current, [])
 
@@ -118,11 +131,11 @@ export function useTeamGithub(teamId: string | null): TeamGithub {
       }
       try {
         const next = await fetchSnapshot(teamId)
-        if (seq !== loadSeq.current) return
+        if (seq !== loadSeq.current || teamIdRef.current !== teamId) return
         setSnapshot(next)
         setStatus('ready')
       } catch {
-        if (seq !== loadSeq.current) return
+        if (seq !== loadSeq.current || teamIdRef.current !== teamId) return
         if (!quiet) setStatus('offline')
       }
     },
@@ -131,11 +144,21 @@ export function useTeamGithub(teamId: string | null): TeamGithub {
 
   useEffect(() => {
     setNotice(null)
+    setLinking(false)
     void load(false)
   }, [load])
   useLiveRefetch([teamId ? liveKeys.team(teamId) : null], () => void load(true), teamId !== null)
 
-  const actions = createActions({ teamId, currentTeamId, load, setLinking, setNotice })
+  const actions = createActions({
+    teamId,
+    currentTeamId,
+    load,
+    // A Retry from the offline note shows the loading state; anything else is quiet.
+    isOffline: () => statusRef.current === 'offline',
+    setLinking,
+    setNotice,
+    clearSnapshot: () => setSnapshot(EMPTY)
+  })
   return { status, ...snapshot, linking, notice, actions }
 }
 
@@ -143,16 +166,20 @@ interface ActionContext {
   teamId: string | null
   currentTeamId: () => string | null
   load: (quiet: boolean) => Promise<void>
+  isOffline: () => boolean
   setLinking: (value: boolean) => void
   setNotice: (value: LinkNotice | null) => void
+  clearSnapshot: () => void
 }
 
 function createActions({
   teamId,
   currentTeamId,
   load,
+  isOffline,
   setLinking,
-  setNotice
+  setNotice,
+  clearSnapshot
 }: ActionContext): TeamGithubActions {
   return {
     link: async () => {
@@ -164,8 +191,8 @@ function createActions({
         { start: startGithubInstall, complete: completeGithubInstall, bridge },
         teamId
       )
-      if (currentTeamId() !== teamId) return
       setLinking(false)
+      if (currentTeamId() !== teamId) return
       if (outcome.kind === 'linked') await load(true)
       else setNotice(outcome)
     },
@@ -173,8 +200,16 @@ function createActions({
       if (!teamId) return { ok: false }
       try {
         const result = await unlinkTeamInstallation(teamId)
-        await load(true)
-        return { ok: true, disabledSources: result.disabled_sources, manageUrl: result.manage_url }
+        const unlinked = {
+          ok: true as const,
+          disabledSources: result.disabled_sources,
+          manageUrl: result.manage_url
+        }
+        if (currentTeamId() !== teamId) return unlinked
+        // Show "unlinked" now; the quiet refetch only confirms it.
+        clearSnapshot()
+        void load(true)
+        return unlinked
       } catch {
         return { ok: false }
       }
@@ -201,6 +236,6 @@ function createActions({
         return inviteRefusal(error)
       }
     },
-    refresh: () => load(true)
+    refresh: () => load(!isOffline())
   }
 }

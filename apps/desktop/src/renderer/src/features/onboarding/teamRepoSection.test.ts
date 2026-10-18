@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest'
 import {
   ACCOUNT_ENTRY_ID,
   SIGN_IN_ENTRY_ID,
+  PICKER_COPY_KEYS,
+  pickerText,
   teamBindErrorMessage,
   teamRepoSections
 } from './teamRepoSection'
@@ -30,22 +32,30 @@ const REPOS: SelectableItem[] = [
 
 describe('teamRepoSections', () => {
   it('returns null with no installation so the legacy single-section wizard is kept', () => {
-    expect(teamRepoSections({ installation: null, repos: REPOS, linkedLogin: 'maya-k' })).toBeNull()
+    expect(
+      teamRepoSections({ installation: null, repos: REPOS, linkedLogin: 'maya-k', mode: 'Guide' })
+    ).toBeNull()
   })
 
-  it('lists the team repos under an upper-cased TEAM header', () => {
+  it('lists the team repos under an natural-case team header (CSS uppercases it)', () => {
     const sections = teamRepoSections({
       installation: INSTALLATION,
       repos: REPOS,
-      linkedLogin: null
+      linkedLogin: null,
+      mode: 'Guide'
     })
-    expect(sections?.[0].header).toBe('FROM FSAE-EV (TEAM)')
+    expect(sections?.[0].header).toBe('From fsae-ev (team)')
     expect(sections?.[0].items).toEqual(REPOS)
     expect(sections?.[0].notice).toBeUndefined()
   })
 
   it('says so when an active installation shares no repositories', () => {
-    const sections = teamRepoSections({ installation: INSTALLATION, repos: [], linkedLogin: null })
+    const sections = teamRepoSections({
+      installation: INSTALLATION,
+      repos: [],
+      linkedLogin: null,
+      mode: 'Guide'
+    })
     expect(sections?.[0].items).toEqual([])
     expect(sections?.[0].notice).toMatch(/no repositories/i)
   })
@@ -54,10 +64,11 @@ describe('teamRepoSections', () => {
     const sections = teamRepoSections({
       installation: { ...INSTALLATION, status: 'suspended' },
       repos: REPOS,
-      linkedLogin: 'maya-k'
+      linkedLogin: 'maya-k',
+      mode: 'Guide'
     })
-    expect(sections?.[0].header).toBe('FROM FSAE-EV (TEAM)')
-    expect(sections?.[0].notice).toBe('Suspended on GitHub')
+    expect(sections?.[0].header).toBe('From fsae-ev (team)')
+    expect(sections?.[0].notice).toBe(pickerText('suspended', 'Guide'))
     expect(sections?.[0].items).toEqual([])
   })
 
@@ -65,10 +76,11 @@ describe('teamRepoSections', () => {
     const sections = teamRepoSections({
       installation: INSTALLATION,
       repos: REPOS,
-      linkedLogin: 'maya-k'
+      linkedLogin: 'maya-k',
+      mode: 'Guide'
     })
     expect(sections).toHaveLength(2)
-    expect(sections?.[1].header).toBe('YOUR ACCOUNT · maya-k')
+    expect(sections?.[1].header).toBe('Your account · maya-k')
     expect(sections?.[1].items.map((i) => i.id)).toEqual([ACCOUNT_ENTRY_ID])
   })
 
@@ -76,12 +88,45 @@ describe('teamRepoSections', () => {
     const sections = teamRepoSections({
       installation: INSTALLATION,
       repos: REPOS,
-      linkedLogin: null
+      linkedLogin: null,
+      mode: 'Guide'
     })
-    expect(sections?.[1].header).toBe('YOUR ACCOUNT')
+    expect(sections?.[1].header).toBe('Your account')
     expect(sections?.[1].items).toEqual([
       expect.objectContaining({ id: SIGN_IN_ENTRY_ID, name: 'Use my own GitHub account' })
     ])
+  })
+})
+
+describe('team picker copy (SOL modes)', () => {
+  it.each(PICKER_COPY_KEYS)('%s has non-empty Guide and Expert variants', (key) => {
+    expect(pickerText(key, 'Guide').length).toBeGreaterThan(0)
+    expect(pickerText(key, 'Expert').length).toBeGreaterThan(0)
+  })
+
+  it.each(PICKER_COPY_KEYS.filter((k) => k !== 'use_own_account'))(
+    '%s explains more in Guide than Expert',
+    (key) => {
+      expect(pickerText(key, 'Guide').length).toBeGreaterThan(pickerText(key, 'Expert').length)
+    }
+  )
+
+  it('renders the notices and sign-in entry in the requested mode', () => {
+    const expert = teamRepoSections({
+      installation: { ...INSTALLATION, status: 'suspended' },
+      repos: [],
+      linkedLogin: null,
+      mode: 'Expert'
+    })
+    expect(expert?.[0].notice).toBe(pickerText('suspended', 'Expert'))
+    expect(expert?.[1].items[0].name).toBe(pickerText('use_own_account', 'Expert'))
+    const empty = teamRepoSections({
+      installation: INSTALLATION,
+      repos: [],
+      linkedLogin: null,
+      mode: 'Expert'
+    })
+    expect(empty?.[0].notice).toBe(pickerText('no_team_repos', 'Expert'))
   })
 })
 
@@ -109,5 +154,11 @@ describe('teamBindErrorMessage', () => {
 
   it('returns null for codes this bind does not own', () => {
     expect(teamBindErrorMessage('already_linked', 'Guide')).toBeNull()
+  })
+
+  it('does not treat inherited object keys as bind codes', () => {
+    for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(teamBindErrorMessage(key as never, 'Guide')).toBeNull()
+    }
   })
 })

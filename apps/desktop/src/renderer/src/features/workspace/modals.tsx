@@ -2,7 +2,7 @@
 // implementation — DRY). ModalShell provides the dim backdrop + centered card;
 // NameModal is the generic single-field create/rename dialog; JoinTeamModal
 // redeems an invite token; DeleteConfirmModal is the destructive confirm.
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -30,18 +30,71 @@ function FailureLine({
   return <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--err)' }}>{failure.message}</div>
 }
 
-/** Shared modal chrome: dim backdrop, centered card, click-out to close.
+/** Open shells that close on Escape, oldest first: only the topmost answers. */
+const ESCAPE_SHELLS: symbol[] = []
+
+/** Focus into the dialog on mount (unless a child already took it) and back to
+ *  the opener on unmount. */
+function useModalFocus(cardRef: React.RefObject<HTMLDivElement | null>): void {
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const card = cardRef.current
+    if (card && !card.contains(document.activeElement)) card.focus()
+    return () => {
+      if (opener?.isConnected) opener.focus()
+    }
+  }, [cardRef])
+}
+
+/** Opt-in Escape-to-close (SOLUSDEV-216). Opt-in so existing modals that own
+ *  their Escape handling keep it unchanged; only the topmost opted-in shell closes. */
+function useEscapeToClose(enabled: boolean, onClose: () => void): void {
+  const closeRef = useRef(onClose)
+  useEffect(() => {
+    closeRef.current = onClose
+  }, [onClose])
+  useEffect(() => {
+    if (!enabled) return
+    const id = Symbol('modal')
+    ESCAPE_SHELLS.push(id)
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || ESCAPE_SHELLS[ESCAPE_SHELLS.length - 1] !== id) return
+      event.preventDefault()
+      closeRef.current()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      ESCAPE_SHELLS.splice(ESCAPE_SHELLS.indexOf(id), 1)
+    }
+  }, [enabled])
+}
+
+/** Shared modal chrome: dim backdrop, centered card, click-out to close, focus
+ *  moved in and restored. `closeOnEscape` opts into Escape-to-close.
+ *  `labelledBy` (an element id inside the modal) makes the card a labelled
+ *  `role="dialog"`; without it the caller supplies its own dialog semantics.
  *  Entrance motion via .modal-backdrop-in/.modal-card-in (main.css). */
 export function ModalShell({
   onClose,
   width = 360,
+  labelledBy,
+  closeOnEscape = false,
   children
 }: {
   onClose: () => void
   /** Card width; the default fits the single-field dialogs. */
   width?: number
+  labelledBy?: string
+  closeOnEscape?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
+  const cardRef = useRef<HTMLDivElement>(null)
+  useModalFocus(cardRef)
+  useEscapeToClose(closeOnEscape, onClose)
+  const dialogProps = labelledBy
+    ? { role: 'dialog', 'aria-modal': true, 'aria-labelledby': labelledBy }
+    : {}
   return (
     <div
       className="modal-backdrop-in"
@@ -56,7 +109,14 @@ export function ModalShell({
       }}
       onClick={onClose}
     >
-      <div className="modal-card-in" onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={cardRef}
+        tabIndex={-1}
+        {...dialogProps}
+        className="modal-card-in"
+        style={{ outline: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <Card pad={24} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
           {children}
         </Card>

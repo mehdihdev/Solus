@@ -5,7 +5,7 @@
 // suspended. Collaborative teams only — Home does not mount it on the personal
 // team. Strings come from githubOrgCopy (Guide/Expert); anything the server or
 // GitHub supplies (logins, URLs) is rendered as text, and URLs only when https.
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
@@ -79,7 +79,7 @@ function CardBody({
 }: BodyProps): React.JSX.Element | null {
   if (github.status === 'idle') return null
   if (github.status === 'loading') return <Spinner size={14} />
-  if (github.status === 'offline') return null
+  if (github.status === 'offline') return <OfflineNote github={github} mode={mode} />
   if (github.unconfigured) return <div style={NOTE_STYLE}>{githubText('unconfigured', mode)}</div>
   if (github.installation) {
     return (
@@ -88,6 +88,7 @@ function CardBody({
         installation={github.installation}
         mode={mode}
         canManage={canManage}
+        onUpgrade={onUpgrade}
         onUnlink={onUnlink}
       />
     )
@@ -100,6 +101,19 @@ function CardBody({
       onUpgrade={onUpgrade}
       onUnlink={onUnlink}
     />
+  )
+}
+
+function OfflineNote({ github, mode }: { github: TeamGithub; mode: SolMode }): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <div role="status" style={NOTE_STYLE}>
+        {githubText('offline_note', mode)}
+      </div>
+      <Button kind="ghost" size="sm" onClick={() => void github.actions.refresh()}>
+        Retry
+      </Button>
+    </div>
   )
 }
 
@@ -234,16 +248,17 @@ function LinkedView({
   installation,
   mode,
   canManage,
+  onUpgrade,
   onUnlink
 }: {
   github: TeamGithub
   installation: TeamInstallation
   mode: SolMode
   canManage: boolean
+  onUpgrade?: () => void
   onUnlink: () => void
 }): React.JSX.Element {
   const [roster, setRoster] = useState(false)
-  const [menu, setMenu] = useState(false)
   const count = repoCountText(github.repoCount)
   const linkedBy = installation.linked_by?.name ?? githubText('former_member', mode)
   const scope = githubText(
@@ -267,7 +282,11 @@ function LinkedView({
         </div>
       </div>
       <div style={{ ...NOTE_STYLE, marginTop: 8, fontSize: 11.5 }}>
-        {`Linked by ${linkedBy} · ${relativeTime(installation.linked_at)} · ${scope}`}
+        {githubText('linked_by', mode, {
+          by: linkedBy,
+          when: relativeTime(installation.linked_at),
+          scope
+        })}
       </div>
       {installation.status === 'suspended' && (
         <div
@@ -286,21 +305,13 @@ function LinkedView({
           </Button>
         )}
         <ExternalLink href={safeHttpsUrl(installation.manage_url)} label="Manage on GitHub" />
-        {canManage && (
-          <OverflowMenu
-            open={menu}
-            onToggle={() => setMenu((v) => !v)}
-            onUnlink={() => {
-              setMenu(false)
-              onUnlink()
-            }}
-          />
-        )}
+        {canManage && <OverflowMenu onUnlink={onUnlink} />}
       </div>
       {roster && (
         <GitHubRosterModal
           actions={github.actions}
           login={installation.account_login}
+          onUpgrade={onUpgrade}
           onClose={() => setRoster(false)}
         />
       )}
@@ -308,29 +319,57 @@ function LinkedView({
   )
 }
 
-function OverflowMenu({
-  open,
-  onToggle,
-  onUnlink
-}: {
-  open: boolean
-  onToggle: () => void
-  onUnlink: () => void
-}): React.JSX.Element {
+/** A disclosure (not an ARIA menu): the trigger exposes aria-expanded /
+ *  aria-controls, Escape or a click/Tab away closes it, and Escape returns focus
+ *  to the trigger. Choosing Unlink also parks focus on the trigger so the dialog
+ *  it opens restores focus somewhere real. */
+function OverflowMenu({ onUnlink }: { onUnlink: () => void }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const panelId = useId()
+  const rootRef = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: MouseEvent): void => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [open])
+
+  const closeToTrigger = (): void => {
+    setOpen(false)
+    rootRef.current?.querySelector<HTMLButtonElement>('[aria-controls]')?.focus()
+  }
+
   return (
-    <span style={{ position: 'relative' }}>
+    <span
+      ref={rootRef}
+      style={{ position: 'relative' }}
+      onKeyDown={(event) => {
+        if (open && event.key === 'Escape') {
+          event.stopPropagation()
+          closeToTrigger()
+        }
+      }}
+      onBlur={(event) => {
+        const next = event.relatedTarget
+        if (open && next instanceof Node && !rootRef.current?.contains(next)) setOpen(false)
+      }}
+    >
       <Button
         kind="bare"
         size="sm"
         aria-label="More actions"
-        aria-haspopup="menu"
-        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((v) => !v)}
       >
         ⋯
       </Button>
       {open && (
         <div
-          role="menu"
+          id={panelId}
           style={{
             position: 'absolute',
             right: 0,
@@ -343,8 +382,11 @@ function OverflowMenu({
           }}
         >
           <button
-            role="menuitem"
-            onClick={onUnlink}
+            type="button"
+            onClick={() => {
+              closeToTrigger()
+              onUnlink()
+            }}
             className="interactive"
             style={{
               display: 'block',
@@ -389,10 +431,13 @@ function UnlinkModal({
         : { phase: 'confirm', busy: false, failed: true }
     )
   }
+  const titleId = useId()
   return (
-    <ModalShell onClose={onClose} width={400}>
-      <div role="dialog" aria-modal="true" aria-label="Unlink GitHub organization">
-        <div style={{ fontSize: 16, fontWeight: 600 }}>Unlink GitHub organization</div>
+    <ModalShell onClose={onClose} width={400} labelledBy={titleId} closeOnEscape>
+      <div>
+        <div id={titleId} style={{ fontSize: 16, fontWeight: 600 }}>
+          Unlink GitHub organization
+        </div>
         {step.phase === 'confirm' ? (
           <>
             <div style={{ ...NOTE_STYLE, marginTop: 8 }}>

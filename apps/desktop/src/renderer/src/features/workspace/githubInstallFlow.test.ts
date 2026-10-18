@@ -64,6 +64,29 @@ describe('runGithubInstall', () => {
     })
   })
 
+  it('completes a code-less request callback with no code in the body', async () => {
+    const deps = makeDeps({
+      bridge: {
+        getConnectorRedirectUrl: async () => 'r',
+        awaitOAuth: async () => ({ setupAction: 'request' as const })
+      },
+      complete: vi.fn(async () => ({ kind: 'requested' as const }))
+    })
+    expect(await runGithubInstall(deps, 't1')).toEqual({ kind: 'requested' })
+    expect(deps.complete).toHaveBeenCalledWith('t1', { state: 's1', setup_action: 'request' })
+  })
+
+  it('stays cancelled for a code-less install or update callback', async () => {
+    const deps = makeDeps({
+      bridge: {
+        getConnectorRedirectUrl: async () => 'r',
+        awaitOAuth: async () => ({ setupAction: 'install' as const, installationId: 3 })
+      }
+    })
+    expect(await runGithubInstall(deps, 't1')).toEqual({ kind: 'cancelled' })
+    expect(deps.complete).not.toHaveBeenCalled()
+  })
+
   it('is cancelled when the loopback returns no code', async () => {
     const deps = makeDeps({
       bridge: { getConnectorRedirectUrl: async () => 'r', awaitOAuth: async () => ({}) }

@@ -5,6 +5,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { GithubOrgMember } from '../../lib/api/resources.teamGithub'
 import { useSettingsStore } from '../../store/settingsStore'
+import { githubText } from './githubOrgCopy'
 import { GitHubRosterModal } from './GitHubRosterModal'
 import type { TeamGithubActions } from './useTeamGithub'
 
@@ -164,5 +165,77 @@ describe('GitHubRosterModal', () => {
     expect(within(dialog).getByText(/fsae-ev/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /^close$/i }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  it('is a labelled modal dialog and Escape closes it', async () => {
+    const onClose = vi.fn()
+    open(makeActions(), onClose)
+    expect(
+      await screen.findByRole('dialog', { name: 'Members of fsae-ev on GitHub' })
+    ).toHaveAttribute('aria-modal', 'true')
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('moves focus into the dialog on open', async () => {
+    open(makeActions())
+    await screen.findByText('user1')
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
+  })
+
+  it('renders the members as a list', async () => {
+    open(makeActions())
+    const list = await screen.findByRole('list', { name: 'Organization members' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(3)
+  })
+
+  it('announces the token reveal and moves focus to it; Escape does not discard it', async () => {
+    const onClose = vi.fn()
+    open(makeActions(), onClose)
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite user3' }))
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('one-time-token')
+    expect(status).toHaveFocus()
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByTestId('invite-token')).toBeInTheDocument()
+  })
+
+  it('says the token was not returned, in each SOL mode', async () => {
+    const actions = makeActions({
+      inviteMember: vi.fn(async () => ({ ok: true as const, token: null }))
+    })
+    open(actions)
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite user3' }))
+    expect(await screen.findByTestId('invite-token')).toHaveTextContent(
+      githubText('roster_token_missing', 'Guide')
+    )
+  })
+
+  it("words the token-missing, copy-failed and won't-see-again lines for Expert", async () => {
+    useSettingsStore.setState({ solMode: 'Expert' })
+    Object.defineProperty(navigator, 'clipboard', {
+      value: {
+        writeText: vi.fn(async () => {
+          throw new Error('denied')
+        })
+      },
+      configurable: true
+    })
+    open(makeActions())
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite user3' }))
+    await userEvent.click(await screen.findByRole('button', { name: /copy token/i }))
+    expect(await screen.findByText(githubText('roster_copy_failed', 'Expert'))).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /^done$/i }))
+    expect(screen.getByText(githubText('roster_wont_see_again', 'Expert'))).toBeInTheDocument()
+  })
+
+  it('Expert mode says the token is missing tersely', async () => {
+    useSettingsStore.setState({ solMode: 'Expert' })
+    open(makeActions({ inviteMember: vi.fn(async () => ({ ok: true as const, token: null })) }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Invite user3' }))
+    expect(await screen.findByTestId('invite-token')).toHaveTextContent(
+      githubText('roster_token_missing', 'Expert')
+    )
   })
 })

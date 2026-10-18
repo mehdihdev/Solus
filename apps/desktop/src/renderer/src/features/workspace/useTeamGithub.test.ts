@@ -23,7 +23,10 @@ vi.mock('../../lib/api/resources', async (importOriginal) => ({
   createInvite: vi.fn()
 }))
 vi.mock('./githubInstallFlow', () => ({ runGithubInstall: vi.fn() }))
-vi.mock('../../lib/desktopBridge', () => ({ getDesktopOAuthBridge: () => null }))
+const bridgeMock = vi.hoisted(() => ({
+  current: null as null | { cancelOAuth?: () => Promise<boolean> }
+}))
+vi.mock('../../lib/desktopBridge', () => ({ getDesktopOAuthBridge: () => bridgeMock.current }))
 
 const INSTALLATION: gh.TeamInstallation = {
   id: 'i1',
@@ -56,6 +59,7 @@ const mocked = {
 
 beforeEach(() => {
   vi.resetAllMocks()
+  bridgeMock.current = null
   resetLiveRevisions()
   mocked.installation.mockResolvedValue(INSTALLATION)
   mocked.repos.mockResolvedValue({ items: [], total: 6, cursor: null })
@@ -245,5 +249,181 @@ describe('useTeamGithub', () => {
       outcome = await result.current.actions.inviteMember(MEMBER)
     })
     expect(outcome).toEqual({ ok: false, reason: 'failed' })
+  })
+
+  describe('races and state', () => {
+    const INSTALLATION_B: gh.TeamInstallation = {
+      ...INSTALLATION,
+      id: 'i2',
+      account_login: 'other'
+    }
+
+    function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+      let resolve: (v: T) => void = () => undefined
+      const promise = new Promise<T>((r) => {
+        resolve = r
+      })
+      return { promise, resolve }
+    }
+
+    it('link(): clears linking even when the team changed mid-flight', async () => {
+      const gate = deferred<flow.InstallOutcome>()
+      mocked.run.mockReturnValue(gate.promise)
+      const { result, rerender } = renderHook(({ id }) => useTeamGithub(id), {
+        initialProps: { id: 't1' }
+      })
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      let pending: Promise<void> = Promise.resolve()
+      act(() => {
+        pending = result.current.actions.link()
+      })
+      expect(result.current.linking).toBe(true)
+      rerender({ id: 't2' })
+      await act(async () => {
+        gate.resolve({ kind: 'cancelled' })
+        await pending
+      })
+      expect(result.current.linking).toBe(false)
+      expect(result.current.notice).toBeNull()
+    })
+
+    it('resets linking and the notice when the team changes', async () => {
+      mocked.run.mockResolvedValue({ kind: 'cancelled' })
+      const { result, rerender } = renderHook(({ id }) => useTeamGithub(id), {
+        initialProps: { id: 't1' }
+      })
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      await act(async () => {
+        await result.current.actions.link()
+      })
+      expect(result.current.notice).toEqual({ kind: 'cancelled' })
+      mocked.run.mockReturnValue(new Promise(() => undefined))
+      act(() => {
+        void result.current.actions.link()
+      })
+      expect(result.current.linking).toBe(true)
+      rerender({ id: 't2' })
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      expect(result.current.linking).toBe(false)
+      expect(result.current.notice).toBeNull()
+    })
+
+    it('unlink(): clears the snapshot locally without waiting for the refetch', async () => {
+      mocked.unlink.mockResolvedValue({ disabled_sources: 1, manage_url: 'https://github.com/m' })
+      const { result } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      // The quiet refetch never answers: the card must not depend on it.
+      mocked.installation.mockReturnValue(new Promise(() => undefined))
+      await act(async () => {
+        await result.current.actions.unlink()
+      })
+      expect(result.current.installation).toBeNull()
+      expect(result.current.repoCount).toBeNull()
+    })
+
+    it('unlink(): a team switch during the call does not wipe the new team', async () => {
+      const gate = deferred<{ disabled_sources: number; manage_url: string }>()
+      mocked.unlink.mockReturnValue(gate.promise)
+      const { result, rerender } = renderHook(({ id }) => useTeamGithub(id), {
+        initialProps: { id: 't1' }
+      })
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      let pending: Promise<unknown> = Promise.resolve()
+      act(() => {
+        pending = result.current.actions.unlink()
+      })
+      mocked.installation.mockResolvedValue(INSTALLATION_B)
+      rerender({ id: 't2' })
+      await waitFor(() => expect(result.current.installation).toEqual(INSTALLATION_B))
+      mocked.installation.mockClear()
+      await act(async () => {
+        gate.resolve({ disabled_sources: 0, manage_url: 'https://github.com/m' })
+        await pending
+      })
+      expect(result.current.installation).toEqual(INSTALLATION_B)
+      expect(mocked.installation).not.toHaveBeenCalled()
+    })
+
+    it('load: a slow reply for the old team never lands on the new team', async () => {
+      const slow = deferred<gh.TeamInstallation | null>()
+      mocked.installation.mockReturnValueOnce(slow.promise)
+      const { result, rerender } = renderHook(({ id }) => useTeamGithub(id), {
+        initialProps: { id: 't1' }
+      })
+      mocked.installation.mockResolvedValue(INSTALLATION_B)
+      rerender({ id: 't2' })
+      await waitFor(() => expect(result.current.installation).toEqual(INSTALLATION_B))
+      await act(async () => slow.resolve(INSTALLATION))
+      expect(result.current.installation).toEqual(INSTALLATION_B)
+      expect(result.current.status).toBe('ready')
+    })
+
+    it('load: a slow failure for the old team does not turn the new team offline', async () => {
+      let reject: (e: Error) => void = () => undefined
+      mocked.installation.mockReturnValueOnce(
+        new Promise((_, r) => {
+          reject = r
+        })
+      )
+      const { result, rerender } = renderHook(({ id }) => useTeamGithub(id), {
+        initialProps: { id: 't1' }
+      })
+      rerender({ id: 't2' })
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      await act(async () => reject(new Error('late')))
+      expect(result.current.status).toBe('ready')
+    })
+
+    it('cancels the in-flight install handshake on unmount', async () => {
+      const cancelOAuth = vi.fn(async () => true)
+      bridgeMock.current = { cancelOAuth }
+      mocked.run.mockReturnValue(new Promise(() => undefined))
+      const { result, unmount } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      act(() => {
+        void result.current.actions.link()
+      })
+      unmount()
+      expect(cancelOAuth).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not cancel anything on unmount when no link is in flight', async () => {
+      const cancelOAuth = vi.fn(async () => true)
+      bridgeMock.current = { cancelOAuth }
+      const { result, unmount } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      unmount()
+      expect(cancelOAuth).not.toHaveBeenCalled()
+    })
+
+    it('unmounting mid-link tolerates a bridge without cancelOAuth', async () => {
+      bridgeMock.current = {}
+      mocked.run.mockReturnValue(new Promise(() => undefined))
+      const { result, unmount } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      act(() => {
+        void result.current.actions.link()
+      })
+      expect(() => unmount()).not.toThrow()
+    })
+
+    it('a 403 on the repo count (viewer) leaves the count null and is not offline', async () => {
+      mocked.repos.mockRejectedValue(new ApiError(403, 'forbidden', 'viewer'))
+      const { result } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('ready'))
+      expect(result.current.repoCount).toBeNull()
+      expect(result.current.installation).toEqual(INSTALLATION)
+    })
+
+    it('refresh() from offline reloads with the loading state and recovers', async () => {
+      mocked.installation.mockRejectedValueOnce(new Error('network'))
+      const { result } = renderHook(() => useTeamGithub('t1'))
+      await waitFor(() => expect(result.current.status).toBe('offline'))
+      await act(async () => {
+        await result.current.actions.refresh()
+      })
+      expect(result.current.status).toBe('ready')
+      expect(result.current.installation).toEqual(INSTALLATION)
+    })
   })
 })

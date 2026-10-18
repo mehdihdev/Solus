@@ -8,7 +8,13 @@
 // and is reported: real work is never thrown away silently.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useConnectWizard, useTeamPick, NOT_LINKED_ERROR } from './useConnectWizard'
+import {
+  clearTeamPick,
+  stageTeamPick,
+  useConnectWizard,
+  useTeamPick,
+  NOT_LINKED_ERROR
+} from './useConnectWizard'
 import {
   EMPTY_EXPORT_ERROR,
   FILE_READ_ERROR,
@@ -713,6 +719,28 @@ function registerTeamRepoDispatchTests(): void {
 
     expect(mockedOAuth).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
+  })
+
+  it('opening the wizard clears a stale pick left by an earlier one', () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => stageTeamPick(TEAM_REPO))
+    act(() => result.current.open(GITHUB))
+    expect(useTeamPick.getState().picked).toBeNull()
+  })
+
+  it('stageTeamPick and clearTeamPick drive the one-slot store', () => {
+    stageTeamPick(TEAM_REPO)
+    expect(useTeamPick.getState().picked).toEqual(TEAM_REPO)
+    clearTeamPick()
+    expect(useTeamPick.getState().picked).toBeNull()
+  })
+
+  it('begin() consumes the pick even when it returns early (no active entry)', async () => {
+    const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+    act(() => stageTeamPick(TEAM_REPO))
+    await act(async () => result.current.begin())
+    expect(useTeamPick.getState().picked).toBeNull()
+    expect(mockedOAuth).not.toHaveBeenCalled()
   })
 
   it('closing the wizard forgets an unconsumed pick', () => {

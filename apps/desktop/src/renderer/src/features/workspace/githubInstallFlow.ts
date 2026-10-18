@@ -18,9 +18,12 @@ import {
  *  install URL in the system browser and owns the (longer) install timeout. */
 export type InstallBridge = Pick<OAuthBridge, 'getConnectorRedirectUrl' | 'awaitOAuth'>
 
+/** `code` is absent when GitHub redirects a non-owner's `request` without one. */
+export type InstallCompleteBody = GithubInstallCompleteInput
+
 export interface InstallFlowDeps {
   start: (teamId: string, redirectUri: string) => Promise<GithubInstallStart>
-  complete: (teamId: string, input: GithubInstallCompleteInput) => Promise<GithubInstallResult>
+  complete: (teamId: string, input: InstallCompleteBody) => Promise<GithubInstallResult>
   /** Null outside the desktop app. */
   bridge: InstallBridge | null
 }
@@ -52,10 +55,11 @@ export async function runGithubInstall(
     const start = await deps.start(teamId, redirectUri)
     const callback = await bridge.awaitOAuth(start.install_url, start.state, { install: true })
     if (callback.error) return { kind: 'failed', reason: 'loopback', message: callback.error }
-    if (!callback.code) return { kind: 'cancelled' }
+    const isRequest = callback.setupAction === 'request'
+    if (!callback.code && !isRequest) return { kind: 'cancelled' }
     return await deps.complete(teamId, {
       state: start.state,
-      code: callback.code,
+      ...(callback.code ? { code: callback.code } : {}),
       setup_action: callback.setupAction ?? 'install',
       ...(callback.installationId === undefined ? {} : { installation_id: callback.installationId })
     })
