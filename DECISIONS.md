@@ -1108,3 +1108,47 @@ verification), annual allowance 2,500, quiet period 90 s.
 5. **Durable scope:** only STEP exports and immutable reads over 256 KiB are
    stored durably; replaced objects are deleted. Writes always resolve the
    target workspace live.
+
+## ADR-039: Team-owned provider installations — GitHub App linked to a team
+
+**Status:** Accepted (2026-10-17, SOLUSDEV-315 design; approved in-chat against the concrete text below). Implementation ticket TBD.
+
+**Context:**
+- GitHub access today is a user-owned OAuth App grant (ADR-035 amendment 2026-09-12), so a team has no GitHub identity of its own.
+- Each member must authorize separately, and only the grant owner can bind it.
+- Sources break when that member leaves.
+- Orgs that restrict third-party OAuth Apps expose no repos at all.
+- ADR-030's signature-verified GitHub webhooks were never built.
+
+**Decision:**
+
+1. A new ownership class: a **team installation**.
+   - A GitHub App installation on an org (or user account) is bound to exactly one COLLABORATIVE team. `installation_id` is unique.
+   - PERSONAL teams cannot hold one.
+   - The user-owned OAuth App / PAT path (ADR-035) is unchanged and coexists with it.
+2. **Linking requires team admin+ and proof of access.** The install callback must present a single-use, 10-minute server state bound to (user, team), and the user's user-to-server token must list the installation (`GET /user/installations`). Unlinking requires admin+.
+3. **Installation tokens are never stored.**
+   - They are minted on demand from the app JWT. The app private key lives in Secrets Manager.
+   - They are cached for at most 55 minutes and never logged, persisted or returned.
+   - Sources bound to an installation carry the reserved `secret_ref` `github-app/installation/{id}`, which the runtime resolver dispatches to the minter. The connector contract does not change.
+4. **Binding is a team right.** Any member+ of the owning team may bind the installation's repos to that team's projects. A project of another team never resolves the installation; routing is installation → team → project.
+5. **The app webhook is the freshness channel.**
+   - One endpoint verifies `X-Hub-Signature-256` with constant-time HMAC before parsing, caps the body, and de-dupes on `X-GitHub-Delivery`.
+   - It routes only through a bound installation. Unknown installations are dropped and logged.
+   - Payload content is untrusted data (CLAUDE.md §7).
+   - The hourly ETag sweep stays as the backstop.
+6. **GitHub org membership never grants Solus access.**
+   - The org roster suggests invites only. An invite may target a GitHub numeric id that is resolved from the accepter's GitHub identity at accept time.
+   - Org removal notifies admins and never auto-removes.
+   - ADR-023 invitee limits and the verified-email gate still apply.
+7. **Revocation.** Unlink, uninstall or suspend disables every bound Source and drops the cached token. Removing a repo from the installation disables only that repo's Sources.
+8. **Plan accounting.** A link counts as one integration against the linking admin's `max_integrations`. Binding repos from it is free.
+9. **App permissions are read-only and minimal:** `contents:read`, `metadata:read`, `members:read`. Any write permission needs a new ADR.
+10. **Configurable endpoints.** API and web base URLs are stored per installation, so GitHub Enterprise Server is not foreclosed (ADR-015).
+
+**Consequences:**
+- A second GitHub credential type to operate: an app private key, a webhook secret, and app registration per environment.
+- Team sources survive member churn.
+- ADR-030 GitHub webhooks become real.
+- Existing OAuth-bound sources are not migrated automatically.
+- GitLab groups would follow this pattern under their own ADR.
