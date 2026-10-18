@@ -195,6 +195,7 @@ describe('githubOrgErrorCode', () => {
         'already_linked',
         'installation_linked_elsewhere',
         'installation_not_accessible',
+        'installation_admin_required',
         'install_state_invalid',
         'plan_limit_reached',
         'github_app_unconfigured',

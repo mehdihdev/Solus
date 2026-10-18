@@ -327,7 +327,7 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
   - **Unlinked, admin+:** "Link your GitHub organization so everyone on the team can add its repos — no personal sign-in" and a **Link organization** button.
     - The button calls `install/start`, opens the install URL in the system browser, waits on the loopback, then calls `install/complete`.
     - Progress copy says the org owner approves on GitHub.
-    - Refusals are named: `plan_limit_reached` (with **Upgrade**), `already_linked`, `installation_linked_elsewhere` ("This organization is linked to another Solus team — unlink it there first"), and `installation_not_accessible`.
+    - Refusals are named: `plan_limit_reached` (with **Upgrade**), `already_linked`, `installation_linked_elsewhere` ("This organization is linked to another Solus team — unlink it there first"), `installation_not_accessible`, and `installation_admin_required` ("Only an owner of <org> on GitHub can link it — ask one to link it from Solus").
     - `github_app_unconfigured` hides the button with the honest note "GitHub organizations aren't set up on this server".
   - **Unlinked, member or viewer:** "No GitHub organization linked — ask a team admin". No button.
   - **Linked:**

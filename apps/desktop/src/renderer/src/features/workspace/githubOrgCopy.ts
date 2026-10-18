@@ -120,6 +120,11 @@ const COPY = {
       "Solus couldn't see that installation with your GitHub account. Make sure you finished the install in the organization you meant, then try again.",
     Expert: 'Installation not accessible to your GitHub account.'
   },
+  installation_admin_required: {
+    Guide:
+      'Only an owner of this organization on GitHub can link it to Solus. Ask an org owner to link it from this team — your access to some of its repositories is not enough.',
+    Expert: 'Org owner required to link.'
+  },
   install_state_invalid: {
     Guide: 'That install attempt expired or was already used. Start the link again.',
     Expert: 'Install state expired — restart.'
@@ -141,6 +146,7 @@ const REFUSAL_KEYS: ReadonlySet<string> = new Set([
   'already_linked',
   'installation_linked_elsewhere',
   'installation_not_accessible',
+  'installation_admin_required',
   'install_state_invalid'
 ])
 

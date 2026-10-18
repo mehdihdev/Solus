@@ -242,6 +242,7 @@ describe('GitHubOrgCard', () => {
       ['already_linked', /already has a github organization linked/i],
       ['installation_linked_elsewhere', /linked to another Solus team — unlink it there first/i],
       ['installation_not_accessible', /couldn't see that installation/i],
+      ['installation_admin_required', /only an owner of this organization/i],
       ['install_state_invalid', /expired or was already used/i]
     ] as const)('names %s inline', (code, text) => {
       mockGithub({ notice: { kind: 'refused', code, limit: null } })
