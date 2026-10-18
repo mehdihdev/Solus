@@ -3,7 +3,7 @@ mutating endpoint (CLAUDE.md §7 input handling)."""
 
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
@@ -50,6 +50,7 @@ from solus_api.models import (
     ensure_utc,
 )
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
+from solus_api.services.github_identity import GITHUB_LOGIN_PATTERN
 
 
 class StrictModel(BaseModel):
@@ -132,10 +133,34 @@ class MemberRoleUpdate(StrictModel):
     role: Literal["owner", "admin", "member", "viewer"]
 
 
+_MAX_GITHUB_ID = 2**63 - 1
+
+
 class InviteCreate(StrictModel):
-    email: EmailStr
+    """Exactly one target: an `email`, or a GitHub org member (`github_user_id` + display-only
+    `github_login`, docs/api/github-orgs.md)."""
+
+    email: EmailStr | None = None
+    github_user_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_GITHUB_ID)] | None = None
+    github_login: str | None = None
     # Owner is granted only via the members route, by an existing owner.
     role: Literal["admin", "member", "viewer"] = "member"
+
+    @field_validator("github_login")
+    @classmethod
+    def _login_shape(cls, value: str | None) -> str | None:
+        if value is not None and GITHUB_LOGIN_PATTERN.fullmatch(value) is None:
+            raise ValueError("not a valid GitHub login")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> "InviteCreate":
+        has_github = self.github_user_id is not None or self.github_login is not None
+        if has_github and (self.github_user_id is None or self.github_login is None):
+            raise ValueError("github_user_id and github_login must be sent together")
+        if (self.email is not None) == has_github:
+            raise ValueError("send exactly one of email or github_user_id + github_login")
+        return self
 
 
 class ProjectCreate(StrictModel):
@@ -539,6 +564,8 @@ def serialize_invite(invite: Invite, *, include_token: bool = False) -> dict[str
         "id": invite.id,
         "team_id": invite.team_id,
         "email": invite.email,
+        "github_user_id": invite.github_user_id,
+        "github_login": invite.github_login,
         "role": invite.role.value,
         "status": invite.status.value,
         "created_at": invite.created_at,
