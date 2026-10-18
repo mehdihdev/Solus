@@ -7,9 +7,9 @@ minted on demand elsewhere and the install-time user token is revoked after the 
 
 from __future__ import annotations
 
-from typing import Any, Literal, Self
+from typing import Any, Final, Literal, Self
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 from pydantic import Field, model_validator
 
 from solus_api.core.errors import APIError
@@ -22,6 +22,7 @@ from solus_api.deps import (
     TeamCtx,
     require_role,
 )
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.models import Role
 from solus_api.routers.integrations import _resolve_redirect_uri
 from solus_api.schemas import StrictModel, serialize_team_installation
@@ -35,6 +36,20 @@ from solus_api.services.team_installations import (
 router = APIRouter(prefix="/api/v1/teams/{team_id}/github", tags=["github-org"])
 
 _REDIRECT_PROVIDER = "github"
+INSTALL_FLOW_PER_MINUTE: Final = 10
+_WINDOW_SECONDS: Final = 60
+_START_LIMITER: Final = "github_install_start_limiter"
+_COMPLETE_LIMITER: Final = "github_install_complete_limiter"
+
+
+def _throttled(request: Request, attr: str, user: Any) -> Any | None:
+    """A 429 response when `user` is over the install-flow budget for this route, else None.
+
+    Checked before any state is created or consumed and before any GitHub call."""
+    limiter = get_or_create_limiter(request.app.state, attr, _WINDOW_SECONDS)
+    if limiter.bump(str(user.id)) > INSTALL_FLOW_PER_MINUTE:
+        return rate_limited_response("Too many GitHub link attempts; slow down", _WINDOW_SECONDS)
+    return None
 
 
 class InstallStart(StrictModel):
@@ -43,27 +58,31 @@ class InstallStart(StrictModel):
 
 class InstallComplete(StrictModel):
     state: str = Field(min_length=1, max_length=128)
-    code: str = Field(min_length=1, max_length=512)
+    # A "request" (a non-owner asked the org owner to install) may arrive with no code.
+    code: str | None = Field(default=None, min_length=1, max_length=512)
     installation_id: int | None = Field(default=None, ge=1)
     setup_action: Literal["install", "update", "request"]
 
     @model_validator(mode="after")
-    def _id_required_unless_requested(self) -> Self:
-        if self.setup_action != "request" and self.installation_id is None:
-            raise ValueError("installation_id is required for install and update")
+    def _id_and_code_required_unless_requested(self) -> Self:
+        if self.setup_action != "request" and (self.installation_id is None or self.code is None):
+            raise ValueError("installation_id and code are required for install and update")
         return self
 
 
 @router.post("/install/start", status_code=201)
 async def install_start(
+    request: Request,
     body: InstallStart,
     ctx: TeamCtx,
     session: SessionDep,
     settings: SettingsDep,
     _verified: RequireVerified,
-) -> dict[str, Any]:
+) -> Any:
     require_role(ctx, Role.ADMIN)
     link.require_collaborative(ctx.team)
+    if (limited := _throttled(request, _START_LIMITER, ctx.user)) is not None:
+        return limited
     redirect_uri = _resolve_redirect_uri(_REDIRECT_PROVIDER, body.redirect_uri, settings)
     started = await link.start_install(
         session, user=ctx.user, team=ctx.team, settings=settings, redirect_uri=redirect_uri
@@ -73,20 +92,25 @@ async def install_start(
 
 @router.post("/install/complete", status_code=201)
 async def install_complete(
+    request: Request,
     body: InstallComplete,
     ctx: TeamCtx,
     session: SessionDep,
     settings: SettingsDep,
     response: Response,
     _verified: RequireVerified,
-) -> dict[str, Any]:
+) -> Any:
     require_role(ctx, Role.ADMIN)
     link.require_collaborative(ctx.team)
     link.require_app_configured(settings)
-    if body.setup_action == "request" or body.installation_id is None:
+    if (limited := _throttled(request, _COMPLETE_LIMITER, ctx.user)) is not None:
+        return limited
+    if body.setup_action == "request":
         await link.consume_state(session, state=body.state, user=ctx.user, team=ctx.team)
         response.status_code = 202
         return envelope({"status": "requested"})
+    if body.installation_id is None or body.code is None:  # the validator rules this out
+        raise APIError(422, "validation_error", "installation_id and code are required")
     outcome = await link.complete_install(
         session,
         user=ctx.user,

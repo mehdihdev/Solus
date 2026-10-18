@@ -31,6 +31,8 @@ All responses use the standard envelope.
 - **Non-member of the team:** 404.
 - **Role too low:** 403 `forbidden`.
 - **PERSONAL team:** 409 `personal_team_unsupported` on every route below except `GET installation`, which answers `{installation: null}` there.
+- **Rate limits (Phase 4):** `429 rate_limited` with `Retry-After` on `GET repos` (30/min per user and team), `GET members` (30/min per user, shared with GitHub-id invites), `install/start` and `install/complete` (10/min per user each, checked before any state is created or consumed and before any GitHub call), and the webhook (failed signatures only, see below).
+- **Cursors:** the list routes (`repos`, `members`) answer `400 invalid_cursor` for a malformed cursor.
 
 ### Summary
 
@@ -40,7 +42,7 @@ All responses use the standard envelope.
 | POST   | `/api/v1/teams/{team_id}/github/install/complete` | admin+, verified email                            |
 | GET    | `/api/v1/teams/{team_id}/github/installation`     | member+ (viewer included)                         |
 | DELETE | `/api/v1/teams/{team_id}/github/installation`     | admin+                                            |
-| GET    | `/api/v1/teams/{team_id}/github/repos`            | member+                                           |
+| GET    | `/api/v1/teams/{team_id}/github/repos`            | member+ (a viewer gets 403)                       |
 | GET    | `/api/v1/teams/{team_id}/github/members`          | admin+                                            |
 | POST   | `/api/v1/projects/{project_id}/sources`           | member+ (existing route, extended)                |
 | POST   | `/api/v1/teams/{team_id}/invites`                 | admin+ (existing route, extended)                 |
@@ -68,18 +70,18 @@ Refusals:
 
 ### `POST /api/v1/teams/{team_id}/github/install/complete`
 
-Request body: `{state: str, code: str, installation_id: int, setup_action: "install" | "update"}`.
+Request body: `{state: str, code?: str, installation_id?: int, setup_action: "install" | "update" | "request"}`. `code` and `installation_id` are required for `install` and `update` (422 otherwise). A `request` may arrive with neither: it consumes the state, binds nothing and answers `202 {status: "requested"}` (§6).
 
 GitHub redirects to the App's callback URL with all four values, because the App has _Request user authorization (OAuth) during installation_ enabled. The desktop loopback captures them.
 
 Steps, in order. Any failure leaves nothing bound.
 
-1. **State.** Load the state. It must be unexpired, unused, the same user, the same team, and the purpose `github_app_install`. Otherwise `404 install_state_invalid`. The state is consumed.
+1. **State.** The state must be unexpired, unused, the same user, the same team, and the purpose `github_app_install`. Otherwise `404 install_state_invalid`. A mismatch is refused without consuming. A match is claimed with one atomic `DELETE ... RETURNING`, so of two concurrent submits exactly one proceeds and the other gets `404 install_state_invalid` (never 500); an expired state is consumed and then refused.
 2. **Code exchange.** Exchange `code` for a user-to-server token using the App's client id and secret. The token is used in memory for steps 3–4 and then dropped. It is never stored.
 3. **Access proof.** `GET /user/installations` (paginated, capped) must contain `installation_id`. Otherwise `403 installation_not_accessible`. This is the hijack guard (ADR-039 §2): a replayed or guessed id fails here.
    **Admin proof** (security review, 2026-10-17). Being able to reach the installation is not enough, because GitHub lists it for anyone with access to one covered repository. While the user token is still alive, after step 4 tells us the account: for an `Organization`, `GET /user/memberships/orgs/{login}` must answer `state: active, role: admin`; for a `User`, `GET /user` must return the installation's account id. Otherwise `403 installation_admin_required`, nothing is bound, and the token is still revoked.
 4. **Installation details.** `GET /app/installations/{id}` with the App JWT returns `account.login/id/type`, `repository_selection`, `suspended_at`, and the API/web base URLs (GHES-ready, ADR-039 §10).
-5. **Uniqueness.** If the installation is already bound to **another** live team, return `409 installation_linked_elsewhere`. Rebinding is an explicit unlink on the other team first. If it is already bound to **this** team, it's idempotent: refresh the fields and return 200.
+5. **Uniqueness.** If the installation is already bound to **another** live team, return `409 installation_linked_elsewhere`. Rebinding is an explicit unlink on the other team first. If it is already bound to **this** team, it's idempotent: refresh the fields and return 200. If a concurrent link loses the unique-index race, the answer is `409 already_linked` when this team now holds a live installation, else `409 installation_linked_elsewhere`.
 6. **Plan limit.** Re-check the plan limit under the subscription row lock.
 7. **Persist.** Insert the `TeamInstallation` row, record activity `github_org.linked`, and emit data event `github_org.linked`. The row listener queues the live hint `team.updated`.
 
@@ -123,6 +125,8 @@ Response:
 { disabled_sources: int, manage_url }
 ```
 
+A team with no live installation answers `404 installation_missing`.
+
 The desktop then offers the GitHub uninstall page. Solus cannot uninstall the App for the org; only an org owner can.
 
 ### `GET /api/v1/teams/{team_id}/github/repos?cursor=&limit=&q=`
@@ -140,8 +144,11 @@ This is the same `SelectableItem` shape as the OAuth picker.
 
 Refusals:
 
+- `403 forbidden`: a viewer (member+ only: a viewer cannot bind, so the picker is not theirs)
 - `409 installation_suspended`
 - `409 installation_revoked`
+- `429 rate_limited`
+- `400 invalid_cursor`
 
 ### `GET /api/v1/teams/{team_id}/github/members?cursor=&limit=`
 
@@ -168,6 +175,7 @@ The existing route gains `installation: true`. It is mutually exclusive with `co
 - The caller must be member+ on the project's team.
 - `config.repo` must be visible to the installation, checked against the repo listing. Otherwise `400 repo_not_in_installation`.
 - On success, the Source is created with `installation_id` set (FK to `team_installations.id`) and `secret_ref = "github-app/installation/{team_installation_id}"`.
+- If `config.branch` is omitted, it is set from the installation repo listing's `default_branch`, so push syncs (which match on the branch) work without the member naming one. An explicit branch is kept.
 - It emits data event `github_org.repo_bound`.
 
 A project from **another** team can never reach this team's installation. Lookup is `project.team_id` → installation, never caller input.
@@ -182,6 +190,8 @@ A project from **another** team can never reach this team's installation. Lookup
 Rules:
 
 - A `github_user_id` invite requires the team to have a live **Organization** installation, and the id must currently be an org member. Otherwise `400 not_an_org_member`.
+- The stored `github_login` is the **roster's** login for that id, never the client-supplied one (the request field is display-only input and is ignored).
+- GitHub-id invites draw on the members limiter (30/min per user) before any roster refresh: `429 rate_limited`.
 - `409 invite_pending` and `409 already_member` apply as for email.
 - It emits data event `github_org.invite_suggested`.
 
@@ -192,7 +202,7 @@ Rules:
 This is the App's single webhook. There is no Bearer token. The signature is the credential.
 
 1. **Body cap.** Read the body with a hard cap of 2 MiB. Larger bodies return `413` and are not parsed; the ETag sweep covers that push.
-2. **Signature.** Verify `X-Hub-Signature-256` with constant-time HMAC-SHA256 against `SOLUS_GITHUB_APP_WEBHOOK_SECRET` **before parsing**. A missing or bad signature returns `401`.
+2. **Signature.** Verify `X-Hub-Signature-256` with constant-time HMAC-SHA256 against `SOLUS_GITHUB_APP_WEBHOOK_SECRET` **before parsing**. A missing or bad signature returns `401`. Failed attempts are throttled separately per source IP (60/min, `SOLUS_GITHUB_APP_WEBHOOK_BAD_SIGNATURE_PER_MINUTE`): the 61st returns `429 rate_limited`. Only failures are counted, so valid deliveries are never throttled by that. **Rate limit:** the route has its own middleware path bucket (1200/min, `SOLUS_GITHUB_APP_WEBHOOK_RATE_LIMIT_PER_MINUTE`), sized for GitHub volume, so it never shares the global unauthenticated write bucket with other routes.
 3. **De-dupe.** De-dupe on `X-GitHub-Delivery` using the `github_webhook_deliveries` table (unique id, pruned after 7 days). A repeat returns `204` and does no work.
 4. **Routing.** Route by `installation.id` → the live `TeamInstallation` → team. An unknown or unbound installation returns `204`, writes a structured log line, and does no work.
 5. **Event handling:**
@@ -200,8 +210,8 @@ This is the App's single webhook. There is no Bearer token. The signature is the
 | Event                                            | Effect                                                                                                                                                                           |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `push`                                           | Enqueue `sync_source` for each CONNECTED Source with this `installation_id` whose `config.repo` equals `repository.full_name` and whose `config.branch` equals the pushed branch |
-| `installation.deleted`                           | Revoke and disable sources, as for DELETE above, with activity actor `null`                                                                                                      |
-| `installation.suspend` / `unsuspend`             | Set status and `suspended_at`. Sources are marked ERROR with `last_error {code: "installation_suspended"}`, then restored on unsuspend                                        |
+| `installation.deleted`                           | **Confirmed with GitHub first** (App-JWT `GET /app/installations/{id}`): act only if GitHub answers 404, then revoke and disable sources as for DELETE above, with activity actor `null`. If GitHub still reports the installation (a replayed event) or the lookup fails (network, 5xx), log and do nothing. A delivery for an already soft-deleted row is a no-op with a log line |
+| `installation.suspend` / `unsuspend`             | **Confirmed with GitHub first** the same way; GitHub's `suspended_at` decides, not the event's action. Sources are marked ERROR with `last_error {code: "installation_suspended"}`, then restored on unsuspend. A failed lookup does nothing |
 | `installation_repositories.removed`              | Disable only the Sources tracking the removed repos (`last_error {code: "repo_access_removed"}`) and invalidate the repo cache                                                   |
 | `installation_repositories.added`                | Invalidate the repo cache                                                                                                                                                        |
 | `installation.new_permissions_accepted`          | Refresh the stored fields                                                                                                                                                        |
@@ -230,7 +240,7 @@ Rules:
 - The OAuth App settings (`SOLUS_GITHUB_CLIENT_ID/SECRET`) are separate and unchanged.
 - Token minting is `POST /app/installations/{id}/access_tokens`.
 - The cache key is the GitHub installation id, with expiry at `min(expires_at − 5 min, 55 min)`. The cache is **process-local only, never Redis**: a bearer token in Redis could reach disk through RDB/AOF snapshots. Every resolve also checks the `TeamInstallation` row is live and `active`, so an unlink in the API process is honoured by a worker that still holds a cached token.
-- A `404`/`403` from the mint marks the installation `revoked` and the sync fails with `installation_unavailable`.
+- A `404` from the mint (or a `403` followed by a lookup `404`) performs the **full revoke** (`revoke_installation`, actor null, reason `installation_deleted`): the row is soft-deleted, sources are disconnected, caches dropped, activity recorded. No zombie link remains: the team can link again at once, and `GET installation` answers `null`, never `revoked`. The sync fails with `installation_unavailable`. A `403` whose lookup shows the installation suspended marks it `suspended` instead.
 
 Places that must never treat the reserved ref as a SecretStore key: source disconnect, connection revoke, account deletion purge, and the refresh write-back in `call_with_refresh`. The rule is: **never `get`/`put`/`delete` a `github-app/` ref against the SecretStore.**
 
@@ -261,7 +271,7 @@ Places that must never treat the reserved ref as a SecretStore key: source disco
 - **User-to-server token.** After the proof step (§2 complete, step 3), the token is revoked at GitHub on a best-effort basis (`DELETE /applications/{client_id}/token`), so it doesn't stay live for 8 h.
 - **Repo count.** The card's repo count is `meta.total` from `GET /github/repos`. `TeamInstallationRead` has no count field.
 - **Plan accounting.** An installation counts against the linker only while the linker is a live member of the team. Sources bound through an installation never count against whoever created them.
-- **PATCH on installation sources.** Changing `config.repo` on an installation-bound source re-runs the `repo_not_in_installation` check. `secret_ref`, `installation_id` and `connection_id` are never patchable.
+- **PATCH on installation sources.** Changing `config.repo` on an installation-bound source re-runs the `repo_not_in_installation` check. `secret_ref`, `installation_id` and `connection_id` are never patchable. Incoming `config` is filtered to the bound keys (`repo`, `branch`) and validated with the same helper as bind: any other key is **dropped** silently (not a 400), and an invalid `repo` or `branch` is `400 validation_error`.
 - **Account id on installation sources.** These sources carry `account_external_id = "installation:{id}"`, so account-keyed caches key per installation, and the I1 account-reuse logic (`reusable_source`, legacy and own-token listings) never adopts or re-points them.
 - **GHES limitation.** The per-installation `api_base_url` is honoured by the minter, the App client and the connector. `read_code_file`, `code_content` and `git_revisions` still call `api.github.com` (known limitation, follow-up). The base URL only ever comes from GitHub's installation record, which the App JWT fetches. It is never taken from request input or a webhook payload.
 - **GitHub identity sources.** The trusted sources are a live GitHub `AccountConnection.account_external_id`, or the Supabase admin identity when the service-role key is configured. JWT `user_metadata` is never trusted. Without the service-role key, only a linked GitHub account proves identity.
@@ -273,3 +283,10 @@ Places that must never treat the reserved ref as a SecretStore key: source disco
 - **Roster and GitHub invites on a suspended or revoked installation.** These answer the `409 installation_*` refusal. A missing installation, a `User` account, or a PERSONAL team answers `400 not_an_org_member` for invites.
 - **Roster matching.** Bulk matching uses linked GitHub account connections only. A teammate proven only through the Supabase admin identity shows as `not_on_solus` in the roster. Accept-time proof still uses both sources.
 - **No auto-sync on bind.** Binding a repo through the installation does not dispatch a sync, matching the existing connect route. The connect wizard writes the config and triggers `POST …/sync` itself.
+- **Repo names compare through one normaliser** (`normalise_repo`, casefold): binding, de-duplication, repo disabling and push/rename webhook matching all use it, so GitHub's case-insensitive names match everywhere.
+- **User-token revoke is shielded.** The best-effort revoke runs under `asyncio.shield`, so a cancelled request (client disconnect) still revokes the 8-hour user token.
+
+### Known follow-ups (not fixed in this ticket)
+
+- **The credential resolver is not yet bound to the requesting source or team.** `resolve_installation_credentials(ref)` trusts that a ref names the right row. Refs are only ever written server-side, and the row-UUID binding already prevents a re-link from reusing a stale ref (a stale ref points at a soft-deleted row). Binding the resolver to the requesting source and team is the next hardening step.
+- **Push syncs scheduled after commit are lost if the process dies between the commit and the run.** GitHub redelivery is de-duplicated by `X-GitHub-Delivery`, so it does not replay the push; the hourly ETag sweep is the backstop.

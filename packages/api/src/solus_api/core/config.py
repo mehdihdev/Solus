@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     # MO-04 classify preview: fired on typing pauses, so it gets its own
     # generous separate bucket (never counts against the global budget above).
     classify_rate_limit_per_minute: int = 600
+    # SOLUSDEV-216 GitHub App webhook: unauthenticated (the HMAC is the credential) and every
+    # delivery from GitHub shares one source IP behind the ALB, so it gets its OWN path bucket
+    # sized for GitHub volume. Failed-signature attempts are throttled separately per source IP
+    # inside the route; valid deliveries are never counted against that.
+    github_app_webhook_rate_limit_per_minute: int = 1200
+    github_app_webhook_bad_signature_per_minute: int = 60
 
     invite_ttl_days: int = 7
     trial_days: int = 30

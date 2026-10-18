@@ -13,7 +13,7 @@
 | `account_type` | String(32) | `Organization` or `User` |
 | `account_avatar_url` | String(512) | Nullable |
 | `repository_selection` | String(16) | `all` or `selected` |
-| `status` | String(16) | `active`, `suspended` or `revoked` |
+| `status` | String(32) | `active`, `suspended` or `revoked` (CHECK constraint `installationstatus`) |
 | `api_base_url` | String(255) | Default `https://api.github.com`. Per-row so GHES is not foreclosed |
 | `web_base_url` | String(255) | Default `https://github.com` |
 | `linked_by` | FK users ON DELETE SET NULL | Nullable. The installation outlives the user |
@@ -27,10 +27,22 @@
 - Partial unique `(team_id, provider) WHERE deleted_at IS NULL`: one live installation per team per provider.
 - No secret, token or key column. Tokens are minted on demand (ADR-039 §3).
 
+## `oauth_states` (extended)
+
+| Column | Change |
+|---|---|
+| `team_id` | New. Nullable FK to `teams.id` ON DELETE CASCADE. Carries the team an install handshake (`provider = "github_app_install"`) was started for, so `install/complete` can refuse a state started for another team. NULL for every connector OAuth state |
+
+The install state is consumed with one atomic `DELETE ... WHERE state, provider, user_id, team_id RETURNING expires_at`, so two concurrent submits of one state cannot both proceed.
+
+## `notifications` (CHECK extended)
+
+The `notificationtype` CHECK constraint admits the new type `github_org.member_removed` (admin notice that a teammate left the linked GitHub organization). The migration drops and recreates the constraint with the extra value.
+
 ## `sources.installation_id`
 
 - Nullable FK to `team_installations.id`, ON DELETE SET NULL, with an index.
-- When set, `secret_ref = "github-app/installation/{team_installation_id}"` and `connection_id` is NULL.
+- When set, `secret_ref = "github-app/installation/{team_installation_id}"` (the `team_installations.id` row UUID, never GitHub's numeric id) and `connection_id` is NULL.
 - A source carries either an installation or a connection, never both. This is enforced in the service layer and backed by a CHECK constraint.
 
 ## `invites` (extended)

@@ -37,6 +37,7 @@ from solus_api.models import Project, Source, SourceStatus, SourceType, TeamInst
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
 from solus_api.services.team_installations import (
+    normalise_repo,
     repos_cache_key,
     require_active_installation,
 )
@@ -121,10 +122,10 @@ async def require_repo_in_installation(
 ) -> dict[str, Any]:
     """The listed repo record, or 400 `repo_not_in_installation`. GitHub names are
     case-insensitive, so the comparison is too."""
-    wanted = repo.casefold()
+    wanted = normalise_repo(repo)
     for record in (await list_installation_repos(app_state, inst)).value:
         name = record.get("full_name")
-        if isinstance(name, str) and name.casefold() == wanted:
+        if isinstance(name, str) and normalise_repo(name) == wanted:
             return record
     raise APIError(
         400,
@@ -144,10 +145,10 @@ async def _existing_binding(
             Source.revision_base_source_id.is_(None),
         )
     )
-    wanted = repo.casefold()
+    wanted = normalise_repo(repo)
     for source in rows.all():
         bound = source.config.get("repo")
-        if isinstance(bound, str) and bound.casefold() == wanted:
+        if isinstance(bound, str) and normalise_repo(bound) == wanted:
             return source
     return None
 
@@ -165,10 +166,15 @@ async def bind_installation_source(
 
     409 `installation_missing` / `installation_suspended` / `installation_revoked` from
     the status gate, 400 `repo_not_in_installation`. Rebinding the same repo returns the
-    existing source."""
+    existing source. A config without `branch` gets the listing's `default_branch`."""
     inst = await require_active_installation(session, project.team_id)
     clean = bound_config(config)
-    await require_repo_in_installation(app_state, inst, clean["repo"])
+    record = await require_repo_in_installation(app_state, inst, clean["repo"])
+    if "branch" not in clean:
+        # So push webhooks (which match on the branch) work without the member naming one.
+        default_branch = record.get("default_branch")
+        if isinstance(default_branch, str) and default_branch.strip():
+            clean["branch"] = default_branch
     existing = await _existing_binding(session, project.id, inst, clean["repo"])
     if existing is not None:
         return existing

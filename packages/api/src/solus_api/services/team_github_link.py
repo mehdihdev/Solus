@@ -13,6 +13,7 @@ one transaction, so the subscription lock held by the check covers the insert.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets as pysecrets
 import uuid
@@ -20,6 +21,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,7 +98,7 @@ async def start_install(
     require_collaborative(team)
     require_app_configured(settings)
     if await get_live_installation(session, team.id) is not None:
-        raise APIError(409, "already_linked", "This team already has a GitHub organization linked.")
+        raise _already_linked()
     await check_can_add_integration(session, user)
     state = pysecrets.token_urlsafe(32)
     session.add(
@@ -116,25 +118,37 @@ async def start_install(
     return {"install_url": install_url, "state": state, "redirect_uri": redirect_uri}
 
 
-async def consume_state(session: AsyncSession, *, state: str, user: User, team: Team) -> OAuthState:
-    """Load and delete the state in its own committed step (replay-proof).
+async def consume_state(session: AsyncSession, *, state: str, user: User, team: Team) -> None:
+    """Atomically claim and delete the state in its own committed step (replay-proof).
 
     A state belonging to another user or team, or of another purpose, is refused WITHOUT
-    being consumed, so a stranger cannot burn somebody else's handshake."""
-    record = await session.get(OAuthState, state)
-    if (
-        record is None
-        or record.provider != STATE_PURPOSE
-        or record.user_id != user.id
-        or record.team_id != team.id
-    ):
+    being consumed (checked first with a SELECT), so a stranger cannot burn somebody else's
+    handshake. The matching claim is one `DELETE ... RETURNING`, so of two concurrent
+    submits exactly one gets the row and the other is a clean 404. An expired state is
+    consumed too, then refused."""
+    owner = await session.execute(
+        select(OAuthState.provider, OAuthState.user_id, OAuthState.team_id).where(
+            OAuthState.state == state
+        )
+    )
+    row = owner.one_or_none()
+    if row is None or (row.provider, row.user_id, row.team_id) != (STATE_PURPOSE, user.id, team.id):
         raise _invalid_state()
-    expired = ensure_utc(record.expires_at) < utcnow()
-    await session.delete(record)
+    claimed = (
+        await session.execute(
+            delete(OAuthState)
+            .where(
+                OAuthState.state == state,
+                OAuthState.provider == STATE_PURPOSE,
+                OAuthState.user_id == user.id,
+                OAuthState.team_id == team.id,
+            )
+            .returning(OAuthState.expires_at)
+        )
+    ).one_or_none()
     await session.commit()
-    if expired:
+    if claimed is None or ensure_utc(claimed.expires_at) < utcnow():
         raise _invalid_state()
-    return record
 
 
 def _invalid_state() -> APIError:
@@ -169,7 +183,8 @@ async def _prove_access(
     except ConnectorError as exc:
         raise _upstream_error(exc) from exc
     finally:
-        await client.revoke_user_token(token)
+        # Shielded: a cancelled request (client disconnect) must still revoke the 8-hour token.
+        await asyncio.shield(client.revoke_user_token(token))
 
 
 async def _is_account_admin(client: GitHubAppClient, token: str, info: InstallationInfo) -> bool:
@@ -179,6 +194,10 @@ async def _is_account_admin(client: GitHubAppClient, token: str, info: Installat
     if info.account_type == "User":
         return await client.user_id(token) == info.account_id
     return False
+
+
+def _already_linked() -> APIError:
+    return APIError(409, "already_linked", "This team already has a GitHub organization linked.")
 
 
 def _linked_elsewhere() -> APIError:
@@ -209,7 +228,7 @@ async def complete_install(
         raise _linked_elsewhere()
     mine = existing or await get_live_installation(session, team.id)
     if mine is not None and mine.external_installation_id != installation_id:
-        raise APIError(409, "already_linked", "This team already has a GitHub organization linked.")
+        raise _already_linked()
     if mine is not None:
         await refresh_installation_fields(session, mine, info)
         await session.commit()
@@ -238,12 +257,16 @@ async def _insert(
         web_base_url=DEFAULT_WEB_BASE,
         linked_by=user.id,
     )
-    team_id = team.id  # read before a rollback expires the ORM objects
+    team_id = team.id
     try:
-        async with session.begin_nested():
+        async with session.begin_nested():  # the savepoint rolls back on IntegrityError
             session.add(row)
     except IntegrityError as exc:
-        await session.rollback()
+        # Two unique indexes can lose: (provider, external id) -> another team owns the
+        # installation; (team, provider) -> this team linked something in the meantime.
+        if await get_live_installation(session, team_id) is not None:
+            logger.info("github_org link race lost to the same team team=%s", team_id)
+            raise _already_linked() from exc
         logger.info("github_org link race lost team=%s", team_id)
         raise _linked_elsewhere() from exc
     record_activity(

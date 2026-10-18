@@ -502,6 +502,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # bucket (core/ratelimit sees the LB's IP), so it gets its own rather
             # than eating the shared budget every panel load.
             "/api/v1/panel/pair/start": resolved_settings.panel_pair_rate_limit_per_minute,
+            # SOLUSDEV-216: GitHub's delivery volume must never share (or drain) the
+            # global unauthenticated write bucket.
+            "/api/v1/webhooks/github/app": (
+                resolved_settings.github_app_webhook_rate_limit_per_minute
+            ),
         },
     )
     app.add_middleware(
@@ -559,7 +564,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(toolkb.router)
     app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
-    # SOLUSDEV-216 (ADR-039): team-owned GitHub App installations (route stubs for now).
+    # SOLUSDEV-216 (ADR-039): team-owned GitHub App installations (link, repos, members, webhook).
     app.include_router(team_github.router)
     app.include_router(team_github_repos.router)
     app.include_router(team_github_members.router)

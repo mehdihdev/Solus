@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.contracts import ConnectorError
-from solus_api.connectors.github_app import GitHubAppClient
+from solus_api.connectors.github_app import GitHubAppClient, InstallationInfo
 from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.models import (
     AccountConnection,
@@ -37,7 +37,6 @@ from solus_api.models import (
     SourceStatus,
     SourceType,
     TeamInstallation,
-    utcnow,
 )
 from solus_api.services.activity import record_activity
 from solus_api.services.notifications import notify_user
@@ -46,8 +45,7 @@ from solus_api.services.team_installations import (
     disable_sources_for_repos,
     find_by_external_id,
     invalidate_installation_caches,
-    mark_suspended,
-    mark_unsuspended,
+    normalise_repo,
     refresh_installation_fields,
     revoke_installation,
 )
@@ -160,45 +158,73 @@ async def _push(
         s.id
         for s in sources
         if isinstance(s.config.get("repo"), str)
-        and s.config["repo"].lower() == repo.lower()
+        and normalise_repo(s.config["repo"]) == normalise_repo(repo)
         and s.config.get("branch") == branch
     ]
     pending: list[uuid.UUID] = session.info.setdefault(PENDING_SYNCS_KEY, [])
     pending.extend(ids)
 
 
+async def _confirm_with_github(
+    inst: TeamInstallation, event: str
+) -> tuple[InstallationInfo | None, bool]:
+    """GitHub's own record of the installation, read with the App JWT: `(info, True)` when it
+    exists, `(None, True)` when GitHub answers 404 (really gone), `(None, False)` when the
+    lookup could not be made (network, 5xx, App unconfigured). Fail safe: a destructive
+    event is only acted on with a definite answer; the mint gate covers the rest."""
+    client = GitHubAppClient(inst.api_base_url, inst.web_base_url)
+    try:
+        return await client.get_installation(inst.external_installation_id), True
+    except ConnectorError as exc:
+        if exc.code == "installation_unavailable":
+            return None, True
+        logger.warning(
+            "github_org %s not confirmed, ignored installation=%s code=%s", event, inst.id, exc.code
+        )
+        return None, False
+
+
 async def _installation_deleted(
     session: AsyncSession, inst: TeamInstallation, _payload: dict[str, Any], state: Any
 ) -> None:
+    info, answered = await _confirm_with_github(inst, "deleted")
+    if not answered:
+        return
+    if info is not None:
+        _drop(
+            "installation.deleted",
+            "github_still_reports_installation",
+            inst.external_installation_id,
+        )
+        return
     await revoke_installation(
         session, inst, actor=None, reason_code="installation_deleted", cache=_cache(state)
     )
 
 
-async def _installation_suspend(
+async def _installation_suspension(
     session: AsyncSession, inst: TeamInstallation, _payload: dict[str, Any], _state: Any
 ) -> None:
-    await mark_suspended(session, inst, utcnow())
-
-
-async def _installation_unsuspend(
-    session: AsyncSession, inst: TeamInstallation, _payload: dict[str, Any], _state: Any
-) -> None:
-    await mark_unsuspended(session, inst)
+    """suspend / unsuspend: the delivery only says "look again"; GitHub's `suspended_at`
+    decides (a replayed event can no longer flip the state)."""
+    info, answered = await _confirm_with_github(inst, "suspension")
+    if info is None:
+        if answered:  # 404: deletion has its own event and the mint gate
+            _drop(
+                "installation.suspension",
+                "installation_unknown_to_github",
+                inst.external_installation_id,
+            )
+        return
+    await refresh_installation_fields(session, inst, info)
 
 
 async def _new_permissions(
     session: AsyncSession, inst: TeamInstallation, _payload: dict[str, Any], _state: Any
 ) -> None:
-    client = GitHubAppClient(inst.api_base_url, inst.web_base_url)
-    try:
-        info = await client.get_installation(inst.external_installation_id)
-    except ConnectorError as exc:
-        logger.warning(
-            "github_org installation refresh failed installation=%s code=%s", inst.id, exc.code
-        )
-        return
-    await refresh_installation_fields(session, inst, info)
+    info, _ = await _confirm_with_github(inst, "new_permissions_accepted")
+    if info is not None:
+        await refresh_installation_fields(session, inst, info)
 
 
 def _removed_repo_names(payload: dict[str, Any]) -> set[str]:
@@ -337,8 +363,8 @@ def _repository_handler(action: str, code: str) -> _Handler:
 
 _HANDLERS: Final[dict[tuple[str, str], _Handler]] = {
     ("installation", "deleted"): _installation_deleted,
-    ("installation", "suspend"): _installation_suspend,
-    ("installation", "unsuspend"): _installation_unsuspend,
+    ("installation", "suspend"): _installation_suspension,
+    ("installation", "unsuspend"): _installation_suspension,
     ("installation", "new_permissions_accepted"): _new_permissions,
     ("installation_repositories", "removed"): _repos_removed,
     ("installation_repositories", "added"): _repos_added,

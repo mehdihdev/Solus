@@ -75,8 +75,9 @@ from solus_api.services.connections import (
 )
 from solus_api.services.events import emit_event
 from solus_api.services.installation_sources import (
-    RESERVED_CONFIG_KEYS,
+    BOUND_CONFIG_KEYS,
     bind_installation_source,
+    bound_config,
     recheck_bound_repo,
 )
 from solus_api.services.limits import check_can_add_integration
@@ -406,14 +407,18 @@ async def update_source(
             k: v for k, v in data["config"].items() if not k.startswith("_") and k != "access"
         }
         if source.installation_id is not None:
-            # ADR-039: the credential linkage is never patchable, not even via config, and
-            # a repo change is re-checked against what the installation can see.
-            incoming = {k: v for k, v in incoming.items() if k not in RESERVED_CONFIG_KEYS}
+            # ADR-039: the credential linkage is never patchable, not even via config. Only
+            # the bound keys (repo, branch) are accepted: any other key is dropped, and the
+            # survivors are validated exactly as they were at bind time. A repo change is
+            # re-checked against what the installation can see.
+            incoming = {k: v for k, v in incoming.items() if k in BOUND_CONFIG_KEYS}
+            merged = bound_config({**source.config, **incoming})
             if "repo" in incoming and incoming["repo"] != source.config.get("repo"):
                 await recheck_bound_repo(
                     session, source=source, repo=incoming["repo"], app_state=request.app.state
                 )
-        merged.update(incoming)
+        else:
+            merged.update(incoming)
         source.config = merged
     await session.commit()
     await session.refresh(source)

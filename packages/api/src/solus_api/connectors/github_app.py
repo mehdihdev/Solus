@@ -579,8 +579,10 @@ async def _mark_status(
 ) -> None:
     """Record what GitHub told us so every later resolve fails fast at the status gate.
 
-    REVOKED applies to any live row not already revoked; SUSPENDED only to an ACTIVE row,
-    so a late suspension answer never downgrades a revoked installation."""
+    REVOKED applies to any live row not already revoked and is the FULL revoke (soft-delete,
+    sources disconnected, activity with a null actor), so no zombie link is left behind;
+    SUSPENDED only to an ACTIVE row, so a late suspension answer never downgrades a revoked
+    installation."""
     allowed = (
         (InstallationStatus.ACTIVE,)
         if status is InstallationStatus.SUSPENDED
@@ -599,10 +601,15 @@ async def _mark_status(
                 )
             ).all()
             for row in rows:
-                row.status = status
                 if status is InstallationStatus.REVOKED:
-                    row.revoked_at = _utcnow()
+                    # Lazy: the service imports this module (invalidate_installation_token).
+                    from solus_api.services.team_installations import revoke_installation
+
+                    await revoke_installation(
+                        session, row, actor=None, reason_code="installation_deleted"
+                    )
                 else:
+                    row.status = status
                     row.suspended_at = suspended_at or _utcnow()
             await session.commit()
     except Exception as exc:  # noqa: BLE001 - the caller still raises installation_unavailable

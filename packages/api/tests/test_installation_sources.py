@@ -24,11 +24,17 @@ from fixtures.team_installation_seed import (
     seed_user,
 )
 from httpx import AsyncClient
+from solus_api.connectors.contracts import ConnectorError
 from solus_api.connectors.github import GitHubConnector
-from solus_api.connectors.github_app import clear_installation_tokens, installation_secret_ref
+from solus_api.connectors.github_app import (
+    clear_installation_tokens,
+    installation_secret_ref,
+    resolve_installation_credentials,
+)
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.core.config import Settings
 from solus_api.models import (
+    Activity,
     DataEvent,
     InstallationStatus,
     Membership,
@@ -36,9 +42,11 @@ from solus_api.models import (
     Source,
     SourceStatus,
     Subscription,
+    TeamInstallation,
     TeamKind,
     User,
 )
+from solus_api.services.team_installations import get_live_installation
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,6 +136,32 @@ async def sources_of(db: AsyncSession, seeded: SeededTeam) -> list[Source]:
 
 
 # --------------------------------------------------------------------- binding
+
+
+async def test_binding_without_a_branch_uses_the_repos_default_branch(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
+    seeded, _ = await world(db)
+    member = seeded.users[Role.MEMBER]
+    body = bind_body(OTHER_REPO)
+    body["config"] = {"repo": OTHER_REPO}  # no branch; the listing says `develop`
+
+    resp = await bind(client, seeded, member, body)
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["config"] == {"repo": OTHER_REPO, "branch": "develop"}
+
+
+async def test_an_explicit_branch_is_kept_at_bind(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
+    seeded, _ = await world(db)
+    body = bind_body(OTHER_REPO)
+    body["config"] = {"repo": OTHER_REPO, "branch": "release"}
+
+    resp = await bind(client, seeded, seeded.users[Role.MEMBER], body)
+
+    assert resp.json()["data"]["config"]["branch"] == "release"
 
 
 async def test_member_binds_with_the_reserved_ref(
@@ -423,6 +457,35 @@ async def test_credential_keys_smuggled_in_config_do_not_reach_the_columns(
     assert after.config == {"repo": REPO, "branch": "dev"}
 
 
+async def test_patch_drops_unknown_config_keys_on_a_bound_source(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
+    seeded, member, _, url = await _bound(client, db)
+
+    resp = await client.patch(
+        url,
+        json={"config": {"branch": "dev", "extra_setting": "x", "token": "t"}},
+        headers=headers_for(member),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["config"] == {"repo": REPO, "branch": "dev"}
+    assert (await sources_of(db, seeded))[0].config == {"repo": REPO, "branch": "dev"}
+
+
+@pytest.mark.parametrize("config", [{"branch": 5}, {"branch": ""}, {"repo": 7}, {"repo": "  "}])
+async def test_patch_validates_the_bound_keys(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp, config: dict[str, Any]
+) -> None:
+    seeded, member, _, url = await _bound(client, db)
+
+    resp = await client.patch(url, json={"config": config}, headers=headers_for(member))
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["code"] == "validation_error"
+    assert (await sources_of(db, seeded))[0].config == {"repo": REPO, "branch": "main"}
+
+
 async def test_patch_repo_to_another_visible_repo_is_allowed(
     client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
 ) -> None:
@@ -511,3 +574,61 @@ async def test_sync_runs_through_the_minted_token_and_builds_the_graph(
     assert detail["entity_count"] > 0
     # The token is minted, never persisted or echoed.
     assert fake.minted_tokens[-1] not in resp.text
+
+
+# ------------------------------------------- mint revocation is a full revoke (B1)
+
+
+async def test_mint_404_runs_the_full_revoke_and_leaves_no_zombie_link(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
+    seeded, member, _, _ = await _bound(client, db)
+    assert seeded.installation is not None
+    inst_id, team_id = seeded.installation.id, seeded.team.id
+    project_id = seeded.project.id
+    member_headers = headers_for(member)
+    fake.mint_status[INSTALL_EXT_ID] = 404  # GitHub says the installation is gone
+    clear_installation_tokens()
+
+    with pytest.raises(ConnectorError) as exc:
+        await resolve_installation_credentials(installation_secret_ref(inst_id))
+    assert exc.value.code == "installation_unavailable"
+
+    db.expire_all()
+    row = await db.get(TeamInstallation, inst_id)
+    assert row is not None
+    assert row.deleted_at is not None and row.status is InstallationStatus.REVOKED
+    assert row.revoked_at is not None
+    source = (await db.scalars(select(Source).where(Source.project_id == project_id))).one()
+    assert source.status is SourceStatus.DISCONNECTED
+    assert source.secret_ref is None
+    assert (source.last_error or {}).get("code") == "installation_deleted"
+    acts = (
+        await db.scalars(
+            select(Activity).where(
+                Activity.team_id == team_id, Activity.type == "github_org.unlinked"
+            )
+        )
+    ).all()
+    assert len(acts) == 1 and acts[0].actor_id is None
+    assert await get_live_installation(db, team_id) is None
+    got = await client.get(f"/api/v1/teams/{team_id}/github/installation", headers=member_headers)
+    assert got.json()["data"]["installation"] is None
+
+
+async def test_team_can_link_again_after_a_mint_revocation(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
+    seeded, member, created, _ = await _bound(client, db)
+    base = f"/api/v1/projects/{seeded.project.id}"
+    fake.mint_status[INSTALL_EXT_ID] = 404
+    clear_installation_tokens()
+    await client.post(f"{base}/sources/{created['id']}/sync", headers=headers_for(member))
+
+    started = await client.post(
+        f"/api/v1/teams/{seeded.team.id}/github/install/start",
+        json={},
+        headers=headers_for(seeded.users[Role.OWNER]),
+    )
+
+    assert started.status_code == 201, started.text

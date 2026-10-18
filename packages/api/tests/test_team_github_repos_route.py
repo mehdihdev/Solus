@@ -108,11 +108,13 @@ async def test_member_lists_repos_in_the_picker_shape(
     assert fake.minted_tokens[-1] not in resp.text
 
 
-async def test_viewer_may_list(client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp) -> None:
+async def test_viewer_cannot_list(
+    client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
+) -> None:
     seeded, viewer = await world(db)
     resp = await get_repos(client, seeded, viewer)
-    assert resp.status_code == 200
-    assert len(resp.json()["data"]) == 5
+    assert resp.status_code == 403
+    assert not fake.mint_calls and not fake.list_requests  # refused before any GitHub call
 
 
 async def test_cursor_and_limit_page_through_the_list(
@@ -177,10 +179,10 @@ async def test_invalid_cursor_is_400(
 async def test_second_call_is_served_from_cache(
     client: AsyncClient, db: AsyncSession, fake: FakeGitHubApp
 ) -> None:
-    seeded, viewer = await world(db)
+    seeded, _ = await world(db)
     first = await get_repos(client, seeded, seeded.users[Role.MEMBER])
     walks = len(fake.list_requests)
-    second = await get_repos(client, seeded, viewer, q="alpha")
+    second = await get_repos(client, seeded, seeded.users[Role.MEMBER], q="alpha")
     third = await get_repos(client, seeded, seeded.users[Role.OWNER], limit=1)
 
     assert first.status_code == second.status_code == third.status_code == 200

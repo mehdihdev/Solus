@@ -1,9 +1,9 @@
 """GET /api/v1/teams/{team_id}/github/repos (SOLUSDEV-216, docs/api/github-orgs.md s2).
 
 The repos the team's GitHub App installation can see, in the OAuth picker's
-`SelectableItem` shape. Any member (viewer included) may list. The list comes from the
-per-installation integration cache; the installation token is minted on demand and never
-leaves the connector.
+`SelectableItem` shape. Member or above may list (a viewer cannot bind, so gets 403). The
+list comes from the per-installation integration cache; the installation token is minted on
+demand and never leaves the connector.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from fastapi import APIRouter, Query, Request
 
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
-from solus_api.deps import SessionDep, TeamCtx
+from solus_api.deps import SessionDep, TeamCtx, require_role
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
-from solus_api.models import TeamKind
+from solus_api.models import Role, TeamKind
 from solus_api.services.installation_sources import list_installation_repos
 from solus_api.services.team_installations import require_active_installation
 
@@ -60,6 +60,7 @@ async def list_repos(
     limit: Annotated[int, Query(ge=1, le=100)] = DEFAULT_LIMIT,
     q: Annotated[str | None, Query(max_length=MAX_QUERY_LENGTH)] = None,
 ) -> Any:
+    require_role(ctx, Role.MEMBER)
     limiter = get_or_create_limiter(request.app.state, _LIMITER_ATTR, _WINDOW_SECONDS)
     if limiter.bump(f"{ctx.user.id}:{ctx.team.id}") > REPOS_PER_MINUTE:
         return rate_limited_response("Too many repository listings; slow down", _WINDOW_SECONDS)

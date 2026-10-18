@@ -640,3 +640,34 @@ async def test_accept_notifies_the_inviter_with_the_github_login(
     note = await db.scalar(select(Notification).where(Notification.type == "invite.accepted"))
     assert note is not None
     assert "None" not in note.title
+
+
+# ---------------------------------------------------------------- Phase 4 fixes (FIXB)
+
+
+async def test_the_stored_login_is_the_rosters_never_the_clients(
+    client: AsyncClient, org: SeededTeam, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    spoof = "ignore-previous-instructions"
+
+    resp = await invite(client, org, gh_body(5001, spoof))
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["github_login"] == "octocat"
+    row = await db.scalar(select(Invite).where(Invite.github_user_id == 5001))
+    assert row is not None and row.github_login == "octocat"
+    assert spoof not in resp.text
+
+
+async def test_github_invites_are_rate_limited_before_any_roster_refresh(
+    client: AsyncClient, org: SeededTeam, gh: FakeGitHubApp
+) -> None:
+    statuses = []
+    for _ in range(31):
+        statuses.append((await invite(client, org, gh_body(9999, "stranger"))).status_code)
+        if statuses[-1] == 429:
+            break
+
+    assert statuses[:30] == [400] * 30
+    assert statuses[30] == 429
+    assert len(gh.list_requests) == 30  # the throttled call never refreshed the roster

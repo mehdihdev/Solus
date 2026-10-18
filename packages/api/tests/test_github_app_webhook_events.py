@@ -110,6 +110,20 @@ async def org(maker: async_sessionmaker[AsyncSession]) -> SeededTeam:
     return seeded
 
 
+@pytest.fixture
+async def github(maker: Any) -> Any:
+    """A configured GitHub App against the respx fake. Destructive events are confirmed
+    with GitHub (App JWT lookup), so each scenario scripts what GitHub reports."""
+    import respx
+
+    base = Settings(_env_file=None, supabase_jwt_secret="test-only")  # type: ignore[call-arg]
+    github_app.configure_github_app(app_settings(base, generate_key_pair()[0]), maker)
+    github_app.clear_installation_tokens()
+    with respx.mock(assert_all_called=False) as router:
+        yield FakeGitHubApp(router)
+    github_app.configure_github_app(base, None)
+
+
 def ext(seeded: SeededTeam) -> int:
     assert seeded.installation is not None
     return seeded.installation.external_installation_id
@@ -227,8 +241,8 @@ async def test_non_integer_installation_id_is_dropped(
 
 
 async def test_installation_deleted_revokes_and_disables_sources_with_null_actor(
-    client: AsyncClient, maker: Any, org: SeededTeam
-) -> None:
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:  # GitHub answers 404 for the installation: it really is gone
     async with maker() as db:
         db.add(org.installation)
         await seed_installation_source(db, org)
@@ -255,7 +269,7 @@ async def test_installation_deleted_revokes_and_disables_sources_with_null_actor
 
 
 async def test_suspend_then_unsuspend_round_trips_sources(
-    client: AsyncClient, maker: Any, org: SeededTeam
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
 ) -> None:
     async with maker() as db:
         db.add(org.installation)
@@ -263,6 +277,7 @@ async def test_suspend_then_unsuspend_round_trips_sources(
         await db.commit()
     payload = {"installation": {"id": ext(org)}}
 
+    github.add_installation(ext(org), suspended_at="2026-10-01T00:00:00Z")
     await deliver(client, "installation", {"action": "suspend", **payload})
     inst = await reload_inst(maker, org)
     assert inst.status is InstallationStatus.SUSPENDED and inst.suspended_at is not None
@@ -270,10 +285,129 @@ async def test_suspend_then_unsuspend_round_trips_sources(
     assert source.status is SourceStatus.ERROR
     assert source.last_error is not None and source.last_error["code"] == "installation_suspended"
 
+    github.add_installation(ext(org))  # no longer suspended
     await deliver(client, "installation", {"action": "unsuspend", **payload})
     inst = await reload_inst(maker, org)
     assert inst.status is InstallationStatus.ACTIVE and inst.suspended_at is None
     assert (await reload_sources(maker))["acme/robot"].status is SourceStatus.CONNECTED
+
+
+async def _with_source(maker: Any, org: SeededTeam) -> None:
+    async with maker() as db:
+        db.add(org.installation)
+        await seed_installation_source(db, org)
+        await db.commit()
+
+
+async def _unlinked_activity_count(maker: Any) -> int:
+    async with maker() as db:
+        return len(
+            (await db.scalars(select(Activity).where(Activity.type == "github_org.unlinked"))).all()
+        )
+
+
+async def test_a_replayed_deleted_event_is_ignored_while_github_still_has_the_installation(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:
+    await _with_source(maker, org)
+    github.add_installation(ext(org))  # GitHub: still installed
+
+    status = await deliver(
+        client, "installation", {"action": "deleted", "installation": {"id": ext(org)}}
+    )
+
+    assert status == 204
+    inst = await reload_inst(maker, org)
+    assert inst.status is InstallationStatus.ACTIVE and inst.deleted_at is None
+    assert (await reload_sources(maker))["acme/robot"].status is SourceStatus.CONNECTED
+    assert await _unlinked_activity_count(maker) == 0
+
+
+async def test_a_genuine_deleted_event_acts(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:
+    await _with_source(maker, org)  # GitHub's fake has no such installation: 404
+
+    await deliver(client, "installation", {"action": "deleted", "installation": {"id": ext(org)}})
+
+    inst = await reload_inst(maker, org)
+    assert inst.deleted_at is not None and inst.status is InstallationStatus.REVOKED
+    assert await _unlinked_activity_count(maker) == 1
+
+
+@pytest.mark.parametrize("failure", ["server_error", "network"])
+async def test_deleted_event_does_nothing_when_the_confirmation_lookup_fails(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp, failure: str
+) -> None:
+    import httpx
+
+    await _with_source(maker, org)
+    if failure == "server_error":
+        github.installation_route.mock(return_value=httpx.Response(502))
+    else:
+        github.installation_route.mock(side_effect=httpx.ConnectError("boom"))
+
+    status = await deliver(
+        client, "installation", {"action": "deleted", "installation": {"id": ext(org)}}
+    )
+
+    assert status == 204
+    inst = await reload_inst(maker, org)
+    assert inst.status is InstallationStatus.ACTIVE and inst.deleted_at is None
+    assert (await reload_sources(maker))["acme/robot"].status is SourceStatus.CONNECTED
+
+
+async def test_deleted_event_for_an_already_deleted_installation_is_a_noop(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:
+    await _with_source(maker, org)
+    payload = {"action": "deleted", "installation": {"id": ext(org)}}
+    assert await deliver(client, "installation", payload) == 204
+    assert await _unlinked_activity_count(maker) == 1
+
+    assert await deliver(client, "installation", payload) == 204  # GitHub redelivers
+
+    assert await _unlinked_activity_count(maker) == 1  # no second revoke
+
+
+async def test_a_replayed_suspend_is_ignored_when_github_reports_it_active(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:
+    await _with_source(maker, org)
+    github.add_installation(ext(org))  # suspended_at null
+
+    await deliver(client, "installation", {"action": "suspend", "installation": {"id": ext(org)}})
+
+    assert (await reload_inst(maker, org)).status is InstallationStatus.ACTIVE
+    assert (await reload_sources(maker))["acme/robot"].status is SourceStatus.CONNECTED
+
+
+async def test_a_replayed_unsuspend_is_ignored_when_github_reports_it_suspended(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp
+) -> None:
+    await _with_source(maker, org)
+    github.add_installation(ext(org), suspended_at="2026-10-01T00:00:00Z")
+    await deliver(client, "installation", {"action": "suspend", "installation": {"id": ext(org)}})
+    assert (await reload_inst(maker, org)).status is InstallationStatus.SUSPENDED
+
+    await deliver(client, "installation", {"action": "unsuspend", "installation": {"id": ext(org)}})
+
+    assert (await reload_inst(maker, org)).status is InstallationStatus.SUSPENDED
+    assert (await reload_sources(maker))["acme/robot"].status is SourceStatus.ERROR
+
+
+@pytest.mark.parametrize("action", ["suspend", "unsuspend"])
+async def test_suspension_events_do_nothing_when_the_lookup_fails(
+    client: AsyncClient, maker: Any, org: SeededTeam, github: FakeGitHubApp, action: str
+) -> None:
+    import httpx
+
+    await _with_source(maker, org)
+    github.installation_route.mock(side_effect=httpx.ConnectError("boom"))
+
+    await deliver(client, "installation", {"action": action, "installation": {"id": ext(org)}})
+
+    assert (await reload_inst(maker, org)).status is InstallationStatus.ACTIVE
 
 
 async def test_new_permissions_accepted_refreshes_fields_from_github(

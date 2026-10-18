@@ -73,6 +73,14 @@ _LIVE_STATES: Final = (SourceStatus.CONNECTED, SourceStatus.ERROR)
 _CACHE_ACCOUNT_PREFIX: Final = "installation:"
 
 
+def normalise_repo(name: str) -> str:
+    """The one comparison key for GitHub `owner/name`s (GitHub names are case-insensitive).
+
+    Every place that matches a repo name (binding, de-duplication, webhook matching, repo
+    disabling) goes through this, so none of them can drift apart."""
+    return name.casefold()
+
+
 def _error(code: str) -> dict[str, str]:
     return {"code": code, "message": _REASON_MESSAGES.get(code, code.replace("_", " "))}
 
@@ -252,15 +260,15 @@ async def revoke_installation(
 async def disable_sources_for_repos(
     session: AsyncSession, inst: TeamInstallation, repo_full_names: set[str], code: str
 ) -> int:
-    """Move this installation's sources tracking any of `repo_full_names` (case-insensitive
+    """Move this installation's sources tracking any of `repo_full_names` (`normalise_repo`
     match on `config["repo"]`) to ERROR with `last_error {code, message}`. Returns the count."""
-    wanted = {name.lower() for name in repo_full_names}
+    wanted = {normalise_repo(name) for name in repo_full_names}
     if not wanted:
         return 0
     disabled = 0
     for source in await _bound_sources(session, inst, _LIVE_STATES):
         repo = source.config.get("repo")
-        if isinstance(repo, str) and repo.lower() in wanted:
+        if isinstance(repo, str) and normalise_repo(repo) in wanted:
             source.status = SourceStatus.ERROR
             source.last_error = _error(code)
             disabled += 1

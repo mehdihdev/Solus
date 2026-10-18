@@ -720,3 +720,192 @@ async def test_delete_other_teams_installation_cannot_be_reached(
     resp = await client.delete(other.url("installation"), headers=world.headers("admin"))
     assert resp.status_code == 404
     assert (await installations(db))[0].deleted_at is None
+
+
+# ------------------------------------------------------------------ Phase 4 fixes (FIXB)
+
+
+async def _seed_state(db: AsyncSession, world: World, state: str, who: str = "admin") -> None:
+    db.add(
+        OAuthState(
+            state=state,
+            provider=PURPOSE,
+            user_id=world.users[who].id,
+            team_id=world.seeded.team.id,
+            redirect_uri="http://127.0.0.1:1/cb",
+            expires_at=utcnow() + timedelta(minutes=5),
+        )
+    )
+    await db.commit()
+
+
+async def test_install_start_is_limited_to_ten_per_minute_per_user(
+    client: AsyncClient, world: World
+) -> None:
+    statuses = [(await start(client, world)).status_code for _ in range(11)]
+
+    assert statuses[:10] == [201] * 10
+    assert statuses[10] == 429
+    other = await start(client, world, "owner")  # another user has their own budget
+    assert other.status_code == 201
+
+
+async def test_install_complete_is_limited_and_the_11th_makes_no_github_call(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    gh.code_response = {"error": "bad_verification_code"}  # every attempt reaches GitHub, fails
+    for i in range(11):
+        await _seed_state(db, world, f"s{i}")
+
+    statuses = []
+    for i in range(11):
+        statuses.append((await complete(client, world, complete_body(f"s{i}"))).status_code)
+
+    assert statuses[:10] == [400] * 10
+    assert statuses[10] == 429
+    assert len(gh.code_requests) == 10  # the 11th never reached GitHub
+    assert await db.get(OAuthState, "s10") is not None  # and its state was not consumed
+
+
+async def test_concurrent_double_submit_of_one_state_proceeds_once(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    state = await started_state(client, world)
+
+    first, second = await asyncio.gather(
+        complete(client, world, complete_body(state)),
+        complete(client, world, complete_body(state)),
+    )
+
+    codes = sorted([first.status_code, second.status_code])
+    assert codes == [201, 404], (first.text, second.text)
+    loser = first if first.status_code == 404 else second
+    assert loser.json()["error"]["code"] == "install_state_invalid"
+    assert len(gh.code_requests) == 1
+    assert len(await installations(db)) == 1
+
+
+async def test_expired_state_is_consumed_and_answers_404(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    state = await started_state(client, world)
+    row = await db.get(OAuthState, state)
+    assert row is not None
+    row.expires_at = utcnow() - timedelta(seconds=1)
+    await db.commit()
+
+    resp = await complete(client, world, complete_body(state))
+
+    assert (resp.status_code, resp.json()["error"]["code"]) == (404, "install_state_invalid")
+    db.expire_all()
+    assert await db.get(OAuthState, state) is None
+
+
+async def test_request_action_needs_no_code(
+    client: AsyncClient, world: World, db: AsyncSession, gh: FakeGitHubApp
+) -> None:
+    state = await started_state(client, world)
+
+    resp = await complete(client, world, {"state": state, "setup_action": "request"})
+
+    assert resp.status_code == 202, resp.text
+    assert await db.get(OAuthState, state) is None
+    assert gh.code_requests == []
+
+
+@pytest.mark.parametrize("action", ["install", "update"])
+async def test_install_and_update_still_need_a_code(
+    client: AsyncClient, world: World, gh: FakeGitHubApp, action: str
+) -> None:
+    state = await started_state(client, world)
+    body = {"state": state, "installation_id": INSTALL_ID, "setup_action": action}
+    assert (await complete(client, world, body)).status_code == 422
+
+
+async def test_losing_the_same_team_insert_race_maps_to_already_linked(
+    db: AsyncSession, world: World
+) -> None:
+    from solus_api.connectors.github_app import InstallationInfo
+    from solus_api.core.errors import APIError
+    from solus_api.services import team_github_link as link
+
+    await seed_installation(db, world.seeded, external_id=111)
+    await db.commit()
+    info = InstallationInfo(
+        installation_id=222,
+        account_login="acme-two",
+        account_id=5,
+        account_type="Organization",
+        account_avatar_url=None,
+        repository_selection="all",
+        suspended_at=None,
+    )
+
+    with pytest.raises(APIError) as exc:
+        await link._insert(db, world.users["admin"], world.seeded.team, info)
+
+    assert (exc.value.status_code, exc.value.code) == (409, "already_linked")
+    assert len(await installations(db)) == 1
+
+
+async def test_losing_the_cross_team_insert_race_stays_linked_elsewhere(
+    db: AsyncSession, world: World
+) -> None:
+    from solus_api.connectors.github_app import InstallationInfo
+    from solus_api.core.errors import APIError
+    from solus_api.services import team_github_link as link
+
+    other = await make_world(db)
+    await seed_installation(db, other.seeded, external_id=333)
+    await db.commit()
+    info = InstallationInfo(
+        installation_id=333,
+        account_login="acme",
+        account_id=5,
+        account_type="Organization",
+        account_avatar_url=None,
+        repository_selection="all",
+        suspended_at=None,
+    )
+
+    with pytest.raises(APIError) as exc:
+        await link._insert(db, world.users["admin"], world.seeded.team, info)
+
+    assert (exc.value.status_code, exc.value.code) == (409, "installation_linked_elsewhere")
+
+
+class _SlowRevokeClient:
+    """A GitHub client whose access proof hangs and whose revoke takes a moment."""
+
+    def __init__(self) -> None:
+        self.revoke_requested = asyncio.Event()
+        self.revoke_finished = asyncio.Event()
+        self.proof_started = asyncio.Event()
+
+    async def exchange_user_code(self, code: str) -> str:
+        return "ghu_cancel_test"
+
+    async def user_installation_ids(self, token: str) -> set[int]:
+        self.proof_started.set()
+        await asyncio.sleep(30)
+        return set()
+
+    async def revoke_user_token(self, token: str) -> None:
+        self.revoke_requested.set()
+        await asyncio.sleep(0.05)
+        self.revoke_finished.set()
+
+
+async def test_user_token_revoke_survives_cancellation_of_the_request() -> None:
+    from solus_api.services import team_github_link as link
+
+    fake = _SlowRevokeClient()
+    task = asyncio.ensure_future(link._prove_access(fake, "code", 1))  # type: ignore[arg-type]
+    await fake.proof_started.wait()
+    task.cancel()  # the client disconnects mid-proof
+    await fake.revoke_requested.wait()
+    task.cancel()  # ...and the revoke itself is interrupted too
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(fake.revoke_finished.wait(), timeout=2)

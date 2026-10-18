@@ -20,6 +20,7 @@ from fastapi import APIRouter, BackgroundTasks, FastAPI, Request, Response
 
 from solus_api.core.errors import APIError
 from solus_api.deps import SessionDep, SettingsDep
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.services.github_app_events import PENDING_SYNCS_KEY, dispatch
 from solus_api.services.github_webhook_deliveries import claim_delivery
 
@@ -31,6 +32,8 @@ MAX_APP_WEBHOOK_BYTES: Final = 2 * 1024 * 1024
 _SIGNATURE: Final = re.compile(r"sha256=[0-9a-f]{64}", re.ASCII)
 _EVENT: Final = re.compile(r"[a-z][a-z_]{0,63}", re.ASCII)
 _DELIVERY: Final = re.compile(r"[A-Za-z0-9-]{1,64}", re.ASCII)
+_BAD_SIGNATURE_LIMITER: Final = "github_app_bad_signature_limiter"
+_BAD_SIGNATURE_WINDOW_SECONDS: Final = 60
 
 
 def _too_large() -> APIError:
@@ -96,7 +99,22 @@ async def github_app_webhook(
     if secret is None or not secret.get_secret_value():
         raise APIError(503, "github_app_unconfigured", "GitHub App webhook is not configured")
     body = await _read_bounded(request)
-    _verify_signature(secret.get_secret_value(), body, request.headers.get("x-hub-signature-256"))
+    try:
+        _verify_signature(
+            secret.get_secret_value(), body, request.headers.get("x-hub-signature-256")
+        )
+    except APIError:
+        # Only FAILED attempts are counted (per source IP), so a valid delivery is never
+        # throttled by the noise around it.
+        limiter = get_or_create_limiter(
+            request.app.state, _BAD_SIGNATURE_LIMITER, _BAD_SIGNATURE_WINDOW_SECONDS
+        )
+        host = request.client.host if request.client else "unknown"
+        if limiter.bump(host) > settings.github_app_webhook_bad_signature_per_minute:
+            return rate_limited_response(
+                "Too many invalid webhook signatures", _BAD_SIGNATURE_WINDOW_SECONDS
+            )
+        raise
     payload = _parse(body)
     event = _header(request, "x-github-event", _EVENT)
     delivery = _header(request, "x-github-delivery", _DELIVERY)

@@ -1269,7 +1269,8 @@ class Source(UuidPkMixin, TimestampMixin, Base):
     )
 
     # SOLUSDEV-216 (ADR-039): set for sources backed by a team GitHub App installation,
-    # whose `secret_ref` is `github-app/installation/{external_installation_id}`.
+    # whose `secret_ref` is `github-app/installation/{team_installations.id}` (the row UUID,
+    # never GitHub's numeric installation id).
     installation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("team_installations.id", ondelete="SET NULL"), default=None, index=True
     )

@@ -403,3 +403,23 @@ async def test_count_bound_sources_excludes_disconnected_and_other_installations
     await seed_installation_source(db, other, repo="a/a")
     assert await svc.count_bound_sources(db, inst) == 2
     assert github_app.installation_secret_ref(inst.id)
+
+
+# ---------------------------------------------------------------- repo-name normalisation (B14)
+
+
+def test_normalise_repo_is_case_insensitive_and_idempotent() -> None:
+    assert svc.normalise_repo("Acme/Robot") == svc.normalise_repo("ACME/robot") == "acme/robot"
+    assert svc.normalise_repo(svc.normalise_repo("Acme/Robot")) == "acme/robot"
+    # casefold, not lower: the two forms of the German sharp s compare equal
+    assert svc.normalise_repo("acme/Straße") == svc.normalise_repo("ACME/STRASSE")
+
+
+async def test_disable_sources_matches_with_the_shared_normaliser(db: AsyncSession) -> None:
+    seeded = await seed_team(db)
+    inst = await seed_installation(db, seeded)
+    source = await seed_installation_source(db, seeded, repo="Acme/Straße")
+
+    count = await svc.disable_sources_for_repos(db, inst, {"ACME/STRASSE"}, "repo_deleted")
+
+    assert count == 1 and source.status is SourceStatus.ERROR

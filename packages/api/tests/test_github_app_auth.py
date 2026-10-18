@@ -271,6 +271,7 @@ async def test_mint_404_marks_the_installation_revoked(
     fresh = await reload(maker, row.id)
     assert fresh.status is InstallationStatus.REVOKED
     assert fresh.revoked_at is not None
+    assert fresh.deleted_at is not None  # a full revoke, not just a status flip
     # The next resolve fails at the status gate with no further GitHub call.
     await _resolve_unavailable()
     assert len(gh.mint_calls) == 1
@@ -296,6 +297,7 @@ async def test_mint_403_with_a_missing_installation_marks_it_revoked(
     await _resolve_unavailable()
     fresh = await reload(maker, row.id)
     assert fresh.status is InstallationStatus.REVOKED and fresh.revoked_at is not None
+    assert fresh.deleted_at is not None
 
 
 async def test_mint_403_with_an_unreachable_lookup_leaves_the_status(

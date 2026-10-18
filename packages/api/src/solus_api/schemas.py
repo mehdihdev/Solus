@@ -249,7 +249,7 @@ class SourceCreate(StrictModel):
     # `token`; must be the caller's own connection for this provider.
     connection_id: str | None = Field(default=None, max_length=64)
     # SOLUSDEV-216: bind to the team's GitHub App installation instead of a personal
-    # token or connection. Accepted but unused until the source-binding task lands.
+    # token or connection (github only; exclusive with `token` and `connection_id`).
     installation: bool = False
 
     _name_not_blank = field_validator("name")(_not_blank)

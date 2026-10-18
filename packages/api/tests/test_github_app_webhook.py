@@ -31,7 +31,13 @@ MAX_BYTES = 2 * 1024 * 1024
 
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
-    return settings.model_copy(update={"github_app_webhook_secret": SecretStr(SECRET)})
+    # Production write budget, so the "never shares the global bucket" claim is measurable.
+    return settings.model_copy(
+        update={
+            "github_app_webhook_secret": SecretStr(SECRET),
+            "write_rate_limit_per_minute": 120,
+        }
+    )
 
 
 @pytest.fixture
@@ -231,3 +237,46 @@ async def test_duplicate_delivery_is_processed_once(
 
     assert first.status_code == second.status_code == 204
     assert synced == [source_id]
+
+
+# ------------------------------------------------------------- rate limits (B3)
+
+
+async def test_a_burst_of_signed_deliveries_all_pass_and_spare_the_shared_write_bucket(
+    client: AsyncClient,
+) -> None:
+    body = b'{"zen":"hi"}'
+    statuses = [
+        (await client.post(URL, content=body, headers=headers(body, event="ping"))).status_code
+        for _ in range(150)
+    ]
+
+    assert statuses == [204] * 150
+    other = await client.post("/api/v1/webhooks/github", content=b"{}")
+    assert other.status_code != 429
+    assert other.headers["X-RateLimit-Limit"] == "120"
+    assert other.headers["X-RateLimit-Remaining"] == "119"  # not shared with the App webhook
+
+
+async def test_repeated_bad_signatures_from_one_ip_are_throttled(client: AsyncClient) -> None:
+    body = push_body(1)
+    bad = {**headers(body), "X-Hub-Signature-256": "sha256=" + "0" * 64}
+
+    statuses = [(await client.post(URL, content=body, headers=bad)).status_code for _ in range(61)]
+
+    assert statuses[:60] == [401] * 60
+    assert statuses[60] == 429
+
+
+async def test_valid_deliveries_are_not_throttled_by_earlier_bad_signatures(
+    client: AsyncClient,
+) -> None:
+    body = push_body(1)
+    bad = {**headers(body), "X-Hub-Signature-256": "sha256=" + "0" * 64}
+    for _ in range(61):
+        await client.post(URL, content=body, headers=bad)
+
+    ping = b'{"zen":"hi"}'
+    ok = await client.post(URL, content=ping, headers=headers(ping, event="ping"))
+
+    assert ok.status_code == 204

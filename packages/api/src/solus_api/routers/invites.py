@@ -8,7 +8,7 @@ import uuid
 from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,7 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.routers.team_github_members import _check_rate as check_roster_rate
 from solus_api.schemas import InviteCreate, serialize_invite
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
@@ -89,6 +90,7 @@ async def list_invites(
 
 @team_router.post("", status_code=201)
 async def create_invite(
+    request: Request,
     body: InviteCreate,
     ctx: TeamCtx,
     session: SessionDep,
@@ -98,8 +100,10 @@ async def create_invite(
 ) -> dict[str, Any]:
     require_role(ctx, Role.ADMIN)
     if body.github_user_id is not None and body.github_login is not None:
+        # The members budget guards every roster read, and an invite may refresh the roster.
+        check_roster_rate(request, ctx.user.id)
         return await _create_github_invite(
-            ctx, session, settings, cache, body.github_user_id, body.github_login, body.role
+            ctx, session, settings, cache, body.github_user_id, body.role
         )
     assert body.email is not None  # InviteCreate guarantees exactly one target
     email = body.email.lower()
@@ -189,14 +193,14 @@ async def _create_github_invite(
     settings: Settings,
     cache: IntegrationCache,
     github_user_id: int,
-    github_login: str,
     role: str,
 ) -> dict[str, Any]:
     """Invite an org member of the team's linked GitHub organization (ADR-039 section 6).
 
     The personal-team spawn does not apply: the team must already be collaborative and hold
-    a live Organization installation. The id (never the login) must be on the org roster. The
-    invitee still has to PROVE that id at accept time."""
+    a live Organization installation. The id (never the login) must be on the org roster, and
+    the login stored is the ROSTER's, never the client's. The invitee still has to PROVE that
+    id at accept time."""
     team = ctx.team
     inst = await get_live_installation(session, team.id)
     if inst is None or inst.account_type != ORGANIZATION:
@@ -215,7 +219,8 @@ async def _create_github_invite(
     )
     if pending is not None:
         raise APIError(409, "invite_pending", "An invite for that GitHub user is already pending")
-    await require_org_member(cache, inst, github_user_id)
+    member = await require_org_member(cache, inst, github_user_id)
+    github_login = member.github_login
 
     invite = Invite(
         team_id=team.id,
