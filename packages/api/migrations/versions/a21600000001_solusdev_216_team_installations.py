@@ -151,7 +151,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(f"DELETE FROM notifications WHERE type = '{_NEW_TYPE}'")
+    op.execute(sa.text("DELETE FROM notifications WHERE type = :type").bindparams(type=_NEW_TYPE))
     _set_notification_check(_OLD_TYPES)
 
     op.drop_constraint("oauth_states_team_id_fkey", "oauth_states", type_="foreignkey")
@@ -170,7 +170,9 @@ def downgrade() -> None:
     op.drop_constraint("sources_installation_id_fkey", "sources", type_="foreignkey")
     op.drop_column("sources", "installation_id")
 
-    op.drop_index("ix_github_webhook_deliveries_received_at", table_name="github_webhook_deliveries")
+    op.drop_index(
+        "ix_github_webhook_deliveries_received_at", table_name="github_webhook_deliveries"
+    )
     op.drop_table("github_webhook_deliveries")
 
     op.drop_index("uq_team_installations_team_provider", table_name="team_installations")

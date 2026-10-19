@@ -174,8 +174,24 @@ export interface StreamSolMessageInput {
   baseUrl?: string
 }
 
-/** The request the turn POSTs. `mentions` is always present, so the server sees
- *  one body shape whether or not the user picked anything. */
+/** The JSON body of a turn. `mentions` is always present, so the server sees
+ *  one body shape whether or not the user picked anything. A resume turn omits
+ *  `content` when it is empty. */
+function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
+  const resume = input.resumeConfirmationId
+  return {
+    ...(resume && input.content === '' ? {} : { content: input.content }),
+    ...(resume ? { resume_confirmation_id: resume } : {}),
+    action_mode: input.actionMode,
+    mentions: input.mentions ?? [],
+    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
+    ...(input.thinkHarder ? { think_harder: true } : {}),
+    ...(input.preferences ? { preferences: input.preferences } : {}),
+    ...(input.screenshot ? { screenshot: input.screenshot } : {})
+  }
+}
+
+/** The request the turn POSTs. */
 async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
   const token = await (input.getToken ?? defaultToken)()
   const headers: Record<string, string> = {
@@ -183,21 +199,7 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
     Accept: 'text/event-stream'
   }
   if (token) headers.Authorization = `Bearer ${token}`
-  return {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      ...(input.resumeConfirmationId && input.content === '' ? {} : { content: input.content }),
-      ...(input.resumeConfirmationId ? { resume_confirmation_id: input.resumeConfirmationId } : {}),
-      action_mode: input.actionMode,
-      mentions: input.mentions ?? [],
-      ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
-      ...(input.thinkHarder ? { think_harder: true } : {}),
-      ...(input.preferences ? { preferences: input.preferences } : {}),
-      ...(input.screenshot ? { screenshot: input.screenshot } : {})
-    }),
-    signal: input.signal
-  }
+  return { method: 'POST', headers, body: JSON.stringify(turnBody(input)), signal: input.signal }
 }
 
 /**

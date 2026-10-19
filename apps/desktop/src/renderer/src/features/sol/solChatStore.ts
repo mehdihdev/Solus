@@ -625,6 +625,65 @@ function settleTurn(projectId: string, prompt: string, failed: boolean): void {
   notifyAway(projectId, prompt, failed)
 }
 
+/** The message text after a decision: a restored approvals item says what
+ *  happened; a chat message gains an "Approval update" line. */
+function decidedContent(
+  m: ChatItem,
+  confirmationId: string,
+  decision: 'approve' | 'reject'
+): string {
+  const approved = decision === 'approve'
+  if (!m.id.startsWith('approvals-')) {
+    const tool = m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'
+    return `${m.content}\n\nApproval update: ${tool} ${approved ? 'approval recorded' : 'was rejected'}.`
+  }
+  if (m.confirmations.length !== 1) return m.content
+  return approved ? 'Approval recorded.' : 'Action rejected.'
+}
+
+/** Drop the decided card from whichever message carries it. */
+function markDecided(
+  projectId: string,
+  confirmationId: string,
+  decision: 'approve' | 'reject'
+): void {
+  decidedApprovals.add(`${projectId}:${confirmationId}`)
+  patchSession(projectId, (s) => ({
+    ...s,
+    items: s.items.map((m) =>
+      m.confirmations.some((c) => c.confirmationId === confirmationId)
+        ? {
+            ...m,
+            content: decidedContent(m, confirmationId, decision),
+            confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
+          }
+        : m
+    )
+  }))
+}
+
+/** POST the decision, closing the tracked command run with its exit status or
+ *  its refusal. Rethrows so ConfirmationCard owns the failure state. */
+async function postDecision(
+  projectId: string,
+  confirmationId: string,
+  decision: 'approve' | 'reject',
+  tracked: boolean,
+  generation: number
+): Promise<Awaited<ReturnType<typeof decideSolConfirmation>> | null> {
+  try {
+    const outcome = await decideSolConfirmation(projectId, confirmationId, decision)
+    if (generation !== identityGeneration) return null
+    if (tracked) runs.end(projectId, confirmationId, commandExitStatus(outcome))
+    return outcome
+  } catch (error: unknown) {
+    if (tracked && generation === identityGeneration) {
+      runs.end(projectId, confirmationId, refusalStatus(error))
+    }
+    throw error
+  }
+}
+
 export async function decideConfirmation(
   projectId: string,
   confirmationId: string,
@@ -634,43 +693,24 @@ export async function decideConfirmation(
   // Clear ONLY on success — ConfirmationCard owns the failure state (CTR-03).
   const generation = identityGeneration
   const tool = findConfirmation(projectId, confirmationId)?.tool ?? null
-  const tracked = decision === 'approve' && tool !== null && hasCommandOutput(tool)
+  const approving = decision === 'approve' && tool !== null
+  const tracked = approving && hasCommandOutput(tool)
   if (tracked) runs.begin(projectId, confirmationId, tool)
-  let outcome: Awaited<ReturnType<typeof decideSolConfirmation>>
-  try {
-    outcome = await decideSolConfirmation(projectId, confirmationId, decision)
-  } catch (error: unknown) {
-    if (tracked && generation === identityGeneration) {
-      runs.end(projectId, confirmationId, refusalStatus(error))
-    }
-    throw error
-  }
-  if (generation !== identityGeneration) return
-  if (tracked) runs.end(projectId, confirmationId, commandExitStatus(outcome))
-  decidedApprovals.add(`${projectId}:${confirmationId}`)
-  patchSession(projectId, (s) => ({
-    ...s,
-    items: s.items.map((m) =>
-      m.confirmations.some((c) => c.confirmationId === confirmationId)
-        ? {
-            ...m,
-            content: m.id.startsWith('approvals-')
-              ? m.confirmations.length === 1
-                ? decision === 'approve'
-                  ? 'Approval recorded.'
-                  : 'Action rejected.'
-                : m.content
-              : `${m.content}\n\nApproval update: ${m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'} ${decision === 'approve' ? 'approval recorded' : 'was rejected'}.`,
-            confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
-          }
-        : m
-    )
-  }))
-  // SOLUSDEV-317 §5.5: SOL continues after an approved command. Never after a
-  // rejection, and never for a non-command card.
-  if (decision === 'approve' && tool !== null && isCommandTool(tool) && options?.actionMode) {
-    void resumeTurn(projectId, confirmationId, options.actionMode)
-  }
+  const outcome = await postDecision(projectId, confirmationId, decision, tracked, generation)
+  if (outcome === null) return
+  markDecided(projectId, confirmationId, decision)
+  if (approving) resumeAfterCommand(projectId, confirmationId, tool, options?.actionMode)
+}
+
+/** SOLUSDEV-317 §5.5: SOL continues after an approved command. Never after a
+ *  rejection (the caller only calls on approve), and never for a non-command card. */
+function resumeAfterCommand(
+  projectId: string,
+  confirmationId: string,
+  tool: string,
+  actionMode: SolActionMode | undefined
+): void {
+  if (isCommandTool(tool) && actionMode) void resumeTurn(projectId, confirmationId, actionMode)
 }
 
 function findConfirmation(projectId: string, confirmationId: string): PendingConfirmation | null {
