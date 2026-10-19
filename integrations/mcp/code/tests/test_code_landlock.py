@@ -40,8 +40,8 @@ class FakeSyscalls:
     def no_new_privs(self) -> None:
         self.calls.append(("no_new_privs",))
 
-    def create_ruleset(self, handled: int) -> int:
-        self.calls.append(("create", handled))
+    def create_ruleset(self, handled: int, scoped: int) -> int:
+        self.calls.append(("create", handled, scoped))
         if self.fail == "create":
             raise OSError("ENOSYS")
         return 77
@@ -80,7 +80,7 @@ def test_restrict_grants_directories_and_files_then_restricts(tmp_path: Path) ->
     device.write_text("")
     landlock.Landlock(fake).restrict([str(directory), str(device), str(tmp_path / "missing")])
     assert fake.calls[0] == ("no_new_privs",)
-    assert fake.calls[1] == ("create", landlock.handled_access(3))
+    assert fake.calls[1] == ("create", landlock.handled_access(3), 0)
     assert fake.calls[2] == ("add", 77, landlock.handled_access(3))
     assert fake.calls[3] == ("add", 77, landlock.WRITE_FILE | landlock.TRUNCATE)
     assert fake.calls[-1] == ("restrict", 77) and len(fake.calls) == 5
@@ -148,3 +148,15 @@ def test_real_landlock_confines_writes(tmp_path: Path) -> None:
     assert (workspace / "inside").read_text() == "ok\n"
     assert not (other / "outside").exists()
     assert os.access(other, os.R_OK)
+
+
+def test_abi_six_scopes_abstract_sockets_and_signals_but_not_network(tmp_path: Path) -> None:
+    fake = FakeSyscalls(abi=6)
+    landlock.Landlock(fake).restrict([str(tmp_path)])
+    create = next(call for call in fake.calls if call[0] == "create")
+    assert create[2] == landlock.SCOPE_ABSTRACT_UNIX_SOCKET | landlock.SCOPE_SIGNAL
+    assert (landlock.SCOPE_ABSTRACT_UNIX_SOCKET, landlock.SCOPE_SIGNAL) == (1, 2)
+    for abi in (1, 4, 5):
+        older = FakeSyscalls(abi=abi)
+        landlock.Landlock(older).restrict([str(tmp_path)])
+        assert next(call for call in older.calls if call[0] == "create")[2] == 0

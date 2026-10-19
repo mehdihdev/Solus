@@ -67,7 +67,8 @@ def test_probe_macos_missing_binary() -> None:
 
 
 def test_probe_linux_needs_landlock_abi_one() -> None:
-    assert sandbox.probe("linux", landlock_abi=lambda: 3)[0] == "landlock"
+    assert sandbox.probe("linux", landlock_abi=lambda: 3)[0] == "landlock-abi3"
+    assert sandbox.probe("linux", landlock_abi=lambda: 1)[0] == "landlock-abi1"
     kind, why = sandbox.probe("linux", landlock_abi=lambda: 0)
     assert kind is None and "landlock" in why
 
@@ -108,6 +109,7 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         "sandbox-exec", ["/usr/bin/make", "-j4"], workspace=link, home=link, tmpdir=link
     )
     real = os.path.realpath(tmp_path / "real")
+    git = f"{real}/.git"
     assert argv == [
         "/usr/bin/sandbox-exec",
         "-p",
@@ -118,9 +120,25 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         f"TMP={real}",
         "-D",
         f"HOME={real}",
+        "-D",
+        f"DOTGIT={git}",
+        "-D",
+        f"GIT_DIR={git}",
+        "-D",
+        f"GIT_DIR_RE={sandbox.sbpl_regex_escape(git)}",
+        "-D",
+        f"GIT_COMMON={git}",
+        "-D",
+        f"GIT_COMMON_RE={sandbox.sbpl_regex_escape(git)}",
         "/usr/bin/make",
         "-j4",
     ]
+
+
+def test_regex_escape_neutralises_metacharacters() -> None:
+    assert sandbox.sbpl_regex_escape("/a.b+c(d)[e]{f}*?^$|\\g-h") == (
+        "/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\*\\?\\^\\$\\|\\\\g-h"
+    )
 
 
 def test_macos_profile_states_the_writable_set_and_denials() -> None:
@@ -130,8 +148,50 @@ def test_macos_profile_states_the_writable_set_and_denials() -> None:
         assert f'(string-append (param "HOME") "/{cache}")' in profile, cache
     for literal in ('"/private/tmp"', '"/private/var/folders"', '"/dev/null"', '"/dev/zero"'):
         assert literal in profile
-    denials = profile.rsplit("(deny file-write*", 1)[1]
-    assert '"/.git/hooks"' in denials and '"/.git/config"' in denials and '"/.solus"' in denials
+    denials = profile.split("(deny file-write*", 2)[2]
+    for fragment in (
+        '(literal (param "DOTGIT"))',
+        '"/hooks"',
+        '"/info"',
+        '"/config[^/]*$"',
+        '"/modules/',
+        '"/worktrees/[^/]+/config[^/]*$"',
+        '"/commondir"',
+        '"/.solus"',
+    ):
+        assert fragment in denials, fragment
+    for program in sandbox.MACOS_DENIED_EXEC:
+        assert f'(literal "{program}")' in profile
+    assert '(deny mach-lookup (global-name "com.apple.coreservices.appleevents"))' in profile
+
+
+def test_protected_git_dirs_follow_gitfile_and_commondir(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    assert sandbox.protected_git_dirs(ws) == (str(ws / ".git"), str(ws / ".git"))
+    main = tmp_path / "main" / ".git"
+    (main / "worktrees" / "feature").mkdir(parents=True)
+    (main / "worktrees" / "feature" / "commondir").write_text("../..\n")
+    (ws / ".git").write_text(f"gitdir: {main / 'worktrees' / 'feature'}\n")
+    git_dir, common = sandbox.protected_git_dirs(ws)
+    assert git_dir == os.path.realpath(main / "worktrees" / "feature")
+    assert common == os.path.realpath(main)
+    (ws / ".git").write_text("garbage\n")
+    assert sandbox.protected_git_dirs(ws) == (str(ws / ".git"), str(ws / ".git"))
+
+
+def test_limitations_are_reported_per_kind() -> None:
+    mac = sandbox.limitations("sandbox-exec")
+    assert mac == ["reads, exec and network are not restricted"]
+    old = sandbox.limitations("landlock-abi1")
+    assert "truncate not confined" in old
+    assert "file metadata (chmod/chown/utimes) not confined" in old
+    assert "unix-socket/signal scoping unavailable" in old
+    assert ".git hooks and config are protected by detection only" in old
+    new = sandbox.limitations("landlock-abi6")
+    assert "truncate not confined" not in new
+    assert "unix-socket/signal scoping unavailable" not in new
+    assert sandbox.limitations(None) == []
 
 
 def test_linux_wrap_runs_the_isolated_helper_over_existing_writable_paths(tmp_path: Path) -> None:
@@ -166,17 +226,66 @@ def test_unknown_kind_is_refused() -> None:
 
 def test_git_metadata_digest_detects_hook_and_config_changes(tmp_path: Path) -> None:
     assert sandbox.git_metadata_digest(tmp_path) == sandbox.git_metadata_digest(tmp_path)
-    (tmp_path / ".git" / "hooks").mkdir(parents=True)
-    (tmp_path / ".git" / "config").write_text("[core]\n")
+    git = tmp_path / ".git"
+    (git / "hooks").mkdir(parents=True)
+    (git / "config").write_text("[core]\n")
+    (git / "objects").mkdir()
     before = sandbox.git_metadata_digest(tmp_path)
     (tmp_path / "src.py").write_text("x = 1\n")
-    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
-    assert sandbox.git_metadata_digest(tmp_path) == before
-    (tmp_path / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
-    after_hook = sandbox.git_metadata_digest(tmp_path)
-    assert after_hook != before
-    (tmp_path / ".git" / "config").write_text("[core]\nhooksPath = /x\n")
-    assert sandbox.git_metadata_digest(tmp_path) != after_hook
+    (git / "HEAD").write_text("ref: refs/heads/main\n")
+    (git / "index").write_bytes(b"DIRC")
+    (git / "objects" / "ab").write_bytes(b"x")
+    assert sandbox.git_metadata_digest(tmp_path) == before, "ordinary git state is not protected"
+    for change in (
+        lambda: (git / "hooks" / "pre-commit").write_text("#!/bin/sh\n"),
+        lambda: (git / "config").write_text("[core]\nhooksPath = /x\n"),
+        lambda: (git / "config.worktree").write_text("[core]\n"),
+        lambda: (git / "info").mkdir(),
+        lambda: (git / "info" / "attributes").write_text("* filter=x\n"),
+        lambda: (git / "commondir").write_text(".."),
+        lambda: (git / "modules" / "sub" / "hooks").mkdir(parents=True),
+        lambda: (git / "modules" / "sub" / "config").write_text("[core]\n"),
+        lambda: (git / "worktrees" / "w").mkdir(parents=True),
+        lambda: (git / "worktrees" / "w" / "config.worktree").write_text("[x]\n"),
+        lambda: (git / "hooks" / "pre-commit").chmod(0o755),
+    ):
+        previous = sandbox.git_metadata_digest(tmp_path)
+        change()
+        assert sandbox.git_metadata_digest(tmp_path) != previous
+
+
+def test_git_metadata_digest_hashes_whole_files(tmp_path: Path) -> None:
+    hooks = tmp_path / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "big").write_bytes(b"a" * (2 * 1024 * 1024))
+    before = sandbox.git_metadata_digest(tmp_path)
+    (hooks / "big").write_bytes(b"a" * (2 * 1024 * 1024 - 1) + b"b")
+    assert sandbox.git_metadata_digest(tmp_path) != before
+
+
+def test_git_metadata_digest_fails_closed_past_its_caps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hooks = tmp_path / ".git" / "hooks"
+    hooks.mkdir(parents=True)
+    for index in range(5):
+        (hooks / f"h{index}").write_text("x")
+    monkeypatch.setattr(sandbox, "MAX_GIT_ENTRIES", 3)
+    assert sandbox.git_metadata_digest(tmp_path) != sandbox.git_metadata_digest(tmp_path)
+    monkeypatch.setattr(sandbox, "MAX_GIT_ENTRIES", 4096)
+    monkeypatch.setattr(sandbox, "MAX_GIT_BYTES", 2)
+    assert sandbox.git_metadata_digest(tmp_path) != sandbox.git_metadata_digest(tmp_path)
+
+
+def test_git_metadata_digest_follows_the_gitfile(tmp_path: Path) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    real = tmp_path / "real.git"
+    (real / "hooks").mkdir(parents=True)
+    (ws / ".git").write_text(f"gitdir: {real}\n")
+    before = sandbox.git_metadata_digest(ws)
+    (real / "hooks" / "post-checkout").write_text("#!/bin/sh\n")
+    assert sandbox.git_metadata_digest(ws) != before
 
 
 # --- the real macOS sandbox ------------------------------------------------------------
@@ -251,3 +360,102 @@ def test_real_sandbox_runs_python_with_network_and_reads_unrestricted(tmp_path: 
         timeout=60,
     )
     assert result.returncode == 0 and result.stdout.strip() == "True", result.stderr
+
+
+def _run_sandboxed(workspace: Path, script: str, tmp_path: Path) -> list[str]:
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    result = subprocess.run(
+        sandbox.wrap(
+            "sandbox-exec",
+            ["/bin/sh", "-c", script],
+            workspace=workspace,
+            home=home,
+            tmpdir=tmp_path,
+        ),
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+    )
+    return result.stdout.split()
+
+
+def _git_repo(path: Path) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["/usr/bin/git", "init", "-q", str(path)], check=True, timeout=60)
+
+
+@pytest.mark.skipif(not _macos_sandbox(), reason="needs macOS with /usr/bin/sandbox-exec")
+def test_real_sandbox_keeps_git_usable_but_protects_its_metadata(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    _git_repo(workspace)
+    (workspace / "a.txt").write_text("a\n")
+    script = "; ".join(
+        [
+            "/usr/bin/git add a.txt >/dev/null 2>&1 && echo add-ok",
+            "/usr/bin/git status --porcelain >/dev/null 2>&1 && echo status-ok",
+            "mv .git .gitx 2>/dev/null || echo rename-denied",
+            "echo x > .git/config.worktree 2>/dev/null || echo worktree-config-denied",
+            "mkdir -p .git/info 2>/dev/null; echo x > .git/info/attributes 2>/dev/null"
+            " || echo info-denied",
+            "echo x > .git/commondir 2>/dev/null || echo commondir-denied",
+            "mkdir -p .git/modules/sub/hooks 2>/dev/null;"
+            " echo x > .git/modules/sub/hooks/post 2>/dev/null || echo module-hook-denied",
+            "echo x > .git/modules/sub/config 2>/dev/null || echo module-config-denied",
+        ]
+    )
+    assert _run_sandboxed(workspace, script, tmp_path) == [
+        "add-ok",
+        "status-ok",
+        "rename-denied",
+        "worktree-config-denied",
+        "info-denied",
+        "commondir-denied",
+        "module-hook-denied",
+        "module-config-denied",
+    ]
+    assert (workspace / ".git").is_dir()
+
+
+@pytest.mark.skipif(not _macos_sandbox(), reason="needs macOS with /usr/bin/sandbox-exec")
+def test_real_sandbox_protects_a_gitfile_target_inside_the_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "store" / "repo.git" / "hooks").mkdir(parents=True)
+    (workspace / ".git").write_text(f"gitdir: {workspace / 'store' / 'repo.git'}\n")
+    script = "; ".join(
+        [
+            "echo x > store/repo.git/hooks/pre-commit 2>/dev/null || echo hook-denied",
+            "echo x > store/repo.git/config 2>/dev/null || echo config-denied",
+            "echo x > .git 2>/dev/null || echo gitfile-denied",
+            "echo x > store/other.txt && echo other-ok",
+        ]
+    )
+    assert _run_sandboxed(workspace, script, tmp_path) == [
+        "hook-denied",
+        "config-denied",
+        "gitfile-denied",
+        "other-ok",
+    ]
+
+
+@pytest.mark.skipif(not _macos_sandbox(), reason="needs macOS with /usr/bin/sandbox-exec")
+def test_real_sandbox_refuses_apple_event_and_launch_tools(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    script = "; ".join(
+        [
+            "/usr/bin/true && echo true-ok",
+            "/usr/bin/osascript -e 'return 1' >/dev/null 2>&1 || echo osascript-refused",
+            "/bin/launchctl list >/dev/null 2>&1 || echo launchctl-refused",
+            "/usr/bin/open -h >/dev/null 2>&1 || echo open-refused",
+        ]
+    )
+    assert _run_sandboxed(workspace, script, tmp_path) == [
+        "true-ok",
+        "osascript-refused",
+        "launchctl-refused",
+        "open-refused",
+    ]

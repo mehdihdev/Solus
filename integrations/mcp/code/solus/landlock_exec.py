@@ -47,6 +47,8 @@ SYS_CREATE_RULESET = 444
 SYS_ADD_RULE = 445
 SYS_RESTRICT_SELF = 446
 CREATE_RULESET_VERSION = 1 << 0
+SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0  # ABI 6
+SCOPE_SIGNAL = 1 << 1  # ABI 6
 RULE_PATH_BENEATH = 1
 PR_SET_NO_NEW_PRIVS = 38
 EXIT_USAGE = 2
@@ -75,7 +77,7 @@ class Syscalls(Protocol):
 
     def no_new_privs(self) -> None: ...
 
-    def create_ruleset(self, handled: int) -> int: ...
+    def create_ruleset(self, handled: int, scoped: int) -> int: ...
 
     def add_rule(self, ruleset_fd: int, allowed: int, parent_fd: int) -> None: ...
 
@@ -84,6 +86,16 @@ class Syscalls(Protocol):
 
 class _RulesetAttr(ctypes.Structure):
     _fields_ = [("handled_access_fs", ctypes.c_uint64)]
+
+
+class _ScopedRulesetAttr(ctypes.Structure):
+    """ABI 6 layout. Network rights stay unhandled: network access is allowed by decision."""
+
+    _fields_ = [
+        ("handled_access_fs", ctypes.c_uint64),
+        ("handled_access_net", ctypes.c_uint64),
+        ("scoped", ctypes.c_uint64),
+    ]
 
 
 class _PathBeneathAttr(ctypes.Structure):
@@ -111,8 +123,10 @@ class CtypesSyscalls:
     def no_new_privs(self) -> None:
         self._check(int(self._libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)), "no_new_privs")
 
-    def create_ruleset(self, handled: int) -> int:
-        attr = _RulesetAttr(handled)
+    def create_ruleset(self, handled: int, scoped: int) -> int:
+        attr: ctypes.Structure = (
+            _ScopedRulesetAttr(handled, 0, scoped) if scoped else _RulesetAttr(handled)
+        )
         result = self._libc.syscall(SYS_CREATE_RULESET, ctypes.byref(attr), ctypes.sizeof(attr), 0)
         return int(self._check(int(result), "create_ruleset"))
 
@@ -143,7 +157,8 @@ class Landlock:
             raise OSError("landlock is not available on this kernel")
         self._syscalls.no_new_privs()
         handled = handled_access(abi)
-        ruleset = self._syscalls.create_ruleset(handled)
+        scoped = SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL if abi >= 6 else 0
+        ruleset = self._syscalls.create_ruleset(handled, scoped)
         for path in paths:
             try:
                 fd = os.open(path, O_PATH | os.O_CLOEXEC)
