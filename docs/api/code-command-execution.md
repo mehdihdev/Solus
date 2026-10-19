@@ -218,7 +218,8 @@ and logs stay writable so ordinary `git` commands work. `~/.solus/**` is denied 
 
 macOS IPC hardening: the profile denies `process-exec` of `/bin/launchctl`,
 `/usr/bin/osascript`, `/usr/bin/osacompile`, `/usr/bin/open`, `/usr/bin/automator` and
-`mach-lookup` of `com.apple.coreservices.appleevents`. Linux: with Landlock ABI ≥ 6 the
+`mach-lookup` of `com.apple.coreservices.appleevents`, `com.apple.coreservices.launchservicesd`
+and `com.apple.lsd.*`. launchd job submission is not blocked and is listed in `limitations`. Linux: with Landlock ABI ≥ 6 the
 ruleset also scopes abstract unix sockets and signals.
 
 The plan answer's `sandbox` object is `{kind, writable, limitations}`. `kind` is
@@ -255,29 +256,38 @@ of `argv[0]`, with a trailing version suffix stripped for interpreters (`python3
 
 **Denied** (also refused by the server planner; both tables are cross-checked by a test):
 
-- Shells: `sh bash zsh fish dash ksh csh tcsh pwsh`.
+- Shells: `sh bash zsh fish dash ksh csh tcsh pwsh busybox rbash ash mksh yash elvish nu xonsh
+  oksh posh`.
 - Command wrappers: `env xargs nohup setsid nice timeout time watch script expect
   sandbox-exec launchctl open osascript busybox stdbuf chroot unshare nsenter flock ionice
-  taskset caffeinate arch chrt`.
+  taskset caffeinate arch chrt systemd-run setpriv prlimit unbuffer fakeroot proot firejail
+  cpulimit faketime`.
 - Privilege elevation: `sudo su doas pkexec runuser`.
 - Inline code: `python -c`/`-<flags>c`, `node -e/--eval/-p/--print`, `ruby -e`, `perl -e/-E`,
   `php -r`, `lua -e`, `deno eval`, `bun -e/--eval`, `Rscript -e`.
+- Git options and subcommands that execute a supplied command: `--upload-pack`,
+  `--receive-pack`, `-u` (clone/fetch/ls-remote/archive), `--exec` (push/archive/rebase),
+  `rebase -x`, `difftool -x/--extcmd`, `bisect run`, `submodule foreach`, `filter-branch`.
 - Git config injection: `-c`, `-c<value>`, `--config-env`, `--exec-path` anywhere before the
   subcommand, and any global option that is not on the known-safe list (fail closed).
 - Interpreter option parsing fails closed: an inline-code flag anywhere among the leading
   options (including combined short flags) denies, and so does an unknown leading option.
   Also denied: node `--import/--loader/--experimental-loader/--require/-r` with `data:` or
   `http(s):` values, the same specifiers for deno, `deno eval|repl`, `bun -p/--print`, and
-  `php -B/-R/-E/-F`.
+  `php -B/-R/-E/-F`, php `-d` setting `allow_url_include`/`auto_prepend_file`/`auto_append_file`,
+  perl `-M/-m` and ruby `-r/-I` values that are not plain module names, node `--inspect*` bound
+  to a non-loopback host, and any specifier with a URL scheme other than `file:` (after trimming
+  whitespace and control characters) for node, deno and bun.
 
-Program names are normalised case-insensitively. Version and build suffixes, `-dbg` and a
+Program names are normalised case-insensitively and fail closed by prefix: a basename that
+starts with a known interpreter or shell name followed by a non-letter maps to it
+(`python3.12-intel64`, `perl5.34-thread-multi`, `php-cgi`). Version and build suffixes, `-dbg` and a
 trailing `w` are stripped, and `nodejs`→`node`, `pypy*`→`python`, `luajit`→`lua`. The server
 checks both the `argv[0]` basename and the resolved realpath basename.
 
 **Risks** (badges on the card; never a denial): `network`, `install`, `destructive`,
 `hardware`, `remote`, `runs_shell` (allowed programs that can run shell text: git config
-writes to `alias.*`/`core.*`/hooks, `git rebase -x`, `git bisect run`, `git submodule
-foreach`, `find -exec/-execdir/-ok`, `awk`, `sed` with `e`), `project_scripts` (runs code defined by the project: `make`, `npm run`,
+writes to `alias.*`/`core.*`/hooks, `find -exec/-execdir/-ok`, `awk`, `sed` with `e`), `project_scripts` (runs code defined by the project: `make`, `npm run`,
 `pnpm run`, `yarn run`, `colcon build`, `cmake --build`, workspace-relative executables).
 The full table lives in the module and its tests.
 
@@ -367,6 +377,14 @@ code-environment route.
 See `docs/wireflows/sol-page.md` and `sol-window.md` (SOLUSDEV-317 sections): command card
 header with program and risk badges, Cmd/Ctrl+Enter approval, retained final output, automatic
 resume after an approved command, and the Running processes strip with Stop.
+
+## 7a. Clarifications
+
+- The decide route's `ToolResult` envelope carries the tool's result dict in `value` (`ok`,
+  `exit_code`, `timed_out`, `reason`, tails, `sandbox`, `git_metadata_changed`).
+- Output chunk fields: the confirmation-output route uses `sequence`; the process-output route
+  uses `seq`. Both are strictly increasing integers.
+- A resume turn uses the action mode currently shown on the SOL surface.
 
 ## 8. Errors
 
