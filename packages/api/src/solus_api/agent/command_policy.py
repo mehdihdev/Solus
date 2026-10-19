@@ -73,6 +73,10 @@ _GIT_MESSAGE: Final = (
     "code.git_commit or code.git_push"
 )
 
+#: §10.2: the only shells that may run, and only as `[bash|sh, <script>, *args]`.
+SCRIPT_SHELLS: Final = frozenset({"bash", "sh"})
+_SCRIPT_SUFFIXES: Final = (".sh", ".bash")
+
 _MAX_ARGS: Final = 64
 _MAX_ARG_CHARS: Final = 1024
 
@@ -105,6 +109,19 @@ def _malformed(argv: object) -> str | None:
         if any(ch in arg for ch in "\x00\r\n"):
             return "argv items may not contain NUL, CR or LF"
     return None
+
+
+def is_shell_script(argv: Sequence[str]) -> bool:
+    """`bash|sh <workspace-relative .sh/.bash file> [args]` with no option before
+    the script (§10.2). Arguments after the script are the script's own."""
+    if len(argv) < 2 or posixpath.basename(argv[0]) not in SCRIPT_SHELLS:
+        return False
+    script = argv[1]
+    return (
+        script.endswith(_SCRIPT_SUFFIXES)
+        and not script.startswith(("-", "+", "/", "~"))
+        and ".." not in script.split("/")
+    )
 
 
 def _denial(program: str, args: Sequence[str], *, exact: bool) -> str | None:
@@ -141,6 +158,11 @@ def classify(argv: object, *, workspace_relative: bool | None = None) -> Command
     if malformed is not None:
         return _deny(malformed)
     items = cast(Sequence[str], argv)
+    if is_shell_script(items):
+        found = {*risks_for(items), Risk.RUNS_SHELL, Risk.PROJECT_SCRIPTS}
+        return CommandVerdict(
+            denied=False, reason=None, risks=tuple(risk for risk in Risk if risk in found)
+        )
     exact = is_workspace_relative(items[0]) if workspace_relative is None else workspace_relative
     reason = _denial(items[0], items[1:], exact=exact)
     if reason is not None:
@@ -152,11 +174,13 @@ __all__ = [
     "DENIED_PROGRAMS",
     "ELEVATION",
     "INLINE_CODE",
+    "SCRIPT_SHELLS",
     "SHELLS",
     "WRAPPERS",
     "CommandVerdict",
     "Risk",
     "classify",
+    "is_shell_script",
     "normalise",
     "program_name",
 ]
