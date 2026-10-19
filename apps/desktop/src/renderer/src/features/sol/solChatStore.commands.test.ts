@@ -90,7 +90,7 @@ beforeEach(() => {
 
 describe('retained command output', () => {
   it('keeps the final output and exit status under the message after the card goes', async () => {
-    decide.mockResolvedValue({ ok: true, value: { exit_code: 2 } })
+    decide.mockResolvedValue({ ok: true, value: { ok: false, exit_code: 2, reason: null } })
     seed(EXEC)
     await decideConfirmation('p', 'cx', 'approve')
     await flush()

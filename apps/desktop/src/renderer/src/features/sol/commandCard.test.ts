@@ -94,21 +94,42 @@ describe('commandHeader', () => {
 })
 
 describe('commandExitStatus', () => {
-  it('reports the exit code', () => {
-    expect(commandExitStatus({ ok: true, value: { exit_code: 0 } })).toBe('exited 0')
-    expect(commandExitStatus({ ok: true, value: { exit_code: 2 } })).toBe('exited 2')
-  })
-
-  it('reports a timeout before the exit code', () => {
-    expect(commandExitStatus({ ok: true, value: { exit_code: -9, timed_out: true } })).toBe(
-      'timed out'
+  it('reports the exit code of a command that ran and succeeded', () => {
+    expect(commandExitStatus({ ok: true, value: { ok: true, exit_code: 0, reason: null } })).toBe(
+      'exited 0'
     )
   })
 
-  it('reports a server refusal with its reason', () => {
+  it('reports the exit code of a command that ran and failed (server shape ok:false)', () => {
+    expect(commandExitStatus({ ok: true, value: { ok: false, exit_code: 2, reason: null } })).toBe(
+      'exited 2'
+    )
+  })
+
+  it('reports a timeout before the exit code', () => {
     expect(
-      commandExitStatus({ ok: true, value: { ok: false, reason: 'sandbox unavailable: x' } })
+      commandExitStatus({ ok: true, value: { ok: false, exit_code: -9, timed_out: true } })
+    ).toBe('timed out')
+  })
+
+  it('reports a server refusal with its reason when nothing ran', () => {
+    expect(
+      commandExitStatus({
+        ok: true,
+        value: { ok: false, exit_code: null, reason: 'sandbox unavailable: x' }
+      })
     ).toBe('refused: sandbox unavailable: x')
+  })
+
+  it('says not run for a refusal without a reason', () => {
+    expect(commandExitStatus({ ok: true, value: { ok: false, exit_code: null } })).toBe(
+      'refused: not run'
+    )
+  })
+
+  it('caps a long refusal reason', () => {
+    const status = commandExitStatus({ ok: true, value: { ok: false, reason: 'x'.repeat(500) } })
+    expect(status).toBe(`refused: ${'x'.repeat(200)}`)
   })
 
   it('says finished when the outcome carries no exit code', () => {

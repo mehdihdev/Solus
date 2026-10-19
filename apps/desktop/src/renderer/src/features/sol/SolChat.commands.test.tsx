@@ -194,7 +194,7 @@ describe('Cmd/Ctrl+Enter approval', () => {
 
 describe('after an approved command', () => {
   it('keeps the output and exit status under the message and resumes SOL', async () => {
-    decide.mockResolvedValue({ ok: true, value: { exit_code: 2 } })
+    decide.mockResolvedValue({ ok: true, value: { ok: false, exit_code: 2, reason: null } })
     const user = userEvent.setup()
     await park(user, command('make'))
     const card = screen.getByLabelText('Action needs your approval')
