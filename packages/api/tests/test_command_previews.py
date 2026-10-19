@@ -130,7 +130,7 @@ async def test_risk_row_lists_every_risk_or_none_flagged() -> None:
     rows = await _rows("code.exec", _plan(argv=["/usr/bin/ls"]), {"argv": ["ls"]})
     assert {r["label"]: r["after"] for r in rows}["risk"] == "none flagged"
     rows = await _rows("code.exec", _plan(argv=["/usr/bin/pip"]), {"argv": ["pip", "install", "x"]})
-    assert {r["label"]: r["after"] for r in rows}["risk"] == "network, install"
+    assert {r["label"]: r["after"] for r in rows}["risk"] == "network, install, project_scripts"
 
 
 async def test_long_commands_are_chunked() -> None:
