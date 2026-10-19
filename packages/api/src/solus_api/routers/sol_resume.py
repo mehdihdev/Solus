@@ -27,7 +27,7 @@ from sqlalchemy import ColumnElement, func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.command_gate import COMMAND_TOOLS
+from solus_api.agent.command_gate import COMMAND_TOOLS, event_program
 from solus_api.core.errors import APIError
 from solus_api.models import (
     ConfirmationStatus,
@@ -38,20 +38,55 @@ from solus_api.models import (
 )
 
 MAX_CONSECUTIVE_RESUMES: Final = 6
+
+
 #: Solus-authored; it rides the turn's fenced user-message slot.
-RESUME_PROMPT: Final = (
-    "[Solus] The command you proposed was decided by the person and its outcome is the "
-    "latest tool result in this conversation. Continue the task from that outcome. Report "
-    "exactly what the result says; if it failed, explain why and propose the next step. "
-    "If nothing remains to do, summarise the outcome briefly."
-)
-
-
 @dataclass(frozen=True)
 class ResumeTicket:
     confirmation_id: uuid.UUID
     tool: str
     chain: int  # this resume's position since the person's last message (1-based)
+    #: Sanitised basename of the approved argv[0] (`event_program`), or "other".
+    program: str = "other"
+    #: Solus-derived from structured result fields, never from command output.
+    outcome: str = "finished"
+
+
+def resume_prompt(ticket: ResumeTicket) -> str:
+    """The Solus-authored instruction for a resume turn. It names THIS command so the
+    model does not answer about an earlier one (live QA 2026-10-19: a resumed `ls` was
+    described as the previous `make` failure, pulled in by the Error logging layer).
+    Only sanitised, Solus-derived fields go in; command output stays in the fenced
+    tool history."""
+    return (
+        f"[Solus] The person approved {ticket.tool} `{ticket.program}` (confirmation "
+        f"{ticket.confirmation_id}) and it {ticket.outcome}. Its full result is the newest "
+        "tool turn in the history, the one marked with that confirmation. Answer about this "
+        "command only: report exactly what its result says; if it failed, explain why and "
+        "propose the next step; if nothing remains to do, summarise it briefly. Treat "
+        "earlier commands and logged errors as background, not as this outcome."
+    )
+
+
+def decision_outcome(result: object, status: ConfirmationStatus) -> str:
+    """What happened, from structured fields only (`ok`, `exit_code`, `timed_out`,
+    `process_id`); unknown shapes read as "finished"."""
+    if status is ConfirmationStatus.REJECTED:
+        return "was rejected"
+    if not isinstance(result, dict):
+        return "finished"
+    value = result.get("value")
+    if isinstance(value, dict):
+        if value.get("timed_out") is True:
+            return "timed out"
+        code = value.get("exit_code")
+        if type(code) is int:
+            return f"exited {code}"
+        if isinstance(value.get("process_id"), str):
+            return "started"
+    if result.get("ok") is False:
+        return "was not run"
+    return "finished"
 
 
 def _decision_turn(
@@ -147,7 +182,14 @@ async def check_resume(
         raise APIError(
             409, "resume_limit", "SOL has continued on its own enough times; send a message."
         )
-    return ResumeTicket(confirmation_id=confirmation_id, tool=row.tool, chain=chain + 1)
+    return ResumeTicket(
+        confirmation_id=confirmation_id,
+        tool=row.tool,
+        chain=chain + 1,
+        program=event_program(row.args.get("argv") if isinstance(row.args, dict) else None)
+        or "other",
+        outcome=decision_outcome(decision.attrs.get("result"), row.status),
+    )
 
 
 async def claim_resume(

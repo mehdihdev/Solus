@@ -48,6 +48,11 @@ _SANDBOX_KIND: Final = re.compile(r"^(?:sandbox-exec|landlock(?:-abi[0-9]{1,2})?
 _EVENT_PROGRAM: Final = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
 
 
+def event_program(argv: object) -> str | None:
+    """The sanitised basename of argv[0] for events and resume prompts, or None."""
+    return _basename(argv)
+
+
 def _basename(argv: object) -> str | None:
     if isinstance(argv, list | tuple) and argv and isinstance(argv[0], str) and argv[0]:
         base = posixpath.basename(argv[0])

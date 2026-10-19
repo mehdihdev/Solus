@@ -94,10 +94,10 @@ from solus_api.orchestration.gates import (
 from solus_api.orchestration.providers import ProviderTransientError
 from solus_api.routers.sol_confirmations import sync_enqueuer
 from solus_api.routers.sol_resume import (
-    RESUME_PROMPT,
     ResumeTicket,
     check_resume,
     claim_resume,
+    resume_prompt,
 )
 from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
@@ -904,11 +904,13 @@ async def post_message(
     turns are persisted as the stream completes."""
     require_role(ctx, Role.MEMBER)
     resuming = body.resume_confirmation_id is not None
-    content = RESUME_PROMPT if resuming else (body.content or "").strip()
-    if not content:
+    content = "" if resuming else (body.content or "").strip()
+    if not resuming and not content:
         raise APIError(422, "validation_error", "Message content must not be blank")
     await _owned_or_404(ctx, session, conversation_id)
     ticket = await _resume_ticket(session, ctx, conversation_id, body)
+    if ticket is not None:
+        content = resume_prompt(ticket)
     # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
     screenshot = body.screenshot.decode() if body.screenshot is not None else None
 

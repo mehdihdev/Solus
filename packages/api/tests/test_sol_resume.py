@@ -7,7 +7,6 @@ and goes through the same budget pre-flight as a typed message.
 
 from __future__ import annotations
 
-import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import timedelta
@@ -29,7 +28,7 @@ from solus_api.models import (
     User,
     utcnow,
 )
-from solus_api.routers.sol_resume import RESUME_PROMPT
+from solus_api.routers.sol_resume import ResumeTicket, resume_prompt
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_sol import _create_conversation, _project
@@ -114,7 +113,9 @@ async def test_resume_runs_a_turn_without_a_user_turn_and_records_resume_of(
     )
 
     assert resp.status_code == 200, resp.text
-    assert capture.seen[0].prompt == RESUME_PROMPT
+    assert capture.seen[0].prompt == resume_prompt(
+        ResumeTicket(confirmation, "code.exec", 1, program="make", outcome="finished")
+    )
     turns = (
         await db.scalars(
             select(ConversationTurn)
@@ -325,7 +326,7 @@ async def test_budget_preflight_applies_and_does_not_consume_the_resume(
     monkeypatch.undo()
     resumed = await client.post(_url(project, convo), json=body, headers=alice_headers)
     assert resumed.status_code == 200
-    assert json.dumps(capture.seen[0].prompt) == json.dumps(RESUME_PROMPT)
+    assert "[Solus]" in capture.seen[0].prompt
 
 
 async def test_the_claim_is_atomic(
@@ -420,3 +421,42 @@ def test_a_resume_cannot_carry_content_or_a_screenshot(extra: dict[str, Any]) ->
     MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4())})
     with pytest.raises(ValidationError, match="a resume carries no content or screenshot"):
         MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4()), **extra})
+
+
+# --- live QA 2026-10-19: the resumed reply described an older command -------------------
+
+
+def test_resume_prompt_names_this_command_and_its_outcome() -> None:
+    ticket = ResumeTicket(uuid.uuid4(), "code.exec", 1, program="ls", outcome="exited 0")
+    prompt = resume_prompt(ticket)
+    assert "`ls`" in prompt and "code.exec" in prompt and "exited 0" in prompt
+    assert str(ticket.confirmation_id) in prompt
+    assert "earlier commands" in prompt and "logged errors" in prompt
+
+
+@pytest.mark.parametrize(
+    ("result", "status", "outcome"),
+    [
+        ({"ok": True, "value": {"exit_code": 0, "stdout_tail": "x"}}, "approved", "exited 0"),
+        ({"ok": False, "value": {"exit_code": 2, "ok": False}}, "approved", "exited 2"),
+        ({"ok": False, "value": {"timed_out": True, "exit_code": None}}, "approved", "timed out"),
+        ({"ok": True, "value": {"process_id": "p", "pid": 7}}, "approved", "started"),
+        ({"ok": False, "error": {"code": "invalid_args"}}, "approved", "was not run"),
+        (None, "rejected", "was rejected"),
+        (None, "approved", "finished"),
+    ],
+)
+def test_outcome_is_derived_from_structured_fields_only(
+    result: dict[str, object] | None, status: str, outcome: str
+) -> None:
+    from solus_api.models import ConfirmationStatus
+    from solus_api.routers.sol_resume import decision_outcome
+
+    assert decision_outcome(result, ConfirmationStatus(status)) == outcome
+
+
+def test_untrusted_output_never_enters_the_resume_prompt() -> None:
+    ticket = ResumeTicket(uuid.uuid4(), "code.exec", 1, program="other", outcome="exited 0")
+    prompt = resume_prompt(ticket)
+    assert "ignore previous instructions" not in prompt.lower()
+    assert "`other`" in prompt
