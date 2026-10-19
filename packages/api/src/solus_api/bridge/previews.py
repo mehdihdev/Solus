@@ -16,7 +16,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
 
-from solus_api.bridge.command_previews import capture_rows, command_rows, legacy_rows
+from solus_api.bridge.command_previews import (
+    capture_rows,
+    command_rows,
+    existing_profiles,
+    legacy_rows,
+    parse_plan,
+)
 
 logger = logging.getLogger("solus.bridge.previews")
 
@@ -98,9 +104,19 @@ def _kicad_symbol_property(read: BridgeReader) -> PreviewBuilder:
 
 
 CODE_PLAN_TOOL: Final = "code.plan"
+#: §9 item 6: the capture card says whether it replaces an existing profile.
+PROFILE_LIST_TOOL: Final = "code.profile_list"
 CODE_ACTIONS: Final = ("create_environment", "install", "run", "test")
 #: SOLUSDEV-317 executing tools whose card rows come from `bridge/command_previews.py`.
 COMMAND_ACTIONS: Final = ("exec", "process_start", "profile_capture")
+
+
+async def _read(read: BridgeReader, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return await read(tool, args)
+    except Exception:  # noqa: BLE001 — the caller refuses on a missing answer
+        logger.warning("code preview read failed for %s", tool)
+        return None
 
 
 def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
@@ -111,13 +127,11 @@ def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
 
     def factory(read: BridgeReader) -> PreviewBuilder:
         async def build(args: dict[str, Any]) -> list[dict[str, Any]]:
-            try:
-                plan = await read(CODE_PLAN_TOOL, {"action": action, "args": dict(args)})
-            except Exception:  # noqa: BLE001 — refused below as "no executable plan"
-                logger.warning("code preview plan failed for %s", action)
-                plan = None
+            plan = await _read(read, CODE_PLAN_TOOL, {"action": action, "args": dict(args)})
             if action == "profile_capture":
-                return capture_rows(plan, args)
+                parse_plan(plan)  # a refused plan's reason wins over the listing read
+                listing = await _read(read, PROFILE_LIST_TOOL, {})
+                return capture_rows(plan, args, existing_profiles(listing))
             if action in ("exec", "process_start"):
                 return command_rows(plan, args, process=action == "process_start")
             return code_plan_rows(plan)

@@ -90,6 +90,8 @@ class _Machine:
         self.executed: list[dict[str, Any]] = []
 
     async def read(self, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        if tool == "code.profile_list":
+            return {"profiles": []}
         self.plans.append(args)
         return self.plan
 
