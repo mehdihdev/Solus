@@ -341,7 +341,7 @@ def _program_changed(root: Path, plan: Plan, executable: str) -> bool:
         return False
     from .command_plan import program_scope
 
-    scope = program_scope(root, plan.argv, executable, plan.setup_file)
+    scope = program_scope(root, plan, executable)
     return os.path.realpath(executable) != plan.program_realpath or scope != plan.program_scope
 
 

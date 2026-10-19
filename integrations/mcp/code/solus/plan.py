@@ -359,6 +359,6 @@ def plan_action(root: Path, action: object, args: object, *, which: Which) -> Pl
     return replace(
         planned,
         sandbox=kind,
-        program_scope=program_scope(root, planned.argv, program, planned.setup_file),
+        program_scope=program_scope(root, planned, program),
         program_realpath=os.path.realpath(program) if program is not None else None,
     )

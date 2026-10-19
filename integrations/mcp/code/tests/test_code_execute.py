@@ -519,3 +519,23 @@ def test_a_venv_interpreter_still_runs_through_its_link(ws: Path, scrub: None) -
     execute.execute_plan(ws, planned, runner=recorder)
     ((argv, _cwd, _env, _timeout),) = recorder.calls
     assert str(ws / ".venv" / "bin" / "python") in argv  # never the realpath
+
+
+def test_a_profile_whose_scope_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = _planned_tool(ws)
+    profile = profiles.Profile(
+        name="p",
+        setup_file="/x.sh",
+        extends=None,
+        captured_at="t",
+        variables=(("PYTHONPATH", "/opt/lib"),),
+        digest="d",
+    )
+    system = dataclasses.replace(planned, program_scope="system", profile=profile)
+    assert execute.execute_plan(ws, system, runner=Recorder())["reason"] == (
+        "the program changed after it was planned"
+    )
+    overlay = dataclasses.replace(profile, variables=(("PYTHONPATH", str(ws / "lib")),))
+    kept = dataclasses.replace(planned, profile=overlay)
+    recorder = Recorder()
+    assert execute.execute_plan(ws, kept, runner=recorder)["ok"] is True

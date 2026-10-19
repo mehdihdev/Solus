@@ -489,3 +489,20 @@ Both items change what the planner lets through, so both are re-review triggers.
   runs, so venv interpreters keep their link semantics. Plans not built by `plan_action`
   carry no scope and are not compared.
 - Re-review relevance: the runner tables, the info-flag set, and the spawn-time comparison.
+
+### 2026-10-19 addendum (5) — broader runner denylist; profiles and venvs decide scope (append-only)
+
+- [x] More project runners give `"workspace"`: always pdm, rye, pixi, hatch, rosrun,
+  roslaunch, ctest, meson, scons, bazel, bazelisk, just, task, invoke, nox, pre-commit (plus
+  the addendum-4 set); by subcommand pip/pip3 `install|download|wheel`, uv
+  `sync|pip|run|build|tool`, poetry `install|build|run`, conda/mamba/micromamba
+  `run|install|env`. A runner invoked only with `--version`/`-V`/`--help`/`-h` stays
+  `"system"`. This remains a denylist (the auto-run model is "anything without a risk badge").
+- [x] Any applied profile whose PATH, PYTHONPATH, LD_LIBRARY_PATH, DYLD_LIBRARY_PATH,
+  AMENT_PREFIX_PATH, COLCON_PREFIX_PATH, CMAKE_PREFIX_PATH, ROS_PACKAGE_PATH, NODE_PATH,
+  GEM_PATH, PERL5LIB, RUBYLIB or CLASSPATH has an entry in the workspace (inode containment;
+  a not-yet-built entry is judged by its nearest existing ancestor; an empty or relative entry
+  counts as the working directory) makes the command `"workspace"` — e.g. `ros2 topic list`
+  under a workspace overlay. So does an explicit workspace venv `environment`
+  (`create_environment` excepted: it creates one, it does not run it). The spawn-time
+  recomputation uses the same plan fields.

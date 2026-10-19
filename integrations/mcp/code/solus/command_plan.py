@@ -171,7 +171,8 @@ def _script_file(root: Path, cwd: str, script: str) -> bool:
     return resolved is not None and resolved.is_file()
 
 
-#: §10.1: programs that run project code whatever their arguments...
+#: §10.1: programs that run project code whatever their arguments (except info-only
+#: `--version`/`--help`). A denylist: anything not listed is judged by path and profile.
 PROJECT_RUNNERS: frozenset[str] = frozenset(
     {
         "pytest",
@@ -190,28 +191,67 @@ PROJECT_RUNNERS: frozenset[str] = frozenset(
         "gmake",
         "ninja",
         "cmake",
+        "ctest",
+        "meson",
+        "scons",
+        "bazel",
+        "bazelisk",
         "colcon",
         "catkin",
         "catkin_make",
+        "rosrun",
+        "roslaunch",
         "gradle",
         "gradlew",
         "mvn",
         "rake",
+        "pdm",
+        "rye",
+        "pixi",
+        "hatch",
+        "just",
+        "task",
+        "invoke",
+        "pre-commit",
     }
 )
+_CONDA = frozenset({"run", "install", "env"})
 #: ...and programs that do so through one of these subcommands.
 SUBCOMMAND_RUNNERS: dict[str, frozenset[str]] = {
     "ros2": frozenset({"run", "launch"}),
     "bundle": frozenset({"exec"}),
-    "poetry": frozenset({"run"}),
-    "uv": frozenset({"run"}),
+    "pip": frozenset({"install", "download", "wheel"}),
+    "uv": frozenset({"sync", "pip", "run", "build", "tool"}),
+    "poetry": frozenset({"install", "build", "run"}),
     "pipenv": frozenset({"run"}),
-    "hatch": frozenset({"run"}),
+    "conda": _CONDA,
+    "mamba": _CONDA,
+    "micromamba": _CONDA,
     "platformio": frozenset({"run"}),
     "pio": frozenset({"run"}),
 }
 #: The only interpreter arguments that run no script or module.
 INFO_FLAGS: frozenset[str] = frozenset({"--version", "-V", "-VV", "--help", "-h", "-v"})
+#: Runner invocations made only of these print a version or help (`-v` is verbose for many).
+RUNNER_INFO_FLAGS: frozenset[str] = frozenset({"--version", "-V", "--help", "-h"})
+#: Profile variables whose entries decide what code a program loads (§10.1).
+SEARCH_PATH_VARIABLES: frozenset[str] = frozenset(
+    {
+        "PATH",
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "AMENT_PREFIX_PATH",
+        "COLCON_PREFIX_PATH",
+        "CMAKE_PREFIX_PATH",
+        "ROS_PACKAGE_PATH",
+        "NODE_PATH",
+        "GEM_PATH",
+        "PERL5LIB",
+        "RUBYLIB",
+        "CLASSPATH",
+    }
+)
 
 
 def planned_program(root: Path, argv0: str, which: Which) -> str | None:
@@ -227,30 +267,48 @@ def _runs_project_code(path: str, args: Sequence[str]) -> bool:
     name = command_deny.program_name(path, exact=True)
     if name in command_deny.INLINE_CODE:
         return not all(arg in INFO_FLAGS for arg in args)
-    # Runners match their normalised name (`cmake3`) or exact basename (`ros2`).
+    # Runners match their normalised name (`cmake3`, `pip3.12`) or exact basename (`ros2`).
     candidates = (name, os.path.basename(path).casefold())
     if any(candidate in PROJECT_RUNNERS for candidate in candidates):
-        return True
+        return not (args and all(arg in RUNNER_INFO_FLAGS for arg in args))
     return any(arg in SUBCOMMAND_RUNNERS.get(c, ()) for c in candidates for arg in args)
 
 
-def program_scope(
-    root: Path, argv: Sequence[str], program: str | None, setup_file: str | None = None
-) -> str:
+def _profile_reaches_workspace(root: Path, profile: profiles.Profile | None) -> bool:
+    """A search-path variable of the applied profile has an entry in the workspace. An
+    empty or relative entry means the working directory, which is in the workspace."""
+    if profile is None:
+        return False
+    for name, value in profile.variables:
+        if name not in SEARCH_PATH_VARIABLES:
+            continue
+        for entry in value.split(os.pathsep):
+            if not os.path.isabs(entry) or _within(root, entry):
+                return True
+    return False
+
+
+def program_scope(root: Path, planned: Plan, program: str | None) -> str:
     """§10.1: "workspace" when what runs is project code — the program's path (before
-    or after following links) is in the workspace (any workspace venv's bin included),
-    a §10.2 shell script, an interpreter given a script or module, a project runner, or
-    a capture of a workspace setup file. Otherwise "system"."""
+    or after following links) is in the workspace (any workspace venv's bin included);
+    an explicit workspace venv or a profile search path into the workspace is applied;
+    it is a §10.2 shell script, an interpreter given a script or module, a project
+    runner, or a capture of a workspace setup file. Otherwise "system"."""
+    argv = planned.argv
     names = [argv[0]]
     if program is not None:
         if _within(root, os.path.dirname(program)) or _within(root, program):
             return WORKSPACE_SCOPE
         names.append(os.path.realpath(program))
-    if setup_file is not None and _within(root, setup_file):
-        return WORKSPACE_SCOPE
-    if command_deny.shell_script(argv):
-        return WORKSPACE_SCOPE
-    if any(_runs_project_code(name, argv[1:]) for name in names):
+    uses_venv = planned.environment is not None and planned.action != "create_environment"
+    setup = planned.setup_file
+    if (
+        uses_venv
+        or _profile_reaches_workspace(root, planned.profile)
+        or (setup is not None and _within(root, setup))
+        or command_deny.shell_script(argv)
+        or any(_runs_project_code(name, argv[1:]) for name in names)
+    ):
         return WORKSPACE_SCOPE
     return SYSTEM_SCOPE
 
@@ -332,14 +390,20 @@ COMMAND_PLANNERS: dict[str, Callable[[Path, Args, Which], Plan]] = {
 
 def _within(root: Path, path: str) -> bool:
     """True when `path`'s realpath is the workspace or beneath it, judged by
-    (st_dev, st_ino) ancestry so a case-insensitive filesystem cannot fool it."""
+    (st_dev, st_ino) ancestry so a case-insensitive filesystem cannot fool it.
+    Missing trailing components are skipped (their existing ancestor decides)."""
     try:
         target = os.stat(root)
-        current = Path(os.path.realpath(path))
-        for candidate in (current, *current.parents):
-            info = os.stat(candidate)
-            if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
-                return True
     except OSError:
         return False
+    current = Path(os.path.realpath(path))
+    for candidate in (current, *current.parents):
+        try:
+            info = os.stat(candidate)
+        except FileNotFoundError:
+            continue  # a not-yet-built path is judged by its nearest existing ancestor
+        except OSError:
+            return False
+        if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+            return True
     return False
