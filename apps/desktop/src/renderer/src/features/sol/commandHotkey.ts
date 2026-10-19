@@ -4,7 +4,7 @@
 // global hotkeys are untouched. It is an approval gesture on a visible card,
 // exactly like clicking Approve: the card's own decide path runs, and a busy
 // or spent card refuses it.
-import { createContext, useContext, useEffect } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { getDesktopPlatform } from '../../lib/desktopBridge'
 import { isCommandTool } from './commandCard'
 
@@ -59,22 +59,28 @@ export function newestCommandConfirmation(items: readonly ConfirmationHolder[]):
 }
 
 /** Each mounted command card registers how to approve itself; the approver
- *  returns false when the card is busy or spent. */
+ *  returns false when the card is busy or spent. The FIRST registration time
+ *  per card is kept (re-registering on a busy-state change does not reset it):
+ *  it is when the card was rendered, which the arming delay measures from. */
 export interface ApprovalRegistry {
   register: (confirmationId: string, approve: () => boolean) => () => void
   approve: (confirmationId: string) => boolean
+  registeredAt: (confirmationId: string) => number | null
 }
 
-export function createApprovalRegistry(): ApprovalRegistry {
+export function createApprovalRegistry(now: () => number = () => Date.now()): ApprovalRegistry {
   const approvers = new Map<string, () => boolean>()
+  const firstSeen = new Map<string, number>()
   return {
     register(confirmationId, approve) {
       approvers.set(confirmationId, approve)
+      if (!firstSeen.has(confirmationId)) firstSeen.set(confirmationId, now())
       return () => {
         if (approvers.get(confirmationId) === approve) approvers.delete(confirmationId)
       }
     },
-    approve: (confirmationId) => approvers.get(confirmationId)?.() ?? false
+    approve: (confirmationId) => approvers.get(confirmationId)?.() ?? false,
+    registeredAt: (confirmationId) => firstSeen.get(confirmationId) ?? null
   }
 }
 
@@ -92,18 +98,122 @@ export function useRegisterCommandApproval(
   }, [registry, confirmationId, approve])
 }
 
-/** The surface's capture-phase keydown: approve the newest command card and,
- *  only when that fired, keep the key from submitting the composer. */
+/** Security review (consent race): a card must have been rendered AND be the
+ *  newest command card for this long before the shortcut can approve it, so a
+ *  card that appears (e.g. from an auto-resume) under a key press already on
+ *  its way is never approved by it. */
+export const ARM_DELAY_MS = 700
+
+interface ShortcutKey extends KeyLike {
+  readonly repeat: boolean
+}
+
+export interface ShortcutResult {
+  /** A card was approved. */
+  readonly fired: boolean
+  /** Keep the key from the composer: the shortcut targeted a command card. */
+  readonly swallow: boolean
+}
+
+export interface ShortcutGate {
+  /** Record which command card is newest now (called as the transcript changes). */
+  noteNewest: (items: readonly ConfirmationHolder[]) => void
+  /** Any keyup: the next shortcut approval may fire. */
+  keyUp: () => void
+  handle: (
+    event: ShortcutKey,
+    registry: ApprovalRegistry,
+    items: readonly ConfirmationHolder[],
+    mac: boolean
+  ) => ShortcutResult
+}
+
+const PASS: ShortcutResult = { fired: false, swallow: false }
+const BLOCKED: ShortcutResult = { fired: false, swallow: true }
+
+export function createShortcutGate(now: () => number = () => Date.now()): ShortcutGate {
+  let newestId: string | null = null
+  let newestSince = 0
+  let awaitingKeyUp = false
+
+  const note = (id: string | null): void => {
+    if (id === newestId) return
+    newestId = id
+    newestSince = now()
+  }
+
+  return {
+    noteNewest: (items) => note(newestCommandConfirmation(items)),
+    keyUp: () => {
+      awaitingKeyUp = false
+    },
+    handle(event, registry, items, mac) {
+      if (!isApproveShortcut(event, mac)) return PASS
+      const newest = newestCommandConfirmation(items)
+      if (newest === null) return PASS
+      note(newest)
+      if (event.repeat || awaitingKeyUp) return BLOCKED
+      const rendered = registry.registeredAt(newest)
+      if (rendered === null) return BLOCKED
+      if (now() - Math.max(newestSince, rendered) < ARM_DELAY_MS) return BLOCKED
+      if (!registry.approve(newest)) return BLOCKED
+      awaitingKeyUp = true
+      return { fired: true, swallow: true }
+    }
+  }
+}
+
+/** The surface's capture-phase keydown. Works from anywhere in the surface,
+ *  including the composer; swallows the key whenever it targeted a command
+ *  card, so a blocked shortcut never falls through to sending the draft. */
 export function approveOnShortcut(
   event: React.KeyboardEvent,
+  gate: ShortcutGate,
   registry: ApprovalRegistry,
   items: readonly ConfirmationHolder[]
 ): void {
   const native = event.nativeEvent as KeyboardEvent
   const composing = native.isComposing || native.keyCode === 229
-  if (composing || !isApproveShortcut(event, approveShortcut().mac)) return
-  const newest = newestCommandConfirmation(items)
-  if (newest === null || !registry.approve(newest)) return
+  const result = gate.handle(
+    {
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      isComposing: composing,
+      repeat: event.repeat
+    },
+    registry,
+    items,
+    approveShortcut().mac
+  )
+  if (!result.swallow) return
   event.preventDefault()
   event.stopPropagation()
+}
+
+/** Wire the gate to a SOL surface: note the newest card as the transcript
+ *  changes, and re-allow the shortcut on any keyup (inside the surface or not)
+ *  or when the window loses focus. */
+export function useCommandShortcut(items: readonly ConfirmationHolder[]): {
+  registry: ApprovalRegistry
+  onKeyDownCapture: (event: React.KeyboardEvent) => void
+} {
+  const [registry] = useState(() => createApprovalRegistry())
+  const [gate] = useState(() => createShortcutGate())
+  useEffect(() => gate.noteNewest(items), [gate, items])
+  useEffect(() => {
+    const release = (): void => gate.keyUp()
+    window.addEventListener('keyup', release, true)
+    window.addEventListener('blur', release)
+    return () => {
+      window.removeEventListener('keyup', release, true)
+      window.removeEventListener('blur', release)
+    }
+  }, [gate])
+  return {
+    registry,
+    onKeyDownCapture: (event) => approveOnShortcut(event, gate, registry, items)
+  }
 }

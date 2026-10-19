@@ -18,7 +18,7 @@ import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard } from './ConfirmationCard'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
-import { CommandApprovalContext, approveOnShortcut, createApprovalRegistry } from './commandHotkey'
+import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { SolMarkdown } from './Markdown'
 import { ModeBadge } from './ModeBadge'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
@@ -581,7 +581,7 @@ export function SolChat({
     (confirmationId, decision) => chat.decide(confirmationId, decision, mode),
     [chat, mode]
   )
-  const [approvals] = useState(createApprovalRegistry)
+  const shortcut = useCommandShortcut(chat.items)
   // The circled region (SOL window only — main pushes it to that renderer).
   // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
   // but only once that turn settled clean: a failed send keeps it attached so
@@ -609,9 +609,9 @@ export function SolChat({
   }
   const page = layout === 'page'
   return (
-    <CommandApprovalContext.Provider value={approvals}>
+    <CommandApprovalContext.Provider value={shortcut.registry}>
       <div
-        onKeyDownCapture={(event) => approveOnShortcut(event, approvals, chat.items)}
+        onKeyDownCapture={shortcut.onKeyDownCapture}
         style={{
           flex: 1,
           minHeight: 0,

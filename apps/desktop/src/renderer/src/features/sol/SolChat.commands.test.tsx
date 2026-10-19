@@ -1,6 +1,6 @@
 // SOLUSDEV-317 on the chat surface: Cmd/Ctrl+Enter approves the newest pending
 // command card, the output stays under the message, and SOL resumes.
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
@@ -8,6 +8,7 @@ import * as commands from '../../lib/api/resources.commands'
 import type { PendingConfirmation } from '../../lib/api/solStream'
 import * as solApi from './solApi'
 import { SolChat } from './SolChat'
+import { ARM_DELAY_MS } from './commandHotkey'
 import { resetSolChatSessions } from './solChatStore'
 import { useSolSessionStore } from './solSessionStore'
 import { useSolWindowStore } from './solWindowStore'
@@ -50,6 +51,7 @@ const ONSHAPE: PendingConfirmation = {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   vi.clearAllMocks()
   localStorage.clear()
   resetSolChatSessions()
@@ -65,6 +67,13 @@ beforeEach(() => {
     truncated: false
   })
 })
+
+/** Move the clock past the shortcut's arming delay (cards must have been on
+ *  screen, newest, for ARM_DELAY_MS). */
+function armCards(): void {
+  const now = Date.now()
+  vi.spyOn(Date, 'now').mockReturnValue(now + ARM_DELAY_MS)
+}
 
 /** Send one message whose turn parks the given cards. */
 async function park(
@@ -88,6 +97,7 @@ describe('Cmd/Ctrl+Enter approval', () => {
     const user = userEvent.setup()
     const input = await park(user, command('older'), command('newer'), ONSHAPE)
     await user.type(input, 'draft')
+    armCards()
     await user.keyboard('{Control>}{Enter}{/Control}')
     await waitFor(() => expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve'))
     expect(decide).toHaveBeenCalledTimes(1)
@@ -101,10 +111,50 @@ describe('Cmd/Ctrl+Enter approval', () => {
     const user = userEvent.setup()
     const input = await park(user, command('older'), command('newer'))
     input.focus()
+    armCards()
     await user.keyboard('{Control>}{Enter}{/Control}')
     await user.keyboard('{Control>}{Enter}{/Control}')
     expect(decide).toHaveBeenCalledTimes(1)
     expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve')
+  })
+
+  it('does nothing — and does not send the draft — before the newest card is armed', async () => {
+    const user = userEvent.setup()
+    const input = await park(user, command('newer'))
+    await user.type(input, 'draft')
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(decide).not.toHaveBeenCalled()
+    expect(input).toHaveValue('draft')
+    expect(stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores auto-repeat and needs a keyup between shortcut approvals', async () => {
+    decide.mockResolvedValue({ ok: true, value: { exit_code: 0 } })
+    const user = userEvent.setup()
+    const input = await park(user, command('older'), command('newer'))
+    armCards()
+    act(() => {
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, repeat: true })
+    })
+    expect(decide).not.toHaveBeenCalled()
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    })
+    expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve')
+    await waitFor(() =>
+      expect(screen.getAllByLabelText('Action needs your approval')).toHaveLength(1)
+    )
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * ARM_DELAY_MS)
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    })
+    expect(decide).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      fireEvent.keyUp(input, { key: 'Enter' })
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    })
+    expect(decide).toHaveBeenCalledTimes(2)
+    expect(decide).toHaveBeenLastCalledWith('p1', 'older', 'approve')
   })
 
   it('ignores the shortcut during IME composition', async () => {
@@ -127,6 +177,7 @@ describe('Cmd/Ctrl+Enter approval', () => {
     const user = userEvent.setup()
     const input = await park(user, ONSHAPE)
     input.focus()
+    armCards()
     await user.keyboard('{Control>}{Enter}{/Control}')
     expect(decide).not.toHaveBeenCalled()
   })
@@ -135,6 +186,7 @@ describe('Cmd/Ctrl+Enter approval', () => {
     const user = userEvent.setup()
     const input = await park(user, command('newer'))
     input.focus()
+    armCards()
     await user.keyboard('{Meta>}{Enter}{/Meta}')
     expect(decide).not.toHaveBeenCalled()
   })
