@@ -262,7 +262,6 @@ def test_denied_argv(argv: list[str]) -> None:
         ["gnumake"],
         ["genhtml", "x"],
         ["shasum", "-a", "256", "f"],
-        ["node-gyp", "rebuild"],
         ["perl", "-MData::Dumper", "s.pl"],
         ["perl", "-MFoo=bar,baz", "s.pl"],
         ["ruby", "-r", "json", "s.rb"],
@@ -296,6 +295,12 @@ def test_allowed_argv(argv: list[str]) -> None:
         ("perl5.34-thread-multi", "perl"),
         ("php-cgi", "php"),
         ("node-arm64", "node"),
+        ("zsh-5.9", "zsh"),
+        ("php-cgi8.2", "php"),
+        ("sudo.ws", "sudo"),
+        ("env-x", "env"),
+        ("node-gyp", "node"),
+        ("time_sync.py", "time_sync.py"),
         ("shasum", "shasum"),
         ("git-upload-pack", "git"),
         ("gtimeout", "timeout"),
@@ -315,3 +320,124 @@ def test_resolved_program_names_are_checked_too() -> None:
     assert deny.denied_reason(["tool", "x"], resolved=("/opt/bin/tool", "/bin/bash")) is not None
     assert deny.denied_reason(["py", "-c", "x"], resolved=("/usr/bin/python3.12",)) is not None
     assert deny.denied_reason(["tool", "x"], resolved=("/opt/bin/tool",)) is None
+
+
+# --- §9.11 (revised): name matching by where the program comes from -------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["zsh-5.9"],
+        ["bash-5.2"],
+        ["/opt/homebrew/bin/php-cgi8.2", "-r", "1"],
+        ["sudo-rs", "ls"],
+        ["sudo.ws", "ls"],
+        ["python3.12-intel64", "-c", "x"],
+        ["perl5.34-thread-multi", "-e", "1"],
+        ["php-cgi", "-r", "1"],
+        ["env-x", "make"],
+        ["gtimeout", "5", "make"],
+        ["/usr/local/bin/node-gyp", "-e", "1"],  # node-gyp is node outside the workspace
+        # workspace programs: exact normalised names still deny
+        ["./bash"],
+        ["./tools/zsh"],
+        ["./python3", "-c", "x"],
+        ["./gtimeout", "5", "make"],
+        ["./sudo", "ls"],
+    ],
+)
+def test_revised_name_rule_denies(argv: list[str]) -> None:
+    assert deny.denied_reason(argv) is not None
+    assert deny.classify_denial(argv) is not None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["./env_setup.sh"],
+        ["./env-check.sh"],
+        ["./time_sync.py"],
+        ["./sh_build.sh"],
+        ["./nu_test"],
+        ["./open_loop"],
+        ["scripts/sudo-helper.sh"],
+        ["./bash-completion-gen"],
+    ],
+)
+def test_workspace_programs_match_exact_names_only(argv: list[str]) -> None:
+    resolved = (f"/w/{argv[0][2:]}", f"/w/{argv[0][2:]}")
+    assert deny.denied_reason(argv, resolved=resolved) is None
+    assert deny.classify_denial(argv) is None
+
+
+def test_workspace_program_resolving_to_a_shell_is_denied() -> None:
+    assert deny.denied_reason(["./tool"], resolved=("/w/tool", "/bin/bash")) is not None
+    assert deny.denied_reason(["./env_setup.sh"], resolved=("/w/env_setup.sh", "/bin/zsh-5.9"))
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["node", "--run", "build"],
+        ["node", "-x", "x.js"],
+        ["node", "--env-file=.env", "x.js"],
+        ["node", "--frobnicate", "x.js"],
+        ["bun", "--config=bunfig.toml", "x.ts"],
+        ["bun", "--frobnicate", "x.ts"],
+        ["ruby", "--jit-wat", "s.rb"],
+        ["ruby", "-x", "s.rb"],
+        ["perl", "-d:Foo", "s.pl"],
+        ["perl", "-x", "s.pl"],
+        ["php", "-d", "auto_prepend_file=x", "x.php"],
+        ["php", "-z", "ext.so", "x.php"],
+        ["php", "-c", "evil.ini", "x.php"],
+        ["lua", "-Z", "x.lua"],
+        ["lua", "-l", "data:x", "x.lua"],
+        ["Rscript", "--frobnicate", "x.R"],
+        ["deno", "--frobnicate", "run", "x.ts"],
+    ],
+)
+def test_unknown_leading_options_fail_closed_for_every_interpreter(argv: list[str]) -> None:
+    assert deny.denied_reason(argv) is not None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["node", "--inspect", "x.js"],
+        ["node", "--inspect=9229", "x.js"],
+        ["node", "--max-old-space-size=4096", "x.js"],
+        ["node", "--enable-source-maps", "--no-warnings", "x.js"],
+        ["ruby", "-W0", "s.rb"],
+        ["ruby", "-w", "-I", "lib", "s.rb"],
+        ["perl", "-l", "s.pl"],
+        ["perl", "-0777", "-n", "s.pl"],
+        ["php", "-f", "x.php"],
+        ["php", "-n", "x.php"],
+        ["lua", "-l", "socket", "x.lua"],
+        ["Rscript", "--vanilla", "x.R"],
+        ["bun", "--hot", "x.ts"],
+        ["bun", "run", "dev"],
+        ["deno", "-q", "run", "x.ts"],
+    ],
+)
+def test_known_safe_leading_options_are_allowed(argv: list[str]) -> None:
+    assert deny.denied_reason(argv) is None
+
+
+def test_classify_denial_loads_standalone_by_path() -> None:
+    """The cloud's behavioural parity test imports this file by path: stdlib only."""
+    import importlib.util
+
+    from code_paths import SOLUS_DIR
+
+    source = (SOLUS_DIR / "command_deny.py").read_text()
+    assert "from ." not in source and "import solus" not in source
+    spec = importlib.util.spec_from_file_location("standalone_deny", SOLUS_DIR / "command_deny.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.classify_denial(["bash", "-c", "x"]) is not None
+    assert module.classify_denial(["./env_setup.sh"]) is None
+    assert module.classify_denial(["colcon", "build"]) is None
