@@ -102,7 +102,23 @@ def world() -> World:
     return World()
 
 
+class FakeTracker:
+    """Records descendant-tree observations and kills per leader."""
+
+    events: list[tuple[str, int, int]] = []
+
+    def __init__(self, leader: int) -> None:
+        self.leader = leader
+
+    def observe(self) -> None:
+        FakeTracker.events.append(("observe", self.leader, 0))
+
+    def kill(self, sig: int) -> None:
+        FakeTracker.events.append(("kill", self.leader, sig))
+
+
 def _registry(ws: Path, world: World) -> Any:
+    FakeTracker.events = []
     return processes.Registry(
         ws,
         spawn=world.spawn,
@@ -110,6 +126,7 @@ def _registry(ws: Path, world: World) -> Any:
         sleep=world.sleep,
         killpg=world.killpg,
         start_token=world.start_token,
+        tracker=FakeTracker,
         watch=False,
     )
 
@@ -385,3 +402,20 @@ def test_real_process_lifecycle(ws: Path, home: Path) -> None:
             os.kill(result["pid"], 0)
     finally:
         registry.stop_all()
+
+
+def test_stop_and_timeout_kill_the_descendant_tree(ws: Path, home: Path, world: World) -> None:
+    registry = _registry(ws, world)
+    first = _start(registry)["process_id"]
+    registry.sweep()
+    assert ("observe", 501, 0) in FakeTracker.events
+    registry.stop(first)
+    assert ("kill", 501, signal.SIGTERM) in FakeTracker.events
+    assert ("kill", 501, signal.SIGKILL) in FakeTracker.events
+    _start(registry, runtime=60)
+    world.now += 61
+    registry.sweep()
+    assert ("kill", 502, signal.SIGKILL) in FakeTracker.events
+    _start(registry)
+    registry.stop_all()
+    assert ("kill", 503, signal.SIGKILL) in FakeTracker.events

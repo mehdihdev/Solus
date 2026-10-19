@@ -292,7 +292,11 @@ def limitations(kind: str | None) -> list[str]:
         return []
     gaps = ["reads, exec and network are not restricted"]
     if not kind.startswith(KIND_LINUX):
-        return [*gaps, "launchd job submission not blocked"]
+        return [
+            *gaps,
+            "launchd job submission not blocked",
+            "a descendant that double-forks between process-table snapshots can survive a stop",
+        ]
     abi = int(kind.rsplit("abi", 1)[-1]) if kind.rsplit("abi", 1)[-1].isdigit() else 0
     gaps.append("file metadata (chmod/chown/utimes) not confined")
     gaps.append(

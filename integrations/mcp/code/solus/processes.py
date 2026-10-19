@@ -27,7 +27,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
-from .process_os import Child, Spawn, default_killpg, default_spawn, start_token
+from .process_os import (
+    Child,
+    Spawn,
+    TreeTracker,
+    default_killpg,
+    default_spawn,
+    start_token,
+)
 from .profiles import workspace_key
 from .progress import LineOutput
 
@@ -85,6 +92,7 @@ class Entry:
     chunks: deque[dict[str, Any]] = field(default_factory=deque)
     readers: list[threading.Thread] = field(default_factory=list)
     output: _RingOutput | None = None
+    tree: Any = None
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -113,8 +121,10 @@ class Registry:
         sleep: Callable[[float], None] = time.sleep,
         killpg: Callable[[int, int], None] = default_killpg,
         start_token: Callable[[int], str | None] = start_token,
+        tracker: Callable[[int], Any] = TreeTracker,
         watch: bool = True,
     ) -> None:
+        self._tracker = tracker
         self._root = root
         self._spawn = spawn
         self._clock = clock
@@ -213,6 +223,7 @@ class Registry:
                 entry.state, entry.ended_at, entry.ended = "failed_to_start", _iso(), now
                 return {**self._start_refusal(f"could not start: {type(exc).__name__}")}
             entry.child, entry.pid = child, child.pid
+            entry.tree = self._tracker(child.pid)
             self._tokens[entry.process_id] = {
                 "pid": child.pid,
                 "pgid": child.pid,
@@ -299,8 +310,12 @@ class Registry:
     def _signal_and_wait(self, entries: list[Entry]) -> None:
         """SIGTERM every group, wait up to 5 s, SIGKILL what is left."""
         for entry in entries:
+            if entry.tree is not None:
+                entry.tree.observe()
             if entry.pid is not None:
                 self._killpg(entry.pid, signal.SIGTERM)
+            if entry.tree is not None:
+                entry.tree.kill(signal.SIGTERM)
         deadline = self._clock() + STOP_GRACE_SECONDS
         while self._clock() < deadline and any(self._alive(e) for e in entries):
             self._sleep(POLL_SECONDS)
@@ -308,6 +323,8 @@ class Registry:
             if self._alive(entry) and entry.pid is not None:
                 self._killpg(entry.pid, signal.SIGKILL)
                 self._wait_dead(entry)
+            if entry.tree is not None:
+                entry.tree.kill(signal.SIGKILL)
 
     def _wait_dead(self, entry: Entry) -> None:
         wait = getattr(entry.child, "wait", None)
@@ -364,6 +381,8 @@ class Registry:
             running = [e for e in self._entries.values() if e.state == RUNNING]
         now = self._clock()
         for entry in running:
+            if entry.tree is not None:
+                entry.tree.observe()
             if not self._alive(entry):
                 self._finish(entry, "exited")
             elif now >= entry.deadline:

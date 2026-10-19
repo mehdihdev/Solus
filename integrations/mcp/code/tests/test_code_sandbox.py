@@ -195,6 +195,7 @@ def test_limitations_are_reported_per_kind() -> None:
     assert mac == [
         "reads, exec and network are not restricted",
         "launchd job submission not blocked",
+        "a descendant that double-forks between process-table snapshots can survive a stop",
     ]
     old = sandbox.limitations("landlock-abi1")
     assert "truncate not confined" in old

@@ -56,6 +56,7 @@ try:
     from .plan import DEFAULT_ENVIRONMENT, DEFAULT_PYTHON, DEFAULT_TEST_TARGET, plan_action
     from .plan import DEFAULT_TIMEOUT_SECONDS as _DEFAULT_TIMEOUT
     from .probe import empty_probe, probe_environment
+    from .process_os import become_subreaper
     from .processes import Registry
     from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, AsyncOutput
     from .roster import TOOL_ROSTER
@@ -90,6 +91,9 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
     from solus.probe import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         empty_probe,
         probe_environment,
+    )
+    from solus.process_os import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        become_subreaper,
     )
     from solus.processes import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         Registry,
@@ -604,6 +608,7 @@ def _stop_processes() -> None:
 def main() -> None:
     _configure_logging()
     _install_signal_handlers()
+    become_subreaper()
     logger.info("Starting Solus code MCP server")
     _reap_orphans()
     try:

@@ -27,6 +27,7 @@ from typing import IO, Any
 
 from . import profiles, sandbox
 from .plan import Plan
+from .process_os import TreeTracker
 from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, LineOutput
 from .workspace import resolve_inside
 
@@ -54,6 +55,8 @@ CHILD_PATH = "/usr/bin:/bin"
 #: Names copied from the server's own (already scrubbed) environment.
 PASSTHROUGH_NAMES: tuple[str, ...] = ("HOME", "LANG", "TMPDIR")
 MAX_TAIL_BYTES = 16 * 1024
+#: How often a running command's descendant tree is snapshotted.
+TREE_SNAPSHOT_SECONDS = 0.5
 #: Never passed to any child, whatever a profile says (loader / iconv injection).
 LOADER_INJECTION: frozenset[str] = frozenset(
     {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"}
@@ -174,8 +177,13 @@ def default_runner(
             observer = LineOutput(OUTPUT_CALLBACK.get())
             deadline = time.monotonic() + timeout_seconds
             timed_out = False
+            tree = TreeTracker(proc.pid)
+            snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
             try:
                 while proc.poll() is None:
+                    if time.monotonic() >= snapshot_at:
+                        tree.observe()
+                        snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
                     observer.feed("stdout", out_reader.read(8192))
                     observer.feed("stderr", err_reader.read(8192))
                     if time.monotonic() >= deadline or (cancelled and cancelled.is_set()):
@@ -184,9 +192,11 @@ def default_runner(
                         break
                     time.sleep(0.025)
                 proc.wait()
-                # Whatever the leader left running in its group dies with it, so the
-                # git metadata check afterwards sees the command's final effect.
+                # Whatever the leader left running (its group, and descendants that
+                # left the group) dies with it, so the git metadata check afterwards
+                # sees the command's final effect.
                 _kill_group(proc)
+                tree.kill(signal.SIGKILL)
                 for stream, reader in (("stdout", out_reader), ("stderr", err_reader)):
                     _drain_output(observer, stream, reader, deadline, cancelled)
                 observer.finish()
