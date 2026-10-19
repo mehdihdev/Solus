@@ -124,13 +124,15 @@ interface LiveProps {
   onNavigate: HomeScreenProps['onNavigate']
   openModal: (modal: HomeTeamModal) => void
   onUpgrade: (() => void) | undefined
+  /** Linked git repos per live project, shared by the list and the pane. */
+  repos: ReposByProject
   onNewProject: () => void
 }
 
 function Sidebar(props: LiveProps): React.JSX.Element {
   const { home, team, currentProject, view, onShow, openModal, onNewProject } = props
   const accounts = useAccountsPosition(view)
-  const repos = useReposByProject(home, currentProject?.id ?? null)
+  const { repos } = props
   return (
     <aside aria-label="Projects" style={SIDEBAR_STYLE}>
       <div style={{ display: 'grid', gap: 12 }}>
@@ -235,6 +237,7 @@ function Pane(props: LiveProps): React.JSX.Element {
 
 function ProjectView({
   home,
+  repos,
   currentProject,
   onShow,
   onOpenProject,
@@ -255,6 +258,7 @@ function ProjectView({
       project={currentProject}
       description={project?.description ?? null}
       activity={home.activityByProject[currentProject.id] ?? []}
+      repos={repos[currentProject.id] ?? []}
       onOpen={() => onOpenProject(currentProject)}
       onBench={() => onNavigate?.('bench')}
       onManageSources={() => onShow('accounts')}
@@ -338,6 +342,7 @@ function LiveHome({
   const [creatingProject, setCreatingProject] = useState(false)
   const [modal, setModal] = useState<HomeTeamModal>(null)
   const [view, setView] = useState<HomePaneView>('project')
+  const repos = useReposByProject(home, currentProject?.id ?? null)
   const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
   const live: LiveProps = {
     home,
@@ -350,6 +355,7 @@ function LiveHome({
     onNavigate,
     openModal: setModal,
     onUpgrade,
+    repos,
     onNewProject: () => setCreatingProject(true)
   }
 

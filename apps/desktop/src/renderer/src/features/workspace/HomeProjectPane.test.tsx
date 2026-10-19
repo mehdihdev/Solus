@@ -41,6 +41,7 @@ function setup(overrides: Partial<HomeProjectPaneProps> = {}): HomeProjectPanePr
     project: { id: 'p1', name: 'Rover MK2', teamId: 't1' },
     description: 'six-wheel rover',
     activity: [ROW],
+    repos: [{ provider: 'github', repo: 'mehdihdev/elegoo_robot' }],
     onOpen: vi.fn(),
     onBench: vi.fn(),
     onManageSources: vi.fn(),
@@ -158,5 +159,18 @@ describe('HomeProjectPane', () => {
     expect(tab('Sources')).toHaveFocus()
     await userEvent.keyboard('{ArrowLeft}{ArrowLeft}')
     expect(tab('Activity')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('names the linked repo under the project title', () => {
+    setup()
+    const heading = screen.getByRole('heading', { name: 'Rover MK2' })
+    const line = screen.getByText('mehdihdev/elegoo_robot')
+    expect(heading.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('repo-logo-github')).toBeInTheDocument()
+  })
+
+  it('shows no repo line for a project without one', () => {
+    setup({ repos: [] })
+    expect(screen.queryByTestId(/^repo-logo-/)).toBeNull()
   })
 })

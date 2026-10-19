@@ -14,6 +14,8 @@ import { ProjectFolderCard } from '../project/ProjectFolderCard'
 import { ProjectActivityFeed, ActivityLine } from './ProjectActivityFeed'
 import { HOME_PANE_ACTIVITY_COUNT } from './projectActivity'
 import { ProjectSourcesSummary } from './ProjectSourcesSummary'
+import { RepoLine } from './RepoLine'
+import type { LinkedRepo } from './useProjectRepos'
 import { SolusCard } from './SolusCard'
 
 type PaneTab = 'overview' | 'sources' | 'solus' | 'activity'
@@ -33,6 +35,8 @@ export interface HomeProjectPaneProps {
   description: string | null
   /** The project's own rows from Home's team-feed window, newest first. */
   activity: readonly ActivityApi[]
+  /** The project's linked git repos, named under its title. */
+  repos: readonly LinkedRepo[]
   onOpen: () => void
   onBench: () => void
   onManageSources: () => void
@@ -115,6 +119,7 @@ function TabBody({
 function PaneHeader({
   project,
   description,
+  repos,
   onOpen,
   onBench
 }: HomeProjectPaneProps): React.JSX.Element {
@@ -127,6 +132,9 @@ function PaneHeader({
         <h2 style={{ margin: '6px 0 0', fontSize: 20, fontWeight: 600, letterSpacing: '-0.01em' }}>
           {project.name}
         </h2>
+        <div style={{ marginTop: 4 }}>
+          <RepoLine repos={repos} size="md" />
+        </div>
         {description && (
           <div style={{ marginTop: 2, fontSize: 12.5, color: 'var(--mut)' }}>{description}</div>
         )}

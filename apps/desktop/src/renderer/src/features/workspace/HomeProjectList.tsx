@@ -10,8 +10,8 @@ import { relativeTime } from '../../lib/relativeTime'
 import { activityText } from '../team/activityText'
 import { ArchivedProjects } from './ArchivedProjects'
 import { ProjectMenu } from './ProjectMenu'
-import { integrationLogo } from '../onboarding/integrationLogos'
 import type { ActivityByProject } from './projectActivity'
+import { RepoLine } from './RepoLine'
 import type { LinkedRepo, ReposByProject } from './useProjectRepos'
 import type { HomeActions } from './useHomeData'
 
@@ -172,31 +172,6 @@ function ProjectRow({
         </div>
       )}
     </div>
-  )
-}
-
-/** The project's linked repo under its name: provider logo + repo, "+N" for more. */
-function RepoLine({ repos }: { repos: readonly LinkedRepo[] }): React.JSX.Element | null {
-  const first = repos[0]
-  if (!first) return null
-  const logo = integrationLogo(first.provider)
-  return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-      {logo && (
-        <img
-          src={logo}
-          alt=""
-          data-testid={`repo-logo-${first.provider}`}
-          style={{ width: 12, height: 12, objectFit: 'contain', flexShrink: 0 }}
-        />
-      )}
-      <span style={{ ...ROW_META, color: 'var(--tx)' }}>{first.repo}</span>
-      {repos.length > 1 && (
-        <span style={{ fontSize: 11, color: 'var(--mut)', flexShrink: 0 }}>
-          +{repos.length - 1}
-        </span>
-      )}
-    </span>
   )
 }
 

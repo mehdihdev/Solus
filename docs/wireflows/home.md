@@ -47,7 +47,8 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
     the row ⋯ menu (Edit details / Archive / Delete, unchanged role gating)
     over the card's corner. The whole card is the select button (border,
     fill, hover tint). The current project has the accent border and
-    `aria-current`. **Clicking a row selects it** —
+    `aria-current`. The project pane names the same repo under its title
+    (`RepoLine`, shared by both). **Clicking a row selects it** —
     the old "Switch to": the current project moves, Home stays, nothing
     opens. `+` (members and up) opens New project; an empty list says "Create
     one to start building the graph."; the archived section is beneath.

@@ -738,6 +738,8 @@ describe('HomeScreen — linked repos under project names', () => {
     expect(within(row('p1')).getByText('strider/rover-fw')).toBeInTheDocument()
     expect(within(row('p1')).queryByText('stale/old-name')).toBeNull()
     expect(within(row('p2')).getByText('strider/arm-fw')).toBeInTheDocument()
+    // The pane's header names the current project's repo too.
+    expect(within(pane()).getByText('strider/rover-fw')).toBeInTheDocument()
     expect(projectRepos.useProjectRepos).toHaveBeenCalledWith(['p1', 'p2'])
   })
 })
