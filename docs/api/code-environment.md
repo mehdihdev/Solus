@@ -172,3 +172,13 @@ wait behind that progress lock.
 It extends the `code.plan` answer with `sandbox`, `profile` and `environment` for every action,
 and wraps `create_environment`, `install`, `run` and `test` in the OS sandbox. The output tail
 the model reads for `code.run`/`code.test` grows from 400 to 3000 characters.
+
+### SOLUSDEV-317 Phase 4 — the probe no longer executes the venv
+
+Superseding the `probe_environment` row in §4: the probe never starts `<venv>/bin/python`, pip
+or `uv pip list` for a workspace venv. Packages come from `site-packages/*.dist-info/METADATA`
+(name and version; at most 300 entries, then `truncated`), and the Python version from
+`pyvenv.cfg`. A workspace venv can contain attacker-controlled `.pth` files, which would run on
+interpreter start outside the sandbox and without approval
+(`docs/api/code-command-execution.md` §9.1). The `probe_environment` reason text in
+`integrations/mcp/code/allowlist.yaml` still says "pip list". Correcting it is a human allowlist edit.

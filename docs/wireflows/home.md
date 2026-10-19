@@ -9,53 +9,73 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 `Solus → Home` in the menu row. `docs/api/API.md §5` ("/") is the route map.
 
 ```
-| Welcome back, Maya                                                                            |
-| Strider · 3 members  [Strider ▾] ⋯                [✉ Join team] [👥 New team] [+ Invite teammate] |
-| ─────────────────────────────────────────────────────────────────────────────────────────── |
-| PROJECTS · 2            [+] | CURRENT PROJECT                                                |
-| ┌ Rover MK2   CURRENT   ⋯ ┐ | Rover MK2                           [Live Bench] [Open workspace] |
-| │ six-wheel rover          │ | six-wheel rover                                                |
-| │ connected github · 2h    │ | ( Overview )  ( .solus )                                      |
-| └──────────────────────────┘ | ┌ LOCAL FOLDER ───────────┐ ┌ SOURCES ─────────── Manage → ┐ |
-| ┌ Arm                     ⋯ ┐ | │ ~/code/rover  [Open in…] │ │ ● rover-fw   GitHub  42 ENT. │ |
-| │ No recent activity.      │ | └──────────────────────────┘ └──────────────────────────────┘ |
-| └──────────────────────────┘ | ┌ RECENT ACTIVITY ────────────────────────── All activity → ┐ |
-| ▸ ARCHIVED (1)              | │ connected github "…" · 2h ago                              │ |
-| ACCOUNT                     | └────────────────────────────────────────────────────────────┘ |
-| [ Members · 3          › ] |                                                                |
-| [ Connected accounts   › ] |                                                                |
+| Welcome back, Maya        │ CURRENT PROJECT                                                  |
+| Strider ⋯                 │ Rover MK2                              [Live Bench] [Open workspace] |
+| 3 members  [Strider ▾]    │ ( Overview )  Sources   .solus   Activity                        |
+|                           │ ┌ ON THIS COMPUTER ──┐ ┌ SOURCES ─── + Add ┐ ┌ .SOLUS ───────────┐ |
+| PROJECTS · 2          [+] │ │ ~/code/rover       │ │ (SOFTWARE) fw  42 │ │ Hardware configs  │ |
+| ┌ Rover MK2           ⋯ ┐ │ │ [Open in editor]   │ │ (ELECTRICAL) sch  │ │ Project details 1 │ |
+| │ six-wheel rover        │ │ │ Show in… More ▾    │ │ +2 more           │ │ …                 │ |
+| │ connected github · 2h  │ │ └────────────────────┘ └───────────────────┘ └───────────────────┘ |
+| └────────────────────────┘ │ ┌ RECENT IN THIS PROJECT ─────────────────────── All activity → ┐ |
+| ┌ Arm                 ⋯ ┐ │ │ connected github "…"                                   2h ago  │ |
+| │ No recent activity.    │ │ └──────────────────────────────────────────────────────────────┘ |
+| └────────────────────────┘ │                                                                  |
+| ▸ ARCHIVED (1)             │                                                                  |
+|                            │                                                                  |
+| ┌ ACCOUNT ───────────────┐ │                                                                  |
+| │ Connected accounts  1 HEALTHY │                                                            |
+| │ Team & invites   3 MEMBERS │                                                               |
+| └────────────────────────┘ │                                                                  |
 ```
 
-## Layout: project list + one pane (SOLUSDEV-317 redesign, concept B)
+## Layout: sidebar + one pane (SOLUSDEV-317 redesign, concept B)
 
-Home is two columns under the full-width greeting and team strip:
+Home is a full-height sidebar beside one pane; each scrolls on its own.
 
-- **Left — the project list** (`HomeProjectList`, `data-testid="project-list"`):
-  one row per live project (`project-row-<id>`): name, description, its
-  latest activity line ("No recent activity." when none), the row ⋯ menu
-  (Edit details / Archive / Delete, unchanged role gating), a CURRENT marker
-  on the current project (`aria-current`). **Clicking a row selects it**: it
-  is the old "Switch to" — the current project moves, Home stays, nothing
-  opens. A `+` (members and up) opens the New project dialog; with no
-  projects the list says "Create one to start building the graph."; the
-  archived section is unchanged beneath. Under it, **ACCOUNT**: two rows,
-  **Members** (count) and **Connected accounts**, each swapping the right
-  pane to that view (`aria-pressed`). There is no health dot — nothing in
-  the API reports per-project health yet; empty beats invented.
-- **Right — one pane, three views** (`HomePane`):
-  - **Project** (default, and whenever a row is selected): the current
-    project's name and description, **Live Bench** (navigates to Bench) and
-    **Open workspace** (opens it, as the old card's Open did). Two tabs:
-    **Overview** — LOCAL FOLDER (`ProjectFolderCard`), SOURCES (the project's
-    sources: status dot, name, tool, entity count or error; **Manage** opens
-    the Connected accounts view), RECENT ACTIVITY (the project's own rows;
-    **All activity** opens the per-project dialog) — and **.solus**
-    (`SolusCard`). No current project → "Select a project on the left to see
-    its folder, sources and .solus."
-  - **Members**: the roster and invites (`LiveMembers`), the GitHub
+- **Sidebar** (300 px, `aside "Projects"`): the greeting; the team block
+  (`TeamStrip`: name, ⋯ menu, "personal workspace · N members", the switcher
+  with more than one team, the plan-limit line); the project list
+  (`HomeProjectList`, `data-testid="project-list"`); and, pinned at its foot,
+  the **ACCOUNT** card (`HomeAccountNav`).
+  - Each project row (`project-row-<id>`): name, description, its latest
+    activity line ("No recent activity." when none), the row ⋯ menu (Edit
+    details / Archive / Delete, unchanged role gating). The current project
+    has the accent border and `aria-current`. **Clicking a row selects it** —
+    the old "Switch to": the current project moves, Home stays, nothing
+    opens. `+` (members and up) opens New project; an empty list says "Create
+    one to start building the graph."; the archived section is beneath.
+  - There is no health dot — nothing in the API reports per-project health
+    yet; empty beats invented.
+  - The team ⋯ menu carries the account-level actions: **Invite teammate**
+    (owners and admins), **Join team**, **New team**, then Rename / Leave /
+    Delete with their existing gating.
+  - ACCOUNT rows swap the pane (`aria-pressed`), each with a status that is
+    left out until known: **Connected accounts** — "N HEALTHY", "N NEED
+    ATTENTION" (warn; any linked grant not connected-and-healthy) or "NONE
+    LINKED"; **Team & invites** — "JUST YOU", or "N MEMBERS · M PENDING".
+- **Pane** (`data-testid="home-pane"`), three views:
+  - **Project** (default, and whenever a row is selected): CURRENT PROJECT,
+    name, description, **Live Bench** (navigates to Bench) and **Open
+    workspace** (opens it). Four tabs:
+    - **Overview** — a row of three cards: ON THIS COMPUTER
+      (`ProjectFolderCard compact`: path, scan line, Open in editor, Show in
+      file manager, **More ▾** → Change folder / Unlink), SOURCES (up to 4:
+      domain chip from the tool (`accountDomains`), name, tool, entity count or
+      the source's own error; "+N more"; **+ Add** opens Connected accounts)
+      and .solus (`SolusCard`); beneath them RECENT IN THIS PROJECT (up to 5
+      rows; **All activity →** opens the Activity tab).
+    - **Sources** — the full LOCAL FOLDER card (with detected projects) and
+      every source.
+    - **.solus** — `SolusCard` on its own.
+    - **Activity** — the project's own feed (`ProjectActivityFeed`,
+      server-filtered `?project_id=`, its own `meta.total`, Load more).
+    - No current project → "Select a project on the left to see its folder,
+      sources and .solus."
+  - **Team & invites**: the roster and invites (`LiveMembers`), the GitHub
     organization card (collaborative teams only), and TEAM ACTIVITY.
   - **Connected accounts**: `ConnectedAccountsCard`, unchanged.
-- Every card below keeps its own rules; only WHERE it sits changed. Ask SOL
+- Every card keeps its own rules below; only WHERE it sits changed. Ask SOL
   from Home is deferred until SOL accepts a starting prompt.
 
 ## Scope: the ACTIVE team
@@ -232,7 +252,7 @@ Home is two columns under the full-width greeting and team strip:
 | → Code environment                                            EMPTY  |
 ```
 
-- The card is the project pane's **.solus** tab and shows the
+- The card sits in the project pane (Overview and its own **.solus** tab) and shows the
   CURRENT project's `.solus` (docs/api/solus.md): the five sections with honest
   counts ("EMPTY" when none). It re-scopes when a project row is selected. No
   project open → "Open or switch to a project to see its .solus."; offline →
@@ -287,7 +307,7 @@ Home is two columns under the full-width greeting and team strip:
   sentence with **Upgrade** inside the dialog; a join refusal says which —
   invalid or used token, expired, issued to another email, already a member.
   The invitee's OWN plan is what blocks a join (ADR-023 cross-plan rule).
-- **LOCAL FOLDER card** (the project pane's Overview tab;
+- **LOCAL FOLDER card** (the project pane: compact on Overview, in full on Sources;
   moved here from the retired Project Overview hub): the CURRENT project's working
   copy on this machine (`ProjectFolderCard`) — Select folder / Clone a repo,
   then the path (one line, clipped with "…", full path in the title), **Open in
@@ -331,7 +351,7 @@ Home is two columns under the full-width greeting and team strip:
   up**, which hands SOL a prefilled request; every install/run/test SOL then proposes arrives as
   an approval card showing the exact command. Failed runs/tests appear in Workspace › .solus ›
   Error logging automatically.
-- **MEMBERS card** (the pane's Members view): roster with roles;
+- **MEMBERS card** (the pane's Team & invites view): roster with roles;
   owners and admins change roles (admin / member / viewer — ownership is
   transferred, not picked) and remove members, never on an owner row; pending
   invites with `Revoke`; `+ Invite` in the header for managers. **Remove and
@@ -350,7 +370,7 @@ Home is two columns under the full-width greeting and team strip:
 - **Later joiners** get the team's existing projects automatically (the
   ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
   and its grid shows those projects without any per-project sharing.
-- **GITHUB ORGANIZATION card** (SOLUSDEV-216 / ADR-039). It sits in the pane's Members view under MEMBERS, and appears on COLLABORATIVE teams only. On the personal team it is absent.
+- **GITHUB ORGANIZATION card** (SOLUSDEV-216 / ADR-039). It sits in the pane's Team & invites view under MEMBERS, and appears on COLLABORATIVE teams only. On the personal team it is absent.
 
   ```
   ┌ GITHUB ORGANIZATION ─────────────────────────────┐
@@ -407,11 +427,10 @@ Home is two columns under the full-width greeting and team strip:
   (`GET /teams/{id}/activity?limit=50`) split by `project_id` — a window,
   honestly labelled. The pane's RECENT ACTIVITY shows up to 5 of the current
   project's rows (`HOME_PANE_ACTIVITY_COUNT`); team-level rows (invites,
-  members) appear only in the Members view's TEAM ACTIVITY.
-- `All activity →` (pane) opens the project's own dialog
-  (`ProjectActivityModal` over the shared `ActivityModal`, titled
-  `<project> — activity`): server-filtered `?project_id=`, `Load more` while
-  `has_next`, `N EVENTS` = the project's own `meta.total`.
+  members) appear only in the Team & invites view's TEAM ACTIVITY.
+- `All activity →` (pane) opens the Activity tab (`ProjectActivityFeed`):
+  server-filtered `?project_id=`, `Load more` while `has_next`, `N EVENTS` =
+  the project's own `meta.total`.
 - `⋯` menu (member+): `Edit details` (name + description, `ProjectEditModal`;
   the retired Overview hub's edit) · `Archive` · `Delete` (owner only,
   ADR-025, confirmed). The menu never opens the project. A failed archive raises the
