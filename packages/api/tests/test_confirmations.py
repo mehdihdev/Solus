@@ -1788,8 +1788,13 @@ async def test_approved_command_binds_progress_and_finalizes_it(
         sink.append("stdout", "first\nlast")
         return {"exit_code": 0}
 
+    async def plan(args: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"label": "command", "before": None, "after": "python run.py"}]
+
     registry = ToolRegistry()
-    registry.register(InProcessTool(DANGEROUS.model_copy(update={"name": "code.run"}), command))
+    registry.register(
+        InProcessTool(DANGEROUS.model_copy(update={"name": "code.run"}), command, preview=plan)
+    )
     async with maker() as db:
         row = await db.get(ToolConfirmation, confirmation)
         assert row is not None

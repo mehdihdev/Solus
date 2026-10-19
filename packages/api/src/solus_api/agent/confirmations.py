@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.command_gate import (
     ARGV_TOOLS,
-    COMPLETE_PREVIEW_TOOLS,
+    PLAN_PREVIEW_TOOLS,
     policy_refusal,
     record_proposed,
 )
@@ -187,34 +187,35 @@ async def _build_preview(
     rows on failure so the caller refuses to park or execute the action.
     """
     required = force_complete or getattr(tool, "requires_complete_preview", False) is True
-    allowed_paths = call_display_paths(
-        getattr(getattr(tool, "descriptor", None), "name", None), args
-    )
-    fallback = [] if required else _argument_rows(args, allowed_paths=allowed_paths)
+    name = getattr(getattr(tool, "descriptor", None), "name", None)
+    planned = name in PLAN_PREVIEW_TOOLS
+    allowed_paths = call_display_paths(name, args)
+    fallback = [] if required or planned else _argument_rows(args, allowed_paths=allowed_paths)
     builder = getattr(tool, "preview", None)
-    if builder is None:
-        return fallback
     try:
+        if builder is None:
+            if planned:
+                raise PreviewRefusal(PLAN_UNAVAILABLE_MESSAGE)
+            return fallback
         # Bounded (SEC-M3): a preview is a live network read and one call site
         # runs under a row lock — a hanging tool must not pin the connection.
         async with asyncio.timeout(_PREVIEW_TIMEOUT_SECONDS):
             rows = await builder(dict(args))
+        if _hides_command(name, rows, allowed_paths):
+            raise PreviewRefusal(HIDDEN_COMMAND_MESSAGE)
     except PreviewRefusal as error:
-        # A quota block or a refused `code.plan` (SOLUSDEV-317): the reason is
-        # Solus-composed and sanitised, and the call is refused, not parked.
+        # A quota block, a refused `code.plan` or a hidden argv (SOLUSDEV-317):
+        # the reason is Solus-composed and sanitised; the call is refused, not parked.
         if quota_failures is not None:
             quota_failures.append(error.safe_message)
         return []
     except Exception:
-        name = getattr(getattr(tool, "descriptor", None), "name", "?")
         logger.warning("preview failed for %s (complete preview required=%s)", name, required)
+        if planned and quota_failures is not None:
+            # A code.plan card never degrades to argument rows (§9 item 2).
+            quota_failures.append(PLAN_UNAVAILABLE_MESSAGE)
         return fallback
     if required and not _complete_preview(rows):
-        return []
-    name = getattr(getattr(tool, "descriptor", None), "name", None)
-    if _hides_command(name, rows, allowed_paths):
-        if quota_failures is not None:
-            quota_failures.append(HIDDEN_COMMAND_MESSAGE)
         return []
     cleaned: list[dict[str, Any]] = []
     for row in rows if isinstance(rows, list) else []:
@@ -243,9 +244,12 @@ async def _build_preview(
     return cleaned[:_MAX_PREVIEW_ROWS] if cleaned else fallback
 
 
-#: SOLUSDEV-317 §9 item 2: command-card rows that must render exactly as they run.
-_VERBATIM_ROWS: Final = frozenset(
-    {"program", "command", "cwd", "environment", "profile", "setup file"}
+#: SOLUSDEV-317 §9 item 2: on a `code.plan` card every row must render exactly as
+#: it runs, except these, which Solus composes from fixed text and validated kinds.
+_COMPOSED_ROWS: Final = frozenset({"sandbox", "risk", "plan fingerprint", "max runtime"})
+PLAN_UNAVAILABLE_MESSAGE: Final = (
+    "The command plan is unavailable, so its approval card cannot be shown. "
+    "Nothing was parked or run."
 )
 HIDDEN_COMMAND_MESSAGE: Final = (
     "Refused: the command contains secret-shaped values that cannot be shown on the "
@@ -255,22 +259,21 @@ HIDDEN_COMMAND_MESSAGE: Final = (
 
 
 def _hides_command(tool_name: object, rows: Any, allowed_paths: frozenset[str]) -> bool:
-    """No hidden argv: a command row that redaction would alter cannot be shown
-    verbatim, so the person would approve something other than what runs."""
-    if tool_name not in COMPLETE_PREVIEW_TOOLS or not isinstance(rows, list):
+    """No hidden argv: a row that redaction would alter cannot be shown verbatim,
+    so the person would approve something other than what runs. Every row is
+    verbatim unless Solus composed it, so a new argument-derived row is covered."""
+    if tool_name not in PLAN_PREVIEW_TOOLS or not isinstance(rows, list):
         return False
     return any(
         isinstance(row, dict)
-        and isinstance(row.get("after"), str)
-        and _verbatim(row.get("label"))
-        and redact_text(row["after"], allowed_paths=allowed_paths) != row["after"]
+        and row.get("label") not in _COMPOSED_ROWS
+        and any(
+            isinstance(row.get(key), str)
+            and redact_text(row[key], allowed_paths=allowed_paths) != row[key]
+            for key in ("label", "before", "after")
+        )
         for row in rows
     )
-
-
-def _verbatim(label: object) -> bool:
-    text = str(label)
-    return text in _VERBATIM_ROWS or text.startswith("command ")  # `command i/n` chunks
 
 
 def _complete_preview(rows: Any) -> bool:

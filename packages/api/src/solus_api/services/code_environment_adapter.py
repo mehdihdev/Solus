@@ -12,7 +12,7 @@ from typing import Any, Final, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent.command_gate import COMPLETE_PREVIEW_TOOLS
+from solus_api.agent.command_gate import COMPLETE_PREVIEW_TOOLS, PLAN_PREVIEW_TOOLS
 from solus_api.agent.tools.shapes import ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.services.code_env import (
@@ -28,10 +28,7 @@ logger = logging.getLogger(__name__)
 
 #: Code tools whose card is the server's own `code.plan`, guarded by the one-use
 #: plan snapshot below (SOLUSDEV-250; SOLUSDEV-317 adds the executing tools).
-PLANNED_TOOLS: Final = (
-    frozenset({"code.create_environment", "code.install", "code.run", "code.test"})
-    | COMPLETE_PREVIEW_TOOLS
-)
+PLANNED_TOOLS: Final = PLAN_PREVIEW_TOOLS
 
 
 class EnvironmentFetch(Protocol):

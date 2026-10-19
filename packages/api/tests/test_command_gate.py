@@ -628,3 +628,102 @@ def test_other_successful_tools_keep_the_bare_exit(tool: str | None) -> None:
 def test_a_silent_success_has_no_tail_clause() -> None:
     value = {"ok": True, "exit_code": 0, "stdout_tail": "  ", "stderr_tail": ""}
     assert command_outcome_text(value, tool="code.exec") == "; the command exited 0"
+
+
+@pytest.mark.parametrize(
+    ("tool", "plan", "args"),
+    [
+        (
+            "code.install",
+            _plan([".venv/bin/python", "-m", "pip", "install", "--", "password=hunter2"]),
+            {"packages": ["password=hunter2"]},
+        ),
+        (
+            "code.run",
+            _plan([".venv/bin/python", "train.py", _TOKEN]),
+            {"script": "train.py", "args": [_TOKEN]},
+        ),
+        (
+            "code.test",
+            _plan([".venv/bin/python", "-m", "pytest", f"--key={_TOKEN}"]),
+            {"args": [f"--key={_TOKEN}"]},
+        ),
+        (
+            "code.create_environment",
+            _plan(["/usr/bin/python3", "-m", "venv", f"envs/{_TOKEN}"]),
+            {"path": f"envs/{_TOKEN}"},
+        ),
+    ],
+)
+async def test_every_planned_tool_refuses_secret_shaped_rows(
+    maker: async_sessionmaker[AsyncSession],
+    tool: str,
+    plan: dict[str, Any],
+    args: dict[str, Any],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(plan)
+    registry = _registry(machine, maker, scope[0], scope[2], tool)
+
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+    assert machine.executed == []
+
+
+async def test_a_secret_shaped_extends_refuses_profile_capture(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.bridge.command_previews import CAPTURE_SCRIPT
+
+    setup = "/opt/ros/jazzy/setup.bash"
+    argv = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile", setup]
+    scope = await _scope(maker)
+    machine = _Machine(_plan(argv))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.profile_capture")
+
+    parked = await _park(
+        maker,
+        registry,
+        scope,
+        "code.profile_capture",
+        {"name": "ros", "setup_file": setup, "extends": _TOKEN},
+    )
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+
+
+async def test_an_ordinary_install_still_parks(maker: async_sessionmaker[AsyncSession]) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan([".venv/bin/python", "-m", "pip", "install", "--", "six==1.17.0"]))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.install")
+
+    parked = await _park(maker, registry, scope, "code.install", {"packages": ["six==1.17.0"]})
+
+    assert parked.confirmation_id is not None
+
+
+@pytest.mark.parametrize("tool", ["code.run", "code.install", "code.exec"])
+async def test_a_plan_tool_without_a_plan_never_parks_argument_rows(
+    maker: async_sessionmaker[AsyncSession], tool: str
+) -> None:
+    executed: list[dict[str, Any]] = []
+
+    async def run(args: dict[str, Any]) -> dict[str, Any]:
+        executed.append(args)
+        return {}
+
+    scope = await _scope(maker)
+    registry = ToolRegistry()
+    registry.register(InProcessTool(_descriptor(tool), run))  # no code.plan preview
+
+    args = {"argv": ["make"]} if tool == "code.exec" else {"script": "x.py"}
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None
+    assert "plan is unavailable" in parked.result.error.message
+    assert await _rows(maker) == [] and executed == []

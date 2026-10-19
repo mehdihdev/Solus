@@ -327,6 +327,9 @@ async def test_failed_confirmed_test_is_filed_into_error_logging(
         await session.commit()
         project_id, team_id, user_id = project.id, team.id, user.id
 
+    async def _test_plan_rows(args: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"label": "command", "before": None, "after": ".venv/bin/python -m pytest -q"}]
+
     async def failing_test(args: dict[str, Any]) -> dict[str, Any]:
         return {
             "ok": False,
@@ -349,6 +352,7 @@ async def test_failed_confirmed_test_is_filed_into_error_logging(
                 files_errors=True,
             ),
             failing_test,
+            preview=_test_plan_rows,
         )
     )
     async with maker() as session:

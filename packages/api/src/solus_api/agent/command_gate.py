@@ -26,6 +26,11 @@ ARGV_TOOLS: Final = frozenset({"code.exec", "code.process_start"})
 #: Tools whose card is the server's complete `code.plan` (§5.1): a failed plan
 #: refuses, and a card row that redaction would alter refuses too (§9 item 2).
 COMPLETE_PREVIEW_TOOLS: Final = ARGV_TOOLS | frozenset({"code.profile_capture"})
+#: Every tool whose card is read back from the server's `code.plan` (§9 item 2
+#: applies to all of them: no card row may be altered by redaction).
+PLAN_PREVIEW_TOOLS: Final = COMPLETE_PREVIEW_TOOLS | frozenset(
+    {"code.create_environment", "code.install", "code.run", "code.test"}
+)
 #: Tools a resume may follow and whose approved result is a command outcome (§5.5).
 COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
     {
