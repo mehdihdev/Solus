@@ -48,54 +48,81 @@ export function TeamSelect({ teams, team, onSwitch }: TeamSelectProps): React.JS
           style={TRIGGER}
         >
           {name}
-          <svg
-            data-chevron
-            aria-hidden="true"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="var(--mut)"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{
-              flexShrink: 0,
-              transform: open ? 'rotate(180deg)' : undefined,
-              transition: 'transform 0.12s'
-            }}
-          >
-            <path d="M6 9l6 6 6-6" />
-          </svg>
+          <Chevron open={open} />
         </button>
       </h2>
       {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={() => setOpen(false)} />
-          <div role="menu" aria-label="Teams" className="popover-in" style={MENU}>
-            {teams.map((t) => (
-              <button
-                key={t.team_id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={t.team_id === team?.team_id}
-                className="interactive"
-                onClick={() => pick(t.team_id)}
-                style={ITEM}
-              >
-                <span style={{ width: 12, color: 'var(--acc)' }} aria-hidden="true">
-                  {t.team_id === team?.team_id ? '✓' : ''}
-                </span>
-                <span style={{ flex: 1, ...NAME }}>{t.name}</span>
-                {t.is_personal && (
-                  <span style={{ fontSize: 11, color: 'var(--mut)' }}>personal</span>
-                )}
-              </button>
-            ))}
-          </div>
-        </>
+        <TeamMenu
+          teams={teams}
+          activeId={team?.team_id}
+          onPick={pick}
+          onClose={() => setOpen(false)}
+        />
       )}
     </div>
+  )
+}
+
+/** The title's chevron; it turns while the menu is open. */
+function Chevron({ open }: { open: boolean }): React.JSX.Element {
+  return (
+    <svg
+      data-chevron
+      aria-hidden="true"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="var(--mut)"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      style={{
+        flexShrink: 0,
+        transform: open ? 'rotate(180deg)' : undefined,
+        transition: 'transform 0.12s'
+      }}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
+/** Every team as a radio item, the active one checked, personal ones marked. */
+function TeamMenu({
+  teams,
+  activeId,
+  onPick,
+  onClose
+}: {
+  teams: readonly TeamSummary[]
+  activeId: string | undefined
+  onPick: (teamId: string) => void
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={onClose} />
+      <div role="menu" aria-label="Teams" className="popover-in" style={MENU}>
+        {teams.map((t) => (
+          <button
+            key={t.team_id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={t.team_id === activeId}
+            className="interactive"
+            onClick={() => onPick(t.team_id)}
+            style={ITEM}
+          >
+            <span style={{ width: 12, color: 'var(--acc)' }} aria-hidden="true">
+              {t.team_id === activeId ? '✓' : ''}
+            </span>
+            <span style={{ flex: 1, ...NAME }}>{t.name}</span>
+            {t.is_personal && <span style={{ fontSize: 11, color: 'var(--mut)' }}>personal</span>}
+          </button>
+        ))}
+      </div>
+    </>
   )
 }
 
