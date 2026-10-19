@@ -117,7 +117,7 @@ class FakeTracker:
         FakeTracker.events.append(("kill", self.leader, sig))
 
 
-def _registry(ws: Path, world: World) -> Any:
+def _registry(ws: Path, world: World, git_digest: Any = None) -> Any:
     FakeTracker.events = []
     return processes.Registry(
         ws,
@@ -128,6 +128,7 @@ def _registry(ws: Path, world: World) -> Any:
         start_token=world.start_token,
         tracker=FakeTracker,
         watch=False,
+        git_digest=git_digest or (lambda _root: "unchanged"),
     )
 
 
@@ -174,6 +175,7 @@ def test_start_records_the_process_and_its_orphan_token(ws: Path, home: Path, wo
         "started_at": result["started_at"],
         "ended_at": None,
         "sandbox": "sandbox-exec",
+        "git_metadata_changed": False,
     }
     assert "output" not in registry.status()
 
@@ -263,6 +265,7 @@ def test_stop_terms_then_kills_after_grace(ws: Path, home: Path, world: World) -
         "state": "stopped",
         "exit_code": -signal.SIGTERM,
         "reason": None,
+        "git_metadata_changed": False,
     }
     assert world.signals == [(501, signal.SIGTERM)]
     world.ignore_term = True
@@ -285,6 +288,7 @@ def test_unknown_process(ws: Path, home: Path, world: World) -> None:
         "state": None,
         "exit_code": None,
         "reason": "unknown process",
+        "git_metadata_changed": False,
     }
     answer = registry.status(process_id="nope")
     assert answer["output"] is None and answer["processes"] == []
@@ -419,3 +423,106 @@ def test_stop_and_timeout_kill_the_descendant_tree(ws: Path, home: Path, world: 
     _start(registry)
     registry.stop_all()
     assert ("kill", 503, signal.SIGKILL) in FakeTracker.events
+
+
+class Digest:
+    """An injected git-metadata digest (the Linux detection path, made deterministic)."""
+
+    def __init__(self) -> None:
+        self.value = "v0"
+        self.roots: list[Path] = []
+
+    def __call__(self, root: Path) -> str:
+        self.roots.append(root)
+        return self.value
+
+
+def test_git_metadata_change_is_reported_at_exit(ws: Path, home: Path, world: World) -> None:
+    digest = Digest()
+    registry = _registry(ws, world, digest)
+    process_id = _start(registry)["process_id"]
+    assert digest.roots == [ws]
+    digest.value = "v1"  # the process wrote .git/hooks (Linux: detection only)
+    world.children[501].returncode = 0
+    registry.sweep()
+    (entry,) = registry.status()["processes"]
+    assert entry["state"] == "exited" and entry["git_metadata_changed"] is True
+    assert registry.stop(process_id)["git_metadata_changed"] is True
+
+
+def test_git_metadata_change_is_reported_on_stop_timeout_and_stop_all(
+    ws: Path, home: Path, world: World
+) -> None:
+    digest = Digest()
+    registry = _registry(ws, world, digest)
+    stopped = _start(registry)["process_id"]
+    timed = _start(registry, runtime=60)["process_id"]
+    clean = _start(registry)["process_id"]
+    assert registry.stop(clean)["git_metadata_changed"] is False
+    shutdown = _start(registry)["process_id"]
+    digest.value = "v1"
+    result = registry.stop(stopped)
+    assert result["state"] == "stopped" and result["git_metadata_changed"] is True
+    world.now += 61
+    registry.sweep()
+    registry.stop_all()
+    states = {p["process_id"]: p for p in registry.status()["processes"]}
+    assert states[timed]["state"] == "timed_out" and states[timed]["git_metadata_changed"]
+    assert states[shutdown]["state"] == "stopped" and states[shutdown]["git_metadata_changed"]
+    assert states[clean]["git_metadata_changed"] is False
+
+
+def test_stop_of_a_naturally_exited_process_reports_its_real_state(
+    ws: Path, home: Path, world: World
+) -> None:
+    registry = _registry(ws, world)
+    process_id = _start(registry)["process_id"]
+    world.children[501].returncode = 0
+    result = registry.stop(process_id)
+    assert result["state"] == "exited" and result["exit_code"] == 0
+    assert world.signals == []
+
+
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS sandbox-exec profile")
+def test_real_sandboxed_process_cannot_write_git_hooks(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    execute = overlay_module("execute")
+    plan_module = overlay_module("plan")
+    ws = (tmp_path / "ws").resolve()
+    (ws / ".git" / "hooks").mkdir(parents=True)
+    (ws / ".git" / "config").write_text("[core]\n")
+    plan = plan_module.plan_action(
+        ws,
+        "process_start",
+        {"argv": ["touch", ".git/hooks/pre-commit"]},
+        which=execute.pinned_which,
+    )
+    assert plan.ok, plan.reason
+    prepared = execute.prepare(ws, plan)
+    assert not isinstance(prepared, str), prepared
+    registry = processes.Registry(ws)
+    try:
+        with prepared.handing_over():
+            started = registry.start(
+                prepared.argv,
+                display_argv=plan.argv,
+                cwd=prepared.cwd,
+                cwd_label=".",
+                env=prepared.env,
+                name=None,
+                max_runtime_seconds=60,
+                sandbox=plan.sandbox,
+            )
+        assert started["ok"] is True
+        for _ in range(200):
+            (entry,) = registry.status()["processes"]
+            if entry["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert entry["state"] == "exited" and entry["exit_code"] != 0
+        assert not (ws / ".git" / "hooks" / "pre-commit").exists()
+        assert entry["git_metadata_changed"] is False
+    finally:
+        registry.stop_all()

@@ -347,7 +347,7 @@ def delete(root: Path, name: object) -> dict[str, Any]:
     return {"ok": True, "name": name, "reason": None}
 
 
-def _capture_refusal(name: str, reason: str) -> dict[str, Any]:
+def capture_refusal(name: str, reason: str) -> dict[str, Any]:
     return {
         "ok": False,
         "name": name,
@@ -381,17 +381,17 @@ def finish_capture(
     """Turn the capture's `env -0` output into a stored profile; names only in the answer."""
     error = _outcome_error(outcome)
     if error is not None:
-        return _capture_refusal(name, error)
+        return capture_refusal(name, error)
     captured = parse_env0(outcome.stdout)
     if captured is None:
-        return _capture_refusal(name, "unparseable environment output")
+        return capture_refusal(name, "unparseable environment output")
     kept, dropped = filter_capture(captured, base)
     if len(kept) > MAX_VARIABLES:
-        return _capture_refusal(name, f"the profile has more than {MAX_VARIABLES} variables")
+        return capture_refusal(name, f"the profile has more than {MAX_VARIABLES} variables")
     try:
         save(root, name, setup_file, extends, kept)
     except OSError as exc:
-        return _capture_refusal(name, f"profile could not be stored: {type(exc).__name__}")
+        return capture_refusal(name, f"profile could not be stored: {type(exc).__name__}")
     path = kept.get("PATH", "")
     return {
         "ok": True,

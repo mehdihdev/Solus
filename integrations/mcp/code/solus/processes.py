@@ -8,8 +8,10 @@ the group is stopped (`timed_out`). Stop = SIGTERM to the process group, SIGKILL
 after 5 s. Server shutdown stops everything. Each start records
 `{pid, pgid, start token}` under `~/.solus/code-processes/<workspace key>.json`; on
 the next server start, entries still alive with the SAME start token are killed
-(a recycled pid has a different token). Nothing is ever restarted. Time, spawning,
-signals and tokens are injectable for tests.
+(a recycled pid has a different token). Nothing is ever restarted. The git-metadata
+digest is taken at start and compared whenever the process ends (exit, stop, timeout,
+shutdown); entries and the stop result carry `git_metadata_changed` (§9.3). Time,
+spawning, signals, tokens and the digest are injectable for tests.
 """
 
 import json
@@ -27,6 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
+from .git_guard import git_metadata_digest
 from .process_os import (
     Child,
     Spawn,
@@ -93,6 +96,8 @@ class Entry:
     readers: list[threading.Thread] = field(default_factory=list)
     output: _RingOutput | None = None
     tree: Any = None
+    git_before: str | None = None
+    git_metadata_changed: bool = False
 
     def summary(self) -> dict[str, Any]:
         return {
@@ -106,6 +111,7 @@ class Entry:
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "sandbox": self.sandbox,
+            "git_metadata_changed": self.git_metadata_changed,
         }
 
 
@@ -123,8 +129,10 @@ class Registry:
         start_token: Callable[[int], str | None] = start_token,
         tracker: Callable[[int], Any] = TreeTracker,
         watch: bool = True,
+        git_digest: Callable[[Path], str] = git_metadata_digest,
     ) -> None:
         self._tracker = tracker
+        self._git_digest = git_digest
         self._root = root
         self._spawn = spawn
         self._clock = clock
@@ -203,7 +211,7 @@ class Registry:
         self.sweep()
         with self._lock:
             if sum(e.state == RUNNING for e in self._entries.values()) >= MAX_RUNNING:
-                return self._start_refusal(f"at most {MAX_RUNNING} processes may run at once")
+                return self.start_refusal(f"at most {MAX_RUNNING} processes may run at once")
             self._make_room()
             now = self._clock()
             entry = Entry(
@@ -215,13 +223,14 @@ class Registry:
                 started_at=_iso(),
                 started=now,
                 deadline=now + max_runtime_seconds,
+                git_before=self._git_digest(self._root),
             )
             self._entries[entry.process_id] = entry
             try:
                 child = self._spawn(argv, cwd, env)
             except (OSError, ValueError) as exc:
                 entry.state, entry.ended_at, entry.ended = "failed_to_start", _iso(), now
-                return {**self._start_refusal(f"could not start: {type(exc).__name__}")}
+                return self.start_refusal(f"could not start: {type(exc).__name__}")
             entry.child, entry.pid = child, child.pid
             entry.tree = self._tracker(child.pid)
             self._tokens[entry.process_id] = {
@@ -244,7 +253,8 @@ class Registry:
         }
 
     @staticmethod
-    def _start_refusal(reason: str) -> dict[str, Any]:
+    def start_refusal(reason: str) -> dict[str, Any]:
+        """The `process_start` refusal shape."""
         return {
             "ok": False,
             "process_id": None,
@@ -296,7 +306,11 @@ class Registry:
     def _finish(self, entry: Entry, state: str) -> None:
         for reader in entry.readers:
             reader.join(timeout=1.0)
+        changed = self._git_digest(self._root) != entry.git_before
+        if changed:
+            logger.warning("process %s changed .git/hooks or .git/config", entry.process_id)
         with self._lock:
+            entry.git_metadata_changed = changed
             if entry.output is not None:
                 entry.output.finish()
             child = entry.child
@@ -348,6 +362,8 @@ class Registry:
             self._finish(entry, state)
 
     def stop(self, process_id: str) -> dict[str, Any]:
+        # A process that already exited on its own reports that, not "stopped".
+        self.sweep()
         with self._lock:
             entry = self._entries.get(process_id)
         if entry is None:
@@ -357,6 +373,7 @@ class Registry:
                 "state": None,
                 "exit_code": None,
                 "reason": "unknown process",
+                "git_metadata_changed": False,
             }
         if entry.state == RUNNING:
             self._halt([entry], "stopped")
@@ -366,6 +383,7 @@ class Registry:
             "state": entry.state,
             "exit_code": entry.exit_code,
             "reason": None,
+            "git_metadata_changed": entry.git_metadata_changed,
         }
 
     def stop_all(self) -> None:

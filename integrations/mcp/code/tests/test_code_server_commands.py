@@ -156,8 +156,10 @@ async def test_process_lifecycle_over_the_wire(ws: Path) -> None:
     assert output["chunks"][0]["text"] == "ready\n"
     assert status["processes"][0]["state"] == "running"
     assert status["processes"][0]["name"] == "srv"
+    assert status["processes"][0]["git_metadata_changed"] is False
     _content, stopped = await built.call_tool("process_stop", {"process_id": process_id})
     assert stopped["ok"] is True and stopped["state"] == "stopped"
+    assert stopped["git_metadata_changed"] is False
 
 
 async def test_process_start_refusals(ws: Path) -> None:
@@ -171,6 +173,7 @@ async def test_process_start_refusals(ws: Path) -> None:
     assert status == {"processes": [], "output": None}
     _content, stop = await server.build_server().call_tool("process_stop", {"process_id": "nope"})
     assert stop["ok"] is False and stop["reason"] == "unknown process"
+    assert stop["git_metadata_changed"] is False
 
 
 @pytest.mark.real_sandbox
@@ -221,6 +224,7 @@ def test_new_tools_never_raise(ws: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     assert server.tool_exec(["ls"])["ok"] is False
     assert server.tool_process_start(["ls"])["ok"] is False
     assert server.tool_process_stop("x")["ok"] is False
+    assert server.tool_process_stop("x")["git_metadata_changed"] is False
     assert server.tool_process_status() == {"processes": [], "output": None}
     assert server.tool_profile_capture("ros", "x.bash")["ok"] is False
     assert server.tool_profile_list() == {"profiles": []}
@@ -322,3 +326,11 @@ def test_real_server_process_exits_stop_their_children(tmp_path: Path) -> None:
         time.sleep(0.05)
     else:
         pytest.fail("the server left its process running after stdin EOF")
+
+
+def test_server_uses_only_public_refusal_helpers() -> None:
+    """Phase 4 LOW: no reach into another module's private helpers."""
+    source = Path(server.__file__).read_text()
+    assert "._start_refusal" not in source and "._capture_refusal" not in source
+    assert server.Registry.start_refusal("x")["reason"] == "x"
+    assert server.profiles.capture_refusal("ros", "x")["reason"] == "x"

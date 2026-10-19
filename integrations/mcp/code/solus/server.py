@@ -236,10 +236,6 @@ def tool_exec(
     return _perform("exec", {**args, "timeout_seconds": timeout_seconds})
 
 
-def _process_refusal(reason: str) -> dict[str, Any]:
-    return Registry._start_refusal(reason)
-
-
 def tool_process_start(
     argv: list[str],
     cwd: str = ".",
@@ -259,7 +255,7 @@ def tool_process_start(
         plan = plan_action(root, "process_start", args, which=pinned_which)
         prepared = prepare(root, plan) if plan.ok else plan.reason or "refused"
         if isinstance(prepared, str):
-            return _process_refusal(prepared)
+            return Registry.start_refusal(prepared)
         with prepared.handing_over():
             return _registry().start(
                 prepared.argv,
@@ -272,7 +268,7 @@ def tool_process_start(
                 sandbox=plan.sandbox,
             )
 
-    return _guarded("process_start", lambda: _process_refusal("process_start failed"), body)
+    return _guarded("process_start", lambda: Registry.start_refusal("process_start failed"), body)
 
 
 def tool_process_stop(process_id: str) -> dict[str, Any]:
@@ -283,6 +279,7 @@ def tool_process_stop(process_id: str) -> dict[str, Any]:
         "state": None,
         "exit_code": None,
         "reason": "process_stop failed",
+        "git_metadata_changed": False,
     }
     return _guarded(
         "process_stop",
@@ -304,10 +301,6 @@ def tool_process_status(process_id: str | None = None, cursor: int = 0) -> dict[
     )
 
 
-def _capture_refusal(name: str, reason: str) -> dict[str, Any]:
-    return profiles._capture_refusal(name, reason)
-
-
 def tool_profile_capture(name: str, setup_file: str, extends: str | None = None) -> dict[str, Any]:
     """Source a setup file (ROS setup.bash, …) with a fixed Solus script inside the
     sandbox and store the filtered environment privately on this machine. Answers
@@ -318,18 +311,20 @@ def tool_profile_capture(name: str, setup_file: str, extends: str | None = None)
         args = {"name": name, "setup_file": setup_file, "extends": extends}
         plan = plan_action(root, "profile_capture", args, which=pinned_which)
         if not plan.ok:
-            return _capture_refusal(name, plan.reason or "refused")
+            return profiles.capture_refusal(name, plan.reason or "refused")
         runner = functools.partial(default_runner, tail_bytes=profiles.MAX_ENV_BYTES + 1)
         ran = run_sandboxed(root, plan, runner=runner)
         if isinstance(ran, str):
-            return _capture_refusal(name, ran)
+            return profiles.capture_refusal(name, ran)
         extended = plan.profile.name if plan.profile else None
         setup = plan.setup_file or setup_file
         return profiles.finish_capture(
             root, plan.capture_name or name, setup, extended, ran.outcome, ran.env
         )
 
-    return _guarded("profile_capture", lambda: _capture_refusal(name, "capture failed"), body)
+    return _guarded(
+        "profile_capture", lambda: profiles.capture_refusal(name, "capture failed"), body
+    )
 
 
 def tool_profile_list() -> dict[str, Any]:
