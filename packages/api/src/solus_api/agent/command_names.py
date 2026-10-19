@@ -28,8 +28,11 @@ _SUFFIX_SHAPED: Final = r"(?:[^a-z].*)?"
 
 
 def is_workspace_relative(program: str) -> bool:
-    """`./env_setup.sh`, `tools/flash`: a relative path naming a workspace file."""
-    return "/" in program and not program.startswith(("/", "~"))
+    """`./env_setup.sh`, `tools/flash`: a relative path naming a workspace file. A path
+    with a `..` segment can climb out of the workspace, so it is not one (fail closed)."""
+    if "/" not in program or program.startswith(("/", "~")):
+        return False
+    return ".." not in program.split("/")
 
 
 def prefix_match(base: str, names: Iterable[str]) -> str | None:

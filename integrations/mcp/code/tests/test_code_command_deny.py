@@ -509,3 +509,12 @@ def test_review_round_denials(argv: list[str]) -> None:
 )
 def test_review_round_allowed(argv: list[str]) -> None:
     assert deny.denied_reason(argv) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["../../usr/local/bin/bash-5.2"], ["tools/../../bin/zsh-5.9"], ["./../sudo-rs", "ls"]],
+)
+def test_a_path_that_climbs_out_is_not_workspace_relative(argv: list[str]) -> None:
+    assert not deny.workspace_relative(argv[0])
+    assert deny.classify_denial(argv) is not None

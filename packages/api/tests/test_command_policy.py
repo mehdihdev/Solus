@@ -429,3 +429,11 @@ def test_cloud_and_server_classifiers_agree_on_the_shared_corpus() -> None:
         if classify(argv).denied is not _server_denied(classify_denial(argv))
     ]
     assert disagreements == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["../../usr/local/bin/bash-5.2"], ["tools/../../bin/zsh-5.9"], ["./../sudo-rs", "ls"]],
+)
+def test_a_path_that_climbs_out_is_not_workspace_relative(argv: list[str]) -> None:
+    assert classify(argv).denied

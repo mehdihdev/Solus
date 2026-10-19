@@ -295,8 +295,11 @@ def program_name(path: str, *, exact: bool = False) -> str:
 
 
 def workspace_relative(argv0: str) -> bool:
-    """argv[0] names a workspace program (`./x`, `tools/x`), judged by syntax alone."""
-    return "/" in argv0 and not os.path.isabs(argv0)
+    """argv[0] names a workspace program (`./x`, `tools/x`), judged by syntax alone. A
+    `..` segment can climb out of the workspace, so it is not one (fail closed)."""
+    if "/" not in argv0 or os.path.isabs(argv0) or argv0.startswith("~"):
+        return False
+    return ".." not in argv0.split("/")
 
 
 def _remote(value: str) -> bool:
