@@ -66,15 +66,20 @@ def command_outcome_text(value: dict[str, Any], *, tool: str | None = None) -> s
     alone is not command evidence (`local.open_in_tool` may return one)."""
     if tool == "code.process_start":
         return _process_started(value)
+    long_tail = tool in LONG_TAIL_TOOLS
     clause = _command_clause(
-        value, _LONG_TAIL_CAP if tool in LONG_TAIL_TOOLS else _OUTCOME_TAIL_CAP
+        value, _LONG_TAIL_CAP if long_tail else _OUTCOME_TAIL_CAP, success_tail=long_tail
     )
     if clause is not None and value.get("git_metadata_changed") is True:
         return clause + _GIT_WARNING
     return clause
 
 
-def _command_clause(value: dict[str, Any], cap: int) -> str | None:
+def _command_clause(
+    value: dict[str, Any], cap: int, *, success_tail: bool = False
+) -> str | None:
+    """`success_tail` (§9 item 7): exec/run/test print the answer, so exit 0
+    carries its output tail too."""
     if value.get("uncertain") is True:
         return "; " + UNCERTAIN_COMMAND_OUTCOME
     if value.get("timed_out") is True:
@@ -99,7 +104,8 @@ def _command_clause(value: dict[str, Any], cap: int) -> str | None:
     if exit_code == 0:
         if value.get("ok") is True and value.get("started") is False:
             return "; verified existing result; no command was started"
-        return "; the command exited 0"
+        tail = output_tail(value, cap) if success_tail else ""
+        return "; the command exited 0" + (f" — output tail: {tail}" if tail else "")
     tail = output_tail(value, cap)
     return f"; the command exited {exit_code}" + (f" — output tail: {tail}" if tail else "")
 

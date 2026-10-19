@@ -605,3 +605,26 @@ async def test_a_parked_command_event_never_carries_an_odd_program_name(
     assert parked.confirmation_id is not None
     events = await _events(maker, "sol.command.proposed")
     assert [event["program"] for event in events] == ["other"]
+
+
+# ------------------------------------------------- outcome on success (§9 item 7)
+
+
+@pytest.mark.parametrize("tool", ["code.exec", "code.run", "code.test"])
+def test_a_successful_command_reports_its_output_tail(tool: str) -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "a" * 4000 + "\nresult: 42"}
+    text = command_outcome_text(value, tool=tool)
+    assert text is not None and text.startswith("; the command exited 0 — output tail: ")
+    assert text.endswith("result: 42")
+    assert len(text.split("output tail: ", 1)[1]) == 3000
+
+
+@pytest.mark.parametrize("tool", ["code.install", "code.create_environment", None])
+def test_other_successful_tools_keep_the_bare_exit(tool: str | None) -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "Successfully installed six"}
+    assert command_outcome_text(value, tool=tool) == "; the command exited 0"
+
+
+def test_a_silent_success_has_no_tail_clause() -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "  ", "stderr_tail": ""}
+    assert command_outcome_text(value, tool="code.exec") == "; the command exited 0"
