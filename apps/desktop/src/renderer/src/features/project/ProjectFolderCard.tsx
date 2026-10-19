@@ -38,6 +38,8 @@ export interface ProjectFolderCardProps {
   compact?: boolean
   /** A label printed inside the card, above its content. */
   heading?: string
+  /** No card chrome (border, fill): the content sits inside another list. */
+  bare?: boolean
 }
 
 export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Element {
@@ -48,7 +50,8 @@ function ProjectFolderCardContent({
   projectId,
   suggestedRepoUrl,
   compact = false,
-  heading
+  heading,
+  bare = false
 }: ProjectFolderCardProps): React.JSX.Element {
   const {
     bridge,
@@ -64,9 +67,10 @@ function ProjectFolderCardContent({
     selectFolder,
     runClone
   } = useProjectFolderSelection(projectId)
+  const inset = bare ? BARE_INSET : '16px'
 
   return (
-    <Card pad={0}>
+    <FolderShell bare={bare}>
       {heading && (
         <div style={{ padding: '14px 16px 0' }}>
           <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
@@ -75,7 +79,7 @@ function ProjectFolderCardContent({
         </div>
       )}
       {!bridge ? (
-        <div style={{ padding: '16px', fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+        <div style={{ padding: inset, fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
           Linking a local folder is available in the Solus desktop app.
         </div>
       ) : link ? (
@@ -83,6 +87,7 @@ function ProjectFolderCardContent({
           link={link}
           folder={folder}
           compact={compact}
+          inset={bare ? BARE_INSET : '14px 16px'}
           selecting={selecting}
           onChangeFolder={() => void selectFolder()}
           onOpenFolder={() => void bridge.reveal(link.path)}
@@ -96,7 +101,7 @@ function ProjectFolderCardContent({
           }}
         />
       ) : (
-        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ padding: inset, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
             Choose a project folder, then confirm “Select this folder” in the picker to link and
             scan it.
@@ -128,14 +133,29 @@ function ProjectFolderCardContent({
           onClone={runClone}
         />
       )}
-    </Card>
+    </FolderShell>
   )
+}
+
+/** Bare mode sits flush with the list it is in: no side padding of its own. */
+const BARE_INSET = '10px 0 6px'
+
+/** The card's frame: a Card, or a plain block inside another list. */
+function FolderShell({
+  bare,
+  children
+}: {
+  bare: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  return bare ? <div>{children}</div> : <Card pad={0}>{children}</Card>
 }
 
 function LinkedFolder({
   link,
   folder,
   compact,
+  inset,
   selecting,
   onChangeFolder,
   onOpenFolder,
@@ -144,6 +164,8 @@ function LinkedFolder({
   link: { path: string; repoUrl?: string }
   folder: LocalFolderController
   compact: boolean
+  /** The block's padding: card-style, or flush when bare. */
+  inset: string
   selecting: boolean
   onChangeFolder: () => void
   onOpenFolder: () => void
@@ -156,7 +178,7 @@ function LinkedFolder({
     <div
       data-testid="linked-folder"
       style={{
-        padding: '14px 16px',
+        padding: inset,
         display: 'flex',
         flexDirection: 'column',
         gap: 10,

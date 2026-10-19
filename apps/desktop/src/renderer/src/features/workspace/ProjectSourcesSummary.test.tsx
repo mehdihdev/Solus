@@ -12,6 +12,8 @@ import * as catalogHook from '../onboarding/useIntegrationCatalog'
 import * as wizardHook from '../onboarding/useConnectWizard'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import type { Connection, Source } from '../../lib/api/resources'
+import * as desktopBridge from '../../lib/desktopBridge'
+import { useProjectFolderStore } from '../project/projectFolderStore'
 
 vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('./useAccountConnections', async (importOriginal) => {
@@ -20,6 +22,10 @@ vi.mock('./useAccountConnections', async (importOriginal) => {
 })
 vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: vi.fn() }))
 vi.mock('../onboarding/useConnectWizard', () => ({ useConnectWizard: vi.fn() }))
+vi.mock('../../lib/desktopBridge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/desktopBridge')>()
+  return { ...actual, getDesktopFolderBridge: vi.fn(() => null) }
+})
 
 const GITHUB: CatalogEntry = {
   id: 'github',
@@ -137,6 +143,10 @@ describe('ProjectSourcesSummary', () => {
       whiteSpace: 'normal'
     })
     expect(within(gh).getByText('42 ENTITIES')).toBeInTheDocument()
+    // The step is a text link, not a full button.
+    expect(
+      within(gh).getByRole('button', { name: 'Pick repositories for GitHub' })
+    ).toHaveTextContent('Pick repositories ›')
     await userEvent.click(within(gh).getByRole('button', { name: 'Pick repositories for GitHub' }))
     expect(open).toHaveBeenCalledWith(GITHUB)
   })
@@ -162,11 +172,23 @@ describe('ProjectSourcesSummary', () => {
     expect(screen.queryByTestId('source-tool-kicad')).toBeNull()
   })
 
-  it('lists a local folder by machine with no next step', () => {
+  it('lists a local folder by machine, with no step while it is not linked here', () => {
     setup({ sources: [source({ id: 's3', type: 'local', name: 'mehdi-mbp', entity_count: 95 })] })
     const local = row('local')
     expect(within(local).getByText('95 ENTITIES')).toBeInTheDocument()
     expect(within(local).queryByRole('button')).toBeNull()
+  })
+
+  it('offers Open folder on the local folder when this machine has it linked', async () => {
+    const reveal = vi.fn().mockResolvedValue({ ok: true })
+    vi.mocked(desktopBridge.getDesktopFolderBridge).mockReturnValue({
+      reveal
+    } as unknown as ReturnType<typeof desktopBridge.getDesktopFolderBridge>)
+    useProjectFolderStore.setState({ folders: { p1: { path: '/Users/m/elegoo' } } })
+    setup({ sources: [source({ id: 's3', type: 'local', name: 'mehdi-mbp', entity_count: 2 })] })
+    await userEvent.click(within(row('local')).getByRole('button', { name: 'Open folder' }))
+    expect(reveal).toHaveBeenCalledWith('/Users/m/elegoo')
+    useProjectFolderStore.setState({ folders: {} })
   })
 
   it("shows a source's own error message, as text", () => {

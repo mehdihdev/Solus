@@ -451,7 +451,7 @@ function homeProjectNavigationTests(): void {
 }
 
 function homeTeamProjectContextTests(): void {
-  it("carries the current project's folder, sources, .solus and recent activity in Overview", () => {
+  it("carries the current project's setup list and recent rail in Overview", () => {
     mockHome()
     useWorkspaceStore.setState({ project: ROVER })
     render(<HomeScreen onOpenProject={vi.fn()} />)
@@ -460,8 +460,11 @@ function homeTeamProjectContextTests(): void {
       'aria-selected',
       'true'
     )
+    expect(within(p).getByText('PROJECT SETUP')).toBeInTheDocument()
     expect(within(p).getByText('ON THIS COMPUTER')).toBeInTheDocument()
-    expect(within(p).getByTestId('solus-card')).toHaveAttribute('data-project', 'p1')
+    // .solus is summarised here; the full card lives on its own tab.
+    expect(within(p).getByRole('button', { name: 'Add instructions' })).toBeInTheDocument()
+    expect(within(p).getByText('RECENT')).toBeInTheDocument()
     // Not under the desktop bridge here, so the card degrades to its honest note.
     expect(within(p).getByText(/available in the Solus desktop app/)).toBeInTheDocument()
     expect(within(p).getByTestId('project-sources')).toBeInTheDocument()

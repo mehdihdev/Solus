@@ -20,6 +20,13 @@ vi.mock('./SolusCard', () => ({
     <div data-testid="solus-card" data-project={projectId ?? ''} />
   )
 }))
+vi.mock('./SolusSummaryRow', () => ({
+  SolusSummaryRow: ({ onAddInstructions }: { onAddInstructions: () => void }) => (
+    <button type="button" data-testid="solus-summary" onClick={onAddInstructions}>
+      Add instructions
+    </button>
+  )
+}))
 vi.mock('../project/ProjectFolderCard', () => ({
   ProjectFolderCard: ({ projectId, compact }: { projectId: string; compact?: boolean }) => (
     <div data-testid="folder-card" data-project={projectId} data-compact={String(!!compact)} />
@@ -82,15 +89,24 @@ describe('HomeProjectPane', () => {
     expect(tab('Overview')).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('Overview: compact folder, a few sources, .solus and recent activity', async () => {
+  it('Overview: one PROJECT SETUP list beside a RECENT rail', async () => {
     const props = setup()
-    expect(screen.getByTestId('folder-card')).toHaveAttribute('data-compact', 'true')
-    expect(screen.getByTestId('sources')).toHaveAttribute('data-limit', '4')
-    expect(screen.getByTestId('solus-card')).toHaveAttribute('data-project', 'p1')
-    expect(screen.getByText('RECENT IN THIS PROJECT')).toBeInTheDocument()
+    const list = screen.getByTestId('project-setup')
+    expect(within(list).getByTestId('folder-card')).toHaveAttribute('data-compact', 'true')
+    expect(within(list).getByTestId('sources')).toHaveAttribute('data-limit', 'all')
+    expect(within(list).getByTestId('solus-summary')).toBeInTheDocument()
+    expect(screen.queryByTestId('solus-card')).toBeNull()
+    expect(screen.getByText('RECENT')).toBeInTheDocument()
     expect(screen.getByText(/created the project/)).toBeInTheDocument()
     await userEvent.click(screen.getByTestId('sources'))
     expect(props.onManageSources).toHaveBeenCalled()
+  })
+
+  it('Add instructions opens the .solus tab', async () => {
+    setup()
+    await userEvent.click(screen.getByRole('button', { name: 'Add instructions' }))
+    expect(tab('.solus')).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('solus-card')).toBeInTheDocument()
   })
 
   it('says so when the project has no recent activity', () => {

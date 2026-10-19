@@ -70,12 +70,16 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
   - **Project** (default, and whenever a row is selected): CURRENT PROJECT,
     name, description, **Live Bench** (navigates to Bench) and **Open
     workspace** (opens it). Four tabs:
-    - **Overview** — a row of three cards: ON THIS COMPUTER
-      (`ProjectFolderCard compact`: path, scan line, Open in editor, Show in
-      file manager, **More ▾** → Change folder / Unlink), SOURCES (see
-      below; up to 4 tools, then "+N more")
-      and .solus (`SolusCard`); beneath them RECENT IN THIS PROJECT (up to 5
-      rows; **All activity →** opens the Activity tab).
+    - **Overview** — concept 1: one **PROJECT SETUP** card beside a
+      **RECENT** rail. The card lists, in one rhythm: ON THIS COMPUTER (the
+      folder, `ProjectFolderCard compact bare`: path, scan line, Open in
+      editor, Show in file manager, More ▾ → Change folder / Unlink); SOURCES
+      (the SOURCES block below, every tool); and .SOLUS — WHAT SOL KNOWS
+      (`SolusSummaryRow`: five segments, one per section, filled when it holds
+      something; "N of 5 sections filled · <Section> (count) · …", or "Nothing
+      yet"; **Add instructions** opens the .solus tab). The rail shows up to 5
+      of the project's rows with a dot per kind (connected/created ok,
+      disconnected warn, sync accent) and **All activity →** (Activity tab).
     - **Sources** — the full LOCAL FOLDER card (with detected projects) and
       the SOURCES block with every tool.
     - **The SOURCES block** (`ProjectSourcesSummary`): one row per tool the
@@ -85,10 +89,12 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
       (`config.repo`, e.g. "strider/rover-firmware"), anything else by name
       (a local folder by machine) — with its entity count, status word or its
       own error message; "Nothing in this project yet" for a linked tool with
-      nothing here. Each tool row offers its **project-level next step**
+      nothing here; the entity total sits in its own right-hand column. Each
+      tool row offers its **project-level next step** as a text link
       (`nextStep`, shared with Connected accounts: Pick documents, Pick
       repositories, Enter details, Add to project, Choose file) through the
-      SAME connect wizard; a local folder has no step. Tools neither linked nor
+      SAME connect wizard; the local folder offers **Open folder** (reveals
+      THIS machine's linked folder; nothing when it isn't linked here). Tools neither linked nor
       used are left out. **Add additional sources** opens the Connected
       accounts view.
     - **.solus** — `SolusCard` on its own.

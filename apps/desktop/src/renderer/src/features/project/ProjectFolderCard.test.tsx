@@ -585,4 +585,12 @@ describe('ProjectFolderCard — compact', () => {
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('menu')).toBeNull()
   })
+
+  it('drops its own card chrome when bare, to sit inside another list', () => {
+    linkedCard()
+    const { container } = render(<ProjectFolderCard projectId="p1" compact bare />)
+    expect((container.firstElementChild as HTMLElement).style.border).toBe('')
+    expect((container.firstElementChild as HTMLElement).style.background).toBe('')
+    expect(screen.getByTestId('linked-folder')).toBeInTheDocument()
+  })
 })

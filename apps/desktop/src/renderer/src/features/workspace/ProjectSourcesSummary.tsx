@@ -7,11 +7,12 @@
 // tools not linked yet. Honest states; never an invented row.
 import type { Source, SourceStatus } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
-import { Button } from '../../components/ui/Button'
+import { getDesktopFolderBridge } from '../../lib/desktopBridge'
 import { Mono } from '../../components/ui/Mono'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import type { WizardScope } from '../onboarding/connectSteps'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
+import { useProjectFolderStore } from '../project/projectFolderStore'
 import { useProjectSources } from '../project/useProjectSources'
 import { CardWizardModal, ProviderMark } from './ConnectedAccountsCard'
 import { nextStep, useCardWizard } from './accountSteps'
@@ -95,10 +96,15 @@ export function ProjectSourcesSummary({
         SOURCES
       </Mono>
       <div style={{ marginTop: 4 }}>
-        <Rows status={sources.status} groups={shown} onStep={open} />
+        <Rows status={sources.status} groups={shown} projectId={project.id} onStep={open} />
         {groups.length > shown.length && <Note>+{groups.length - shown.length} more</Note>}
       </div>
-      <button type="button" className="interactive" onClick={onAdd} style={LINK_BUTTON}>
+      <button
+        type="button"
+        className="interactive"
+        onClick={onAdd}
+        style={{ ...LINK_BUTTON, marginTop: 10 }}
+      >
         Add additional sources
       </button>
       <CardWizardModal wizard={wizard} scope={scope} />
@@ -109,10 +115,12 @@ export function ProjectSourcesSummary({
 function Rows({
   status,
   groups,
+  projectId,
   onStep
 }: {
   status: 'loading' | 'ready' | 'offline'
   groups: readonly ToolGroup[]
+  projectId: string
   onStep: (entry: CatalogEntry, scope: WizardScope) => void
 }): React.JSX.Element {
   if (status === 'loading') return <Note>Loading sources…</Note>
@@ -127,68 +135,123 @@ function Rows({
   return (
     <>
       {groups.map((g) => (
-        <ToolRow key={g.key} group={g} onStep={onStep} />
+        <ToolRow key={g.key} group={g} projectId={projectId} onStep={onStep} />
       ))}
     </>
   )
 }
 
+/** One tool: mark | name and its items | entities | the next step as a link. */
 function ToolRow({
   group,
+  projectId,
   onStep
 }: {
   group: ToolGroup
+  projectId: string
   onStep: (entry: CatalogEntry, scope: WizardScope) => void
 }): React.JSX.Element {
   const { entry, held } = group
-  const step = entry ? nextStep(entry, group.linked) : null
   const mark = entry ?? { id: LOCAL_SOURCE_TYPE, mark: LOCAL_FOLDER_MARK }
   return (
     <div data-testid={`source-tool-${group.key}`} style={ROW}>
       <ProviderMark entry={mark} />
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry?.name ?? 'Local folder'}</div>
         {held.length === 0 ? (
-          <div style={{ fontSize: 11, color: 'var(--mut)' }}>Nothing in this project yet</div>
+          <div style={{ fontSize: 12, color: 'var(--mut)' }}>Nothing in this project yet</div>
         ) : (
           held.map((s) => <HeldItem key={s.id} source={s} />)
         )}
       </div>
-      {entry && step && (
-        <Button
-          kind="soft"
-          size="sm"
-          aria-label={`${step.action} for ${entry.name}`}
-          onClick={() => onStep(entry, step.scope)}
-        >
-          {step.action}
-        </Button>
+      <Count held={held} />
+      {entry ? (
+        <StepLink entry={entry} linked={group.linked} onStep={onStep} />
+      ) : (
+        <OpenFolderLink projectId={projectId} />
       )}
     </div>
   )
 }
 
+function StepLink({
+  entry,
+  linked,
+  onStep
+}: {
+  entry: CatalogEntry
+  linked: boolean
+  onStep: (entry: CatalogEntry, scope: WizardScope) => void
+}): React.JSX.Element {
+  const step = nextStep(entry, linked)
+  return (
+    <button
+      type="button"
+      className="interactive"
+      aria-label={`${step.action} for ${entry.name}`}
+      onClick={() => onStep(entry, step.scope)}
+      style={LINK_BUTTON}
+    >
+      {step.action} ›
+    </button>
+  )
+}
+
+/** Reveals THIS machine's linked folder; nothing when it isn't linked here. */
+function OpenFolderLink({ projectId }: { projectId: string }): React.JSX.Element {
+  const path = useProjectFolderStore((s) => s.folders[projectId]?.path ?? null)
+  const bridge = getDesktopFolderBridge()
+  if (!path || !bridge) return <span />
+  return (
+    <button
+      type="button"
+      className="interactive"
+      aria-label="Open folder"
+      onClick={() => void bridge.reveal(path)}
+      style={LINK_BUTTON}
+    >
+      Open folder ›
+    </button>
+  )
+}
+
+/** The tool's entities in this project, or a status word when none report a count. */
+function Count({ held }: { held: readonly Source[] }): React.JSX.Element {
+  if (held.length === 0) return <span />
+  const counted = held.filter((s) => s.entity_count !== undefined)
+  const first = held[0]
+  const text =
+    counted.length > 0
+      ? `${counted.reduce((n, s) => n + (s.entity_count ?? 0), 0).toLocaleString('en-US')} ENTITIES`
+      : first.status.toUpperCase()
+  const tone = held.some((s) => s.status === 'error') ? 'var(--err)' : STATUS_TONE[first.status]
+  return (
+    <Mono size={9.5} color={tone} style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
+      {text}
+    </Mono>
+  )
+}
+
+/** One item the tool holds here (a GitHub repo, a document): its own line in
+ *  full, and the source's own error beneath it when its sync failed. */
 function HeldItem({ source }: { source: Source }): React.JSX.Element {
   const error = source.status === 'error' ? source.last_error : null
-  // The item (a GitHub repo, a document) gets its own line in full — beside
-  // the count and the step button it clipped to a few letters.
   return (
-    <div style={{ marginTop: 3, minWidth: 0 }}>
+    <div style={{ minWidth: 0 }}>
       <div
-        style={{ fontSize: 12, color: 'var(--tx)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+        style={{
+          fontSize: 12,
+          color: 'var(--mut)',
+          whiteSpace: 'normal',
+          overflowWrap: 'anywhere'
+        }}
       >
         {sourceLabel(source)}
       </div>
-      {error ? (
+      {error && (
         <div style={{ fontSize: 11, color: 'var(--err)', overflowWrap: 'anywhere' }}>
           {error.message}
         </div>
-      ) : (
-        <Mono size={9} color={STATUS_TONE[source.status]} style={{ whiteSpace: 'nowrap' }}>
-          {source.entity_count !== undefined
-            ? `${source.entity_count.toLocaleString('en-US')} ENTITIES`
-            : source.status.toUpperCase()}
-        </Mono>
       )}
     </div>
   )
@@ -203,7 +266,8 @@ function Note({ children }: { children: React.ReactNode }): React.JSX.Element {
 }
 
 const LINK_BUTTON: React.CSSProperties = {
-  marginTop: 10,
+  justifySelf: 'end',
+  whiteSpace: 'nowrap',
   background: 'transparent',
   border: 'none',
   color: 'var(--acc)',
@@ -214,9 +278,10 @@ const LINK_BUTTON: React.CSSProperties = {
 }
 
 const ROW: React.CSSProperties = {
-  display: 'flex',
+  display: 'grid',
+  gridTemplateColumns: '32px minmax(0, 1fr) 96px 132px',
+  gap: 12,
   alignItems: 'center',
-  gap: 10,
   padding: '10px 0',
   borderBottom: '1px solid var(--bd)'
 }

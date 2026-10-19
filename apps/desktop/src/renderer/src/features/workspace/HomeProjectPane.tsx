@@ -11,7 +11,10 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
 import { ProjectFolderCard } from '../project/ProjectFolderCard'
-import { ProjectActivityFeed, ActivityLine } from './ProjectActivityFeed'
+import { ProjectActivityFeed } from './ProjectActivityFeed'
+import { ProjectSetupList } from './ProjectSetupList'
+import { relativeTime } from '../../lib/relativeTime'
+import { activityText } from '../team/activityText'
 import { HOME_PANE_ACTIVITY_COUNT } from './projectActivity'
 import { ProjectSourcesSummary } from './ProjectSourcesSummary'
 import { RepoLine } from './RepoLine'
@@ -26,9 +29,6 @@ const TABS: ReadonlyArray<{ id: PaneTab; label: string }> = [
   { id: 'solus', label: '.solus' },
   { id: 'activity', label: 'Activity' }
 ]
-
-/** Sources the Overview card lists before "+N more". */
-const OVERVIEW_SOURCE_COUNT = 4
 
 export interface HomeProjectPaneProps {
   project: WorkspaceProject
@@ -78,7 +78,12 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
         ))}
       </div>
       <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)} tabIndex={0}>
-        <TabBody tab={tab} pane={props} onShowActivity={() => setTab('activity')} />
+        <TabBody
+          tab={tab}
+          pane={props}
+          onShowActivity={() => setTab('activity')}
+          onShowSolus={() => setTab('solus')}
+        />
       </div>
     </div>
   )
@@ -87,14 +92,17 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
 function TabBody({
   tab,
   pane,
-  onShowActivity
+  onShowActivity,
+  onShowSolus
 }: {
   tab: PaneTab
   pane: HomeProjectPaneProps
   onShowActivity: () => void
+  onShowSolus: () => void
 }): React.JSX.Element {
   const { project, onManageSources } = pane
-  if (tab === 'overview') return <Overview {...pane} onShowActivity={onShowActivity} />
+  if (tab === 'overview')
+    return <Overview {...pane} onShowActivity={onShowActivity} onShowSolus={onShowSolus} />
   if (tab === 'solus') return <SolusCard projectId={project.id} projectName={project.name} />
   if (tab === 'activity')
     return project.teamId ? (
@@ -187,38 +195,39 @@ function TabButton({
   )
 }
 
+/** Concept 1: one PROJECT SETUP list beside a RECENT activity rail. */
 function Overview({
   project,
   activity,
   onManageSources,
-  onShowActivity
-}: HomeProjectPaneProps & { onShowActivity: () => void }): React.JSX.Element {
+  onShowActivity,
+  onShowSolus
+}: HomeProjectPaneProps & {
+  onShowActivity: () => void
+  onShowSolus: () => void
+}): React.JSX.Element {
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
-      <div style={OVERVIEW_GRID}>
-        <ProjectFolderCard
-          key={project.id}
-          projectId={project.id}
-          compact
-          heading="ON THIS COMPUTER"
-        />
-        <Card pad={16} style={{ minWidth: 0 }}>
-          <ProjectSourcesSummary
-            project={project}
-            onAdd={onManageSources}
-            limit={OVERVIEW_SOURCE_COUNT}
-          />
-        </Card>
-        <div style={{ minWidth: 0 }}>
-          <SolusCard projectId={project.id} projectName={project.name} />
-        </div>
-      </div>
-      <RecentActivity activity={activity} onShowAll={onShowActivity} />
+    <div style={OVERVIEW_GRID}>
+      <ProjectSetupList
+        project={project}
+        onAddSources={onManageSources}
+        onAddInstructions={onShowSolus}
+      />
+      <RecentRail activity={activity} onShowAll={onShowActivity} />
     </div>
   )
 }
 
-function RecentActivity({
+/** The dot beside an activity row: connected/created ok, disconnected warn,
+ *  a sync the accent, anything else muted. */
+function activityTone(type: string): string {
+  if (type.includes('disconnect') || type.includes('delete')) return 'var(--warn)'
+  if (type.includes('connect') || type.includes('create')) return 'var(--ok)'
+  if (type.includes('sync')) return 'var(--acc)'
+  return 'var(--mut)'
+}
+
+function RecentRail({
   activity,
   onShowAll
 }: {
@@ -227,10 +236,10 @@ function RecentActivity({
 }): React.JSX.Element {
   const preview = activity.slice(0, HOME_PANE_ACTIVITY_COUNT)
   return (
-    <Card pad={16}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
-        <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
-          RECENT IN THIS PROJECT
+    <Card pad={16} style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
+        <Mono size={10} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+          RECENT
         </Mono>
         <div style={{ flex: 1 }} />
         <button type="button" className="interactive" onClick={onShowAll} style={LINK_BUTTON}>
@@ -242,7 +251,17 @@ function RecentActivity({
           No recent activity.
         </div>
       ) : (
-        preview.map((a) => <ActivityLine key={a.id} row={a} />)
+        preview.map((a) => (
+          <div key={a.id} style={RAIL_ROW}>
+            <span aria-hidden="true" style={{ ...RAIL_DOT, background: activityTone(a.type) }} />
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{activityText(a)}</div>
+              <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 2 }}>
+                {relativeTime(a.created_at)}
+              </div>
+            </div>
+          </div>
+        ))
       )}
     </Card>
   )
@@ -250,10 +269,19 @@ function RecentActivity({
 
 const OVERVIEW_GRID: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-  gap: 16,
+  gridTemplateColumns: 'minmax(0, 2fr) minmax(240px, 1fr)',
+  gap: 20,
   alignItems: 'start'
 }
+
+const RAIL_ROW: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '10px minmax(0, 1fr)',
+  gap: 10,
+  padding: '8px 0'
+}
+
+const RAIL_DOT: React.CSSProperties = { width: 7, height: 7, marginTop: 5, borderRadius: '50%' }
 
 const LINK_BUTTON: React.CSSProperties = {
   display: 'inline-flex',
