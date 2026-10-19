@@ -345,6 +345,20 @@ def _account_label(account: Source | AccountConnection) -> str | None:
     return account.account_login
 
 
+def _local_remote(source: Source) -> dict[str, str] | None:
+    """SOLUSDEV-317: a local folder's git origin as the sync normalised it
+    (`owner/name` + host kind) so Home can mark it as a clone of the project's
+    GitHub/GitLab repo. Only these two cursor values leave the server — never
+    the raw remote URL, the digest or the detected list."""
+    if source.type is not SourceType.LOCAL:
+        return None
+    cursor = source.cursor or {}
+    repo, host = cursor.get("remote"), cursor.get("host")
+    if not isinstance(repo, str) or not repo or not isinstance(host, str) or not host:
+        return None
+    return {"repo": repo, "host": host}
+
+
 def serialize_source(
     source: Source,
     *,
@@ -381,6 +395,9 @@ def serialize_source(
     }
     if entity_count is not None:
         data["entity_count"] = entity_count
+    remote = _local_remote(source)
+    if remote is not None:
+        data["remote"] = remote
     if quota is not None:
         # SOLUSDEV-167 acceptance #5: the degraded state, visible BEFORE the wall.
         #
