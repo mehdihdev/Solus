@@ -531,7 +531,6 @@ def test_a_path_that_climbs_out_is_not_workspace_relative(argv: list[str]) -> No
         ["bash", "x.bash"],
         ["/bin/bash", "scripts/build.sh", "-c", "anything"],  # args after the script are its own
         ["/bin/sh", "x.sh"],
-        ["BASH", "x.sh"],
     ],
 )
 def test_bash_and_sh_may_run_a_workspace_script(argv: list[str]) -> None:
@@ -584,3 +583,10 @@ def test_a_script_shell_must_resolve_to_bash_or_sh() -> None:
     assert deny.denied_reason(script, resolved=("/bin/bash", "/opt/bash-5.2")) is not None
     # A renamed shell is never a script shell: argv[0] itself must say bash or sh.
     assert deny.denied_reason(["innocent", "x.sh"], resolved=("/b/innocent", "/bin/bash"))
+
+
+@pytest.mark.parametrize("argv", [["BASH", "scripts/build.sh"], ["/bin/Sh", "x.sh"]])
+def test_script_shell_names_are_exact_lowercase(argv: list[str]) -> None:
+    # Parity with the cloud: only the exact names `bash`/`sh` take the §10.2 shape.
+    assert not deny.shell_script(argv)
+    assert deny.classify_denial(argv) is not None

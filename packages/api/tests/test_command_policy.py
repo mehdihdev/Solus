@@ -501,7 +501,6 @@ def test_the_server_denies_the_other_shell_forms_too(argv: list[str]) -> None:
     assert _server_denied(_server_classifier()(argv))
 
 
-@pytest.mark.xfail(strict=False, reason="server shell-script rule lands at integration")
 @pytest.mark.parametrize("argv", _SHELL_SCRIPT_ALLOWED, ids=lambda argv: " ".join(argv))
 def test_the_server_allows_the_same_shell_scripts(argv: list[str]) -> None:
     assert not _server_denied(_server_classifier()(argv))

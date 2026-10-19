@@ -517,7 +517,7 @@ def shell_script(argv: Sequence[str]) -> bool:
     return (
         len(argv) >= 2
         and not workspace_relative(argv[0])
-        and os.path.basename(argv[0]).casefold() in SCRIPT_SHELLS
+        and os.path.basename(argv[0]) in SCRIPT_SHELLS
         and script_path(argv[1])
     )
 
