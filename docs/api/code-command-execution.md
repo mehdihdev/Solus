@@ -506,3 +506,23 @@ Every other shell form stays denied, as do other shells (zsh, fish, …). The co
   collapsed beyond 12 lines, and the Copy button copies the full retained output.
 - "Output display limit reached" appears only when the output really was truncated (the
   route's `truncated` flag or the client's own caps), never on completion alone.
+
+### 10.4 What counts as project code (security review, 2026-10-19)
+
+Auto-run must never execute workspace code without a card, so both of the following are
+judged as running project code:
+
+- **Cloud risk.** `project_scripts` is added for an interpreter (any `INLINE_CODE` name) given a
+  non-option positional argument or `-m <module>`, and for project runners: `pytest`, `tox`,
+  `nox`, `npm`, `npx`, `pnpm`, `yarn`, `bun`, `deno`, `cargo`, `go`, `make`, `ninja`, `cmake`
+  (build or source dir), `colcon`, `catkin`, `ros2 run|launch`, `gradle`/`gradlew`, `mvn`,
+  `rake`, `bundle exec`, `poetry|uv|pipenv|hatch run`, `platformio|pio run|test`.
+  `--version`/`--help`-only invocations stay no-risk.
+- **Server scope.** `program_scope: "workspace"` for shell scripts, for interpreters given a
+  script or module, for project runners, and whenever the resolved program path (before or
+  after symlinks) or a workspace venv's bin dir holds the program. Right before spawn, the
+  server re-resolves the program's realpath and scope, and refuses if either changed since
+  planning.
+
+Live output (§5.4): the server packs complete lines into each progress frame, up to the
+2048-char frame limit, so normal bursts are not dropped. `truncated` means a real cap was hit.
