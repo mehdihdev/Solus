@@ -164,7 +164,7 @@ Governing spec: `docs/api/code-command-execution.md`. Applies identically to the
 - **Command card.** For `code.exec`, `code.process_start`, `code.run`, `code.test`,
   `code.install`, `code.create_environment` and `code.profile_capture`, the compact card's
   header shows the program basename and one badge per value of the `risk` row (`network`,
-  `install`, `destructive`, `hardware`, `remote`, `project_scripts`), plus a `sandboxed` badge
+  `install`, `destructive`, `hardware`, `remote`, `runs_shell`, `project_scripts`), plus a `sandboxed` badge
   read from the `sandbox` row. The badges are presentation only. The renderer does not
   classify anything; the verbatim rows (program, command, cwd, environment, profile,
   sandbox, risk, fingerprint) are unchanged in the expandable preview.

@@ -210,8 +210,22 @@ Writable set (everything else is read-only; reads, exec and network are not rest
   `.local/share/pnpm`, `.local/share/uv`, `.cargo/registry`, `.cargo/git`, `.platformio`,
   `.arduino15`, `.gradle`, `.colcon`. Adding a cache is a SECURITY_REVIEW re-review trigger.
 
-Denied even inside the workspace (macOS rule; Linux detects, see below):
-`<workspace>/.git/hooks/**`, `<workspace>/.git/config`, and `~/.solus/**` everywhere.
+Denied even inside the workspace (macOS rule; Linux detects, see below), for the workspace
+gitdir (or the gitdir a `.git` file points to, when it resolves inside the workspace): the
+`.git` entry itself (no rename/replace), `config*`, `hooks/**`, `info/**`, `commondir`,
+`modules/*/config*`, `modules/**/hooks/**`, `worktrees/*/config*`. Objects, refs, index, HEAD
+and logs stay writable so ordinary `git` commands work. `~/.solus/**` is denied everywhere.
+
+macOS IPC hardening: the profile denies `process-exec` of `/bin/launchctl`,
+`/usr/bin/osascript`, `/usr/bin/osacompile`, `/usr/bin/open`, `/usr/bin/automator` and
+`mach-lookup` of `com.apple.coreservices.appleevents`. Linux: with Landlock ABI ≥ 6 the
+ruleset also scopes abstract unix sockets and signals.
+
+The plan answer's `sandbox` object is `{kind, writable, limitations}`. `kind` is
+`sandbox-exec` or `landlock-abi<N>`. `limitations` lists the known gaps for that kind, for
+example `truncate not confined` (Landlock ABI < 3), `file metadata changes not confined`, or
+`unix-socket/signal scoping unavailable` (ABI < 6). The card shows them. Landlock ABI ≥ 1 is
+accepted, so Jetson-class 5.15 kernels work, with their limitations shown.
 
 **macOS:** `["/usr/bin/sandbox-exec", "-p", PROFILE, "-D", "WORKSPACE=…", "-D", "TMP=…",
 "-D", "HOME=…", program, *args]`. `PROFILE` is a Solus constant
@@ -223,8 +237,9 @@ program, *args]`. The helper is Solus-authored, has no dependencies, sets
 `PR_SET_NO_NEW_PRIVS`, creates a Landlock ruleset handling the filesystem write rights of the
 best available ABI (`WRITE_FILE, REMOVE_DIR, REMOVE_FILE, MAKE_*`, `REFER` ≥ ABI 2, `TRUNCATE`
 ≥ ABI 3), adds `PATH_BENEATH` rules for the writable set, calls `landlock_restrict_self`, then
-`os.execv`. Landlock grants only, so the `.git/hooks`/`.git/config` denial is enforced by
-detection: the server hashes both before and after every sandboxed command; a change sets
+`os.execv`. Landlock only grants, so the protected-gitdir denial is enforced by detection: the server
+hashes the full contents and modes of every protected path before and after every sandboxed
+command. If a count or size cap is hit, the result counts as changed (fail closed); a change sets
 `git_metadata_changed: true` in the result, the cloud shows it in the outcome, and the change is
 reported (never silently kept or reverted). macOS reports the same flag (it should stay false).
 
@@ -242,14 +257,27 @@ of `argv[0]`, with a trailing version suffix stripped for interpreters (`python3
 
 - Shells: `sh bash zsh fish dash ksh csh tcsh pwsh`.
 - Command wrappers: `env xargs nohup setsid nice timeout time watch script expect
-sandbox-exec launchctl open osascript`.
-- Privilege elevation: `sudo su doas pkexec`.
+  sandbox-exec launchctl open osascript busybox stdbuf chroot unshare nsenter flock ionice
+  taskset caffeinate arch chrt`.
+- Privilege elevation: `sudo su doas pkexec runuser`.
 - Inline code: `python -c`/`-<flags>c`, `node -e/--eval/-p/--print`, `ruby -e`, `perl -e/-E`,
   `php -r`, `lua -e`, `deno eval`, `bun -e/--eval`, `Rscript -e`.
-- Git config injection: `git -c …`, `git --config-env …`.
+- Git config injection: `-c`, `-c<value>`, `--config-env`, `--exec-path` anywhere before the
+  subcommand, and any global option that is not on the known-safe list (fail closed).
+- Interpreter option parsing fails closed: an inline-code flag anywhere among the leading
+  options (including combined short flags) denies, and so does an unknown leading option.
+  Also denied: node `--import/--loader/--experimental-loader/--require/-r` with `data:` or
+  `http(s):` values, the same specifiers for deno, `deno eval|repl`, `bun -p/--print`, and
+  `php -B/-R/-E/-F`.
+
+Program names are normalised case-insensitively. Version and build suffixes, `-dbg` and a
+trailing `w` are stripped, and `nodejs`→`node`, `pypy*`→`python`, `luajit`→`lua`. The server
+checks both the `argv[0]` basename and the resolved realpath basename.
 
 **Risks** (badges on the card; never a denial): `network`, `install`, `destructive`,
-`hardware`, `remote`, `project_scripts` (runs code defined by the project: `make`, `npm run`,
+`hardware`, `remote`, `runs_shell` (allowed programs that can run shell text: git config
+writes to `alias.*`/`core.*`/hooks, `git rebase -x`, `git bisect run`, `git submodule
+foreach`, `find -exec/-execdir/-ok`, `awk`, `sed` with `e`), `project_scripts` (runs code defined by the project: `make`, `npm run`,
 `pnpm run`, `yarn run`, `colcon build`, `cmake --build`, workspace-relative executables).
 The full table lives in the module and its tests.
 
@@ -271,8 +299,7 @@ the call instead of parking a card with argument rows.
 
 `code.exec` / `code.process_start` (in order): `program` (resolved absolute path), `command`
 (the argv as a JSON array, chunked `command i/n` at 400 chars), `cwd`, `environment`,
-`profile` (`name · digest[:12]` or `none`), `sandbox` (`sandbox-exec — writes limited to the
-workspace, temp and tool caches`), `risk` (comma-separated risks or `none flagged`),
+`profile` (`name · digest[:12]` or `none`), `sandbox` (`<kind> — writes limited to the workspace, temp and tool caches`, plus `; limits: …` when `limitations` is non-empty), `risk` (comma-separated risks or `none flagged`),
 `max runtime` (process only), `plan fingerprint`. Fingerprint = sha256 of canonical JSON
 `{argv, cwd, environment, profile_digest, sandbox_kind}`, four 16-hex groups.
 `code.profile_capture`: `setup file`, `extends`, `command` (the fixed bash argv), `sandbox`,
