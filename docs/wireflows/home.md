@@ -10,12 +10,13 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 
 ```
 | Welcome back, Maya        │ CURRENT PROJECT                                                  |
-| Strider ⋯                 │ Rover MK2                              [Live Bench] [Open workspace] |
-| 3 members  [Strider ▾]    │ ( Overview )  Sources   .solus   Activity                        |
-|                           │ ┌ ON THIS COMPUTER ──┐ ┌ SOURCES ─── + Add ┐ ┌ .SOLUS ───────────┐ |
-| PROJECTS · 2          [+] │ │ ~/code/rover       │ │ (SOFTWARE) fw  42 │ │ Hardware configs  │ |
-| ┌ Rover MK2           ⋯ ┐ │ │ [Open in editor]   │ │ (ELECTRICAL) sch  │ │ Project details 1 │ |
-| │ six-wheel rover        │ │ │ Show in… More ▾    │ │ +2 more           │ │ …                 │ |
+| Strider ▾              ⋯ │ Rover MK2                              [Live Bench] [Open workspace] |
+| 3 members                 │ ( Overview )  Sources   .solus   Activity                        |
+|                           │ ┌ ON THIS COMPUTER ──┐ ┌ SOURCES ───────────────┐ ┌ .SOLUS ──────┐ |
+| PROJECTS · 2          [+] │ │ ~/code/rover       │ │ [Gh] GitHub [Pick repos]│ │ Hardware cfg │ |
+| ┌ Rover MK2           ⋯ ┐ │ │ [Open in editor]   │ │      strider/rover-fw 42│ │ Project det. │ |
+| │ six-wheel rover        │ │ │ Show in… More ▾    │ │ [On] Onshape [Pick docs]│ │ …            │ |
+|                           │ │                    │ │ Add additional sources  │ │              │ |
 | │ connected github · 2h  │ │ └────────────────────┘ └───────────────────┘ └───────────────────┘ |
 | └────────────────────────┘ │ ┌ RECENT IN THIS PROJECT ─────────────────────── All activity → ┐ |
 | ┌ Arm                 ⋯ ┐ │ │ connected github "…"                                   2h ago  │ |
@@ -47,6 +48,11 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
     one to start building the graph."; the archived section is beneath.
   - There is no health dot — nothing in the API reports per-project health
     yet; empty beats invented.
+  - **The team name is the switcher** (`TeamSelect`): with more than one team
+    it is a button ("<name> ▾", accessible name "<name>, switch team") whose
+    menu lists every team as `menuitemradio`, the active one checked and
+    personal ones marked; picking another switches the active team. With one
+    team it is plain text. There is no separate select.
   - The team ⋯ menu carries the account-level actions: **Invite teammate**
     (owners and admins), **Join team**, **New team**, then Rename / Leave /
     Delete with their existing gating.
@@ -60,13 +66,25 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
     workspace** (opens it). Four tabs:
     - **Overview** — a row of three cards: ON THIS COMPUTER
       (`ProjectFolderCard compact`: path, scan line, Open in editor, Show in
-      file manager, **More ▾** → Change folder / Unlink), SOURCES (up to 4:
-      domain chip from the tool (`accountDomains`), name, tool, entity count or
-      the source's own error; "+N more"; **+ Add** opens Connected accounts)
+      file manager, **More ▾** → Change folder / Unlink), SOURCES (see
+      below; up to 4 tools, then "+N more")
       and .solus (`SolusCard`); beneath them RECENT IN THIS PROJECT (up to 5
       rows; **All activity →** opens the Activity tab).
     - **Sources** — the full LOCAL FOLDER card (with detected projects) and
-      every source.
+      the SOURCES block with every tool.
+    - **The SOURCES block** (`ProjectSourcesSummary`): one row per tool the
+      project holds something from, or whose account is already linked
+      (holding tools first): the tool's logo (`ProviderMark`) and name; under
+      it each of THIS project's sources — a git source by its repo
+      (`config.repo`, e.g. "strider/rover-firmware"), anything else by name
+      (a local folder by machine) — with its entity count, status word or its
+      own error message; "Nothing in this project yet" for a linked tool with
+      nothing here. Each tool row offers its **project-level next step**
+      (`nextStep`, shared with Connected accounts: Pick documents, Pick
+      repositories, Enter details, Add to project, Choose file) through the
+      SAME connect wizard; a local folder has no step. Tools neither linked nor
+      used are left out. **Add additional sources** opens the Connected
+      accounts view.
     - **.solus** — `SolusCard` on its own.
     - **Activity** — the project's own feed (`ProjectActivityFeed`,
       server-filtered `?project_id=`, its own `meta.total`, Load more).

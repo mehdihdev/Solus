@@ -552,3 +552,37 @@ function projectScanAvailabilityTests(): void {
     expect(rootEditor()).toBeDisabled()
   })
 }
+
+// Home's Overview (SOLUSDEV-317) shows the card compact: a heading, the path,
+// Open in editor and Show in file manager up front, Change folder and Unlink
+// behind More, and no detected-project list (the Sources tab keeps it).
+describe('ProjectFolderCard — compact', () => {
+  it('heads the card and keeps the primary actions up front', async () => {
+    linkedCard()
+    reveal.mockResolvedValue({ ok: true })
+    render(<ProjectFolderCard projectId="p1" compact heading="ON THIS COMPUTER" />)
+    expect(screen.getByText('ON THIS COMPUTER')).toBeInTheDocument()
+    await waitFor(() => expect(rootEditor()).toBeEnabled())
+    expect(screen.queryByRole('button', { name: 'Change folder' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /show in file manager/i }))
+    expect(reveal).toHaveBeenCalledWith('/home/u/arm')
+    expect(screen.queryByRole('list', { name: 'Detected projects' })).toBeNull()
+  })
+
+  it('puts Change folder and Unlink behind More', async () => {
+    linkedCard()
+    render(<ProjectFolderCard projectId="p1" compact />)
+    await userEvent.click(screen.getByRole('button', { name: 'More folder actions' }))
+    expect(screen.getByRole('menuitem', { name: 'Change folder' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Unlink' }))
+    expect(useProjectFolderStore.getState().folders['p1']).toBeUndefined()
+  })
+
+  it('closes More on Escape', async () => {
+    linkedCard()
+    render(<ProjectFolderCard projectId="p1" compact />)
+    await userEvent.click(screen.getByRole('button', { name: 'More folder actions' }))
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+})

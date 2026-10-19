@@ -25,8 +25,7 @@ import type { WizardScope } from '../onboarding/connectSteps'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import { integrationLogo } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
-import { plural } from '../onboarding/selectionConfigureStep'
-import { useConnectWizard } from '../onboarding/useConnectWizard'
+import type { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
 import { toolStatusText, platformUnavailableReason } from '../project/localconnections/presentation'
 import { useProjectSources } from '../project/useProjectSources'
@@ -41,6 +40,7 @@ import {
   emptyDomainText,
   type AccountDomain
 } from './accountDomains'
+import { nextStep, useCardWizard } from './accountSteps'
 import { SimulationPanel } from './SimulationPanel'
 import { IsaacConnectionPanel } from './IsaacConnectionPanel'
 import type { MainScreen } from './shellStore'
@@ -121,28 +121,6 @@ export function ToolRowHead({
       </Button>
     </div>
   )
-}
-
-interface NextStep {
-  action: string
-  scope: WizardScope
-  needsProject: boolean
-}
-
-/** What the tool's row offers next — derived from the connector's declared
- *  shape and whether an account is already linked, never from its id. */
-function nextStep(entry: CatalogEntry, linked: boolean): NextStep {
-  if (entry.mode === 'export-file')
-    return { action: 'Choose file', scope: 'project', needsProject: true }
-  if (entry.mode === 'local-bridge')
-    return { action: 'Connect', scope: 'project', needsProject: false }
-  if (!linked) return { action: 'Connect', scope: 'account', needsProject: false }
-  const action = entry.selection
-    ? `Pick ${plural(entry.selection.label)}`
-    : entry.configFields.length > 0
-      ? 'Enter details'
-      : 'Add to project'
-  return { action, scope: 'project', needsProject: true }
 }
 
 function statusLine(
@@ -350,36 +328,6 @@ export interface ConnectedAccountsCardProps {
   onNavigate?: (screen: MainScreen) => void
 }
 
-/** The card's one wizard, in whichever scope the clicked step needs, plus the
- *  refresh both scopes share once a connect settles. */
-function useCardWizard(
-  currentProject: WorkspaceProject | null,
-  accounts: ReturnType<typeof useAccountConnections>,
-  sources: ReturnType<typeof useProjectSources>
-): {
-  wizard: ReturnType<typeof useConnectWizard>
-  scope: WizardScope
-  open: (entry: CatalogEntry, scope: WizardScope) => void
-} {
-  // One wizard, two scopes: the account sign-in, or a project-bound step that
-  // reuses the linked account (the rail then skips the sign-in).
-  const [scope, setScope] = useState<WizardScope>('account')
-  const wizard = useConnectWizard({
-    projectId: currentProject?.id ?? null,
-    scope,
-    linkedConnections: accounts.connections,
-    onConnected: () => {
-      void accounts.refresh()
-      void sources.actions.refresh()
-    }
-  })
-  const open = (entry: CatalogEntry, nextScope: WizardScope): void => {
-    setScope(nextScope)
-    wizard.open(entry)
-  }
-  return { wizard, scope, open }
-}
-
 /** Every tool the registry knows for a domain, account tools first — a missing
  *  row would read as "unsupported". */
 function providersFor(catalog: readonly CatalogEntry[], domain: AccountDomain): CatalogEntry[] {
@@ -457,7 +405,6 @@ export function ConnectedAccountsCard({
   const accounts = useAccountConnections()
   const sources = useProjectSources()
   const bridge = useBridgeStatus(currentProject?.id ?? null)
-  const states = useOnboardingStore((s) => s.connections)
   const [domain, setDomain] = useState<AccountDomain>(ACCOUNT_DOMAINS[0])
   const { wizard, scope, open } = useCardWizard(currentProject, accounts, sources)
   if (accounts.status === 'offline' || catalog.length === 0) return null
@@ -490,23 +437,34 @@ export function ConnectedAccountsCard({
           />
         </div>
       </Card>
-      {wizard.active && (
-        <ConnectWizardModal
-          entry={wizard.active}
-          scope={scope}
-          state={states[wizard.active.id]}
-          linkedAccount={
-            wizard.linkedAccount ? { login: wizard.linkedAccount.account_login } : null
-          }
-          onBegin={() => void wizard.begin()}
-          onPickFiles={(files) => void wizard.pickFiles(files)}
-          onSelect={wizard.select}
-          onRefreshSelection={wizard.refreshSelection}
-          onSubmitConfig={wizard.submitConfig}
-          onChooseAccess={wizard.chooseAccess}
-          onClose={wizard.close}
-        />
-      )}
+      <CardWizardModal wizard={wizard} scope={scope} />
     </div>
+  )
+}
+
+/** The connect wizard dialog for whichever tool `useCardWizard` opened. */
+export function CardWizardModal({
+  wizard,
+  scope
+}: {
+  wizard: ReturnType<typeof useConnectWizard>
+  scope: WizardScope
+}): React.JSX.Element | null {
+  const states = useOnboardingStore((s) => s.connections)
+  if (!wizard.active) return null
+  return (
+    <ConnectWizardModal
+      entry={wizard.active}
+      scope={scope}
+      state={states[wizard.active.id]}
+      linkedAccount={wizard.linkedAccount ? { login: wizard.linkedAccount.account_login } : null}
+      onBegin={() => void wizard.begin()}
+      onPickFiles={(files) => void wizard.pickFiles(files)}
+      onSelect={wizard.select}
+      onRefreshSelection={wizard.refreshSelection}
+      onSubmitConfig={wizard.submitConfig}
+      onChooseAccess={wizard.chooseAccess}
+      onClose={wizard.close}
+    />
   )
 }

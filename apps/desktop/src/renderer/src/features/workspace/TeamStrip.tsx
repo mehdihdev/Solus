@@ -1,13 +1,13 @@
-// The team strip at the top of Home (SOLUSDEV-244 / HOME H5): the active team,
-// always visible; the switcher only with more than one team; the account-level
-// actions (Join, New team, Invite for managers); a ⋯ menu with Rename (admin+),
+// The team block atop Home's sidebar (SOLUSDEV-244 / HOME H5; stacked for the
+// SOLUSDEV-317 sidebar): the active team, always visible; the switcher only
+// with more than one team; one ⋯ menu carrying the account-level actions
+// (Invite teammate for managers, Join team, New team) and Rename (admin+),
 // Leave, and Delete (owner-only, never on the personal team); and where I stand
 // against my plan's collaborative-team limit — stated honestly, with the
 // upgrade path, never as a silent failure (ADR-023; the personal team never
 // counts, ADR-025).
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
-import { Icons } from '../../components/ui/icons.constants'
 import type { TeamRole, TeamSummary } from '../../lib/api/resources'
 import type { TeamLimitPosition } from '../../lib/api/planLimit'
 import { MANAGER_ROLES } from '../team/MembersPanel'
@@ -42,23 +42,22 @@ export function teamLimitText(limit: TeamLimitPosition | null): string | null {
 export const AT_LIMIT_MESSAGE =
   "You're at your collaborative-team limit. Leave a team or upgrade your plan."
 
-function TeamMenu({
-  canRename,
-  canLeave,
-  canDelete,
-  onRename,
-  onLeave,
-  onDelete
-}: {
+interface TeamMenuProps {
+  canInvite: boolean
   canRename: boolean
   canLeave: boolean
   canDelete: boolean
+  onInvite: () => void
+  onJoin: () => void
+  onNewTeam: () => void
   onRename: () => void
   onLeave: () => void
   onDelete: () => void
-}): React.JSX.Element | null {
+}
+
+function TeamMenu(props: TeamMenuProps): React.JSX.Element {
+  const { canInvite, canRename, canLeave, canDelete } = props
   const [open, setOpen] = useState(false)
-  if (!canRename && !canLeave && !canDelete) return null
   const pick = (action: () => void): void => {
     setOpen(false)
     action()
@@ -87,10 +86,16 @@ function TeamMenu({
               overflow: 'hidden'
             }}
           >
-            {canRename && <MenuItem onClick={() => pick(onRename)}>Rename team</MenuItem>}
-            {canLeave && <MenuItem onClick={() => pick(onLeave)}>Leave team</MenuItem>}
+            {canInvite && <MenuItem onClick={() => pick(props.onInvite)}>Invite teammate</MenuItem>}
+            <MenuItem onClick={() => pick(props.onJoin)}>Join team</MenuItem>
+            <MenuItem onClick={() => pick(props.onNewTeam)}>New team</MenuItem>
+            {(canRename || canLeave || canDelete) && (
+              <div role="separator" style={{ height: 1, background: 'var(--bd)' }} />
+            )}
+            {canRename && <MenuItem onClick={() => pick(props.onRename)}>Rename team</MenuItem>}
+            {canLeave && <MenuItem onClick={() => pick(props.onLeave)}>Leave team</MenuItem>}
             {canDelete && (
-              <MenuItem danger onClick={() => pick(onDelete)}>
+              <MenuItem danger onClick={() => pick(props.onDelete)}>
                 Delete team
               </MenuItem>
             )}
@@ -148,34 +153,6 @@ function TeamSubtitle({
   return <span style={{ fontSize: 12, color: 'var(--mut)' }}>{parts.join(' · ')}</span>
 }
 
-function StripActions({
-  showInvite,
-  onJoin,
-  onNewTeam,
-  onInvite
-}: {
-  showInvite: boolean
-  onJoin: () => void
-  onNewTeam: () => void
-  onInvite: () => void
-}): React.JSX.Element {
-  return (
-    <>
-      <Button kind="ghost" size="sm" onClick={onJoin}>
-        <Icons.mail size={13} /> Join team
-      </Button>
-      <Button kind="ghost" size="sm" onClick={onNewTeam}>
-        <Icons.team size={13} /> New team
-      </Button>
-      {showInvite && (
-        <Button kind="primary" size="sm" onClick={onInvite}>
-          <Icons.plus size={13} /> Invite teammate
-        </Button>
-      )}
-    </>
-  )
-}
-
 function LimitLine({
   teamLimit,
   onUpgrade
@@ -203,31 +180,23 @@ export function TeamStrip(props: TeamStripProps): React.JSX.Element {
   const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
   const collaborative = team !== null && !team.is_personal
   return (
-    <div style={{ marginTop: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }} data-testid="team-name">
-          {team?.name ?? 'No team'}
-        </h2>
-        <TeamSubtitle team={team} memberCount={memberCount} />
-        <TeamSelect teams={teams} currentId={team?.team_id} onSwitch={props.onSwitch} />
-        {team && (
-          <TeamMenu
-            canRename={canManage}
-            canLeave={collaborative}
-            canDelete={collaborative && myRole === 'owner'}
-            onRename={props.onRename}
-            onLeave={props.onLeave}
-            onDelete={props.onDelete}
-          />
-        )}
-        <div style={{ flex: 1 }} />
-        <StripActions
-          showInvite={team !== null && canManage}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+        <TeamSelect teams={teams} team={team} onSwitch={props.onSwitch} />
+        <TeamMenu
+          canInvite={team !== null && canManage}
+          canRename={team !== null && canManage}
+          canLeave={collaborative}
+          canDelete={collaborative && myRole === 'owner'}
+          onInvite={props.onInvite}
           onJoin={props.onJoin}
           onNewTeam={props.onNewTeam}
-          onInvite={props.onInvite}
+          onRename={props.onRename}
+          onLeave={props.onLeave}
+          onDelete={props.onDelete}
         />
       </div>
+      <TeamSubtitle team={team} memberCount={memberCount} />
       <LimitLine teamLimit={teamLimit} onUpgrade={props.onUpgrade} />
     </div>
   )

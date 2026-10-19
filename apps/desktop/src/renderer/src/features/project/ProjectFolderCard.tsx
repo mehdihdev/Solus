@@ -1,4 +1,4 @@
-// Local folder card — on Home's side column for the current project
+// Local folder card — on Home's project pane for the current project
 // (SOLUSDEV-244; it began life on the Project Overview hub, SOLUSDEV-164).
 // Links a project to a working copy on THIS machine: select an existing directory, or
 // clone a repo (URL prefilled from a connected GitHub source; cloned by the
@@ -33,6 +33,11 @@ export interface ProjectFolderCardProps {
   projectId: string
   /** Repo URL to prefill the clone dialog (from a connected GitHub source). */
   suggestedRepoUrl?: string
+  /** Home's Overview (SOLUSDEV-317): Change folder and Unlink move behind
+   *  More, and the detected-project list stays on the Sources tab. */
+  compact?: boolean
+  /** A label printed inside the card, above its content. */
+  heading?: string
 }
 
 export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Element {
@@ -41,7 +46,9 @@ export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Elem
 
 function ProjectFolderCardContent({
   projectId,
-  suggestedRepoUrl
+  suggestedRepoUrl,
+  compact = false,
+  heading
 }: ProjectFolderCardProps): React.JSX.Element {
   const {
     bridge,
@@ -60,6 +67,13 @@ function ProjectFolderCardContent({
 
   return (
     <Card pad={0}>
+      {heading && (
+        <div style={{ padding: '14px 16px 0' }}>
+          <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+            {heading}
+          </Mono>
+        </div>
+      )}
       {!bridge ? (
         <div style={{ padding: '16px', fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
           Linking a local folder is available in the Solus desktop app.
@@ -68,6 +82,7 @@ function ProjectFolderCardContent({
         <LinkedFolder
           link={link}
           folder={folder}
+          compact={compact}
           selecting={selecting}
           onChangeFolder={() => void selectFolder()}
           onOpenFolder={() => void bridge.reveal(link.path)}
@@ -120,6 +135,7 @@ function ProjectFolderCardContent({
 function LinkedFolder({
   link,
   folder,
+  compact,
   selecting,
   onChangeFolder,
   onOpenFolder,
@@ -127,6 +143,7 @@ function LinkedFolder({
 }: {
   link: { path: string; repoUrl?: string }
   folder: LocalFolderController
+  compact: boolean
   selecting: boolean
   onChangeFolder: () => void
   onOpenFolder: () => void
@@ -148,7 +165,9 @@ function LinkedFolder({
       }}
     >
       <LinkedFolderHeader link={link} view={view} status={status} />
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div
+        style={{ display: 'flex', gap: compact ? 2 : 8, flexWrap: 'wrap', alignItems: 'center' }}
+      >
         <Button
           kind="ghost"
           size="sm"
@@ -159,15 +178,30 @@ function LinkedFolder({
         >
           {OPEN_LABEL.vscode}
         </Button>
-        <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
-          Change folder
-        </Button>
-        <Button kind="ghost" size="sm" onClick={onOpenFolder}>
+        {!compact && (
+          <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
+            Change folder
+          </Button>
+        )}
+        <Button
+          kind={compact ? 'bare' : 'ghost'}
+          size="sm"
+          style={compact ? COMPACT_BARE : undefined}
+          onClick={onOpenFolder}
+        >
           Show in file manager
         </Button>
-        <Button kind="ghost" size="sm" onClick={onUnlink}>
-          Unlink
-        </Button>
+        {compact ? (
+          <MoreFolderActions
+            selecting={selecting}
+            onChangeFolder={onChangeFolder}
+            onUnlink={onUnlink}
+          />
+        ) : (
+          <Button kind="ghost" size="sm" onClick={onUnlink}>
+            Unlink
+          </Button>
+        )}
       </div>
       {!folder.machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
       {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
@@ -176,14 +210,108 @@ function LinkedFolder({
       {editorReason !== null && !bridgeOffline && folder.machineAvailable && (
         <Note>{editorReason}</Note>
       )}
-      <DetectedProjectList
-        projects={detectedProjects(view)}
-        scanned={scanned}
-        disabledReason={rowsReason}
-        onOpen={folder.open}
-      />
+      {!compact && (
+        <DetectedProjectList
+          projects={detectedProjects(view)}
+          scanned={scanned}
+          disabledReason={rowsReason}
+          onOpen={folder.open}
+        />
+      )}
     </div>
   )
+}
+
+/** Compact mode's More ▾: the folder actions that change or drop the link. */
+function MoreFolderActions({
+  selecting,
+  onChangeFolder,
+  onUnlink
+}: {
+  selecting: boolean
+  onChangeFolder: () => void
+  onUnlink: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const pick = (action: () => void): void => {
+    setOpen(false)
+    action()
+  }
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setOpen(false)
+      }}
+    >
+      <Button
+        kind="bare"
+        size="sm"
+        style={COMPACT_BARE}
+        aria-label="More folder actions"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        More ▾
+      </Button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="popover-in" style={MORE_MENU}>
+            <button
+              type="button"
+              role="menuitem"
+              className="interactive"
+              disabled={selecting}
+              onClick={() => pick(onChangeFolder)}
+              style={MORE_ITEM}
+            >
+              Change folder
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="interactive"
+              onClick={() => pick(onUnlink)}
+              style={MORE_ITEM}
+            >
+              Unlink
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Compact mode's text buttons drop their side padding so the three actions
+ *  share one row in a third of the pane. */
+const COMPACT_BARE: React.CSSProperties = { paddingLeft: 6, paddingRight: 6 }
+
+const MORE_MENU: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: '100%',
+  zIndex: 61,
+  minWidth: 150,
+  background: 'var(--sur)',
+  border: '1px solid var(--bd)',
+  borderRadius: 4,
+  boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
+  overflow: 'hidden'
+}
+
+const MORE_ITEM: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  background: 'transparent',
+  border: 'none',
+  color: 'var(--tx)',
+  cursor: 'pointer',
+  fontFamily: 'var(--font-ui)',
+  fontSize: 12.5,
+  padding: '9px 12px'
 }
 
 function LinkedFolderHeader({
