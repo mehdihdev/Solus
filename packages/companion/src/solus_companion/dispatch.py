@@ -32,7 +32,7 @@ from solus_companion.frames import (
     tool_result_error,
     tool_result_ok,
 )
-from solus_companion.supervisor import UnknownToolError
+from solus_companion.supervisor import NEVER_REPLAYED_CODE_TOOLS, UnknownToolError
 
 logger = logging.getLogger("solus.companion.dispatch")
 
@@ -45,6 +45,10 @@ ARTIFACT_CHUNK_BYTES = 512 * 1024
 #: Only used when an artifact is too large to stage at all — the call still
 #: succeeds, the block just says why the bytes are unavailable.
 NON_TEXT_NOTE = "non-text content omitted (too large to stage)"
+
+#: `code` tools whose output is relayed as `tool_output` frames while they run
+#: (docs/api/code-command-execution.md §5.4).
+STREAMING_CODE_TOOLS: frozenset[str] = frozenset({"run", "test", "exec"})
 
 
 class ToolCaller(Protocol):
@@ -170,7 +174,7 @@ class Dispatcher:
                 call.call_id, "not_found", f"malformed tool name {call.tool!r}", retryable=False
             )
         try:
-            if server == "code" and tool in {"run", "test"}:
+            if server == "code" and tool in STREAMING_CODE_TOOLS:
                 result = await self._command_call(call, server, tool)
             else:
                 result = await self._supervisor.call_tool(server, tool, call.args)
@@ -184,7 +188,7 @@ class Dispatcher:
                 call.call_id,
                 "tool_error",
                 str(exc) or type(exc).__name__,
-                retryable=call.tool not in {"code.run", "code.test"},
+                retryable=not (server == "code" and tool in NEVER_REPLAYED_CODE_TOOLS),
             )
         # PUSH first: a declared `artifact_path` names a file on disk, which
         # must not be staged in memory. Everything else falls through to the
