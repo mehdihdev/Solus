@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import re
-import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -28,6 +27,7 @@ from typing import Any
 
 from .execute import CHILD_PATH, PASSTHROUGH_NAMES, _kill_group, pinned_which, search_path
 from .plan import _relative, venv_python
+from .safe_read import read_regular
 from .workspace import resolve_inside
 
 logger = logging.getLogger("solus.code.probe")
@@ -112,19 +112,10 @@ def _interpreters(which: Which, capture: Capture) -> list[dict[str, str]]:
 
 
 def _read_small(path: Path) -> str | None:
-    """A regular, non-symlinked file's first MAX_METADATA_BYTES as text, else None."""
-    try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except OSError:
-        return None
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            return None
-        return os.read(descriptor, MAX_METADATA_BYTES).decode("utf-8", errors="replace")
-    except OSError:
-        return None
-    finally:
-        os.close(descriptor)
+    """A regular, non-symlinked file's first MAX_METADATA_BYTES as text, else None
+    (a FIFO never blocks: see `safe_read`)."""
+    data = read_regular(path, MAX_METADATA_BYTES)
+    return None if data is None else data.decode("utf-8", errors="replace")
 
 
 def _headers(text: str) -> dict[str, str]:

@@ -15,6 +15,8 @@ import stat
 import uuid
 from pathlib import Path
 
+from .safe_read import open_regular, read_regular
+
 MAX_GIT_ENTRIES = 4096
 MAX_GIT_BYTES = 64 * 1024 * 1024
 MAX_GIT_VISITED = 200_000
@@ -27,11 +29,10 @@ def _real(path: Path | str) -> str:
 
 
 def _gitfile_target(dot_git: Path) -> str | None:
-    try:
-        with open(dot_git, "rb") as handle:
-            text = handle.read(4096).decode("utf-8", errors="replace").strip()
-    except OSError:
+    data = read_regular(dot_git, 4096)
+    if data is None:
         return None
+    text = data.decode("utf-8", errors="replace").strip()
     if not text.startswith("gitdir:"):
         return None
     target = text[len("gitdir:") :].strip()
@@ -39,11 +40,10 @@ def _gitfile_target(dot_git: Path) -> str | None:
 
 
 def _commondir(git_dir: str) -> str:
-    try:
-        with open(os.path.join(git_dir, "commondir"), "rb") as handle:
-            target = handle.read(4096).decode("utf-8", errors="replace").strip()
-    except OSError:
+    data = read_regular(os.path.join(git_dir, "commondir"), 4096, follow=True)
+    if data is None:
         return git_dir
+    target = data.decode("utf-8", errors="replace").strip()
     return _real(os.path.join(git_dir, target)) if target else git_dir
 
 
@@ -96,9 +96,14 @@ class _Digest:
             self._stream(path)
 
     def _stream(self, path: str) -> None:
+        """Contents of a regular file; anything else (a FIFO swapped in after the
+        lstat) hashes as unreadable rather than blocking."""
         try:
-            with open(path, "rb") as handle:
-                for block in iter(lambda: handle.read(1024 * 1024), b""):
+            with open_regular(path) as descriptor:
+                if descriptor is None:
+                    self.hash.update(b"unreadable")
+                    return
+                for block in iter(lambda: os.read(descriptor, 1024 * 1024), b""):
                     self.hash.update(block)
         except OSError:
             self.hash.update(b"unreadable")

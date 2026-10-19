@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from .safe_read import read_regular
 from .workspace import is_safe_relative, resolve_inside
 
 SCHEMA_VERSION = 1
@@ -294,11 +295,10 @@ def _valid_record(record: object, name: str) -> bool:
 
 
 def _read(path: Path) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(descriptor, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise OSError("not a regular file")
-        return handle.read(MAX_PROFILE_BYTES + 1)
+    data = read_regular(path, MAX_PROFILE_BYTES + 1)
+    if data is None:
+        raise OSError("not a regular file")
+    return data
 
 
 def load(root: Path, name: object) -> Profile | str:
