@@ -15,6 +15,7 @@ from conftest import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 plan = overlay_module("plan")
+command_plan = overlay_module("command_plan")
 profiles = overlay_module("profiles")
 sandbox = overlay_module("sandbox")
 execute = overlay_module("execute")
@@ -256,3 +257,21 @@ def test_profile_path_into_tmp_never_resolves_a_program(
     assert command_plan.resolve_program(ws, str(planted), roots) is None
     inside = _executable(ws / "bin" / "tool")
     assert command_plan.resolve_program(ws, "bin/tool", roots) == str(inside)
+
+
+def test_workspace_link_to_an_outside_shell_variant_is_refused(ws: Path, tmp_path: Path) -> None:
+    # A workspace symlink whose target is a versioned shell outside the workspace is
+    # judged by the target's name, fail-closed (`bash-5.2` → bash).
+    outside = tmp_path / "outside-bin"
+    outside.mkdir()
+    shell = _executable(outside / "bash-5.2")
+    (ws / "tools").mkdir(exist_ok=True)
+    (ws / "tools" / "x").symlink_to(shell)
+    answer = plan.plan_action(ws, "exec", {"argv": ["./tools/x"]}, which=lambda _n: None)
+    assert answer.ok is False
+
+
+def test_within_compares_by_inode(ws: Path, tmp_path: Path) -> None:
+    (ws / "sub").mkdir(exist_ok=True)
+    assert command_plan._within(ws, str(ws / "sub"))
+    assert not command_plan._within(ws, str(tmp_path))

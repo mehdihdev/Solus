@@ -145,7 +145,9 @@ def _command(root: Path, args: Args, action: str, keys: frozenset[str]) -> Plan 
     if program is None:
         return f"program not found in the allowed locations: {_echo(argv[0])}"
     resolved = (program, os.path.realpath(program))
-    denied = command_deny.denied_reason(argv, resolved=resolved)
+    denied = command_deny.denied_reason(
+        argv, resolved=resolved, inside=lambda path: _within(root, path)
+    )
     if denied is not None:
         return denied
     return Plan(
@@ -231,3 +233,18 @@ COMMAND_PLANNERS: dict[str, Callable[[Path, Args, Which], Plan]] = {
     "process_start": plan_process_start,
     "profile_capture": plan_profile_capture,
 }
+
+
+def _within(root: Path, path: str) -> bool:
+    """True when `path`'s realpath is the workspace or beneath it, judged by
+    (st_dev, st_ino) ancestry so a case-insensitive filesystem cannot fool it."""
+    try:
+        target = os.stat(root)
+        current = Path(os.path.realpath(path))
+        for candidate in (current, *current.parents):
+            info = os.stat(candidate)
+            if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+                return True
+    except OSError:
+        return False
+    return False

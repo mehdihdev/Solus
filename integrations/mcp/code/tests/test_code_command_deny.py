@@ -321,6 +321,26 @@ def test_resolved_program_names_are_checked_too() -> None:
     assert deny.denied_reason(["tool", "x"], resolved=("/opt/bin/tool",)) is None
 
 
+def test_a_workspace_link_to_an_outside_program_is_matched_fail_closed() -> None:
+    # `./tools/x` is workspace-relative (exact matching for its own name), but its
+    # realpath leaves the workspace: that name was not the attacker's choice of a
+    # workspace file name, so it gets the fail-closed prefix rule.
+    outside = ("/ws/tools/x", "/usr/local/bin/bash-5.2")
+    assert deny.denied_reason(["./tools/x"], resolved=outside) is not None
+    assert (
+        deny.denied_reason(["./tools/x"], resolved=outside, inside=lambda p: p.startswith("/ws/"))
+        is not None
+    )
+
+
+def test_a_workspace_program_staying_inside_keeps_exact_matching() -> None:
+    inside = ("/ws/env_setup.sh", "/ws/env_setup.sh")
+    assert (
+        deny.denied_reason(["./env_setup.sh"], resolved=inside, inside=lambda p: p.startswith("/ws/"))
+        is None
+    )
+
+
 # --- §9.11 (revised): name matching by where the program comes from -------------------
 
 
@@ -366,7 +386,8 @@ def test_revised_name_rule_denies(argv: list[str]) -> None:
 )
 def test_workspace_programs_match_exact_names_only(argv: list[str]) -> None:
     resolved = (f"/w/{argv[0][2:]}", f"/w/{argv[0][2:]}")
-    assert deny.denied_reason(argv, resolved=resolved) is None
+    in_workspace = lambda path: path.startswith("/w/")  # noqa: E731
+    assert deny.denied_reason(argv, resolved=resolved, inside=in_workspace) is None
     assert deny.classify_denial(argv) is None
 
 

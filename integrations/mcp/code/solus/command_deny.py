@@ -21,7 +21,7 @@ Every interpreter in INLINE_CODE FAILS CLOSED on leading options it does not kno
 
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 
 SHELLS: frozenset[str] = frozenset(
@@ -490,15 +490,24 @@ def _check(name: str, args: Sequence[str]) -> str | None:
     return None
 
 
-def denied_reason(argv: Sequence[str], *, resolved: Sequence[str] = ()) -> str | None:
+def denied_reason(
+    argv: Sequence[str],
+    *,
+    resolved: Sequence[str] = (),
+    inside: Callable[[str], bool] = lambda _path: False,
+) -> str | None:
     """Why `argv` is refused, or None. `resolved` adds the resolved program path and
-    its realpath: each name is checked against the same arguments, with the matching
-    mode (exact for workspace programs, prefix otherwise) chosen from argv[0]."""
+    its realpath, each checked against the same arguments. Exact matching applies only
+    to names the workspace chose: a workspace-relative argv[0], and a resolved path
+    that `inside` confirms is still in the workspace. Every other name (bare names,
+    absolute paths, a workspace link whose target leaves the workspace) is matched
+    fail-closed by prefix."""
     if not argv:
         return f"an empty argv is refused; {HINT}"
     exact = workspace_relative(argv[0])
-    for path in (argv[0], *resolved):
-        reason = _check(program_name(path, exact=exact), argv[1:])
+    names = [(argv[0], exact), *((path, exact and inside(path)) for path in resolved)]
+    for path, path_exact in names:
+        reason = _check(program_name(path, exact=path_exact), argv[1:])
         if reason is not None:
             return reason
     return None
