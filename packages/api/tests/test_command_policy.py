@@ -421,7 +421,6 @@ def test_the_parity_corpus_is_large_enough() -> None:
     assert len(_PARITY_CORPUS) >= 60
 
 
-@pytest.mark.xfail(strict=False, reason="server classify_denial lands at integration")
 def test_cloud_and_server_classifiers_agree_on_the_shared_corpus() -> None:
     classify_denial = _server_classifier()
     disagreements = [
