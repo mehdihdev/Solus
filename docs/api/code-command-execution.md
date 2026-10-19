@@ -435,14 +435,18 @@ These supersede earlier sections where they conflict.
    fingerprint (a sub-second window between the cloud's re-plan and the server's). On macOS a
    copied `launchctl`/`osascript` binary escapes the `process-exec` literal denials (the
    AppleEvents/LaunchServices mach denials still apply).
-11. **Prefix matching is version-shaped only.** A basename maps to a denied shell or interpreter
-    only when it is that name optionally followed by a version (`[0-9][0-9.]*`) and/or dash tokens
-    (`-[a-z0-9]+`), for example `python3.12-intel64`, `perl5.34-thread-multi`, `php-cgi`. Wrappers
-    and elevation tools match on the exact normalised name, plus the GNU `g` prefix. So
-    `./env_setup.sh`, `./time_sync.py`, `./sh_build.sh` and `./nu_test` are not denied by name.
-    Both cloud and server fail closed on unknown leading options for every interpreter in
-    `INLINE_CODE` (not only python). A behavioural parity test runs both classifiers over a shared
-    corpus.
+11. **Name matching.** For programs that are not workspace-relative (bare names resolved from the
+    environment, profile or pinned roots, and absolute paths), matching against every denied set
+    (shells, interpreters, wrappers, elevation, git) fails closed by prefix. A known name followed
+    by the end, a version `[0-9][0-9.]*`, and/or tokens `[-.][a-z0-9.]+` is denied (`zsh-5.9`,
+    `bash-5.2`, `php-cgi8.2`, `sudo-rs`, `sudo.ws`, `python3.12-intel64`, `env-x`, and the GNU `g`
+    forms). Workspace-relative programs (`./env_setup.sh`, `tools/env-check.sh`) match on the exact
+    normalised name only, for both the argv basename and the resolved realpath basename, because
+    renaming a workspace file defeats any name rule anyway. Cloud and server both fail closed on
+    unknown leading options for every interpreter, and a behavioural parity test runs both
+    classifiers over a shared corpus. Path containment checks (writable roots, workspace,
+    HOME/`.solus`) compare `(st_dev, st_ino)` of ancestors, so case-insensitive filesystems
+    cannot fool them.
 12. **Resume body.** `resume_confirmation_id` cannot be combined with `content` or `screenshot`
     (422).
 13. **Shutdown.** On stdin EOF or a signal, the server ignores further SIGTERM/SIGINT while it
