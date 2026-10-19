@@ -244,3 +244,34 @@ async def test_legacy_code_actions_refuse_without_a_sandbox() -> None:
     plan = {"ok": True, "argv": ["python", "x.py"], "cwd": "."}
     with pytest.raises(ToolException):
         await _rows("code.run", plan, {"script": "x.py"})
+
+
+async def test_landlock_abi_kinds_and_limitations_render_on_the_sandbox_row() -> None:
+    sandbox = {
+        "kind": "landlock-abi3",
+        "writable": ["/w"],
+        "limitations": ["no .git/hooks write denial\n(detected instead)", "truncate unchecked"],
+    }
+    plan = _plan(sandbox=sandbox)
+    rows = await _rows("code.exec", plan, dict(_EXEC_ARGS))
+    row = {r["label"]: r["after"] for r in rows}["sandbox"]
+    assert row == (
+        "landlock-abi3 — writes limited to the workspace, temp and tool caches; "
+        "limits: no .git/hooks write denial (detected instead); truncate unchecked"
+    )
+    assert plan_fingerprint(plan) != plan_fingerprint(_plan(sandbox={**sandbox, "kind": "landlock-abi2"}))
+    assert len(row) <= 500
+
+
+async def test_an_unknown_sandbox_kind_refuses() -> None:
+    with pytest.raises(PreviewRefusal):
+        await _rows("code.exec", _plan(sandbox={"kind": "landlock-evil"}), dict(_EXEC_ARGS))
+
+
+async def test_a_program_inside_the_workspace_is_a_project_script() -> None:
+    plan = _plan(
+        argv=["/home/u/robot/.venv/bin/mytool"],
+        sandbox={"kind": "landlock-abi3", "writable": ["/home/u/robot", "/tmp"]},
+    )
+    rows = await _rows("code.exec", plan, {"argv": ["mytool"], "environment": ".venv"})
+    assert {r["label"]: r["after"] for r in rows}["risk"] == "project_scripts"

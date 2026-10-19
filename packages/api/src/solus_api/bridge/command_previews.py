@@ -17,7 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
-from solus_api.agent.command_policy import classify
+from solus_api.agent.command_policy import Risk, classify
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.untrusted import redact_text
 
@@ -31,7 +31,9 @@ _CAPTURE_PREFIX: Final = (
     CAPTURE_SCRIPT,
     "solus-profile",
 )
-SANDBOX_KINDS: Final = frozenset({"sandbox-exec", "landlock"})
+#: `sandbox-exec`, `landlock` or `landlock-abi<N>` (the server names the ABI).
+SANDBOX_KIND: Final = re.compile(r"^(?:sandbox-exec|landlock(?:-abi[0-9]{1,2})?)$")
+_LIMITS_CAP: Final = 300
 _SANDBOX_NOTE: Final = "writes limited to the workspace, temp and tool caches"
 _CHUNK: Final = 400
 #: 40 chunks + at most 9 other rows stays inside the gate's 50-row bound.
@@ -57,6 +59,8 @@ class CommandPlan:
     profile_name: str | None
     profile_digest: str | None
     sandbox_kind: str
+    sandbox_limits: tuple[str, ...] = ()
+    writable: tuple[str, ...] = ()
 
 
 def _refuse(detail: str) -> PreviewRefusal:
@@ -108,10 +112,26 @@ def parse_plan(plan: object) -> CommandPlan:
         raise _refuse("The code server returned an invalid command plan.")
     sandbox = plan.get("sandbox")
     kind = sandbox.get("kind") if isinstance(sandbox, Mapping) else None
-    if kind not in SANDBOX_KINDS:
+    if not isinstance(kind, str) or not SANDBOX_KIND.fullmatch(kind):
         raise _refuse("The command plan has no usable OS sandbox (sandbox unavailable).")
+    assert isinstance(sandbox, Mapping)
     name, digest = _profile(plan.get("profile"))
-    return CommandPlan(tuple(argv), cwd, environment, name, digest, str(kind))
+    return CommandPlan(
+        tuple(argv),
+        cwd,
+        environment,
+        name,
+        digest,
+        kind,
+        _strings(sandbox.get("limitations")),
+        _strings(sandbox.get("writable")),
+    )
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value[:32] if isinstance(item, str))
 
 
 def _fingerprint(plan: CommandPlan) -> str:
@@ -149,7 +169,20 @@ def _chunked(label: str, text: str, cap: int) -> list[dict[str, Any]]:
 
 
 def _sandbox_row(plan: CommandPlan) -> dict[str, Any]:
-    return _row("sandbox", f"{plan.sandbox_kind} — {_SANDBOX_NOTE}")
+    text = f"{plan.sandbox_kind} — {_SANDBOX_NOTE}"
+    limits = "; ".join(filter(None, (_reason(item) for item in plan.sandbox_limits)))
+    if limits:
+        text += f"; limits: {limits[:_LIMITS_CAP]}"
+    return _row("sandbox", text)
+
+
+def _inside_writable(plan: CommandPlan) -> bool:
+    """The resolved program lives where the project or a command could write it."""
+    program = plan.argv[0]
+    return any(
+        root.startswith("/") and program.startswith(root.rstrip("/") + "/")
+        for root in plan.writable
+    )
 
 
 def _profile_text(plan: CommandPlan) -> str:
@@ -178,7 +211,8 @@ def command_rows(
                 f"The command is denied: {verdict.reason}. Propose a direct argv instead "
                 "(no shell, no &&, no pipes)."
             )
-    risks = ", ".join(risk.value for risk in requested.risks) or "none flagged"
+    found = set(requested.risks) | ({Risk.PROJECT_SCRIPTS} if _inside_writable(plan) else set())
+    risks = ", ".join(risk.value for risk in Risk if risk in found) or "none flagged"
     return [
         _row("program", plan.argv[0]),
         *command,

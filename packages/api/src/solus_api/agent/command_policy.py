@@ -11,15 +11,24 @@ stand behind it. A risk is never a denial: the person decides.
 from __future__ import annotations
 
 import posixpath
-import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
+from solus_api.agent.command_interpreters import (
+    GIT_CONFIG_FLAGS,
+    GRAMMARS,
+    INLINE_CODE,
+    git_denial,
+    interpreter_denial,
+)
+from solus_api.agent.command_names import INTERPRETERS, normalise
 from solus_api.agent.command_risks import Risk, risks_for
 
 #: Mirrored in the server deny table; keep both in lockstep (test cross-checks).
-SHELLS: Final = frozenset({"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh"})
+SHELLS: Final = frozenset(
+    {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh", "busybox"}
+)
 WRAPPERS: Final = frozenset(
     {
         "env",
@@ -36,41 +45,20 @@ WRAPPERS: Final = frozenset(
         "launchctl",
         "open",
         "osascript",
+        "stdbuf",
+        "chroot",
+        "unshare",
+        "nsenter",
+        "flock",
+        "ionice",
+        "taskset",
+        "caffeinate",
+        "arch",
+        "chrt",
     }
 )
-ELEVATION: Final = frozenset({"sudo", "su", "doas", "pkexec"})
-#: interpreter -> the flags (or, for deno, the subcommand) that run inline code.
-INLINE_CODE: Final[Mapping[str, frozenset[str]]] = {
-    "python": frozenset({"-c"}),
-    "node": frozenset({"-e", "--eval", "-p", "--print"}),
-    "ruby": frozenset({"-e"}),
-    "perl": frozenset({"-e", "-E"}),
-    "php": frozenset({"-r"}),
-    "lua": frozenset({"-e"}),
-    "deno": frozenset({"eval"}),
-    "bun": frozenset({"-e", "--eval"}),
-    "Rscript": frozenset({"-e"}),
-}
-#: Git global options that inject configuration (aliases, hooks paths, pagers).
-GIT_CONFIG_FLAGS: Final = frozenset({"-c", "--config-env"})
+ELEVATION: Final = frozenset({"sudo", "su", "doas", "pkexec", "runuser"})
 
-_INTERPRETERS: Final = {name.lower(): name for name in INLINE_CODE} | {"pypy": "python"}
-_VERSION_SUFFIX: Final = re.compile(r"[-_]?[0-9][0-9.]*$")
-_GIT_ARG_OPTIONS: Final = frozenset({"-C", "-c", "--config-env", "--git-dir", "--work-tree"})
-#: Interpreter options whose value is the NEXT argument (scanning must skip it).
-_VALUE_OPTIONS: Final[Mapping[str, frozenset[str]]] = {
-    "python": frozenset({"-W", "-X"}),
-    "node": frozenset(
-        {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions"}
-        | {"--input-type", "--env-file", "--title", "--inspect-port"}
-    ),
-    "ruby": frozenset({"-I", "-r", "-C", "-E", "-F"}),
-    "perl": frozenset({"-I", "-M", "-m"}),
-    "php": frozenset({"-d", "-c", "-z"}),
-    "lua": frozenset({"-l"}),
-    "bun": frozenset({"-r", "--preload", "--cwd", "--env-file", "--config"}),
-    "Rscript": frozenset({"--default-packages"}),
-}
 _MAX_ARGS: Final = 64
 _MAX_ARG_CHARS: Final = 1024
 
@@ -86,8 +74,8 @@ def program_name(program: str) -> str:
     """argv[0]'s basename, version suffix stripped for interpreters
     (`/usr/bin/python3.12` → `python`). Other names keep their spelling."""
     base = posixpath.basename(program)
-    stem = _VERSION_SUFFIX.sub("", base).lower()
-    return _INTERPRETERS.get(stem, base)
+    stem = normalise(base)
+    return stem if stem in INTERPRETERS.values() else base
 
 
 def _deny(reason: str) -> CommandVerdict:
@@ -105,65 +93,20 @@ def _malformed(argv: object) -> str | None:
     return None
 
 
-def _leading_options(args: Sequence[str], consumes: frozenset[str]) -> list[str]:
-    """Interpreter options before the script/module: where inline-code flags
-    live. Options in `consumes` take the next argument as their value, so
-    `python -X dev -c ...` is still scanned past `dev`."""
-    options: list[str] = []
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "-" or not arg.startswith("-") or arg in ("-m", "--"):
-            break
-        options.append(arg)
-        index += 2 if arg in consumes else 1
-    return options
-
-
-def _is_inline_flag(arg: str, flags: frozenset[str]) -> bool:
-    if arg in flags or any(arg.startswith(f"{flag}=") for flag in flags if flag.startswith("--")):
-        return True
-    # Clustered short flags: `-Sc`, `-pe`, `-lne` — any short inline letter.
-    letters = {flag[1] for flag in flags if len(flag) == 2 and flag[0] == "-"}
-    return not arg.startswith("--") and any(letter in arg[1:] for letter in letters)
-
-
-def _inline_code(name: str, args: Sequence[str]) -> bool:
-    interpreter = _INTERPRETERS.get(_VERSION_SUFFIX.sub("", name).lower())
-    if interpreter is None:
-        return False
-    flags = INLINE_CODE[interpreter]
-    if interpreter == "deno":
-        return bool(args) and args[0] in flags
-    consumes = _VALUE_OPTIONS.get(interpreter, frozenset())
-    return any(_is_inline_flag(arg, flags) for arg in _leading_options(args, consumes))
-
-
-def _git_config_injection(args: Sequence[str]) -> bool:
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if not arg.startswith("-"):
-            return False  # the subcommand: its own options are not global
-        if arg.startswith("-c") or arg.startswith("--config-env"):
-            return True
-        index += 2 if arg in _GIT_ARG_OPTIONS else 1
-    return False
-
-
-def _denial(name: str, args: Sequence[str]) -> str | None:
-    lowered = name.lower()
-    stem = _VERSION_SUFFIX.sub("", lowered)
-    if lowered in SHELLS or stem in SHELLS:
-        return f"{name} is a shell"
-    if lowered in WRAPPERS:
-        return f"{name} runs another program"
-    if lowered in ELEVATION:
-        return f"{name} elevates privileges"
-    if _inline_code(name, args):
-        return f"{name} with an inline-code flag runs code that is not in a file"
-    if lowered == "git" and _git_config_injection(args):
-        return "git -c / --config-env injects configuration"
+def _denial(base: str, args: Sequence[str]) -> str | None:
+    names = {base.lower(), normalise(base)}
+    if names & SHELLS:
+        return f"{base} is a shell"
+    if names & WRAPPERS:
+        return f"{base} runs another program"
+    if names & ELEVATION:
+        return f"{base} elevates privileges"
+    interpreter = normalise(base)
+    if interpreter in GRAMMARS:
+        reason = interpreter_denial(interpreter, args)
+        return None if reason is None else f"{base}: {reason}"
+    if "git" in names:
+        return git_denial(args)
     return None
 
 
@@ -176,7 +119,7 @@ def classify(argv: object) -> CommandVerdict:
     reason = _denial(posixpath.basename(items[0]), items[1:])
     if reason is not None:
         return _deny(reason)
-    return CommandVerdict(denied=False, reason=None, risks=risks_for(program_name(items[0]), items))
+    return CommandVerdict(denied=False, reason=None, risks=risks_for(items))
 
 
 __all__ = [
@@ -188,5 +131,6 @@ __all__ = [
     "CommandVerdict",
     "Risk",
     "classify",
+    "normalise",
     "program_name",
 ]

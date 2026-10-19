@@ -10,6 +10,7 @@ BASENAME only — never the argv, its arguments or profile variable names.
 from __future__ import annotations
 
 import posixpath
+import re
 import uuid
 from typing import Any, Final
 
@@ -32,7 +33,7 @@ COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
         "code.profile_capture",
     }
 )
-SANDBOX_KINDS: Final = frozenset({"sandbox-exec", "landlock"})
+_SANDBOX_KIND: Final = re.compile(r"^(?:sandbox-exec|landlock(?:-abi[0-9]{1,2})?)$")
 
 
 def _basename(argv: object) -> str | None:
@@ -130,7 +131,9 @@ def completion_events(
                     "duration_ms": value.get("duration_ms")
                     if type(value.get("duration_ms")) is int
                     else None,
-                    "sandbox": sandbox if sandbox in SANDBOX_KINDS else None,
+                    "sandbox": sandbox
+                    if isinstance(sandbox, str) and _SANDBOX_KIND.fullmatch(sandbox)
+                    else None,
                     "git_metadata_changed": value.get("git_metadata_changed") is True,
                 },
             )
