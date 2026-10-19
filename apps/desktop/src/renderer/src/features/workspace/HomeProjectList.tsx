@@ -10,7 +10,9 @@ import { relativeTime } from '../../lib/relativeTime'
 import { activityText } from '../team/activityText'
 import { ArchivedProjects } from './ArchivedProjects'
 import { ProjectMenu } from './ProjectMenu'
+import { integrationLogo } from '../onboarding/integrationLogos'
 import type { ActivityByProject } from './projectActivity'
+import type { LinkedRepo, ReposByProject } from './useProjectRepos'
 import type { HomeActions } from './useHomeData'
 
 /** Roles allowed to permanently delete a project — only an OWNER (ADR-025; the server enforces it). */
@@ -20,6 +22,8 @@ export interface HomeProjectListProps {
   team: TeamSummary
   projects: readonly Project[]
   activityByProject: ActivityByProject
+  /** Git repos linked to each project; a project absent here shows no repo line. */
+  reposByProject?: ReposByProject
   currentProjectId: string | null
   actions: HomeActions
   onSelect: (project: Project) => void
@@ -31,6 +35,7 @@ export function HomeProjectList({
   team,
   projects,
   activityByProject,
+  reposByProject = {},
   currentProjectId,
   actions,
   onSelect,
@@ -67,6 +72,7 @@ export function HomeProjectList({
             key={p.id}
             project={p}
             latest={activityByProject[p.id]?.[0] ?? null}
+            repos={reposByProject[p.id] ?? []}
             isCurrent={p.id === currentProjectId}
             canManage={canManage}
             canDelete={canDelete}
@@ -106,6 +112,7 @@ function EmptyList({
 interface ProjectRowProps {
   project: Project
   latest: ActivityApi | null
+  repos: readonly LinkedRepo[]
   isCurrent: boolean
   canManage: boolean
   canDelete: boolean
@@ -117,6 +124,7 @@ interface ProjectRowProps {
 function ProjectRow({
   project,
   latest,
+  repos,
   isCurrent,
   canManage,
   canDelete,
@@ -124,27 +132,28 @@ function ProjectRow({
   onSelect,
   onActionFailed
 }: ProjectRowProps): React.JSX.Element {
+  // The whole card is the select button (border, fill, hover tint); the ⋯
+  // sits over its corner as a sibling, never nested inside the button.
   return (
     <div
       data-testid={`project-row-${project.id}`}
       aria-current={isCurrent ? 'true' : undefined}
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 4,
-        borderRadius: 4,
-        border: `1px solid ${isCurrent ? 'var(--acc)' : 'var(--bd)'}`,
-        background: isCurrent ? 'var(--sur2)' : 'var(--sur)'
-      }}
+      style={{ position: 'relative' }}
     >
       <button
         type="button"
         aria-label={`Select ${project.name}`}
         className="interactive"
         onClick={() => onSelect(project)}
-        style={ROW_BUTTON}
+        style={{
+          ...ROW_BUTTON,
+          border: `1px solid ${isCurrent ? 'var(--acc)' : 'var(--bd)'}`,
+          background: isCurrent ? 'var(--sur2)' : 'var(--sur)',
+          paddingRight: canManage ? 36 : 12
+        }}
       >
         <span style={ROW_NAME}>{project.name}</span>
+        <RepoLine repos={repos} />
         {project.description && <span style={ROW_META}>{project.description}</span>}
         <span style={ROW_META}>
           {latest
@@ -153,7 +162,7 @@ function ProjectRow({
         </span>
       </button>
       {canManage && (
-        <div style={{ padding: '10px 6px 0 0' }}>
+        <div style={{ position: 'absolute', top: 9, right: 6 }}>
           <ProjectMenu
             project={project}
             canDelete={canDelete}
@@ -163,6 +172,31 @@ function ProjectRow({
         </div>
       )}
     </div>
+  )
+}
+
+/** The project's linked repo under its name: provider logo + repo, "+N" for more. */
+function RepoLine({ repos }: { repos: readonly LinkedRepo[] }): React.JSX.Element | null {
+  const first = repos[0]
+  if (!first) return null
+  const logo = integrationLogo(first.provider)
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+      {logo && (
+        <img
+          src={logo}
+          alt=""
+          data-testid={`repo-logo-${first.provider}`}
+          style={{ width: 12, height: 12, objectFit: 'contain', flexShrink: 0 }}
+        />
+      )}
+      <span style={{ ...ROW_META, color: 'var(--tx)' }}>{first.repo}</span>
+      {repos.length > 1 && (
+        <span style={{ fontSize: 11, color: 'var(--mut)', flexShrink: 0 }}>
+          +{repos.length - 1}
+        </span>
+      )}
+    </span>
   )
 }
 
@@ -181,19 +215,18 @@ const ICON_BUTTON: React.CSSProperties = {
 }
 
 const ROW_BUTTON: React.CSSProperties = {
-  flex: 1,
+  width: '100%',
   minWidth: 0,
   display: 'flex',
   flexDirection: 'column',
   gap: 4,
   textAlign: 'left',
   background: 'transparent',
-  border: 'none',
   borderRadius: 4,
   color: 'var(--tx)',
   cursor: 'pointer',
   fontFamily: 'var(--font-ui)',
-  padding: '11px 4px 11px 12px'
+  padding: '11px 12px'
 }
 
 const ROW_NAME: React.CSSProperties = {

@@ -11,6 +11,8 @@ import * as homeData from './useHomeData'
 import * as meHook from './useMe'
 import * as projectActivity from './useProjectActivity'
 import * as homeTeam from './useHomeTeam'
+import * as projectRepos from './useProjectRepos'
+import * as projectSources from '../project/useProjectSources'
 import { useShellStore } from './shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { ActivityApi, Project, TeamSummary } from '../../lib/api/resources'
@@ -25,6 +27,19 @@ vi.mock('./useMe', async (importOriginal) => {
 })
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
 vi.mock('./useHomeTeam', () => ({ useHomeTeam: vi.fn() }))
+// Repos per project are read by their own hook (useProjectRepos.test.ts); the
+// current project's comes from its live source list.
+vi.mock('./useProjectRepos', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useProjectRepos')>()
+  return { ...actual, useProjectRepos: vi.fn(() => ({})) }
+})
+vi.mock('../project/useProjectSources', () => ({
+  useProjectSources: vi.fn(() => ({
+    status: 'offline',
+    sources: [],
+    actions: { refresh: vi.fn(), syncNow: vi.fn(), disconnect: vi.fn() }
+  }))
+}))
 // The project's sources are their own block (ProjectSourcesSummary.test.tsx);
 // Home only hosts it and routes its "Add additional sources".
 vi.mock('./ProjectSourcesSummary', () => ({
@@ -691,3 +706,38 @@ function homeTeamLimitsAndAvailabilityTests(): void {
     expect(home.actions.switchTeam).toHaveBeenCalledWith('t-me')
   })
 }
+
+describe('HomeScreen — linked repos under project names', () => {
+  it('shows each project’s repo, the current one from its live sources', () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    vi.mocked(projectRepos.useProjectRepos).mockReturnValue({
+      p1: [{ provider: 'github', repo: 'stale/old-name' }],
+      p2: [{ provider: 'github', repo: 'strider/arm-fw' }]
+    })
+    vi.mocked(projectSources.useProjectSources).mockReturnValue({
+      status: 'ready',
+      sources: [
+        {
+          id: 's1',
+          project_id: 'p1',
+          type: 'github',
+          name: 'n',
+          status: 'connected',
+          config: { repo: 'strider/rover-fw' },
+          account_login: null,
+          last_synced_at: null,
+          last_error: null,
+          created_at: '',
+          updated_at: ''
+        }
+      ],
+      actions: { refresh: vi.fn(), syncNow: vi.fn(), disconnect: vi.fn() }
+    })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(within(row('p1')).getByText('strider/rover-fw')).toBeInTheDocument()
+    expect(within(row('p1')).queryByText('stale/old-name')).toBeNull()
+    expect(within(row('p2')).getByText('strider/arm-fw')).toBeInTheDocument()
+    expect(projectRepos.useProjectRepos).toHaveBeenCalledWith(['p1', 'p2'])
+  })
+})

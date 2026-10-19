@@ -26,6 +26,8 @@ import { ConnectedAccountsCard } from './ConnectedAccountsCard'
 import { GitHubOrgCard } from './GitHubOrgCard'
 import { HomeAccountNav, type AccountsPosition, type HomePaneView } from './HomeAccountNav'
 import { useAccountConnections } from './useAccountConnections'
+import { linkedRepos, useProjectRepos, type ReposByProject } from './useProjectRepos'
+import { useProjectSources } from '../project/useProjectSources'
 import { HomeProjectList } from './HomeProjectList'
 import { HomeProjectPane } from './HomeProjectPane'
 import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
@@ -128,6 +130,7 @@ interface LiveProps {
 function Sidebar(props: LiveProps): React.JSX.Element {
   const { home, team, currentProject, view, onShow, openModal, onNewProject } = props
   const accounts = useAccountsPosition(view)
+  const repos = useReposByProject(home, currentProject?.id ?? null)
   return (
     <aside aria-label="Projects" style={SIDEBAR_STYLE}>
       <div style={{ display: 'grid', gap: 12 }}>
@@ -153,6 +156,7 @@ function Sidebar(props: LiveProps): React.JSX.Element {
           team={home.team}
           projects={home.projects}
           activityByProject={home.activityByProject}
+          reposByProject={repos}
           currentProjectId={currentProject?.id ?? null}
           actions={home.actions}
           onSelect={(p) => {
@@ -180,6 +184,16 @@ function Sidebar(props: LiveProps): React.JSX.Element {
       />
     </aside>
   )
+}
+
+/** Each live project's linked repos — read once per project, with the current
+ *  project's taken from its live source list so a repo picked here shows at once. */
+function useReposByProject(home: HomeData, currentId: string | null): ReposByProject {
+  const ids = home.projects.filter((p) => !p.archived_at).map((p) => p.id)
+  const read = useProjectRepos(ids)
+  const live = useProjectSources()
+  if (!currentId || live.status !== 'ready') return read
+  return { ...read, [currentId]: linkedRepos(live.sources) }
 }
 
 /** Linked account grants by health for the ACCOUNT card; null until known. */

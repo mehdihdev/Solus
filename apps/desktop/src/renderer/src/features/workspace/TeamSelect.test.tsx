@@ -27,6 +27,8 @@ describe('TeamSelect', () => {
   it('lists every team, checks the active one and marks personal', async () => {
     render(<TeamSelect teams={[PERSONAL, STRIDER]} team={STRIDER} onSwitch={vi.fn()} />)
     const trigger = screen.getByRole('button', { name: 'Strider, switch team' })
+    // A real chevron icon, not a tiny text glyph.
+    expect(trigger.querySelector('svg[data-chevron]')).not.toBeNull()
     await userEvent.click(trigger)
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('menuitemradio', { name: /strider/i })).toHaveAttribute(

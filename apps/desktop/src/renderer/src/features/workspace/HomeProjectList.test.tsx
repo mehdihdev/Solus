@@ -47,6 +47,7 @@ function setup(overrides: Partial<HomeProjectListProps> = {}): HomeProjectListPr
       deleteProject: vi.fn(),
       editProject: vi.fn()
     } as unknown as HomeActions,
+    reposByProject: { p1: [{ provider: 'github', repo: 'mehdihdev/lerobot-arm' }] },
     onSelect: vi.fn(),
     onNewProject: vi.fn(),
     onActionFailed: vi.fn(),
@@ -104,5 +105,34 @@ describe('HomeProjectList', () => {
     expect(screen.getByText('PROJECTS · 1')).toBeInTheDocument()
     expect(screen.queryByTestId('project-row-p2')).toBeNull()
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toBeInTheDocument()
+  })
+
+  it('shows the linked repo with its provider logo under the name, and nothing for others', () => {
+    setup()
+    const rover = screen.getByTestId('project-row-p1')
+    expect(within(rover).getByText('mehdihdev/lerobot-arm')).toBeInTheDocument()
+    expect(within(rover).getByTestId('repo-logo-github')).toBeInTheDocument()
+    expect(within(screen.getByTestId('project-row-p2')).queryByTestId(/^repo-logo-/)).toBeNull()
+  })
+
+  it('counts further repos after the first', () => {
+    setup({
+      reposByProject: {
+        p1: [
+          { provider: 'github', repo: 'org/a' },
+          { provider: 'github', repo: 'org/b' }
+        ]
+      }
+    })
+    expect(within(screen.getByTestId('project-row-p1')).getByText('+1')).toBeInTheDocument()
+  })
+
+  it('makes the whole card the select target, with the menu beside it, not inside', () => {
+    setup()
+    const select = screen.getByRole('button', { name: 'Select Rover MK2' })
+    const menu = screen.getByRole('button', { name: 'Project actions for Rover MK2' })
+    expect(select).toHaveStyle({ width: '100%' })
+    expect(select.contains(menu)).toBe(false)
+    expect(screen.getByTestId('project-row-p1')).toContainElement(menu)
   })
 })

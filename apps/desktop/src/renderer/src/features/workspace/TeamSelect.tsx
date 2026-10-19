@@ -48,9 +48,25 @@ export function TeamSelect({ teams, team, onSwitch }: TeamSelectProps): React.JS
           style={TRIGGER}
         >
           {name}
-          <span aria-hidden="true" style={{ color: 'var(--mut)', fontSize: 10 }}>
-            ▾
-          </span>
+          <svg
+            data-chevron
+            aria-hidden="true"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--mut)"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              flexShrink: 0,
+              transform: open ? 'rotate(180deg)' : undefined,
+              transition: 'transform 0.12s'
+            }}
+          >
+            <path d="M6 9l6 6 6-6" />
+          </svg>
         </button>
       </h2>
       {open && (
