@@ -47,6 +47,9 @@ def test_only_the_kicad_write_is_previewable_today() -> None:
         "code.install",
         "code.run",
         "code.test",
+        "code.exec",
+        "code.process_start",
+        "code.profile_capture",
     }
     assert preview_builder("kicad.export_netlist", _Reader(None)) is None
     assert preview_builder("kicad.set_symbol_property", _Reader(None)) is not None
@@ -330,6 +333,7 @@ async def test_code_previews_show_the_servers_own_argv() -> None:
             "ok": True,
             "argv": [".venv/bin/python", "-m", "pip", "install", "--", "six==1.17.0"],
             "cwd": ".",
+            "sandbox": {"kind": "sandbox-exec", "writable": []},
         }
     )
     build = preview_builder("code.install", reader)

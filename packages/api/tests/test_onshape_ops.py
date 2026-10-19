@@ -395,9 +395,7 @@ async def test_malformed_feature_parameters_fail_closed(
 async def test_malformed_feature_collections_fail_closed(
     operation: str, key: str, suffix: str, collection: Any
 ) -> None:
-    respx.get(_spec_read_path(suffix)).respond(
-        200, json={key: collection}
-    )
+    respx.get(_spec_read_path(suffix)).respond(200, json={key: collection})
     with pytest.raises(ConnectorError) as error:
         await _run(
             f"onshape.{operation}", {"document_id": DID, "workspace_id": WID, "element_id": EID}
@@ -480,9 +478,7 @@ async def test_exact_feature_filter_returns_complete_selected_record(
 async def test_missing_exact_feature_filter_is_explicit(
     operation: str, suffix: str, key: str, filter_key: str
 ) -> None:
-    respx.get(_spec_read_path(suffix)).respond(
-        200, json={key: []}
-    )
+    respx.get(_spec_read_path(suffix)).respond(200, json={key: []})
     with pytest.raises(ConnectorError) as error:
         await _run(
             f"onshape.{operation}",

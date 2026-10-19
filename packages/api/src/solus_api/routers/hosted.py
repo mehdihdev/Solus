@@ -412,11 +412,7 @@ async def hosted_oauth_exchange(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if (
-        current is None
-        or current.connection_id is not None
-        or current.secret_ref != original_ref
-    ):
+    if current is None or current.connection_id is not None or current.secret_ref != original_ref:
         raise APIError(404, "not_found", "Connected source not found")
     source = current
     await secret_store.put(

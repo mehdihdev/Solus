@@ -14,7 +14,7 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast
 
 from solus_api.agent.command_risks import Risk, risks_for
 
@@ -167,16 +167,16 @@ def _denial(name: str, args: Sequence[str]) -> str | None:
     return None
 
 
-def classify(argv: Sequence[str]) -> CommandVerdict:
+def classify(argv: object) -> CommandVerdict:
     """Deny or badge one argument list. Never raises."""
     malformed = _malformed(argv)
     if malformed is not None:
         return _deny(malformed)
-    name = program_name(argv[0])
-    reason = _denial(posixpath.basename(argv[0]), argv[1:])
+    items = cast(Sequence[str], argv)
+    reason = _denial(posixpath.basename(items[0]), items[1:])
     if reason is not None:
         return _deny(reason)
-    return CommandVerdict(denied=False, reason=None, risks=risks_for(name, argv))
+    return CommandVerdict(denied=False, reason=None, risks=risks_for(program_name(items[0]), items))
 
 
 __all__ = [

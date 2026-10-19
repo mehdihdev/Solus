@@ -103,5 +103,5 @@ def test_redaction_keeps_the_shape_of_the_text() -> None:
 
 
 def test_authorization_scheme_does_not_leave_credential_visible() -> None:
-    assert 'short-token' not in redact_text('Authorization: Bearer short-token')
-    assert 'short-token' not in redact_text('authorization=Basic short-token')
+    assert "short-token" not in redact_text("Authorization: Bearer short-token")
+    assert "short-token" not in redact_text("authorization=Basic short-token")
