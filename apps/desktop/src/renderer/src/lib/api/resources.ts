@@ -1259,6 +1259,9 @@ export interface ConfirmationOutcome {
    *  ok:false — refusing to run is its success — so callers must branch on the
    *  decision, not on this flag alone. */
   readonly ok?: boolean
+  /** The tool's own result on success (a command's `exit_code`, `timed_out`,
+   *  `reason`, …). Untrusted machine data — read defensively, render as text. */
+  readonly value?: Readonly<Record<string, unknown>> | null
   readonly error?: { readonly code?: string; readonly message?: string }
 }
 

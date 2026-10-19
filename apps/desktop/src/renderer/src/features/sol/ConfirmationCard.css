@@ -187,3 +187,60 @@
   font-size: 11px;
   text-transform: none;
 }
+
+/* SOLUSDEV-317: command card header — program + risk badges (presentation only). */
+.confirmation-card__command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.confirmation-card__program {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx);
+  overflow-wrap: anywhere;
+}
+
+.confirmation-card__badge {
+  padding: 1px 7px;
+  border: 1px solid var(--bd);
+  border-radius: 999px;
+  background: var(--sur2);
+  color: var(--mut);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.confirmation-card__badge[data-risk='destructive'],
+.confirmation-card__badge[data-risk='hardware'] {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.confirmation-card__badge[data-sandboxed='true'] {
+  border-color: var(--acc);
+  color: var(--acc);
+}
+
+.confirmation-card__hint {
+  margin-left: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.confirmation-card__output pre:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.confirmation-card__exit {
+  margin: 4px 0 0;
+  color: var(--mut);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
