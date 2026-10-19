@@ -95,9 +95,14 @@ class Profile:
 
 
 class CaptureOutcome(Protocol):
-    exit_code: int | None
-    stdout: bytes
-    timed_out: bool
+    @property
+    def exit_code(self) -> int | None: ...
+
+    @property
+    def stdout(self) -> bytes: ...
+
+    @property
+    def timed_out(self) -> bool: ...
 
 
 def name_error(name: object) -> str | None:
