@@ -110,8 +110,8 @@ class FakeTracker:
     def __init__(self, leader: int) -> None:
         self.leader = leader
 
-    def observe(self) -> None:
-        FakeTracker.events.append(("observe", self.leader, 0))
+    def observe(self, force: bool = False) -> None:
+        FakeTracker.events.append(("observe", self.leader, int(force)))
 
     def kill(self, sig: int) -> None:
         FakeTracker.events.append(("kill", self.leader, sig))
@@ -414,6 +414,7 @@ def test_stop_and_timeout_kill_the_descendant_tree(ws: Path, home: Path, world: 
     registry.sweep()
     assert ("observe", 501, 0) in FakeTracker.events
     registry.stop(first)
+    assert ("observe", 501, 1) in FakeTracker.events, "stop takes a forced snapshot"
     assert ("kill", 501, signal.SIGTERM) in FakeTracker.events
     assert ("kill", 501, signal.SIGKILL) in FakeTracker.events
     _start(registry, runtime=60)

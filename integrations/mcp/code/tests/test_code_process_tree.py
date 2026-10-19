@@ -126,6 +126,56 @@ def test_tracker_observe_is_rate_limited_and_kill_reads_a_fresh_table() -> None:
     assert len(reads) == 3 and killed == [101]
 
 
+def test_forced_observe_bypasses_the_rate_limit() -> None:
+    reads: list[int] = []
+    clock = Clock()
+
+    def table() -> dict[int, int]:
+        reads.append(1)
+        return {100: 1, 101: 100}
+
+    tracker = process_os.TreeTracker(
+        100, table=table, kill=lambda *_: None, token=str, clock=clock, interval=10.0
+    )
+    tracker.observe()
+    tracker.observe(force=True)
+    assert len(reads) == 2
+
+
+def test_unknown_token_is_retried_and_a_live_descendant_is_still_signalled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A None token means "not yet known": retried on later observes; at kill time a
+    pid still in the tree's parent chain is signalled even without a token, while a
+    tokenless pid that left the chain is skipped (and logged)."""
+    tables = [
+        {100: 1, 101: 100, 102: 100},
+        {100: 1, 101: 100, 102: 100},
+        {100: 1, 101: 100, 102: 1},
+    ]
+    tokens: dict[int, str | None] = {101: None, 102: None}
+    clock = Clock()
+    killed: list[int] = []
+    tracker = process_os.TreeTracker(
+        100,
+        table=lambda: tables.pop(0),
+        kill=lambda pid, _sig: killed.append(pid),
+        token=lambda pid: tokens.get(pid),
+        clock=clock,
+    )
+    tracker.observe()
+    assert tracker.tokens == {101: None, 102: None}
+    tokens[101] = "late"
+    clock.now += 5
+    tracker.observe()
+    assert tracker.tokens[101] == "late"
+    tokens[102] = None
+    with caplog.at_level("INFO", logger="solus.code.process_os"):
+        tracker.kill(signal.SIGKILL)
+    assert killed == [101]
+    assert any("skipped" in record.getMessage() for record in caplog.records)
+
+
 def test_observe_interval_is_one_second_on_macos() -> None:
     expected = 1.0 if sys.platform == "darwin" else 0.5
     assert process_os.OBSERVE_SECONDS == expected
@@ -143,7 +193,7 @@ def test_linux_start_token_includes_the_boot_id(tmp_path: Path) -> None:
     (tmp_path / "sys" / "kernel" / "random" / "boot_id").write_text("boot-2\n")
     assert process_os.start_token(42, proc_root=tmp_path) != token
     (tmp_path / "sys" / "kernel" / "random" / "boot_id").unlink()
-    assert process_os.start_token(42, proc_root=tmp_path) is None, "fail closed"
+    assert process_os.start_token(42, proc_root=tmp_path) == "22", "raw starttime fallback"
 
 
 def test_process_table_contains_this_process() -> None:

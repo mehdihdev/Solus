@@ -325,7 +325,7 @@ class Registry:
         """SIGTERM every group, wait up to `grace_seconds`, SIGKILL what is left."""
         for entry in entries:
             if entry.tree is not None:
-                entry.tree.observe()
+                entry.tree.observe(force=True)
             if entry.pid is not None:
                 self._killpg(entry.pid, signal.SIGTERM)
             if entry.tree is not None:
@@ -338,6 +338,7 @@ class Registry:
                 self._killpg(entry.pid, signal.SIGKILL)
                 self._wait_dead(entry)
             if entry.tree is not None:
+                entry.tree.observe(force=True)
                 entry.tree.kill(signal.SIGKILL)
 
     def _wait_dead(self, entry: Entry) -> None:
