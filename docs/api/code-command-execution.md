@@ -456,3 +456,53 @@ These supersede earlier sections where they conflict.
 14. **Stop route.** A stop whose result does not arrive within the dispatch bound answers
     `504 stop_unconfirmed` (it may have landed); `404` is only for a process the server reports
     unknown.
+
+## 10. Build auto-run and shell scripts (ADR-031 amendment 2026-10-19)
+
+This section supersedes "every execution is confirmed" (§1 invariant 2) for the narrow class below.
+
+### 10.1 Auto-run
+
+In Build mode (`action_mode: do`), with `force_confirmation` false, a `code.exec` call executes
+**without a card** when all of the following hold:
+
+1. `CommandPolicy.classify(argv)` does not deny it, and its risks are empty.
+2. The server plan answers `ok: true` with `program_scope: "system"`. `program_scope` is a new
+   plan field for every action: `"workspace"` when the resolved program's realpath is inside the
+   workspace (a workspace script, a venv binary, a profile PATH entry under the workspace),
+   otherwise `"system"`. A workspace program counts as running project code, so it keeps the card.
+3. The `BuildExecutionPolicy` routine path succeeds: argument validation, two identical
+   complete previews (the same `code.plan` rows and fingerprint as a card would show), and
+   single use.
+
+The call is then dispatched exactly like an approved one. It streams output, gets the 3000-char
+outcome tail, and is filed to Error logging on a non-zero exit. Its tool result reaches the
+model in the same turn, so there is no resume. Events: `sol.command.completed` gains `auto:
+true|false`. Everything else keeps the card: risk-flagged exec, `process_start/stop`,
+`profile_capture/delete`, `create_environment`, `install`, `run`, `test`, and any exec whose plan
+fails or is `program_scope: "workspace"`. Guide mode never executes.
+
+### 10.2 Shell scripts
+
+`bash` and `sh` are allowed **only** in this shape, which both the cloud and the server check:
+`[bash|sh, <script>, *args]`. `<script>` is a workspace-relative path with no `..` segment
+that ends in `.sh` or `.bash` and does not start with `-`. No option may come before the script
+(`-c`, `-s`, `-i`, `-e`, `--rcfile`, `--init-file`, `-o`, `+o`, … are all refused), and stdin is
+closed. The server additionally resolves `<script>` inside the workspace as a regular file.
+Every other shell form stays denied, as do other shells (zsh, fish, …). The command carries the
+`runs_shell` and `project_scripts` risks, so it always shows a card.
+
+### 10.3 Desktop output presentation
+
+- Command output (the live region on a running card, the output kept under a decided card, and
+  auto-run results in the transcript) renders in the same code-block surface as SOL's markdown
+  code blocks: the same background token, monospace font, rounded border and padding. It is
+  plain text, never HTML.
+- Every markdown code block in SOL messages and every command-output block has a **Copy**
+  button in its top-right corner. It copies the block's plain text, shows "Copied" for about
+  1.5 s, and has an accessible name ("Copy code" / "Copy output").
+- An auto-run `code.exec` shows in the transcript as a compact command row: the program
+  basename, status (`exited N` / `timed out`) and an `auto` label. Its output block is
+  collapsed beyond 12 lines, and the Copy button copies the full retained output.
+- "Output display limit reached" appears only when the output really was truncated (the
+  route's `truncated` flag or the client's own caps), never on completion alone.

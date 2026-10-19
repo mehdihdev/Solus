@@ -204,3 +204,11 @@ Governing spec: `docs/api/code-command-execution.md`. Applies identically to the
 - **Refusals.** A denied command (shell, inline code, sudo) never produces a card. SOL gets
   the refusal and proposes a direct command instead. A missing sandbox shows up as the card's
   refusal text, `sandbox unavailable: …`.
+
+### SOLUSDEV-317 follow-up — auto-run and output blocks (2026-10-19)
+
+Build mode runs no-risk commands without a card (`docs/api/code-command-execution.md` §10).
+They appear as a compact command row (program, status, `auto`) with a code-block output
+region. Risky commands, workspace programs and shell scripts still show the card. Command output
+and SOL's markdown code blocks share one code-block surface, and each block has a top-right
+Copy button. The truncation label appears only when output was actually truncated.
