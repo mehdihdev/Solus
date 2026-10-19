@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from solus_api.agent.confirmations import (
@@ -30,6 +30,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 _DIGEST = "ab" * 32
+#: The wrapper never opens a session for these tools; a typed stand-in.
+_NO_SESSIONS = cast("async_sessionmaker[AsyncSession]", None)
 
 
 @pytest.fixture
@@ -90,6 +92,8 @@ class _Machine:
         self.executed: list[dict[str, Any]] = []
 
     async def read(self, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        if tool == "code.profile_list":
+            return {"profiles": []}
         self.plans.append(args)
         return self.plan
 
@@ -246,15 +250,16 @@ def test_the_snapshot_wrapper_requires_complete_previews_for_the_new_tools() -> 
         tool = with_environment_recording(
             InProcessTool(_descriptor(name), run, preview=rows),
             None,
-            None,
+            _NO_SESSIONS,
             uuid.uuid4(),
-            uuid.uuid4(),  # type: ignore[arg-type]
+            uuid.uuid4(),
         )
         assert getattr(tool, "requires_complete_preview", False) is required, name
         assert callable(getattr(tool, "preview", None))
     for name in ("code.process_stop", "code.profile_delete", "code.process_status"):
         raw = InProcessTool(_descriptor(name), run)
-        assert with_environment_recording(raw, None, None, uuid.uuid4(), uuid.uuid4()) is raw  # type: ignore[arg-type]
+        unwrapped = with_environment_recording(raw, None, _NO_SESSIONS, uuid.uuid4(), uuid.uuid4())
+        assert unwrapped is raw
 
 
 async def test_exec_never_runs_without_the_previewed_plan(
@@ -443,7 +448,7 @@ async def test_the_decide_route_emits_basename_only_command_events(
 
     from solus_api.agent.tools.shapes import ToolResult
     from solus_api.models import ConversationTurn
-    from solus_api.routers import sol
+    from solus_api.routers import sol_confirmations as sol
     from sqlalchemy import update
     from test_confirmations import _seeded_confirmation
 
@@ -475,10 +480,253 @@ async def test_the_decide_route_emits_basename_only_command_events(
 
 def test_decision_summary_uses_the_tools_tail_and_git_warning() -> None:
     from solus_api.agent.tools.shapes import ToolResult
-    from solus_api.routers.sol import _decision_summary
+    from solus_api.routers.sol_confirmations import _decision_summary
 
     value = {"ok": False, "exit_code": 1, "stdout_tail": "q" * 5000, "git_metadata_changed": True}
     summary = _decision_summary("approve", ToolResult.success("c", value), "code.exec")
     assert summary.count("q") == 3000 and summary.endswith(".git/config")
     short = _decision_summary("approve", ToolResult.success("c", value), "code.install")
     assert short.count("q") == 400
+
+
+# ------------------------------------------------- no hidden argv (§9 item 2)
+
+_TOKEN = "aB3dE5fG7hJ9kL1mN2pQ4rS6tU8vW0xY2zA4bC6dE8fG"
+_HIDDEN = "the command contains secret-shaped values that cannot be shown on the approval card"
+
+
+@pytest.mark.parametrize(
+    ("tool", "plan", "args"),
+    [
+        (
+            "code.exec",
+            _plan(["/usr/bin/curl", "-H", _TOKEN, "https://example.com"]),
+            {"argv": ["curl", "-H", _TOKEN, "https://example.com"]},
+        ),
+        (
+            "code.exec",
+            _plan(["/usr/bin/mysql", "password=hunter2"]),
+            {"argv": ["mysql", "password=hunter2"]},
+        ),
+        (
+            "code.process_start",
+            _plan([f"/opt/tools/{_TOKEN}", "serve"]),
+            {"argv": [f"/opt/tools/{_TOKEN}", "serve"]},
+        ),
+        (
+            "code.exec",
+            _plan(["/usr/bin/make"], cwd=f"build/{_TOKEN}"),
+            {"argv": ["make"], "cwd": f"build/{_TOKEN}"},
+        ),
+    ],
+)
+async def test_secret_shaped_command_rows_refuse_instead_of_parking_redacted(
+    maker: async_sessionmaker[AsyncSession],
+    tool: str,
+    plan: dict[str, Any],
+    args: dict[str, Any],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(plan)
+    registry = _registry(machine, maker, scope[0], scope[2], tool)
+
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None
+    assert _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+    assert machine.executed == []
+
+
+async def test_a_secret_shaped_setup_file_refuses_profile_capture(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.bridge.command_previews import CAPTURE_SCRIPT
+
+    setup = f"vendor/{_TOKEN}/env.sh"
+    argv = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile", setup]
+    scope = await _scope(maker)
+    machine = _Machine(_plan(argv))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.profile_capture")
+
+    parked = await _park(
+        maker, registry, scope, "code.profile_capture", {"name": "vendor", "setup_file": setup}
+    )
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+
+
+async def test_an_ordinary_command_is_not_refused_as_hidden(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan(["/opt/ros/jazzy/bin/colcon", "build", "--symlink-install"]))
+    registry = _registry(machine, maker, scope[0], scope[2])
+
+    parked = await _park(
+        maker, registry, scope, "code.exec", {"argv": ["colcon", "build", "--symlink-install"]}
+    )
+
+    assert parked.confirmation_id is not None
+
+
+# ------------------------------------------------ event program values (§9 item 9)
+
+
+@pytest.mark.parametrize(
+    ("argv0", "program"),
+    [
+        ("/usr/bin/make", "make"),
+        ("./tools/build_v2.sh", "build_v2.sh"),
+        ("/usr/bin/g++", "g++"),
+        ("./run me", "other"),
+        ("./bu‮ild", "other"),
+        ("./café", "other"),
+        ("./" + "x" * 65, "other"),
+        ("./" + "x" * 64, "x" * 64),
+    ],
+)
+def test_event_program_values_are_charset_bounded(argv0: str, program: str) -> None:
+    from solus_api.agent.command_gate import completion_events
+
+    events = completion_events("code.exec", {"argv": [argv0]}, {"ok": True, "exit_code": 0})
+    assert events[0][1]["program"] == program
+
+
+async def test_a_parked_command_event_never_carries_an_odd_program_name(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan(["/w/café-build"]))
+    registry = _registry(machine, maker, scope[0], scope[2])
+
+    parked = await _park(maker, registry, scope, "code.exec", {"argv": ["./café-build"]})
+
+    assert parked.confirmation_id is not None
+    events = await _events(maker, "sol.command.proposed")
+    assert [event["program"] for event in events] == ["other"]
+
+
+# ------------------------------------------------- outcome on success (§9 item 7)
+
+
+@pytest.mark.parametrize("tool", ["code.exec", "code.run", "code.test"])
+def test_a_successful_command_reports_its_output_tail(tool: str) -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "a" * 4000 + "\nresult: 42"}
+    text = command_outcome_text(value, tool=tool)
+    assert text is not None and text.startswith("; the command exited 0 — output tail: ")
+    assert text.endswith("result: 42")
+    assert len(text.split("output tail: ", 1)[1]) == 3000
+
+
+@pytest.mark.parametrize("tool", ["code.install", "code.create_environment", None])
+def test_other_successful_tools_keep_the_bare_exit(tool: str | None) -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "Successfully installed six"}
+    assert command_outcome_text(value, tool=tool) == "; the command exited 0"
+
+
+def test_a_silent_success_has_no_tail_clause() -> None:
+    value = {"ok": True, "exit_code": 0, "stdout_tail": "  ", "stderr_tail": ""}
+    assert command_outcome_text(value, tool="code.exec") == "; the command exited 0"
+
+
+@pytest.mark.parametrize(
+    ("tool", "plan", "args"),
+    [
+        (
+            "code.install",
+            _plan([".venv/bin/python", "-m", "pip", "install", "--", "password=hunter2"]),
+            {"packages": ["password=hunter2"]},
+        ),
+        (
+            "code.run",
+            _plan([".venv/bin/python", "train.py", _TOKEN]),
+            {"script": "train.py", "args": [_TOKEN]},
+        ),
+        (
+            "code.test",
+            _plan([".venv/bin/python", "-m", "pytest", f"--key={_TOKEN}"]),
+            {"args": [f"--key={_TOKEN}"]},
+        ),
+        (
+            "code.create_environment",
+            _plan(["/usr/bin/python3", "-m", "venv", f"envs/{_TOKEN}"]),
+            {"path": f"envs/{_TOKEN}"},
+        ),
+    ],
+)
+async def test_every_planned_tool_refuses_secret_shaped_rows(
+    maker: async_sessionmaker[AsyncSession],
+    tool: str,
+    plan: dict[str, Any],
+    args: dict[str, Any],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(plan)
+    registry = _registry(machine, maker, scope[0], scope[2], tool)
+
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+    assert machine.executed == []
+
+
+async def test_a_secret_shaped_extends_refuses_profile_capture(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.bridge.command_previews import CAPTURE_SCRIPT
+
+    setup = "/opt/ros/jazzy/setup.bash"
+    argv = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile", setup]
+    scope = await _scope(maker)
+    machine = _Machine(_plan(argv))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.profile_capture")
+
+    parked = await _park(
+        maker,
+        registry,
+        scope,
+        "code.profile_capture",
+        {"name": "ros", "setup_file": setup, "extends": _TOKEN},
+    )
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+
+
+async def test_an_ordinary_install_still_parks(maker: async_sessionmaker[AsyncSession]) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan([".venv/bin/python", "-m", "pip", "install", "--", "six==1.17.0"]))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.install")
+
+    parked = await _park(maker, registry, scope, "code.install", {"packages": ["six==1.17.0"]})
+
+    assert parked.confirmation_id is not None
+
+
+@pytest.mark.parametrize("tool", ["code.run", "code.install", "code.exec"])
+async def test_a_plan_tool_without_a_plan_never_parks_argument_rows(
+    maker: async_sessionmaker[AsyncSession], tool: str
+) -> None:
+    executed: list[dict[str, Any]] = []
+
+    async def run(args: dict[str, Any]) -> dict[str, Any]:
+        executed.append(args)
+        return {}
+
+    scope = await _scope(maker)
+    registry = ToolRegistry()
+    registry.register(InProcessTool(_descriptor(tool), run))  # no code.plan preview
+
+    args = {"argv": ["make"]} if tool == "code.exec" else {"script": "x.py"}
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None
+    assert "plan is unavailable" in parked.result.error.message
+    assert await _rows(maker) == [] and executed == []

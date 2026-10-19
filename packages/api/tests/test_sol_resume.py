@@ -347,3 +347,76 @@ async def test_the_claim_is_atomic(
         with pytest.raises(APIError) as caught:
             await claim_resume(second, ticket, **scope)
     assert caught.value.status_code == 409
+
+
+async def test_concurrent_resumes_at_chain_five_respect_the_cap(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, engine: Any
+) -> None:
+    """§9 item 9: the chain check locks the conversation row, so two resumes that
+    both read chain 5 cannot both start a turn (the sixth claim is visible to the
+    second check before any assistant turn has been written)."""
+    import asyncio
+
+    from solus_api.core.errors import APIError
+    from solus_api.routers.sol_resume import check_resume, claim_resume
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    project, convo = await _setup(client, alice_headers)
+    owner = await db.get(Conversation, uuid.UUID(convo))
+    assert owner is not None
+    for _ in range(5):
+        db.add(
+            ConversationTurn(
+                conversation_id=owner.id,
+                project_id=uuid.UUID(project),
+                role=TurnRole.ASSISTANT,
+                content="continued",
+                attrs={"resume_of": str(uuid.uuid4())},
+            )
+        )
+    await db.commit()
+    first = await _seed(db, project_id=project, conversation_id=convo)
+    second = await _seed(db, project_id=project, conversation_id=convo)
+    assert owner.team_id is not None and owner.created_by is not None
+    project_id, team_id, user_id = uuid.UUID(project), owner.team_id, owner.created_by
+
+    def check(session: AsyncSession, confirmation: uuid.UUID) -> Any:
+        return check_resume(
+            session,
+            confirmation_id=confirmation,
+            conversation_id=owner.id,
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+        )
+
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as a, maker() as b:
+        ticket = await check(a, first)
+        assert ticket.chain == 6
+        racing = asyncio.create_task(check(b, second))
+        await asyncio.sleep(0.3)
+        assert not racing.done()  # blocked on the conversation row lock
+        await claim_resume(a, ticket, conversation_id=owner.id, project_id=uuid.UUID(project))
+        await a.commit()
+        with pytest.raises(APIError) as caught:
+            await racing
+    assert caught.value.status_code == 409
+    assert caught.value.code == "resume_limit"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"content": "carry on"},
+        {"screenshot": {"media_type": "image/png", "data": "iVBORw0KGgo="}},
+    ],
+)
+def test_a_resume_cannot_carry_content_or_a_screenshot(extra: dict[str, Any]) -> None:
+    """§9 item 12: the resume validator — a resume carries no words or pixels."""
+    from pydantic import ValidationError
+    from solus_api.routers.sol import MessageCreate
+
+    MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4())})
+    with pytest.raises(ValidationError, match="a resume carries no content or screenshot"):
+        MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4()), **extra})

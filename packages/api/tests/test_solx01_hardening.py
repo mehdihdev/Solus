@@ -158,10 +158,12 @@ def test_the_parked_message_tells_the_model_not_to_re_propose() -> None:
     """The load-bearing replacement for the old `return`. Without this sentence a
     model reads UNAUTHORIZED as "try harder" and burns the round budget."""
     from solus_api.agent import confirmations as conf
+    from solus_api.agent.tools.shapes import ToolCall
 
-    source = inspect.getsource(conf.request_confirmation)
-    assert "do not propose it again in this turn" in source
-    assert "not a failure" in source
+    assert "_parked_message" in inspect.getsource(conf.request_confirmation)
+    message = conf._parked_message(ToolCall(tool="onshape.x", args={}), "summary")
+    assert "do not propose it again in this turn" in message
+    assert "not a failure" in message
 
 
 # ------------------------------------------------------------------ SEC-M3 / SEC-M4

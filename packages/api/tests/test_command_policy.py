@@ -38,6 +38,38 @@ _DENY_CASES: list[list[str]] = [
     ["tcsh"],
     ["pwsh", "-Command", "x"],
     ["bash5"],
+    ["bash5.2"],
+    ["python3.12-intel64", "-c", "x"],
+    ["perl5.34-thread-multi", "-e", "1"],
+    ["php-cgi", "-r", "1"],
+    ["gtimeout", "5", "make"],
+    ["zsh-5.9"],
+    ["bash-5.2", "x.sh"],
+    ["php-cgi8.2", "-r", "1"],
+    ["sudo-rs", "ls"],
+    ["sudo.ws", "ls"],
+    ["/usr/bin/env-x", "make"],
+    ["env-x", "make"],
+    ["/opt/homebrew/bin/gtimeout", "5", "make"],
+    ["perl5.36.0-x86_64-linux", "-e", "1"],
+    ["python3.12-x86_64", "-c", "x"],
+    ["bash+x"],
+    ["/usr/bin/zsh_static"],
+    ["node", "--inspect=0.0.0.0:9229", "app.js"],
+    ["node", "--inspect=[::]:9229", "app.js"],
+    ["node", "--inspect=robot.local:9229", "app.js"],
+    ["node", "--inspect=localhost", "app.js"],
+    ["node", "--inspect-port=0.0.0.0:9229", "app.js"],
+    ["node", "-vr", "data:text/javascript,1", "a.js"],
+    ["node", "-vrhttps://x.example/a.js", "a.js"],
+    ["bun", "-br", "https://x.example/a.js", "a.ts"],
+    ["perl", "-wMIO::Socket;system(1)", "x.pl"],
+    ["perl", "-wm", "x;y", "x.pl"],
+    ["ruby", "-wrhttp://x.example/a", "a.rb"],
+    ["ruby", "-wI", "a b", "a.rb"],
+    ["genv", "x"],
+    ["/usr/bin/git-upload-pack", "."],
+    ["git-receive-pack"],
     # wrappers that would run another program
     ["env", "bash"],
     ["/usr/bin/env", "python3", "x.py"],
@@ -129,6 +161,25 @@ _ALLOW_CASES: list[list[str]] = [
     ["deno", "run", "main.ts"],
     ["cmake", "--build", "build"],
     ["environment-tool"],  # not "env"
+    ["node", "--inspect=9229", "app.js"],
+    ["node", "--inspect=127.0.0.1:9229", "app.js"],
+    ["node", "--inspect=localhost:9229", "app.js"],
+    ["node", "--inspect=[::1]:9229", "app.js"],
+    ["perl", "-wMIO::Socket", "x.pl"],
+    ["ruby", "-wrjson", "a.rb"],
+    # §9 item 11: prefix matching is version-shaped only
+    ["./env_setup.sh"],
+    ["./env-check.sh"],
+    ["./tools/env-check.sh"],
+    ["./time_sync.py"],
+    ["./sh_build.sh"],
+    ["./nu_test"],
+    ["./open_loop"],
+    ["./sudo_check"],
+    ["./git_report.sh"],
+    ["./bashful"],
+    ["./timeout-test"],
+    ["./envoy"],
 ]
 
 
@@ -272,12 +323,8 @@ def _mirror_tables() -> dict[str, Any]:
     return tables
 
 
-@pytest.mark.skipif(
-    not _MIRROR.exists(),
-    reason="server deny table integrations/mcp/code/solus/command_deny.py not merged yet "
-    "(SOLUSDEV-317 code-server sub-branch); un-skip at integration",
-)
 def test_cloud_policy_matches_the_server_deny_table() -> None:
+    assert _MIRROR.is_file(), f"server deny table missing: {_MIRROR}"
     from solus_api.agent.command_interpreters import (
         GRAMMARS,
         PERL_MODULE_PATTERN,
@@ -295,3 +342,91 @@ def test_cloud_policy_matches_the_server_deny_table() -> None:
     assert frozenset(tables["BUN_LOADER_FLAGS"]) <= GRAMMARS["bun"].value_options
     assert tables["PERL_MODULE_PATTERN"] == PERL_MODULE_PATTERN
     assert tables["RUBY_LIBRARY_PATTERN"] == RUBY_LIBRARY_PATTERN
+
+
+# ------------------------------------------- behavioural parity (§9 item 11)
+
+#: Shared corpus: every argv here must get the same denied/allowed answer from
+#: the cloud `classify` and the server's `classify_denial`.
+_PARITY_CORPUS: list[list[str]] = [
+    *_DENY_CASES[:-2],  # the malformed pair is a cloud-only input shape
+    *_ALLOW_CASES,
+    ["python3.13t", "-c", "x"],
+    ["pythonw", "-c", "x"],
+    ["python3-dbg", "-c", "x"],
+    ["nodejs", "-e", "1"],
+    ["luajit", "-e", "x"],
+    ["pypy3.10", "-c", "x"],
+    ["python", "--unknown-flag", "x.py"],
+    ["ruby", "--weird", "app.rb"],
+    ["node", "--import", "data:text/javascript,1", "x.js"],
+    ["node", "--inspect=0.0.0.0:9229", "app.js"],
+    ["perl", "-MIO::Socket", "x.pl"],
+    ["php", "-d", "auto_prepend_file=x", "a.php"],
+    ["bun", "-p", "1"],
+    ["deno", "repl"],
+    ["sudo", "ls"],
+    ["runuser", "-u", "x", "ls"],
+    ["chroot", "/", "ls"],
+    ["unshare", "-r", "ls"],
+    ["nsenter", "-t", "1"],
+    ["stdbuf", "-o0", "make"],
+    ["systemd-run", "x"],
+    ["firejail", "x"],
+    ["zsh5.9"],
+    ["fish-3"],
+    ["./env_setup.sh"],
+    ["./env-check.sh"],
+    ["zsh-5.9"],
+    ["perl5.36.0-x86_64-linux", "x.pl"],
+    ["python3.12-x86_64", "-c", "x"],
+    ["bash+x"],
+    ["node", "--inspect=[::]:9229", "app.js"],
+    ["node", "--inspect=localhost:9229", "app.js"],
+    ["node", "--inspect=9229", "app.js"],
+    ["node", "-vr", "data:text/javascript,1", "a.js"],
+    ["perl", "-wMIO::Socket;system(1)", "x.pl"],
+    ["ruby", "-wrhttp://x.example/a", "a.rb"],
+    ["sudo-rs", "ls"],
+    ["env-x"],
+    ["./nu_test"],
+    ["./sh_build.sh"],
+    ["./time_sync.py"],
+    ["./open_loop"],
+    ["cargo", "build"],
+    ["npm", "run", "build"],
+    ["rm", "-rf", "build"],
+    ["ssh", "robot", "ls"],
+    ["pip", "install", "numpy"],
+    ["/opt/ros/jazzy/bin/ros2", "topic", "list"],
+]
+
+
+def _server_classifier() -> Any:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_server_command_deny", _MIRROR)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.classify_denial
+
+
+def _server_denied(answer: Any) -> bool:
+    denied = getattr(answer, "denied", None)
+    return bool(answer) if denied is None else bool(denied)
+
+
+def test_the_parity_corpus_is_large_enough() -> None:
+    assert len(_PARITY_CORPUS) >= 60
+
+
+@pytest.mark.xfail(strict=False, reason="server classify_denial lands at integration")
+def test_cloud_and_server_classifiers_agree_on_the_shared_corpus() -> None:
+    classify_denial = _server_classifier()
+    disagreements = [
+        argv
+        for argv in _PARITY_CORPUS
+        if classify(argv).denied is not _server_denied(classify_denial(argv))
+    ]
+    assert disagreements == []

@@ -47,6 +47,8 @@ class _Companion:
         self.sent: list[dict[str, Any]] = []
         self.session: BridgeSession | None = None
         self.running = {"p1"}
+        self.silent = False
+        self.stop_failure: str | None = None
 
     async def _send(self, frame: str) -> None:
         data = json.loads(frame)["data"]
@@ -57,6 +59,11 @@ class _Companion:
             if "process_id" in args:
                 if args["process_id"] in self.running:
                     value["output"] = {**_OUTPUT, "process_id": args["process_id"]}
+        elif data["tool"] == "code.process_stop" and self.silent:
+            return
+        elif data["tool"] == "code.process_stop" and self.stop_failure is not None:
+            value = {"ok": False, "process_id": args["process_id"], "state": None}
+            value |= {"exit_code": None, "reason": self.stop_failure}
         elif data["tool"] == "code.process_stop":
             known = args["process_id"] in self.running
             value = {
@@ -248,3 +255,64 @@ async def test_reads_are_rate_limited(
     ]
     assert statuses[:-1] == [200] * READ_LIMIT
     assert statuses[-1] == 429
+
+
+async def test_an_unanswered_stop_is_504_stop_unconfirmed(
+    client: AsyncClient,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    monkeypatch: Any,
+) -> None:
+    from solus_api.routers import code_processes
+
+    monkeypatch.setattr(code_processes, "_TIMEOUT_SECONDS", 0.2)
+    _, project, companion = await _setup(client, app, alice_headers)
+    companion.silent = True
+    resp = await client.post(
+        f"{_base(project)}/p1/stop", params={"machine_id": MACHINE}, headers=alice_headers
+    )
+    assert resp.status_code == 504, resp.text
+    assert resp.json()["error"]["code"] == "stop_unconfirmed"
+
+
+async def test_a_failed_stop_that_is_not_unknown_is_unconfirmed_not_404(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str]
+) -> None:
+    _, project, companion = await _setup(client, app, alice_headers)
+    companion.stop_failure = "process_stop failed"
+    resp = await client.post(
+        f"{_base(project)}/p1/stop", params={"machine_id": MACHINE}, headers=alice_headers
+    )
+    assert resp.status_code == 504
+    assert resp.json()["error"]["code"] == "stop_unconfirmed"
+
+
+async def test_stops_are_rate_limited(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str]
+) -> None:
+    from solus_api.routers.code_processes import STOP_LIMIT
+
+    _, project, _companion = await _setup(client, app, alice_headers)
+    params = {"machine_id": MACHINE}
+    statuses = [
+        (
+            await client.post(f"{_base(project)}/p1/stop", params=params, headers=alice_headers)
+        ).status_code
+        for _ in range(STOP_LIMIT + 1)
+    ]
+    assert statuses[:-1] == [200] * STOP_LIMIT
+    assert statuses[-1] == 429
+
+
+async def test_a_viewer_cannot_list_read_or_stop(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    team, project, companion = await _setup(client, app, alice_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team, role="viewer")
+    params = {"machine_id": MACHINE}
+    assert (await client.get(_base(project), params=params, headers=bob_headers)).status_code == 403
+    out = await client.get(f"{_base(project)}/p1/output", params=params, headers=bob_headers)
+    assert out.status_code == 403
+    stop = await client.post(f"{_base(project)}/p1/stop", params=params, headers=bob_headers)
+    assert stop.status_code == 403
+    assert companion.sent == []

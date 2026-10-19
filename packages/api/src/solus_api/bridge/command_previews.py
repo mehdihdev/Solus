@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
+from solus_api.agent.command_names import is_workspace_relative
 from solus_api.agent.command_policy import Risk, classify
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.untrusted import redact_text
@@ -47,6 +48,8 @@ _DIGEST: Final = re.compile(r"^[0-9a-f]{64}$")
 _PROFILE_NAME: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 _WHITESPACE: Final = re.compile(r"\s+")
 _NOTHING: Final = "Nothing was parked or run."
+#: §2.4: the only absolute setup files a capture accepts live here.
+_SYSTEM_SETUP_ROOT: Final = "/opt/ros/"
 
 
 @dataclass(frozen=True)
@@ -132,25 +135,27 @@ def _strings(value: object) -> tuple[str, ...]:
     return tuple(item for item in value[:32] if isinstance(item, str))
 
 
-def _fingerprint(plan: CommandPlan) -> str:
-    canonical = json.dumps(
-        {
-            "argv": list(plan.argv),
-            "cwd": plan.cwd,
-            "environment": plan.environment,
-            "profile_digest": plan.profile_digest,
-            "sandbox_kind": plan.sandbox_kind,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+def _fingerprint(plan: CommandPlan, profile_name: str | None = None) -> str:
+    """`profile_name` is the profile a CAPTURE writes (§9 item 6); command plans
+    leave it out, so their fingerprints keep the §5.2 shape."""
+    fields: dict[str, Any] = {
+        "argv": list(plan.argv),
+        "cwd": plan.cwd,
+        "environment": plan.environment,
+        "profile_digest": plan.profile_digest,
+        "sandbox_kind": plan.sandbox_kind,
+    }
+    if profile_name is not None:
+        fields["profile_name"] = profile_name
+    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     return ":".join(digest[start : start + 16] for start in range(0, 64, 16))
 
 
-def plan_fingerprint(plan: object) -> str:
-    """sha256 of canonical `{argv, cwd, environment, profile_digest, sandbox_kind}`."""
-    return _fingerprint(parse_plan(plan))
+def plan_fingerprint(plan: object, *, profile_name: str | None = None) -> str:
+    """sha256 of canonical `{argv, cwd, environment, profile_digest, sandbox_kind}`
+    (plus `profile_name` for a capture)."""
+    return _fingerprint(parse_plan(plan), profile_name)
 
 
 def _row(label: str, after: str) -> dict[str, Any]:
@@ -193,8 +198,15 @@ def command_rows(
     """Rows for `code.exec` (and `code.process_start` when `process`)."""
     plan = parse_plan(raw)
     command = _chunked("command", json.dumps(list(plan.argv)), _JSON_COMMAND_CAP)
-    requested = classify(args.get("argv"))
-    for verdict in (requested, classify(plan.argv)):
+    requested_argv = args.get("argv")
+    requested = classify(requested_argv)
+    relative = (
+        isinstance(requested_argv, list)
+        and bool(requested_argv)
+        and isinstance(requested_argv[0], str)
+        and is_workspace_relative(requested_argv[0])
+    )
+    for verdict in (requested, classify(plan.argv, workspace_relative=relative)):
         if verdict.denied:
             raise _refuse(
                 f"The command is denied: {verdict.reason}. Propose a direct argv instead "
@@ -224,18 +236,48 @@ def _venv_program(plan: CommandPlan) -> bool:
     return env is not None and f"/{env.strip('/')}/bin/" in plan.argv[0]
 
 
-def capture_rows(raw: object, args: Mapping[str, Any]) -> list[dict[str, Any]]:
+def existing_profiles(listing: object) -> frozenset[str]:
+    """Profile names from a `code.profile_list` answer; refuses when unreadable,
+    because the card must say whether the capture replaces one (§9 item 6)."""
+    profiles = listing.get("profiles") if isinstance(listing, Mapping) else None
+    if not isinstance(profiles, list):
+        raise _refuse("The existing environment profiles could not be read.")
+    return frozenset(
+        entry["name"]
+        for entry in profiles
+        if isinstance(entry, Mapping) and isinstance(entry.get("name"), str)
+    )
+
+
+def _capture_risk(setup_file: object, resolved: str) -> str:
+    """A workspace setup file is project code; only a `/opt/ros/` file is not."""
+    system = isinstance(setup_file, str) and setup_file.startswith(_SYSTEM_SETUP_ROOT)
+    return (
+        "none flagged"
+        if system and resolved.startswith(_SYSTEM_SETUP_ROOT)
+        else (Risk.PROJECT_SCRIPTS.value)
+    )
+
+
+def capture_rows(
+    raw: object, args: Mapping[str, Any], existing: frozenset[str]
+) -> list[dict[str, Any]]:
     """Rows for `code.profile_capture`: only the fixed Solus capture argv passes."""
     plan = parse_plan(raw)
     if len(plan.argv) != len(_CAPTURE_PREFIX) + 1 or plan.argv[:-1] != _CAPTURE_PREFIX:
         raise _refuse("The profile capture plan is not the fixed Solus capture script.")
+    name = args.get("name")
+    if not (isinstance(name, str) and _PROFILE_NAME.fullmatch(name)):
+        raise _refuse("The profile name is invalid.")
     extends = args.get("extends")
     return [
+        _row("profile", f"{name} (replaces existing)" if name in existing else name),
         _row("setup file", plan.argv[-1]),
         _row("extends", extends if isinstance(extends, str) and extends else "none"),
         *_chunked("command", json.dumps(list(plan.argv)), _JSON_COMMAND_CAP),
         _sandbox_row(plan),
-        _row("plan fingerprint", _fingerprint(plan)),
+        _row("risk", _capture_risk(args.get("setup_file"), plan.argv[-1])),
+        _row("plan fingerprint", _fingerprint(plan, name)),
     ]
 
 

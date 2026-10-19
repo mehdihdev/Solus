@@ -16,7 +16,12 @@ from dataclasses import dataclass
 from typing import Final, cast
 
 from solus_api.agent.command_interpreters import GRAMMARS, INLINE_CODE, interpreter_denial
-from solus_api.agent.command_names import INTERPRETERS, normalise, prefix_match
+from solus_api.agent.command_names import (
+    INTERPRETERS,
+    is_workspace_relative,
+    name_match,
+    normalise,
+)
 from solus_api.agent.command_risks import Risk, risks_for
 
 #: Mirrored in the server deny table; keep both in lockstep (test cross-checks).
@@ -102,37 +107,42 @@ def _malformed(argv: object) -> str | None:
     return None
 
 
-def _wrapper(base: str) -> bool:
-    """A denied wrapper, including GNU `g`-prefixed builds (gtimeout, genv…)."""
-    if prefix_match(base, WRAPPERS) is not None:
-        return True
-    lowered = posixpath.basename(base).lower()
-    return lowered.startswith("g") and prefix_match(lowered[1:], WRAPPERS) is not None
-
-
-def _denial(base: str, args: Sequence[str]) -> str | None:
-    if prefix_match(base, SHELLS) is not None:
+def _denial(program: str, args: Sequence[str], *, exact: bool) -> str | None:
+    base = posixpath.basename(program)
+    if name_match(base, SHELLS, exact=exact) is not None:
         return f"{base} is a shell"
-    if _wrapper(base):
+    if name_match(base, WRAPPERS, exact=exact, gnu=True) is not None:
         return f"{base} runs another program"
-    if prefix_match(base, ELEVATION) is not None:
+    if name_match(base, ELEVATION, exact=exact) is not None:
         return f"{base} elevates privileges"
-    if prefix_match(base, DENIED_PROGRAMS) is not None:
+    if name_match(base, DENIED_PROGRAMS, exact=exact) is not None:
         return _GIT_MESSAGE
-    interpreter = normalise(base)
-    if interpreter in GRAMMARS:
+    interpreter = _interpreter(base, exact=exact)
+    if interpreter is not None and interpreter in GRAMMARS:
         reason = interpreter_denial(interpreter, args)
         return None if reason is None else f"{base}: {reason}"
     return None
 
 
-def classify(argv: object) -> CommandVerdict:
-    """Deny or badge one argument list. Never raises."""
+def _interpreter(base: str, *, exact: bool) -> str | None:
+    if not exact:
+        return normalise(base)
+    found = name_match(base, INTERPRETERS, exact=True)
+    return None if found is None else INTERPRETERS[found]
+
+
+def classify(argv: object, *, workspace_relative: bool | None = None) -> CommandVerdict:
+    """Deny or badge one argument list. Never raises.
+
+    A workspace-relative program (`./env-check.sh`) is matched by its EXACT name;
+    anything else fails closed by prefix (§9 item 11). `workspace_relative`
+    overrides the inference, for a resolved plan argv whose request was relative."""
     malformed = _malformed(argv)
     if malformed is not None:
         return _deny(malformed)
     items = cast(Sequence[str], argv)
-    reason = _denial(posixpath.basename(items[0]), items[1:])
+    exact = is_workspace_relative(items[0]) if workspace_relative is None else workspace_relative
+    reason = _denial(items[0], items[1:], exact=exact)
     if reason is not None:
         return _deny(reason)
     return CommandVerdict(denied=False, reason=None, risks=risks_for(items))

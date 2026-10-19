@@ -23,6 +23,14 @@ from solus_api.services.events import emit_event
 
 #: Tools whose model-proposed argv the policy judges (§4).
 ARGV_TOOLS: Final = frozenset({"code.exec", "code.process_start"})
+#: Tools whose card is the server's complete `code.plan` (§5.1): a failed plan
+#: refuses, and a card row that redaction would alter refuses too (§9 item 2).
+COMPLETE_PREVIEW_TOOLS: Final = ARGV_TOOLS | frozenset({"code.profile_capture"})
+#: Every tool whose card is read back from the server's `code.plan` (§9 item 2
+#: applies to all of them: no card row may be altered by redaction).
+PLAN_PREVIEW_TOOLS: Final = COMPLETE_PREVIEW_TOOLS | frozenset(
+    {"code.create_environment", "code.install", "code.run", "code.test"}
+)
 #: Tools a resume may follow and whose approved result is a command outcome (§5.5).
 COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
     {
@@ -36,9 +44,16 @@ COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
 _SANDBOX_KIND: Final = re.compile(r"^(?:sandbox-exec|landlock(?:-abi[0-9]{1,2})?)$")
 
 
+#: §9 item 9: an event `program` is a plain basename or the literal "other".
+_EVENT_PROGRAM: Final = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
+
+
 def _basename(argv: object) -> str | None:
     if isinstance(argv, list | tuple) and argv and isinstance(argv[0], str) and argv[0]:
-        return posixpath.basename(argv[0])[:128] or None
+        base = posixpath.basename(argv[0])
+        if not base:
+            return None
+        return base if _EVENT_PROGRAM.fullmatch(base) else "other"
     return None
 
 

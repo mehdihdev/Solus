@@ -39,7 +39,12 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.command_gate import ARGV_TOOLS, policy_refusal, record_proposed
+from solus_api.agent.command_gate import (
+    ARGV_TOOLS,
+    PLAN_PREVIEW_TOOLS,
+    policy_refusal,
+    record_proposed,
+)
 from solus_api.agent.command_outcome import command_outcome_text, output_tail
 from solus_api.agent.command_output import STREAMING_TOOLS
 from solus_api.agent.command_policy import classify
@@ -182,55 +187,96 @@ async def _build_preview(
     rows on failure so the caller refuses to park or execute the action.
     """
     required = force_complete or getattr(tool, "requires_complete_preview", False) is True
-    allowed_paths = call_display_paths(
-        getattr(getattr(tool, "descriptor", None), "name", None), args
-    )
-    fallback = [] if required else _argument_rows(args, allowed_paths=allowed_paths)
+    name = getattr(getattr(tool, "descriptor", None), "name", None)
+    planned = name in PLAN_PREVIEW_TOOLS
+    allowed_paths = call_display_paths(name, args)
+    fallback = [] if required or planned else _argument_rows(args, allowed_paths=allowed_paths)
     builder = getattr(tool, "preview", None)
-    if builder is None:
-        return fallback
     try:
+        if builder is None:
+            if planned:
+                raise PreviewRefusal(PLAN_UNAVAILABLE_MESSAGE)
+            return fallback
         # Bounded (SEC-M3): a preview is a live network read and one call site
         # runs under a row lock — a hanging tool must not pin the connection.
         async with asyncio.timeout(_PREVIEW_TIMEOUT_SECONDS):
             rows = await builder(dict(args))
+        if _hides_command(name, rows, allowed_paths):
+            raise PreviewRefusal(HIDDEN_COMMAND_MESSAGE)
     except PreviewRefusal as error:
-        # A quota block or a refused `code.plan` (SOLUSDEV-317): the reason is
-        # Solus-composed and sanitised, and the call is refused, not parked.
+        # A quota block, a refused `code.plan` or a hidden argv (SOLUSDEV-317):
+        # the reason is Solus-composed and sanitised; the call is refused, not parked.
         if quota_failures is not None:
             quota_failures.append(error.safe_message)
         return []
     except Exception:
-        name = getattr(getattr(tool, "descriptor", None), "name", "?")
         logger.warning("preview failed for %s (complete preview required=%s)", name, required)
+        if planned and quota_failures is not None:
+            # A code.plan card never degrades to argument rows (§9 item 2).
+            quota_failures.append(PLAN_UNAVAILABLE_MESSAGE)
         return fallback
     if required and not _complete_preview(rows):
         return []
-    cleaned: list[dict[str, Any]] = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict) or "label" not in row:
-            continue
-        # redact_text (SEC-M4): before/after are read from the customer's live
-        # system and are persisted + streamed to the browser — the same
-        # redaction gate every other persistence path applies.
-        cleaned.append(
-            {
-                "label": redact_text(_single_line(row.get("label", ""), _LABEL_CAP)),
-                "before": None
-                if row.get("before") is None
-                else redact_text(
-                    row["before"] if required else _single_line(row["before"], _VALUE_CAP),
-                    allowed_paths=allowed_paths,
-                ),
-                "after": None
-                if row.get("after") is None
-                else redact_text(
-                    row["after"] if required else _single_line(row["after"], _VALUE_CAP),
-                    allowed_paths=allowed_paths,
-                ),
-            }
+    cleaned = _cleaned_rows(rows, required=required, allowed_paths=allowed_paths)
+    return cleaned or fallback
+
+
+def _cleaned_rows(
+    rows: Any, *, required: bool, allowed_paths: frozenset[str]
+) -> list[dict[str, Any]]:
+    """redact_text (SEC-M4): before/after are read from the customer's live
+    system and are persisted + streamed to the browser — the same redaction gate
+    every other persistence path applies. A complete preview keeps its line
+    breaks; a legacy one is collapsed to single lines."""
+
+    def value(raw: Any) -> str | None:
+        if raw is None:
+            return None
+        text = raw if required else _single_line(raw, _VALUE_CAP)
+        return redact_text(text, allowed_paths=allowed_paths)
+
+    cleaned = [
+        {
+            "label": redact_text(_single_line(row.get("label", ""), _LABEL_CAP)),
+            "before": value(row.get("before")),
+            "after": value(row.get("after")),
+        }
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict) and "label" in row
+    ]
+    return cleaned[:_MAX_PREVIEW_ROWS]
+
+
+#: SOLUSDEV-317 §9 item 2: on a `code.plan` card every row must render exactly as
+#: it runs, except these, which Solus composes from fixed text and validated kinds.
+_COMPOSED_ROWS: Final = frozenset({"sandbox", "risk", "plan fingerprint", "max runtime"})
+PLAN_UNAVAILABLE_MESSAGE: Final = (
+    "The command plan is unavailable, so its approval card cannot be shown. "
+    "Nothing was parked or run."
+)
+HIDDEN_COMMAND_MESSAGE: Final = (
+    "Refused: the command contains secret-shaped values that cannot be shown on the "
+    "approval card. Nothing was parked or run; pass secrets through the environment or a "
+    "file the command reads instead."
+)
+
+
+def _hides_command(tool_name: object, rows: Any, allowed_paths: frozenset[str]) -> bool:
+    """No hidden argv: a row that redaction would alter cannot be shown verbatim,
+    so the person would approve something other than what runs. Every row is
+    verbatim unless Solus composed it, so a new argument-derived row is covered."""
+    if tool_name not in PLAN_PREVIEW_TOOLS or not isinstance(rows, list):
+        return False
+    return any(
+        isinstance(row, dict)
+        and row.get("label") not in _COMPOSED_ROWS
+        and any(
+            isinstance(row.get(key), str)
+            and redact_text(row[key], allowed_paths=allowed_paths) != row[key]
+            for key in ("label", "before", "after")
         )
-    return cleaned[:_MAX_PREVIEW_ROWS] if cleaned else fallback
+        for row in rows
+    )
 
 
 def _complete_preview(rows: Any) -> bool:
@@ -296,6 +342,129 @@ def validate_tool_arguments(descriptor: ToolDescriptor, args: dict[str, Any]) ->
     return "; ".join(error.message[:120] for error in errors[:3]) if errors else None
 
 
+@dataclass(frozen=True)
+class _ParkScope:
+    project_id: uuid.UUID
+    team_id: uuid.UUID
+    user_id: uuid.UUID
+    conversation_id: uuid.UUID | None
+
+
+def _unparked(call: ToolCall, result: ToolResult) -> ParkedCall:
+    """A refusal: nothing was persisted, so no confirmation frame is streamed."""
+    return ParkedCall(None, call.tool, {}, "", [], result)
+
+
+async def _refused_before_preview(
+    session: AsyncSession, descriptor: ToolDescriptor, call: ToolCall, scope: _ParkScope
+) -> ParkedCall | None:
+    """SEC-H3: validate BEFORE parking. Unvalidated args would be persisted,
+    rendered on the consent card, and streamed — a token-shaped extra key
+    ("token": "ghp_…") would land in Postgres and on the wire even though
+    execution later rejects it. Then (SOLUSDEV-317 §4) a denied argv is refused
+    before any preview read or park."""
+    detail = validate_tool_arguments(descriptor, call.args)
+    if detail:
+        message = f"{call.tool} arguments are invalid and were not parked: {detail}"
+        return _unparked(call, _refusal(call.call_id, message, ToolErrorCode.INVALID_ARGS))
+    denied = await policy_refusal(
+        session, call, user_id=scope.user_id, team_id=scope.team_id, project_id=scope.project_id
+    )
+    return None if denied is None else _unparked(call, denied)
+
+
+async def _pending_duplicate(
+    session: AsyncSession, call: ToolCall, scope: _ParkScope
+) -> ParkedCall | None:
+    """Serialize cross-turn check/insert under the same owner-private chat (the
+    caller commits right after parking, releasing the lock) and restore an
+    identical card that is still waiting instead of minting a second one."""
+    if scope.conversation_id is None:
+        return None
+    owned = await session.scalar(
+        select(Conversation)
+        .where(
+            Conversation.id == scope.conversation_id,
+            Conversation.project_id == scope.project_id,
+            Conversation.team_id == scope.team_id,
+            Conversation.created_by == scope.user_id,
+            Conversation.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if owned is None:
+        return _unparked(
+            call, _refusal(call.call_id, "Conversation not found", ToolErrorCode.NOT_FOUND)
+        )
+    candidates = await session.scalars(
+        select(ToolConfirmation)
+        .where(
+            ToolConfirmation.conversation_id == scope.conversation_id,
+            ToolConfirmation.project_id == scope.project_id,
+            ToolConfirmation.team_id == scope.team_id,
+            ToolConfirmation.user_id == scope.user_id,
+            ToolConfirmation.tool == call.tool,
+            ToolConfirmation.status == ConfirmationStatus.PENDING,
+            ToolConfirmation.expires_at > utcnow(),
+        )
+        .order_by(ToolConfirmation.created_at, ToolConfirmation.id)
+    )
+    key = _canonical(call.args)
+    existing = next((row for row in candidates if _canonical(row.args) == key), None)
+    if existing is None:
+        return None
+    message = (
+        f"{call.tool} is already waiting for the person's approval. "
+        "The original approval card has been restored. Do not propose it again."
+    )
+    return ParkedCall(
+        existing.id,
+        existing.tool,
+        dict(existing.args),
+        existing.summary,
+        existing.preview,
+        _refusal(call.call_id, message, ToolErrorCode.UNAUTHORIZED),
+    )
+
+
+def _canonical(args: Any) -> str:
+    return json.dumps(args, sort_keys=True, separators=(",", ":"))
+
+
+async def _card_preview(
+    registry: ToolRegistry, call: ToolCall
+) -> tuple[list[dict[str, Any]], ToolResult | None]:
+    """The card's rows, or the refusal when a required preview cannot be shown."""
+    tool = next((t for t in registry.tools() if t.descriptor.name == call.tool), None)
+    refusals: list[str] = []
+    preview = (
+        await _build_preview(tool, call.args, quota_failures=refusals) if tool is not None else []
+    )
+    if not refusals and (getattr(tool, "requires_complete_preview", False) is not True or preview):
+        return preview, None
+    message = (
+        refusals[0]
+        if refusals
+        else "The complete change preview is unavailable. Nothing was parked or applied; "
+        "read the current design and try again."
+    )
+    return [], _refusal(call.call_id, message, ToolErrorCode.UNAVAILABLE)
+
+
+def _parked_message(call: ToolCall, summary: str) -> str:
+    """The ONLY thing the model learns about the park, and after SOLUSDEV-168's
+    loop change it keeps reasoning afterwards — so it says three things: the
+    action is waiting for a PERSON, it is not a failure, and proposing it again
+    this turn achieves nothing. Without the last clause a model reads
+    UNAUTHORIZED as "try harder"."""
+    return (
+        f"{call.tool} is now waiting for the person to approve it — they have "
+        f"been shown exactly what it would do. This is not a failure and it "
+        f"does not need retrying: do not propose it again in this turn. "
+        f"Carry on with anything else the task needs. {summary}"
+    )
+
+
 async def request_confirmation(
     session: AsyncSession,
     registry: ToolRegistry,
@@ -314,112 +483,16 @@ async def request_confirmation(
     descriptor = next((d for d in registry.list() if d.name == call.tool), None)
     if descriptor is None or not descriptor.requires_confirmation:
         return None
-
-    # SEC-H3: validate BEFORE parking. Unvalidated args would be persisted,
-    # rendered on the consent card, and streamed — a token-shaped extra key
-    # ("token": "ghp_…") would land in Postgres and on the wire even though
-    # execution later rejects it. Invalid args are refused, never parked.
-    detail = validate_tool_arguments(descriptor, call.args)
-    if detail:
-        return ParkedCall(
-            confirmation_id=None,
-            tool=call.tool,
-            args={},
-            summary="",
-            preview=[],
-            result=_refusal(
-                call.call_id,
-                f"{call.tool} arguments are invalid and were not parked: {detail}",
-                ToolErrorCode.INVALID_ARGS,
-            ),
-        )
-
-    # SOLUSDEV-317 §4: a denied argv is refused BEFORE any preview read or park.
-    denied = await policy_refusal(
-        session, call, user_id=user_id, team_id=team_id, project_id=project_id
-    )
-    if denied is not None:
-        return ParkedCall(None, call.tool, {}, "", [], denied)
-
-    if conversation_id is not None:
-        # Serialize cross-turn check/insert under the same owner-private chat.
-        # The caller commits immediately after parking, releasing this lock.
-        owned = await session.scalar(
-            select(Conversation)
-            .where(
-                Conversation.id == conversation_id,
-                Conversation.project_id == project_id,
-                Conversation.team_id == team_id,
-                Conversation.created_by == user_id,
-                Conversation.deleted_at.is_(None),
-            )
-            .with_for_update()
-        )
-        if owned is None:
-            return ParkedCall(
-                None,
-                call.tool,
-                {},
-                "",
-                [],
-                _refusal(call.call_id, "Conversation not found", ToolErrorCode.NOT_FOUND),
-            )
-        candidates = await session.scalars(
-            select(ToolConfirmation)
-            .where(
-                ToolConfirmation.conversation_id == conversation_id,
-                ToolConfirmation.project_id == project_id,
-                ToolConfirmation.team_id == team_id,
-                ToolConfirmation.user_id == user_id,
-                ToolConfirmation.tool == call.tool,
-                ToolConfirmation.status == ConfirmationStatus.PENDING,
-                ToolConfirmation.expires_at > utcnow(),
-            )
-            .order_by(ToolConfirmation.created_at, ToolConfirmation.id)
-        )
-        key = json.dumps(call.args, sort_keys=True, separators=(",", ":"))
-        for existing in candidates:
-            if json.dumps(existing.args, sort_keys=True, separators=(",", ":")) == key:
-                return ParkedCall(
-                    existing.id,
-                    existing.tool,
-                    dict(existing.args),
-                    existing.summary,
-                    existing.preview,
-                    _refusal(
-                        call.call_id,
-                        f"{call.tool} is already waiting for the person's approval. "
-                        "The original approval card has been restored. Do not propose it again.",
-                        ToolErrorCode.UNAUTHORIZED,
-                    ),
-                )
-
+    scope = _ParkScope(project_id, team_id, user_id, conversation_id)
+    early = await _refused_before_preview(
+        session, descriptor, call, scope
+    ) or await _pending_duplicate(session, call, scope)
+    if early is not None:
+        return early
     summary = _summarize(descriptor, call.args)
-    tool = next((t for t in registry.tools() if t.descriptor.name == call.tool), None)
-    quota_failures: list[str] = []
-    preview = (
-        await _build_preview(tool, call.args, quota_failures=quota_failures)
-        if tool is not None
-        else []
-    )
-    if quota_failures or (
-        getattr(tool, "requires_complete_preview", False) is True and not preview
-    ):
-        return ParkedCall(
-            confirmation_id=None,
-            tool=call.tool,
-            args={},
-            summary="",
-            preview=[],
-            result=_refusal(
-                call.call_id,
-                quota_failures[0]
-                if quota_failures
-                else "The complete change preview is unavailable. Nothing was parked or applied; "
-                "read the current design and try again.",
-                ToolErrorCode.UNAVAILABLE,
-            ),
-        )
+    preview, refused = await _card_preview(registry, call)
+    if refused is not None:
+        return _unparked(call, refused)
     row = ToolConfirmation(
         project_id=project_id,
         team_id=team_id,
@@ -446,24 +519,12 @@ async def request_confirmation(
         )
     logger.info("parked %s for confirmation (project=%s)", call.tool, project_id)
     return ParkedCall(
-        confirmation_id=row.id,
-        tool=call.tool,
-        args=dict(call.args),
-        summary=summary,
-        preview=preview,
-        result=_refusal(
-            call.call_id,
-            # This sentence is the ONLY thing the model learns about the park, and
-            # after SOLUSDEV-168's loop change it keeps reasoning afterwards — so
-            # it has to say three things: the action is waiting for a PERSON, it
-            # is not a failure, and proposing it again this turn achieves nothing.
-            # Without the last clause a model reads UNAUTHORIZED as "try harder".
-            f"{call.tool} is now waiting for the person to approve it — they have "
-            f"been shown exactly what it would do. This is not a failure and it "
-            f"does not need retrying: do not propose it again in this turn. "
-            f"Carry on with anything else the task needs. {summary}",
-            ToolErrorCode.UNAUTHORIZED,
-        ),
+        row.id,
+        call.tool,
+        dict(call.args),
+        summary,
+        preview,
+        _refusal(call.call_id, _parked_message(call, summary), ToolErrorCode.UNAUTHORIZED),
     )
 
 

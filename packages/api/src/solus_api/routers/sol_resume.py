@@ -31,6 +31,7 @@ from solus_api.agent.command_gate import COMMAND_TOOLS
 from solus_api.core.errors import APIError
 from solus_api.models import (
     ConfirmationStatus,
+    Conversation,
     ConversationTurn,
     ToolConfirmation,
     TurnRole,
@@ -67,6 +68,9 @@ def _decision_turn(
 async def _chain_length(
     session: AsyncSession, conversation_id: uuid.UUID, project_id: uuid.UUID
 ) -> int:
+    """Resumes since the person's last message: answered ones (assistant turns
+    with `resume_of`) plus CLAIMED ones whose turn is still streaming (decision
+    turns marked `resumed`), counted once per confirmation."""
     scope = (
         ConversationTurn.conversation_id == conversation_id,
         ConversationTurn.project_id == project_id,
@@ -76,14 +80,24 @@ async def _chain_length(
             *scope, ConversationTurn.role == TurnRole.USER
         )
     )
-    query = select(func.count()).where(
-        *scope,
-        ConversationTurn.role == TurnRole.ASSISTANT,
-        ConversationTurn.attrs.has_key("resume_of"),
+    since = () if last_user is None else (ConversationTurn.created_at > last_user,)
+    answered = await session.scalars(
+        select(ConversationTurn.attrs["resume_of"].astext).where(
+            *scope,
+            *since,
+            ConversationTurn.role == TurnRole.ASSISTANT,
+            ConversationTurn.attrs.has_key("resume_of"),
+        )
     )
-    if last_user is not None:
-        query = query.where(ConversationTurn.created_at > last_user)
-    return int(await session.scalar(query) or 0)
+    claimed = await session.scalars(
+        select(ConversationTurn.attrs["confirmation_id"].astext).where(
+            *scope,
+            *since,
+            ConversationTurn.role == TurnRole.TOOL,
+            ConversationTurn.attrs.has_key("resumed"),
+        )
+    )
+    return len(set(answered) | set(claimed))
 
 
 async def check_resume(
@@ -95,7 +109,15 @@ async def check_resume(
     team_id: uuid.UUID,
     user_id: uuid.UUID,
 ) -> ResumeTicket:
-    """Validate a resume request (no writes). Raises APIError."""
+    """Validate a resume request (no writes). Raises APIError.
+
+    Locks the conversation row (§9 item 9) until the caller commits its claim,
+    so two concurrent resumes cannot both pass the chain cap."""
+    await session.scalar(
+        select(Conversation.id)
+        .where(Conversation.id == conversation_id, Conversation.project_id == project_id)
+        .with_for_update()
+    )
     row = await session.scalar(
         select(ToolConfirmation).where(
             ToolConfirmation.id == confirmation_id,

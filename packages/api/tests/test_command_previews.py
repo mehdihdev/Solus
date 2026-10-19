@@ -193,28 +193,96 @@ async def test_plan_refusal_reason_is_redacted_and_bounded() -> None:
     assert len(caught.value.safe_message) < 400
 
 
-async def test_profile_capture_rows() -> None:
-    argv = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile"]
-    argv.append("/opt/ros/jazzy/setup.bash")
-    plan = _plan(argv=argv, cwd=".", profile=None, environment=None)
-    reader = _Reader(plan)
+class _ToolReader:
+    """Answers per bridge tool: `code.plan` and `code.profile_list`."""
+
+    def __init__(self, answers: dict[str, dict[str, Any] | None]) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def __call__(self, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+        self.calls.append((tool, dict(args)))
+        return self.answers.get(tool)
+
+
+_CAPTURE_ARGV = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile"]
+
+
+def _capture_plan(setup_file: str) -> dict[str, Any]:
+    return _plan(argv=[*_CAPTURE_ARGV, setup_file], cwd=".", profile=None, environment=None)
+
+
+async def _capture(
+    args: dict[str, Any], plan: dict[str, Any], profiles: list[str] | None
+) -> tuple[list[dict[str, Any]], _ToolReader]:
+    listing = None if profiles is None else {"profiles": [{"name": n} for n in profiles]}
+    reader = _ToolReader({"code.plan": plan, "code.profile_list": listing})
     builder = preview_builder("code.profile_capture", reader)
     assert builder is not None
+    return await builder(dict(args)), reader
+
+
+async def test_profile_capture_rows() -> None:
+    plan = _capture_plan("/opt/ros/jazzy/setup.bash")
     args = {"name": "ros", "setup_file": "/opt/ros/jazzy/setup.bash"}
-    rows = await builder(dict(args))
-    assert reader.calls == [("code.plan", {"action": "profile_capture", "args": args})]
+    rows, reader = await _capture(args, plan, [])
+    assert reader.calls == [
+        ("code.plan", {"action": "profile_capture", "args": args}),
+        ("code.profile_list", {}),
+    ]
     assert [row["label"] for row in rows] == [
+        "profile",
         "setup file",
         "extends",
         "command",
         "sandbox",
+        "risk",
         "plan fingerprint",
     ]
     by_label = {row["label"]: row["after"] for row in rows}
+    assert by_label["profile"] == "ros"
     assert by_label["setup file"] == "/opt/ros/jazzy/setup.bash"
     assert by_label["extends"] == "none"
-    assert by_label["command"] == json.dumps(argv)
-    assert by_label["plan fingerprint"] == plan_fingerprint(plan)
+    assert by_label["command"] == json.dumps(plan["argv"])
+    assert by_label["risk"] == "none flagged"
+    assert by_label["plan fingerprint"] == plan_fingerprint(plan, profile_name="ros")
+
+
+async def test_profile_capture_says_when_it_replaces_an_existing_profile() -> None:
+    plan = _capture_plan("/opt/ros/jazzy/setup.bash")
+    args = {"name": "ros", "setup_file": "/opt/ros/jazzy/setup.bash"}
+    rows, _ = await _capture(args, plan, ["base", "ros"])
+    assert {r["label"]: r["after"] for r in rows}["profile"] == "ros (replaces existing)"
+    rows, _ = await _capture(args, plan, ["rosx"])
+    assert {r["label"]: r["after"] for r in rows}["profile"] == "ros"
+
+
+async def test_a_workspace_setup_file_is_a_project_script() -> None:
+    args = {"name": "ws", "setup_file": "install/setup.bash"}
+    rows, _ = await _capture(args, _capture_plan("install/setup.bash"), [])
+    assert {r["label"]: r["after"] for r in rows}["risk"] == "project_scripts"
+
+
+async def test_the_capture_fingerprint_covers_the_profile_name() -> None:
+    plan = _capture_plan("/opt/ros/jazzy/setup.bash")
+    first, _ = await _capture({"name": "ros", "setup_file": "/opt/ros/jazzy/setup.bash"}, plan, [])
+    second, _ = await _capture(
+        {"name": "ros2", "setup_file": "/opt/ros/jazzy/setup.bash"}, plan, []
+    )
+    assert first[-1]["after"] != second[-1]["after"]
+    assert plan_fingerprint(plan, profile_name="ros") != plan_fingerprint(plan)
+
+
+@pytest.mark.parametrize("listing", [None, {"profiles": "x"}, {"nothing": []}])
+async def test_capture_refuses_when_existing_profiles_cannot_be_read(listing: Any) -> None:
+    reader = _ToolReader(
+        {"code.plan": _capture_plan("/opt/ros/jazzy/setup.bash"), "code.profile_list": listing}
+    )
+    builder = preview_builder("code.profile_capture", reader)
+    assert builder is not None
+    with pytest.raises(PreviewRefusal) as caught:
+        await builder({"name": "ros", "setup_file": "/opt/ros/jazzy/setup.bash"})
+    assert "profiles" in caught.value.safe_message
 
 
 async def test_profile_capture_refuses_anything_but_the_fixed_script() -> None:
@@ -279,3 +347,11 @@ async def test_a_program_inside_the_workspace_is_a_project_script() -> None:
     )
     rows = await _rows("code.exec", plan, {"argv": ["mytool"], "environment": ".venv"})
     assert {r["label"]: r["after"] for r in rows}["risk"] == "project_scripts"
+
+
+async def test_a_workspace_program_is_judged_by_its_exact_name_on_the_card() -> None:
+    plan = _plan(argv=["/home/u/robot/env-check.sh"], environment=None, profile=None)
+    rows = await _rows("code.exec", plan, {"argv": ["./env-check.sh"]})
+    assert {r["label"]: r["after"] for r in rows}["program"] == "/home/u/robot/env-check.sh"
+    with pytest.raises(PreviewRefusal):
+        await _rows("code.exec", _plan(argv=["/usr/bin/env-x"]), {"argv": ["env-x"]})
