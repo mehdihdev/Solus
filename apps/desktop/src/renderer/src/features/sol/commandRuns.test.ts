@@ -3,10 +3,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfirmationOutput } from '../../lib/api/resources.commands'
 import {
+  FINAL_TAIL_BYTES,
   MAX_RUN_CHARS,
   MAX_RUN_CHUNKS,
   appendRunOutput,
+  finalOutputOf,
   newCommandRun,
+  settleRun,
   startRunPoller,
   type CommandRun
 } from './commandRuns'
@@ -53,7 +56,22 @@ describe('appendRunOutput', () => {
     const next = appendRunOutput({ run, cursor: 0 }, output({ chunks, cursor: chunks.length }))
     expect(next.run.text.length).toBeLessThanOrEqual(MAX_RUN_CHARS)
     expect(next.cursor).toBeLessThanOrEqual(MAX_RUN_CHUNKS)
+    // §10.3: the client's own caps are a real truncation and say so.
+    expect(next.run.truncated).toBe(true)
+  })
+
+  it('never labels a complete, unflagged run as truncated (ls -la regression)', () => {
+    const lines = Array.from({ length: 30 }, (_, i) => ({
+      sequence: i + 1,
+      stream: 'stdout' as const,
+      text: `-rw-r--r--  1 dev  staff  ${i} file${i}\n`
+    }))
+    const next = appendRunOutput(
+      { run: newCommandRun('c1', 'code.exec'), cursor: 0 },
+      output({ chunks: lines, cursor: 30, complete: true })
+    )
     expect(next.run.truncated).toBe(false)
+    expect(next.run.text.split('\n')).toHaveLength(31)
   })
 
   it('carries the server truncation marker', () => {
@@ -131,5 +149,54 @@ describe('startRunPoller', () => {
     poller.stop()
     await vi.advanceTimersByTimeAsync(5000)
     expect(fetchOutput).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('final output (decide result tails)', () => {
+  const live = (over: Partial<CommandRun>): CommandRun => ({
+    ...newCommandRun('c1', 'code.exec'),
+    ...over
+  })
+
+  it('reads stdout then stderr tails, plain text', () => {
+    expect(finalOutputOf({ exit_code: 0, stdout_tail: 'out', stderr_tail: 'err\n' })).toEqual({
+      text: 'out\nerr\n',
+      clipped: false
+    })
+    expect(finalOutputOf({ stdout_tail: 'a\n', stderr_tail: '' })?.text).toBe('a\n')
+  })
+
+  it('is null when the result carries no tails (or junk)', () => {
+    expect(finalOutputOf({ exit_code: 0 })).toBeNull()
+    expect(finalOutputOf(null)).toBeNull()
+    expect(finalOutputOf({ stdout_tail: 42 })).toBeNull()
+  })
+
+  it('marks a tail that filled the server tail window as clipped', () => {
+    const full = finalOutputOf({ stdout_tail: 'x'.repeat(FINAL_TAIL_BYTES) })
+    expect(full?.clipped).toBe(true)
+  })
+
+  // Root cause of the false label: the code server's progress queue holds 16
+  // lines, so a burst like `ls -la` overflows it and the route reports
+  // `truncated` although the command's complete output is in the result tails.
+  it('replaces a live view the route truncated with the complete final output', () => {
+    const settled = settleRun(
+      live({ text: 'line 1\n[command output truncated]\n', truncated: true }),
+      { text: 'line 1\nline 2\n', clipped: false }
+    )
+    expect(settled).toMatchObject({ text: 'line 1\nline 2\n', truncated: false })
+  })
+
+  it('keeps the live view and its label when the final tails are clipped too', () => {
+    const run = live({ text: 'partial', truncated: true })
+    expect(settleRun(run, { text: 'y'.repeat(10), clipped: true })).toBe(run)
+  })
+
+  it('fills in lines the live view missed, but never shortens complete live output', () => {
+    expect(settleRun(live({ text: 'a\n' }), { text: 'a\nb\n', clipped: false }).text).toBe('a\nb\n')
+    const run = live({ text: 'a\nb\n' })
+    expect(settleRun(run, { text: 'b\n', clipped: false })).toBe(run)
+    expect(settleRun(run, null)).toBe(run)
   })
 })

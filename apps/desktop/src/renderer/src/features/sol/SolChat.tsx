@@ -16,6 +16,7 @@ import { Switch } from '../../components/ui/Switch'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
+import { AutoRunsView } from './AutoRunRow'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
 import { COMPOSER_ATTR, CommandApprovalContext, useCommandShortcut } from './commandHotkey'
@@ -207,6 +208,8 @@ const MessageRow = memo(function MessageRow({
     <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
       <TraceView trace={item.trace} />
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
+      {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
+      <AutoRunsView runs={item.autoRuns} />
       {item.content ? (
         <SolMarkdown content={item.content} />
       ) : item.pending ? (
