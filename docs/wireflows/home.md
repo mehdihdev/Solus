@@ -39,10 +39,15 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
   with more than one team, the plan-limit line); the project list
   (`HomeProjectList`, `data-testid="project-list"`); and, pinned at its foot,
   the **ACCOUNT** card (`HomeAccountNav`).
-  - Each project row (`project-row-<id>`): name, description, its latest
-    activity line ("No recent activity." when none), the row ⋯ menu (Edit
-    details / Archive / Delete, unchanged role gating). The current project
-    has the accent border and `aria-current`. **Clicking a row selects it** —
+  - Each project row (`project-row-<id>`): name; its linked git repo under
+    the name (provider logo + `config.repo`, "+N" for more — read once per
+    project per Home mount via `useProjectRepos`, the current project's from
+    its live source list; no line when none or when the read failed);
+    description; its latest activity line ("No recent activity." when none);
+    the row ⋯ menu (Edit details / Archive / Delete, unchanged role gating)
+    over the card's corner. The whole card is the select button (border,
+    fill, hover tint). The current project has the accent border and
+    `aria-current`. **Clicking a row selects it** —
     the old "Switch to": the current project moves, Home stays, nothing
     opens. `+` (members and up) opens New project; an empty list says "Create
     one to start building the graph."; the archived section is beneath.
