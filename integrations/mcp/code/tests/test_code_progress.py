@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 from code_paths import overlay_module
 
 execute = overlay_module("execute")
@@ -127,8 +128,8 @@ async def test_async_queue_is_bounded_and_reports_overflow() -> None:
     chunks = []
 
     class Context:
-        async def report_progress(self, sequence, *, message):
-            chunks.append(json.loads(message))
+        async def report_progress(self, sequence: float, *, message: str) -> None:
+            chunks.append(json.loads(message or "null"))
 
     output = progress.AsyncOutput(Context())
     for _ in range(1000):
@@ -139,10 +140,10 @@ async def test_async_queue_is_bounded_and_reports_overflow() -> None:
     assert chunks[-1]["text"] == progress.TRUNCATED
 
 
+@pytest.mark.real_sandbox
 async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Path) -> None:
     import asyncio
     import json
-    import os
 
     from code_paths import FORK_DIR
     from mcp import ClientSession, StdioServerParameters
@@ -157,8 +158,8 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
     )
     chunks = []
 
-    async def progress(progress, total, message):
-        chunks.append(json.loads(message))
+    async def progress(progress: float, total: float | None, message: str | None) -> None:
+        chunks.append(json.loads(message or "null"))
 
     params = StdioServerParameters(
         command=sys.executable,
@@ -166,7 +167,7 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
         env={
             "SOLUS_MCP_WORKSPACE": str(tmp_path),
             "PATH": "/usr/bin:/bin",
-            "HOME": os.environ.get("HOME", "/tmp"),
+            "HOME": str(tmp_path),
         },
     )
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
@@ -182,6 +183,7 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
         result = await result_task
     assert not result.isError
     assert chunks[0] == {"stream": "stdout", "text": "early\n"}
+    assert result.structuredContent is not None
     assert result.structuredContent["stdout_tail"] == "early\ndone\n"
 
 
@@ -196,7 +198,9 @@ def test_oversized_secret_prefix_suppresses_rest_of_stream() -> None:
     assert ("stderr", "safe diagnostic\n") in chunks
 
 
-def test_already_cancelled_execution_never_launches_process(tmp_path: Path, monkeypatch) -> None:
+def test_already_cancelled_execution_never_launches_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import threading
 
     cancelled = threading.Event()
@@ -213,14 +217,14 @@ def test_already_cancelled_execution_never_launches_process(tmp_path: Path, monk
     assert calls == [] and result.timed_out
 
 
-def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch) -> None:
+def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import io
     from types import SimpleNamespace
 
     reads = []
 
     class EndlessSpool(io.BytesIO):
-        def read(self, size=-1):
+        def read(self, size: int | None = -1) -> bytes:
             reads.append(size)
             if len(reads) > 40:
                 raise RuntimeError("unbounded post-exit spool scan")
@@ -231,7 +235,9 @@ def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         execute.subprocess,
         "Popen",
-        lambda *args, **kwargs: SimpleNamespace(poll=lambda: 0, wait=lambda: 0, returncode=0),
+        lambda *args, **kwargs: SimpleNamespace(
+            poll=lambda: 0, wait=lambda: 0, returncode=0, pid=2**22 + 4321, kill=lambda: None
+        ),
     )
     chunks = []
     token = execute.OUTPUT_CALLBACK.set(lambda stream, text: chunks.append((stream, text)))
@@ -251,7 +257,7 @@ def test_post_exit_drain_raw_budget_and_deadline_drop_partial_context() -> None:
     class GrowingSpool:
         reads = 0
 
-        def read(self, size):
+        def read(self, size: int) -> bytes:
             self.reads += 1
             return (b"x" * 2000 + b"\n") * 4
 

@@ -12,8 +12,32 @@ from code_paths import (  # isort: skip
     SECURITY_REVIEW,
 )
 
-TOOLS = ("probe_environment", "plan", "create_environment", "install", "run", "test")
-GATED = ("create_environment", "install", "run", "test")
+TOOLS = (
+    "probe_environment",
+    "plan",
+    "create_environment",
+    "install",
+    "run",
+    "test",
+    "exec",
+    "process_start",
+    "process_stop",
+    "process_status",
+    "profile_capture",
+    "profile_list",
+    "profile_delete",
+)
+GATED = (
+    "create_environment",
+    "install",
+    "run",
+    "test",
+    "exec",
+    "process_start",
+    "process_stop",
+    "profile_capture",
+    "profile_delete",
+)
 
 
 def _provenance() -> str:
@@ -70,6 +94,9 @@ def test_security_review_is_a_dated_draft_awaiting_human_sign_off() -> None:
     ):
         assert section in text, section
     assert "SEARCH_ROOTS" in text, "the pinned-roots residual must be recorded for reviewers"
+    section = text.split("## 2026-10-18 — SOLUSDEV-317", 1)[1]
+    assert "DRAFT" in section and "awaiting human sign-off" in section
+    assert "Residual risks" in section and "Re-review triggers" in section
 
 
 def test_fork_readme_exists_and_describes_the_layout() -> None:

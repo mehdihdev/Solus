@@ -36,6 +36,20 @@ RESTART_BACKOFF_CAP_SECONDS = 2.0
 LAUNCH_TIMEOUT_SECONDS = 30.0
 DEFAULT_PING_TIMEOUT_SECONDS = 5.0
 STATUS_DETAIL_CAP = 512  # §6 hygiene: short detail, matches the cloud's cap
+#: `code` tools that may already have acted when the transport fails, so they are
+#: never replayed (docs/api/code-command-execution.md §2.3, code-environment.md §4).
+NEVER_REPLAYED_CODE_TOOLS: frozenset[str] = frozenset(
+    {
+        "run",
+        "test",
+        "exec",
+        "process_start",
+        "process_stop",
+        "profile_capture",
+        "install",
+        "create_environment",
+    }
+)
 
 
 class ServerState(enum.Enum):
@@ -378,7 +392,7 @@ class Supervisor:
         except asyncio.CancelledError:
             raise
         except Exception:
-            if server == "code" and tool in {"run", "test"}:
+            if server == "code" and tool in NEVER_REPLAYED_CODE_TOOLS:
                 raise  # execution may already have applied; never replay
             logger.warning("server %r call failed; attempting one restart", server)
             fresh = await self._revive(handle, dead=session)

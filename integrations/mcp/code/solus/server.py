@@ -18,10 +18,12 @@ import asyncio
 import functools
 import inspect
 import logging
+import signal
 import sys
 import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from types import FrameType
 from typing import Any, Literal
 
 _FORK_DIR = Path(__file__).resolve().parents[1]
@@ -48,11 +50,14 @@ try:
         arduino_upload,
         git_execution,
         git_operations,
+        profiles,
     )
-    from .execute import execute_plan, pinned_which, refusal
+    from .execute import default_runner, execute_plan, pinned_which, prepare, refusal, run_sandboxed
     from .plan import DEFAULT_ENVIRONMENT, DEFAULT_PYTHON, DEFAULT_TEST_TARGET, plan_action
     from .plan import DEFAULT_TIMEOUT_SECONDS as _DEFAULT_TIMEOUT
     from .probe import empty_probe, probe_environment
+    from .process_os import become_subreaper
+    from .processes import Registry
     from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, AsyncOutput
     from .roster import TOOL_ROSTER
     from .workspace import workspace_root
@@ -64,11 +69,15 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
         arduino_upload,
         git_execution,
         git_operations,
+        profiles,
     )
     from solus.execute import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        default_runner,
         execute_plan,
         pinned_which,
+        prepare,
         refusal,
+        run_sandboxed,
     )
     from solus.plan import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         DEFAULT_ENVIRONMENT,
@@ -82,6 +91,12 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
     from solus.probe import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         empty_probe,
         probe_environment,
+    )
+    from solus.process_os import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        become_subreaper,
+    )
+    from solus.processes import (  # type: ignore[import-not-found, no-redef, unused-ignore]
+        Registry,
     )
     from solus.progress import (
         CANCEL_EVENT,
@@ -121,9 +136,9 @@ def tool_probe_environment(environment: str | None = None) -> dict[str, Any]:
 
 
 def tool_plan(action: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The EXACT argv `action` (create_environment | install | run | test)
-    would run with `args`, or `ok: false` with the refusal reason. Pure: no
-    execution."""
+    """The EXACT argv `action` (create_environment | install | run | test | exec |
+    process_start | profile_capture) would run with `args`, plus the sandbox, profile
+    and environment it would use, or `ok: false` with the refusal reason. Pure."""
     return _guarded(
         "plan",
         lambda: {"argv": [], "cwd": ".", "ok": False, "reason": "plan failed"},
@@ -188,6 +203,150 @@ def tool_test(
     over a workspace target. Confirmation-gated."""
     return _perform(
         "test", {"target": target, "environment": environment, "timeout_seconds": timeout_seconds}
+    )
+
+
+# --- SOLUSDEV-317: commands, processes, profiles (code-command-execution.md §2) ------
+
+_REGISTRY: Registry | None = None
+_REGISTRY_LOCK = threading.Lock()
+MAX_PROCESS_ID_CHARS = 64
+
+
+def _registry() -> Registry:
+    """The server's one process registry, for the linked workspace."""
+    global _REGISTRY
+    with _REGISTRY_LOCK:
+        if _REGISTRY is None:
+            _REGISTRY = Registry(workspace_root())
+        return _REGISTRY
+
+
+def tool_exec(
+    argv: list[str],
+    cwd: str = ".",
+    environment: str | None = None,
+    profile: str | None = None,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    """Run one argument list (never a shell) in the linked folder inside the OS sandbox.
+    argv[0] resolves to an absolute program without the inherited PATH; shells,
+    wrappers, elevation and inline code are refused. Confirmation-gated."""
+    args = {"argv": argv, "cwd": cwd, "environment": environment, "profile": profile}
+    return _perform("exec", {**args, "timeout_seconds": timeout_seconds})
+
+
+def _process_refusal(reason: str) -> dict[str, Any]:
+    return Registry._start_refusal(reason)
+
+
+def tool_process_start(
+    argv: list[str],
+    cwd: str = ".",
+    environment: str | None = None,
+    profile: str | None = None,
+    name: str | None = None,
+    max_runtime_seconds: int = 3600,
+) -> dict[str, Any]:
+    """Start a long-running sandboxed process (at most 4) and return immediately.
+    It is stopped after max_runtime_seconds and when the server exits; never restarted.
+    Confirmation-gated."""
+
+    def body() -> dict[str, Any]:
+        root = workspace_root()
+        args: dict[str, Any] = {"argv": argv, "cwd": cwd, "environment": environment}
+        args |= {"profile": profile, "name": name, "max_runtime_seconds": max_runtime_seconds}
+        plan = plan_action(root, "process_start", args, which=pinned_which)
+        prepared = prepare(root, plan) if plan.ok else plan.reason or "refused"
+        if isinstance(prepared, str):
+            return _process_refusal(prepared)
+        with prepared.handing_over():
+            return _registry().start(
+                prepared.argv,
+                display_argv=list(plan.argv),
+                cwd=prepared.cwd,
+                cwd_label=plan.cwd,
+                env=prepared.env,
+                name=plan.label,
+                max_runtime_seconds=plan.max_runtime_seconds or 3600,
+                sandbox=plan.sandbox,
+            )
+
+    return _guarded("process_start", lambda: _process_refusal("process_start failed"), body)
+
+
+def tool_process_stop(process_id: str) -> dict[str, Any]:
+    """Stop a process SOL started: SIGTERM to its group, SIGKILL after 5 s."""
+    fallback = {
+        "ok": False,
+        "process_id": process_id[:MAX_PROCESS_ID_CHARS],
+        "state": None,
+        "exit_code": None,
+        "reason": "process_stop failed",
+    }
+    return _guarded(
+        "process_stop",
+        lambda: dict(fallback),
+        lambda: _registry().stop(process_id[:MAX_PROCESS_ID_CHARS]),
+    )
+
+
+def tool_process_status(process_id: str | None = None, cursor: int = 0) -> dict[str, Any]:
+    """Processes SOL started on this machine and, for one process_id, its output
+    chunks after cursor (at most 64 KiB per answer)."""
+    if cursor < 0:
+        return {"processes": [], "output": None, "reason": "cursor must be >= 0"}
+    key = process_id[:MAX_PROCESS_ID_CHARS] if process_id is not None else None
+    return _guarded(
+        "process_status",
+        lambda: {"processes": [], "output": None},
+        lambda: _registry().status(process_id=key, cursor=cursor),
+    )
+
+
+def _capture_refusal(name: str, reason: str) -> dict[str, Any]:
+    return profiles._capture_refusal(name, reason)
+
+
+def tool_profile_capture(name: str, setup_file: str, extends: str | None = None) -> dict[str, Any]:
+    """Source a setup file (ROS setup.bash, …) with a fixed Solus script inside the
+    sandbox and store the filtered environment privately on this machine. Answers
+    variable names only, never values. Confirmation-gated."""
+
+    def body() -> dict[str, Any]:
+        root = workspace_root()
+        args = {"name": name, "setup_file": setup_file, "extends": extends}
+        plan = plan_action(root, "profile_capture", args, which=pinned_which)
+        if not plan.ok:
+            return _capture_refusal(name, plan.reason or "refused")
+        runner = functools.partial(default_runner, tail_bytes=profiles.MAX_ENV_BYTES + 1)
+        ran = run_sandboxed(root, plan, runner=runner)
+        if isinstance(ran, str):
+            return _capture_refusal(name, ran)
+        extended = plan.profile.name if plan.profile else None
+        setup = plan.setup_file or setup_file
+        return profiles.finish_capture(
+            root, plan.capture_name or name, setup, extended, ran.outcome, ran.env
+        )
+
+    return _guarded("profile_capture", lambda: _capture_refusal(name, "capture failed"), body)
+
+
+def tool_profile_list() -> dict[str, Any]:
+    """Stored environment profiles: names and variable names, never values."""
+    return _guarded(
+        "profile_list",
+        lambda: {"profiles": []},
+        lambda: {"profiles": profiles.list_profiles(workspace_root())},
+    )
+
+
+def tool_profile_delete(name: str) -> dict[str, Any]:
+    """Delete a stored environment profile. Confirmation-gated."""
+    return _guarded(
+        "profile_delete",
+        lambda: {"ok": False, "name": name[:64], "reason": "profile_delete failed"},
+        lambda: profiles.delete(workspace_root(), name),
     )
 
 
@@ -336,7 +495,19 @@ _TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "arduino_prepare": tool_arduino_prepare,
     "arduino_compile": tool_arduino_compile,
     "arduino_upload": tool_arduino_upload,
+    "exec": tool_exec,
+    "process_start": tool_process_start,
+    "process_stop": tool_process_stop,
+    "process_status": tool_process_status,
+    "profile_capture": tool_profile_capture,
+    "profile_list": tool_profile_list,
+    "profile_delete": tool_profile_delete,
 }
+#: Tools that stream incremental output (MCP progress) while they run.
+STREAMING_TOOLS = frozenset({"run", "test", "exec", "arduino_upload"})
+#: Strict argument models: extra fields forbidden, no type coercion.
+STRICT_PREFIXES = ("git_", "arduino_", "process_", "profile_")
+STRICT_TOOLS = frozenset({"exec"})
 
 
 def _streaming_tool(server: Any, function: Callable[..., Any]) -> Callable[..., Any]:
@@ -384,12 +555,10 @@ def build_server() -> Any:
     server = FastMCP(SERVER_NAME)
     for name, function in _TOOLS.items():
         registered_function = (
-            _streaming_tool(server, function)
-            if name in {"run", "test", "arduino_upload"}
-            else function
+            _streaming_tool(server, function) if name in STREAMING_TOOLS else function
         )
         server.tool(name=name, description=function.__doc__)(registered_function)
-        if name.startswith(("git_", "arduino_")):
+        if name.startswith(STRICT_PREFIXES) or name in STRICT_TOOLS:
             tool = server._tool_manager.get_tool(name)
             if tool is None:
                 raise RuntimeError("Strict tool registration failed")
@@ -414,10 +583,39 @@ def _configure_logging() -> None:
     )
 
 
+def _exit_on_signal(signum: int, _frame: FrameType | None) -> None:
+    """SIGTERM/SIGINT unwind through main()'s cleanup like stdin EOF does."""
+    raise SystemExit(128 + signum)
+
+
+def _install_signal_handlers() -> None:
+    signal.signal(signal.SIGTERM, _exit_on_signal)
+    signal.signal(signal.SIGINT, _exit_on_signal)
+
+
+def _reap_orphans() -> None:
+    try:
+        _registry().reap_orphans()
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on cleanup
+        logger.warning("orphan reaping skipped: %s", type(exc).__name__)
+
+
+def _stop_processes() -> None:
+    if _REGISTRY is not None:
+        _REGISTRY.stop_all()
+
+
 def main() -> None:
     _configure_logging()
+    _install_signal_handlers()
+    become_subreaper()
     logger.info("Starting Solus code MCP server")
-    build_server().run(transport="stdio")
+    _reap_orphans()
+    try:
+        build_server().run(transport="stdio")
+    finally:
+        # stdin EOF, SIGTERM or SIGINT: every started process is stopped.
+        _stop_processes()
 
 
 if __name__ == "__main__":
