@@ -113,3 +113,11 @@ in-memory, bounded per-confirmation buffer presents output to that confirmation'
 owner through the existing API service; the card reads it during execution.
 Like the existing in-memory bridge registry, this stays behind a replaceable
 service seam. It is command output, not robot telemetry or a Live Bench channel.
+
+### SOLUSDEV-317 — sandbox and generic commands
+
+Every executing tool above now runs inside the OS sandbox (macOS `sandbox-exec`, Linux
+Landlock), and the plan answer carries the `sandbox` and `profile` fields. The statement that
+"arbitrary command execution [is] not supplied" is superseded by `code.exec` and
+`code.process_*`, specified in `docs/api/code-command-execution.md` under the ADR-031
+amendment of 2026-10-18.

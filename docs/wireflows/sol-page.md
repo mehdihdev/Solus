@@ -156,3 +156,36 @@ output region. Poll the owner-scoped output endpoint only during execution;
 append incremental stdout/stderr, label truncation, and retain final completion
 or failure state. Never interpret terminal text as HTML or instructions. No modal
 or second approval screen is introduced.
+
+## Command execution — SOLUSDEV-317
+
+Governing spec: `docs/api/code-command-execution.md`. Applies identically to the SOL window.
+
+- **Command card.** For `code.exec`, `code.process_start`, `code.run`, `code.test`,
+  `code.install`, `code.create_environment` and `code.profile_capture`, the compact card's
+  header shows the program basename and one badge per value of the `risk` row (`network`,
+  `install`, `destructive`, `hardware`, `remote`, `project_scripts`), plus a `sandboxed` badge
+  read from the `sandbox` row. The badges are presentation only. The renderer does not
+  classify anything; the verbatim rows (program, command, cwd, environment, profile,
+  sandbox, risk, fingerprint) are unchanged in the expandable preview.
+- **Cmd/Ctrl+Enter approves.** While focus is inside a SOL chat surface (page or window),
+  Cmd+Enter (macOS) / Ctrl+Enter (Linux) approves the newest pending **command** card in that
+  surface. It does nothing when the card is busy, when IME composition is active, or when no
+  command card is pending. When it fires it takes precedence over composer submit. The Approve
+  button shows the hint `⌘↵` / `Ctrl↵`. Non-command cards still need a click.
+- **Output stays.** The output region is shown while an approved command runs, and the final
+  output stays under the resulting "Approval recorded" message with the exit status
+  (`exited 0`, `exited 2`, `timed out`, `refused: …`) until the conversation is closed.
+- **SOL continues.** After an approved command card finishes, the client starts a resume turn
+  (`resume_confirmation_id`) without adding a user bubble. SOL reads the result and either
+  proposes the next step (which is another card) or answers. A `resume_limit` answer shows
+  "SOL paused — reply to continue". Rejecting a card does not resume.
+- **Running processes strip.** Above the composer, when this machine has processes started by
+  SOL for the open project: one row per process (name or program, state, elapsed time) with
+  **Output** (expands a bounded, keyboard-scrollable plain-text region, polled while open) and
+  **Stop** (a direct user action, no card). The strip polls every 2 s while any process is
+  running and every 15 s otherwise, and is hidden when there are no processes or the bridge
+  is offline.
+- **Refusals.** A denied command (shell, inline code, sudo) never produces a card. SOL gets
+  the refusal and proposes a direct command instead. A missing sandbox shows up as the card's
+  refusal text, `sandbox unavailable: …`.

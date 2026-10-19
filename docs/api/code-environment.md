@@ -165,3 +165,10 @@ buffer complete lines before redaction, suppress oversized lines rather than
 splitting secrets, and flush bounded final lines on completion. Companion progress
 is paced below five frames/second across calls; final and control frames do not
 wait behind that progress lock.
+
+## SOLUSDEV-317 — sandbox, generic commands, profiles
+
+`docs/api/code-command-execution.md` adds `code.exec`, `code.process_*` and `code.profile_*`.
+It extends the `code.plan` answer with `sandbox`, `profile` and `environment` for every action,
+and wraps `create_environment`, `install`, `run` and `test` in the OS sandbox. The output tail
+the model reads for `code.run`/`code.test` grows from 400 to 3000 characters.

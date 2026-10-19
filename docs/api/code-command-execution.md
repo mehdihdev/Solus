@@ -1,0 +1,348 @@
+# Code command execution — SOL runs commands (SOLUSDEV-317)
+
+Route plan, tool contract and wire shapes. Tier-1 (ADR-032). Authority: DECISIONS.md ADR-031
+amendment of 2026-10-18 (SOLUSDEV-317). Extends `code-environment.md` (the `code` server, the
+`code.plan` preview, the one-use plan snapshot, incremental `tool_output`) and
+`local-machine-actions.md`. Where this document and the "no generic command executor"
+sentences of those documents disagree, this document wins.
+
+## 1. What changes
+
+Before SOLUSDEV-317, SOL could only run the typed verbs of the `code` server (venv create,
+pip install, `python <script>`, `pytest`, git, Arduino). Everything else it could only print.
+This feature adds:
+
+| Capability                              | Tools                                                                                                               | Gated |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----- |
+| One-shot command                        | `code.exec`                                                                                                         | yes   |
+| Long-running process                    | `code.process_start`, `code.process_stop`                                                                           | yes   |
+| Process observation                     | `code.process_status`                                                                                               | no    |
+| Environment profiles (ROS `setup.bash`) | `code.profile_capture`, `code.profile_delete`                                                                       | yes   |
+| Profile listing                         | `code.profile_list`                                                                                                 | no    |
+| OS sandbox                              | applied by the server to `create_environment`, `install`, `run`, `test`, `exec`, `process_start`, `profile_capture` | —     |
+
+Invariants (ADR-031 amendment):
+
+1. **argv only.** No shell string ever reaches a process. The model proposes a JSON list; the
+   server resolves `argv[0]` to an absolute program and executes the list directly.
+2. **Every execution is confirmed** on the central approval card. Build mode never executes a
+   command automatically; none of these tools is an owned routine (`execution_policy.py`).
+   The desktop's Cmd/Ctrl+Enter is an approval gesture on a visible card, not a bypass.
+3. **Sandboxed or refused.** macOS: `/usr/bin/sandbox-exec`. Linux: Landlock (ABI ≥ 1).
+   Anything else, or a failed probe: the plan answers `ok: false`, reason
+   `"sandbox unavailable: <why>"`, and nothing runs.
+4. **Denied programs** (§4) are refused by the cloud `CommandPolicy` before a card exists and
+   again by the server's planner.
+5. **Output is untrusted.** Ingress redaction applies to tails, progress chunks and process
+   output exactly as for `code.run`.
+
+## 2. The `code` server — new tools
+
+All arguments are validated with strict Pydantic models (`extra="forbid"`, `strict=True`),
+like the git/Arduino tools. Every tool returns a dict and never raises.
+
+### 2.1 `code.exec` (gated, streams output)
+
+Args:
+
+```json
+{
+  "argv": ["colcon", "build", "--symlink-install"],
+  "cwd": "ros_ws",
+  "environment": ".venv",
+  "profile": "ros",
+  "timeout_seconds": 300
+}
+```
+
+- `argv`: 1–64 strings, each 1–1024 chars, no NUL, CR or LF.
+- `cwd`: workspace-relative directory (default `"."`), `is_safe_relative` + `resolve_inside`.
+- `environment`: optional workspace venv, validated exactly like `code.run`'s (pyvenv.cfg +
+  interpreter outside the workspace). No implicit default for `exec`.
+- `profile`: optional profile name (§2.4).
+- `timeout_seconds`: 1–600, default 120.
+
+Result: the `code.run` result shape plus `sandbox`:
+`{ok, argv, cwd, exit_code, stdout_tail, stderr_tail, duration_ms, timed_out, reason,
+sandbox: "sandbox-exec" | "landlock" | null, git_metadata_changed: bool}`.
+`argv[0]` in the result is the resolved absolute program path.
+
+**Program resolution** (`argv[0]`), first match wins; the inherited `PATH` is never consulted:
+
+1. Contains `/` and is relative → workspace-relative file (`./scripts/build.sh`,
+   `tools/flash`), resolved inside the workspace, regular, executable.
+2. Absolute → allowed only when its parent directory is one of the roots in steps 3–5.
+3. Bare name → `<environment>/bin` when `environment` is given.
+4. Bare name → the profile's `PATH` entries, in order (absolute, existing directories only).
+5. Bare name → `execute.SEARCH_ROOTS` (unchanged).
+
+The planner also refuses a resolved program whose basename (or realpath basename) is denied (§4).
+
+### 2.2 `code.plan` — new actions
+
+`code.plan {action: "exec" | "process_start" | "profile_capture", args}` plans these tools.
+The answer for every action (old and new) gains three fields:
+
+```json
+{
+  "argv": ["/opt/ros/jazzy/bin/colcon", "build", "--symlink-install"],
+  "cwd": "ros_ws",
+  "ok": true,
+  "reason": null,
+  "sandbox": {
+    "kind": "sandbox-exec",
+    "writable": ["<workspace>", "<tmp>", "~/.ros", "..."]
+  },
+  "profile": { "name": "ros", "digest": "<sha256 of the stored profile file>" },
+  "environment": ".venv"
+}
+```
+
+`sandbox` is null only when `ok` is false. `profile` is null when no profile is used. The
+cloud fingerprint (§5.2) covers argv, cwd, environment, profile digest and sandbox kind, so a
+re-captured profile or a changed sandbox invalidates an approval.
+
+### 2.3 Long-running processes
+
+`code.process_start` (gated, returns immediately): args = the `exec` args without
+`timeout_seconds`, plus `name?` (1–64 printable chars, a label) and
+`max_runtime_seconds?` (60–14400, default 3600).
+Result: `{ok, process_id, pid, argv, cwd, started_at, sandbox, reason}`.
+
+`code.process_status` (read): args `{process_id?: str, cursor?: int ≥ 0}`. Result:
+
+```json
+{
+  "processes": [
+    {
+      "process_id": "…",
+      "name": "bringup",
+      "argv": ["…"],
+      "cwd": "ros_ws",
+      "state": "running",
+      "pid": 4242,
+      "exit_code": null,
+      "started_at": "…",
+      "ended_at": null,
+      "sandbox": "landlock"
+    }
+  ],
+  "output": {
+    "process_id": "…",
+    "chunks": [{ "seq": 1, "stream": "stdout", "text": "…" }],
+    "cursor": 1,
+    "truncated": false
+  }
+}
+```
+
+`state` is `running | exited | stopped | timed_out | failed_to_start`. `output` is present only
+when `process_id` is given: chunks with `seq > cursor`, at most 64 KiB per answer.
+
+`code.process_stop` (gated when SOL proposes it; also reachable by the user's own button, §6):
+args `{process_id}`. Sends SIGTERM to the process group, SIGKILL after 5 s. Result
+`{ok, process_id, state, exit_code}`.
+
+Bounds and lifetime:
+
+- At most **4** running processes per server; a fifth start is refused.
+- Finished entries are kept 30 minutes, at most 16 entries in total.
+- Output: complete lines ≤ 2048 chars (`LineOutput` rules), a ring of 256 KiB per process;
+  older chunks are dropped and `truncated` is set.
+- `max_runtime_seconds` elapsed → group killed, `state: timed_out`.
+- Server shutdown (stdin EOF, SIGTERM, SIGINT) stops every process (SIGTERM, 5 s, SIGKILL).
+  The companion restarts the server on project link/unlink, so unlink kills processes.
+- Orphan reaping: each start records `{pid, pgid, start token}` in
+  `~/.solus/code-processes/<workspace key>.json`; on server start, entries that are still alive
+  **with the same start token** are killed and the file is cleared. Nothing is restarted.
+- `process_*` is never replayed by the companion after a failure.
+
+### 2.4 Environment profiles
+
+A profile is the environment produced by sourcing a setup file (ROS `setup.bash`, a workspace
+`install/setup.bash`, a vendor `env.sh`).
+
+`code.profile_capture` (gated): args
+`{name: "^[a-z0-9][a-z0-9_-]{0,31}$", setup_file: str, extends?: profile name}`.
+
+- `setup_file` is either workspace-relative (resolved inside the workspace) or absolute with a
+  realpath under `/opt/ros/`. It must be a regular file ≤ 256 KiB ending `.bash` or `.sh`.
+- Execution, sandboxed, `cwd` = workspace, 30 s timeout, stdin closed, the base environment is
+  the scrubbed child environment (plus the `extends` profile's variables when given):
+  `["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile", <setup_file>]`
+  where `CAPTURE_SCRIPT` is the fixed Solus constant
+  `'source "$1" >/dev/null 2>&1 </dev/null || exit 97; exec /usr/bin/env -0'`.
+  The setup file is an argument (`$1`), never interpolated.
+- The `env -0` output (≤ 256 KiB) is diffed against the base. Variables that are new or changed
+  are kept, except names that are invalid (`^[A-Za-z_][A-Za-z0-9_]{0,127}$`), secret-shaped
+  (case-insensitive `TOKEN|SECRET|PASSW|KEY|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE`, prefixes
+  `AWS_ GITHUB_ GH_ GITLAB_ NPM_ HF_ OPENAI_ ANTHROPIC_`, and `SSH_AUTH_SOCK`), or loader
+  injection names (`LD_PRELOAD LD_AUDIT DYLD_INSERT_LIBRARIES BASH_ENV ENV
+  PROMPT_COMMAND PYTHONSTARTUP`). `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` are kept (ROS needs them). At most 256 variables, each value ≤ 8192 chars.
+- Stored at `~/.solus/code-profiles/<workspace key>/<name>.json`, written atomically
+  (temp + rename, file 0600, directories 0700),
+  `{schema_version: 1, name, setup_file, extends, captured_at, vars: {…}}`. The workspace key
+  is the first 16 hex characters of sha256(realpath(workspace)).
+- Result: `{ok, name, variables: [names], dropped: [names], path_entries: int, reason}`.
+  **Values are never returned to the cloud.**
+
+`code.profile_list` (read): `{profiles: [{name, setup_file, extends, captured_at, variables:
+[names]}]}`. `code.profile_delete` (gated): `{name}` → `{ok, name}`.
+
+Applying a profile (`exec`, `process_start`): the child environment is the scrubbed environment,
+overlaid with the profile's variables. `HOME`, `TMPDIR` and `VIRTUAL_ENV` stay Solus-controlled;
+when `environment` is also given, the venv `bin` directory is prepended to the profile's `PATH`.
+A missing or unreadable profile refuses the plan.
+
+## 3. The sandbox
+
+`solus/sandbox.py` in the server wraps the final argv for every executing tool listed in §1.
+Arduino keeps its existing bubblewrap posture; git tools are not changed.
+
+Writable set (everything else is read-only; reads, exec and network are not restricted):
+
+- the workspace (realpath), which contains any selected venv;
+- the process temporary directory (`TMPDIR` realpath, `/private/tmp`, `/private/var/folders`
+  on macOS; `/tmp` and `/var/tmp` on Linux);
+- device nodes `/dev/null`, `/dev/zero`, `/dev/tty`, `/dev/fd/*`, and serial devices
+  (`/dev/cu.*`, `/dev/tty.*` on macOS; `/dev/ttyUSB*`, `/dev/ttyACM*` on Linux);
+- declared tool caches under `HOME`: `.cache`, `Library/Caches`, `.ros`, `.npm`, `.pnpm-store`,
+  `.local/share/pnpm`, `.local/share/uv`, `.cargo/registry`, `.cargo/git`, `.platformio`,
+  `.arduino15`, `.gradle`, `.colcon`. Adding a cache is a SECURITY_REVIEW re-review trigger.
+
+Denied even inside the workspace (macOS rule; Linux detects, see below):
+`<workspace>/.git/hooks/**`, `<workspace>/.git/config`, and `~/.solus/**` everywhere.
+
+**macOS:** `["/usr/bin/sandbox-exec", "-p", PROFILE, "-D", "WORKSPACE=…", "-D", "TMP=…",
+"-D", "HOME=…", program, *args]`. `PROFILE` is a Solus constant
+`(version 1)(allow default)(deny file-write*)(allow file-write* …params…)` followed by the
+explicit denials above. `sandbox-exec` must be the root-owned `/usr/bin/sandbox-exec`.
+
+**Linux:** `[<server python>, "-I", "<fork>/solus/landlock_exec.py", "--rw", <path>, …, "--",
+program, *args]`. The helper is Solus-authored, has no dependencies, sets
+`PR_SET_NO_NEW_PRIVS`, creates a Landlock ruleset handling the filesystem write rights of the
+best available ABI (`WRITE_FILE, REMOVE_DIR, REMOVE_FILE, MAKE_*`, `REFER` ≥ ABI 2, `TRUNCATE`
+≥ ABI 3), adds `PATH_BENEATH` rules for the writable set, calls `landlock_restrict_self`, then
+`os.execv`. Landlock grants only, so the `.git/hooks`/`.git/config` denial is enforced by
+detection: the server hashes both before and after every sandboxed command; a change sets
+`git_metadata_changed: true` in the result, the cloud shows it in the outcome, and the change is
+reported (never silently kept or reverted). macOS reports the same flag (it should stay false).
+
+Probe: `sandbox.available() -> (kind | None, reason)`, cached for the server's lifetime;
+Linux probes `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)`.
+
+## 4. Command policy (cloud `CommandPolicy`, mirrored deny table in the server)
+
+`solus_api/agent/command_policy.py` is pure: `classify(argv: Sequence[str]) -> CommandVerdict
+{denied: bool, reason: str | None, risks: tuple[Risk, ...]}`. The program name is the basename
+of `argv[0]`, with a trailing version suffix stripped for interpreters (`python3.12` →
+`python`).
+
+**Denied** (also refused by the server planner; both tables are cross-checked by a test):
+
+- Shells: `sh bash zsh fish dash ksh csh tcsh pwsh`.
+- Command wrappers: `env xargs nohup setsid nice timeout time watch script expect
+sandbox-exec launchctl open osascript`.
+- Privilege elevation: `sudo su doas pkexec`.
+- Inline code: `python -c`/`-<flags>c`, `node -e/--eval/-p/--print`, `ruby -e`, `perl -e/-E`,
+  `php -r`, `lua -e`, `deno eval`, `bun -e/--eval`, `Rscript -e`.
+- Git config injection: `git -c …`, `git --config-env …`.
+
+**Risks** (badges on the card; never a denial): `network`, `install`, `destructive`,
+`hardware`, `remote`, `project_scripts` (runs code defined by the project: `make`, `npm run`,
+`pnpm run`, `yarn run`, `colcon build`, `cmake --build`, workspace-relative executables).
+The full table lives in the module and its tests.
+
+A denied call is refused **before parking** with `INVALID_ARGS` and a message that tells SOL
+to propose a direct argv instead (no shell, no `&&`, no pipes).
+
+## 5. Cloud: tools, cards, outcomes
+
+### 5.1 Registration
+
+`allowlist.yaml` entries (`requires_confirmation`, `timeout_seconds`):
+`exec` true/630, `process_start` true/30, `process_stop` true/30, `process_status` false/15,
+`profile_capture` true/60, `profile_list` false/15, `profile_delete` true/15.
+None is registered as a Build owned routine. `code.exec`, `code.process_start` and
+`code.profile_capture` require a complete plan preview: a failed or unrenderable plan refuses
+the call instead of parking a card with argument rows.
+
+### 5.2 Card rows
+
+`code.exec` / `code.process_start` (in order): `program` (resolved absolute path), `command`
+(the argv as a JSON array, chunked `command i/n` at 400 chars), `cwd`, `environment`,
+`profile` (`name · digest[:12]` or `none`), `sandbox` (`sandbox-exec — writes limited to the
+workspace, temp and tool caches`), `risk` (comma-separated risks or `none flagged`),
+`max runtime` (process only), `plan fingerprint`. Fingerprint = sha256 of canonical JSON
+`{argv, cwd, environment, profile_digest, sandbox_kind}`, four 16-hex groups.
+`code.profile_capture`: `setup file`, `extends`, `command` (the fixed bash argv), `sandbox`,
+`plan fingerprint`. The one-use plan snapshot (`services/code_environment_adapter.py`) covers
+these tools exactly as it covers `code.run`.
+
+### 5.3 Outcome fed to the model
+
+`command_outcome_text` keeps its shape. For `code.exec`, `code.run` and `code.test` the
+output tail cap is **3000** chars (was 400); other tools keep 400. `code.process_start`
+reports `started process <process_id> (pid …)`. `git_metadata_changed: true` adds
+`WARNING: the command modified .git/hooks or .git/config`. The text is redacted and the TOOL
+turn is fenced as data by `contain_result`.
+
+### 5.4 Incremental output
+
+The bridge output sink and the companion's progress relay cover `code.exec` as they cover
+`code.run`/`code.test` (§"Incremental command output" of `code-environment.md`, unchanged
+limits). `GET …/sol/confirmations/{id}/output` therefore serves `code.exec` too.
+
+### 5.5 Continuing the turn after a command
+
+`POST /api/v1/projects/{project_id}/sol/conversations/{conversation_id}/messages`
+(`MessageCreate`) gains `resume_confirmation_id: UUID | null`. When set:
+
+- `content` may be omitted (it becomes optional only together with this field; validation
+  rejects a body with neither);
+- the confirmation must belong to the caller and this conversation, be decided, and be one of
+  the command tools (`code.exec`, `code.run`, `code.test`, `code.install`,
+  `code.create_environment`, `code.process_start`, `code.profile_capture`);
+- each confirmation can be resumed once (a second request answers `409 already_resumed`);
+- at most **6** consecutive resume turns without a user-authored message (`409
+resume_limit`); SOL then waits for the person;
+- budget pre-flight, frequency cap and turn limits apply exactly as for a normal message;
+- no user turn is stored; the assistant turn records `{resume_of: <confirmation_id>}`.
+
+The desktop sends it automatically after an approved command card finishes (§7).
+
+### 5.6 Events (`emit_event`, consent-gated)
+
+| event                   | when                                                 | payload                                                                             |
+| ----------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `sol.command.proposed`  | a command card is parked or a denied call is refused | `{tool, program, risks, denied}`                                                    |
+| `sol.command.completed` | an approved command tool returns                     | `{tool, program, exit_code, timed_out, duration_ms, sandbox, git_metadata_changed}` |
+| `sol.turn_resumed`      | a resume turn starts                                 | `{confirmation_id, tool, chain}`                                                    |
+| `code.process.stopped`  | a stop succeeds                                      | `{via: "ui" \| "sol", state}`                                                       |
+| `code.profile.captured` | capture succeeds                                     | `{variable_count, dropped_count}`                                                   |
+
+`program` is the basename only. Full argv and variable names are never in events.
+
+## 6. Routes (new)
+
+| Method | Path                                                                                     | Purpose                                                                                                                                                                                                                       | Success |
+| ------ | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| GET    | `/api/v1/projects/{project_id}/code/processes?machine_id=…`                              | `code.process_status {}` over the caller's own bridge session: `{bridge: {connected}, processes: […]}`. Offline → `processes: []`, `connected: false`. MEMBER+.                                                               | `200`   |
+| GET    | `/api/v1/projects/{project_id}/code/processes/{process_id}/output?machine_id=…&cursor=…` | `code.process_status {process_id, cursor}` → `{output}`. Unknown process → `404 not_found`. MEMBER+.                                                                                                                          | `200`   |
+| POST   | `/api/v1/projects/{project_id}/code/processes/{process_id}/stop?machine_id=…`            | The person's own Stop button: dispatches `code.process_stop` directly over their own bridge session (a user action, not a model proposal). Emits `code.process.stopped {via: "ui"}`. Offline → `409 bridge_offline`. MEMBER+. | `200`   |
+
+All three are scoped to the authenticated user's own bridge session for that project: a team
+member can never see or stop another member's processes (tested). Rate limited like the
+code-environment route.
+
+## 7. Desktop
+
+See `docs/wireflows/sol-page.md` and `sol-window.md` (SOLUSDEV-317 sections): command card
+header with program and risk badges, Cmd/Ctrl+Enter approval, retained final output, automatic
+resume after an approved command, and the Running processes strip with Stop.
+
+## 8. Errors
+
+Tool refusals are tool results, never HTTP errors. Route errors: `404 not_found` (non-member,
+unknown process), `409 bridge_offline` (stop only), `409 already_resumed`, `409 resume_limit`,
+`422` validation.

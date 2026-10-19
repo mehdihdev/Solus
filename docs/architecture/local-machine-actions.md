@@ -166,3 +166,32 @@ fixed/revolute declarative URDF before import. Cloud registration references
 existing project graph identities; it creates only a model root and containment.
 Articulation discovery replaces robot-specific prim paths. Generic bounded joint
 trajectories report tracking; object/grasp assumptions are not supplied implicitly.
+
+## Generic command execution — SOLUSDEV-317 (supersedes "no generic command executor")
+
+The ADR-031 amendment of 2026-10-18 adds model-proposed argv execution to the existing `code`
+server, behind the same bridge and central confirmation gate. There is still no second
+dispatcher and no shell. Wire shapes: `docs/api/code-command-execution.md`.
+
+```text
+SOL proposes code.exec {argv, cwd, environment?, profile?}
+  → CommandPolicy (cloud, pure): deny shells / inline code / sudo before any card
+  → code.plan exec: resolve argv[0] to an absolute program, load profile, probe sandbox
+  → card: program, argv, cwd, profile, sandbox, risk badges, fingerprint (Cmd/Ctrl+Enter = approve)
+  → one-use snapshot re-plan → bridge tool_call → companion → code server
+  → sandbox-exec (macOS) | Landlock helper (Linux) → child process, scrubbed env + profile
+  → tool_output chunks → final tail → outcome turn → desktop resume turn → SOL continues
+```
+
+Long-running processes (`code.process_*`) are owned by the code server process: in-memory
+registry, bounded output rings, killed on server shutdown, so on companion exit and project
+unlink. Orphans left by a crashed server are reaped on next start using recorded start
+tokens. Environment profiles are captured by a fixed Solus bash script, filtered of
+secret-shaped and loader-injection variables, and stored machine-private under
+`~/.solus/code-profiles/`. Their values never leave the machine.
+
+The sandbox now wraps every executing `code` tool (`create_environment`, `install`, `run`,
+`test`, `exec`, `process_start`, `profile_capture`). It confines writes to the workspace,
+temp and declared tool caches. Where no sandbox is available the plan refuses. The
+"Declared sandbox posture" in `integrations/mcp/code/SECURITY_REVIEW.md` must be re-reviewed
+and signed again by both developers.
