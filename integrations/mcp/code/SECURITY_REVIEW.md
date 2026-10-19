@@ -338,3 +338,89 @@ macOS profile, `landlock_exec.py`, `command_deny.py` tables, `CAPTURE_SCRIPT`, t
 filters, process bounds, or `SEARCH_ROOTS`.
 
 - [ ] Both human reviewers ratify the changed source tree before shipping.
+
+### 2026-10-19 addendum — SOLUSDEV-317 Phase 4 fixes (append-only; the entry above stands as written)
+
+**DRAFT — agent verification, awaiting human sign-off.** Authority:
+`docs/api/code-command-execution.md` §9 (Phase 4 security amendments, 2026-10-19).
+
+Correction to the entry above: "Git metadata detection **around every sandboxed
+command**" was not true as shipped on 2026-10-18 — only the one-shot tools (`run`, `test`,
+`exec`, `install`, `create_environment`, `profile_capture`) compared the digest;
+`process_start` did not. Fixed below (§9.3).
+
+Fixes verified by tests in this slice:
+
+- [x] **C1 / §9.1 — the probe never executes workspace code.** `probe_environment` reads
+  a workspace venv's packages from `site-packages/*.dist-info/METADATA` (Name/Version;
+  ≤ 4096 directory entries, ≤ 4 site dirs, ≤ 64 KiB per file, ≤ 300 packages +
+  `truncated`, no symlinked dist-info or METADATA) and its Python version from
+  `pyvenv.cfg`. It never starts `<venv>/bin/python`, pip or `uv pip list`. System
+  interpreters on the pinned roots are still asked `--version`. Real test: a `.venv` whose
+  `bin/python` links to a real interpreter and whose site-packages carries an
+  import-time `.pth` payload — no side effect, packages still listed.
+- [x] **FIFO-safe reads** (`solus/safe_read.py`): METADATA, `pyvenv.cfg`, gitfile/`commondir`
+  targets, git-metadata streams and profile files open with `O_NONBLOCK` and must be
+  regular files, so a planted named pipe cannot hang the server.
+- [x] **H2 / §9.3 — processes are tamper-checked.** `process_start` takes the
+  git-metadata digest at start and compares it at exit, stop, timeout and shutdown;
+  `process_status` entries and the stop result carry `git_metadata_changed`. Real macOS
+  test: a started process cannot write `.git/hooks` (sandbox denial) and reports no change.
+- [x] **H3 / §9.4 — HOME is never the workspace.** Every executing action is refused when
+  the workspace realpath equals or contains HOME or `~/.solus` (or lies inside
+  `~/.solus`); `~/.solus` is also resolved when it is a symlink, and containment is judged
+  by `(st_dev, st_ino)` ancestry as well as spelling (case-insensitive APFS). `wrap`
+  refuses the same. The Linux helper takes HOME as an explicit `--home` argument, opens
+  each `--rw` path ONCE (`O_PATH|O_NOFOLLOW`), refuses symlinks and any descriptor that
+  holds HOME/`~/.solus`, and adds the Landlock rule from that same descriptor (no
+  check-then-use window). Temp roots that contain HOME are not granted.
+- [x] **H4 / §9.5 — caches are data only.** `HOME_CACHES` narrowed to `.cache`,
+  `Library/Caches`, `.ros`, `.npm/_cacache`, `.pnpm-store`, `.cargo/registry/cache`,
+  `.gradle/caches`, `.platformio/.cache`, `.arduino15/staging`, `.colcon`. `pinned_which`,
+  the command planner's resolver and the executor's final resolution refuse a program
+  whose realpath (inode-compared) lies in the writable set outside the workspace (temp,
+  user cache dir, caches) — e.g. a venv interpreter linked into `/tmp`.
+- [x] **§9.13 — shutdown.** The signal handler ignores further SIGTERM/SIGINT, stops every
+  started process with a 1.0 s SIGTERM grace then SIGKILL, and exits; previously a
+  SIGTERM with stdin still open never reached the cleanup (the stdio transport waited on
+  stdin). Real-server test: a TERM-ignoring process is dead < 2 s after the server's
+  SIGTERM, with a second SIGTERM sent mid-cleanup.
+- [x] **M2 / L3 — tree tracking.** Vanished pids are pruned on every snapshot; each pid's
+  start token is recorded when first seen and must still match before it is signalled;
+  Linux tokens carry `/proc/sys/kernel/random/boot_id`. Snapshots are at most every
+  1.0 s on macOS (`ps` cost), 0.5 s on Linux.
+- [x] **M3 / §9.11 — deny table.** Outside the workspace a denied name followed by a
+  version and/or `[-.]` tokens is denied for every denied set (`zsh-5.9`, `php-cgi8.2`,
+  `sudo-rs`, `sudo.ws`, `env-x`, `gtimeout`); workspace-relative programs match exact
+  normalised names of argv[0] and of the resolved realpath only (`./env_setup.sh`,
+  `./time_sync.py`, `./nu_test` run). Every interpreter in `INLINE_CODE` fails closed on
+  leading options not in its known-safe list (`node --run`, `node -x`,
+  `node --env-file`, `php -d/-z/-c`, `perl -d`, `lua -l data:…`). `classify_denial(argv)`
+  is the stdlib-only entry point the cloud's parity test loads by path.
+- [x] **L5 / §9.8 — one loader list** (`profiles.LOADER_NAMES`) for capture and spawn:
+  adds `NODE_OPTIONS PERL5OPT RUBYOPT JAVA_TOOL_OPTIONS _JAVA_OPTIONS GCONV_PATH`;
+  `PYTHONPATH` and `LD_LIBRARY_PATH` are kept.
+- [x] **L6** — the companion never replays `code.profile_delete`. **L7** — the macOS
+  limitations shown on the card add "a copied launchctl/osascript binary is not covered
+  by the exec denial".
+- [x] LOW — `Registry.stop()` sweeps first, so a process that exited on its own reports
+  `exited`, not `stopped`; the server uses public refusal helpers; `default_runner` is
+  split into functions under 50 lines.
+
+Residual risks added for the reviewers:
+
+- **The server re-plans at execute time and does not receive the approved fingerprint.**
+  The cloud re-plans and compares before dispatch, but between the cloud's re-plan and
+  the server's own planning there is a (sub-second) window in which the workspace could
+  change what the same arguments resolve to. Not closed in this slice.
+- **macOS copied binaries.** The `process-exec` denials are literal paths: a copy of
+  `launchctl`/`osascript` placed in the workspace or temp escapes them (the AppleEvents
+  and LaunchServices mach-lookup denials still apply, and temp copies no longer resolve
+  as programs, but a workspace copy run by an allowed program is not prevented).
+- `allowlist.yaml`'s `probe_environment` reason and `docs/api/code-environment.md` §4
+  still describe the probe as running `pip list`; §9.1 supersedes them — both need a
+  human/doc-owner edit (allowlist edits are human decisions).
+- Linux real-Landlock behaviour of the new descriptor-based grants is covered by unit
+  tests with injected openers here; the real-kernel test still only runs on Linux CI.
+
+- [ ] Both human reviewers ratify the changed source tree before shipping.
