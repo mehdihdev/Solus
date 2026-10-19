@@ -367,3 +367,67 @@ it('sends explicit force_confirmation only for confirmation-required turns', asy
   expect(bodies[0]).toMatchObject({ action_mode: 'do', force_confirmation: true })
   expect(bodies[1]).not.toHaveProperty('force_confirmation')
 })
+
+describe('SOLUSDEV-317 resume turns', () => {
+  const base = {
+    projectId: 'p1',
+    conversationId: 'c1',
+    actionMode: 'do' as const,
+    onEvent: vi.fn(),
+    getToken: async () => null,
+    baseUrl: 'http://api.test/api/v1'
+  }
+
+  it('sends resume_confirmation_id and omits empty content', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(''))
+    await streamSolMessage({
+      ...base,
+      content: '',
+      resumeConfirmationId: 'cf-1',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const body = JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string
+    ) as Record<string, unknown>
+    expect(body).toMatchObject({ resume_confirmation_id: 'cf-1', action_mode: 'do' })
+    expect(body).not.toHaveProperty('content')
+  })
+
+  it('never sends resume_confirmation_id on a normal message', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(''))
+    await streamSolMessage({
+      ...base,
+      content: 'hi',
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const body = JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string
+    ) as Record<string, unknown>
+    expect(body).toMatchObject({ content: 'hi' })
+    expect(body).not.toHaveProperty('resume_confirmation_id')
+  })
+
+  it('keeps the envelope error code of a refused turn', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'resume_limit', message: 'wait' } }), {
+          status: 409
+        })
+    )
+    await expect(
+      streamSolMessage({
+        ...base,
+        content: '',
+        resumeConfirmationId: 'cf-1',
+        fetchImpl: fetchImpl as unknown as typeof fetch
+      })
+    ).rejects.toMatchObject({ status: 409, code: 'resume_limit' })
+  })
+
+  it('falls back to sol_stream_failed for a body without an envelope', async () => {
+    const fetchImpl = vi.fn(async () => new Response('<html>', { status: 502 }))
+    await expect(
+      streamSolMessage({ ...base, content: 'x', fetchImpl: fetchImpl as unknown as typeof fetch })
+    ).rejects.toMatchObject({ status: 502, code: 'sol_stream_failed' })
+  })
+})

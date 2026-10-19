@@ -53,7 +53,12 @@ export interface SolChat {
   /** CTR-03: record approve/reject for a parked action. Rejection is a decision
    *  too, so both clear the card; the arguments that execute are the stored
    *  server-side ones the user was shown, never re-sent from here. */
-  decide: (confirmationId: string, decision: 'approve' | 'reject') => Promise<void>
+  decide: (
+    confirmationId: string,
+    decision: 'approve' | 'reject',
+    /** SOLUSDEV-317: given, an approved command resumes SOL in this mode. */
+    actionMode?: SolActionMode
+  ) => Promise<void>
   /** SOLUSDEV-252 S5: file a turn's artifact into a `.solus` section (once). */
   fileArtifact: (artifactId: string, section: SolusSection) => Promise<void>
 }
@@ -88,8 +93,15 @@ export function useSolChat(projectId: string | null): SolChat {
     if (projectId) startNewChatInStore(projectId)
   }, [projectId])
   const decide = useCallback<SolChat['decide']>(
-    (confirmationId, decision) =>
-      projectId ? decideConfirmation(projectId, confirmationId, decision) : Promise.resolve(),
+    (confirmationId, decision, actionMode) =>
+      projectId
+        ? decideConfirmation(
+            projectId,
+            confirmationId,
+            decision,
+            actionMode ? { actionMode } : undefined
+          )
+        : Promise.resolve(),
     [projectId]
   )
 

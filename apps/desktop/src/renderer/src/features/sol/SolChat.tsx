@@ -10,12 +10,14 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Switch } from '../../components/ui/Switch'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard } from './ConfirmationCard'
+import { CommandOutput } from './CommandOutput'
+import { CommandApprovalContext, approveOnShortcut, createApprovalRegistry } from './commandHotkey'
 import { SolMarkdown } from './Markdown'
 import { ModeBadge } from './ModeBadge'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
@@ -196,10 +198,14 @@ const MessageRow = memo(function MessageRow({
       {confirmations.map((confirmation) => (
         <ConfirmationCard
           key={confirmation.confirmationId}
-          projectId={projectId}
           pending={confirmation}
           onDecide={(decision) => onDecide(confirmation.confirmationId, decision)}
         />
+      ))}
+      {/* SOLUSDEV-317: an approved command's output, live while it runs and
+          kept with its exit status after the card is gone. */}
+      {(item.commandRuns ?? []).map((run) => (
+        <CommandOutput key={run.confirmationId} run={run} />
       ))}
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
@@ -216,11 +222,13 @@ const FOLLOW_SLACK_PX = 48
 function MessageList({
   chat,
   projectId,
-  page
+  page,
+  onDecide
 }: {
   chat: SolChat
   projectId: string
   page: boolean
+  onDecide: SolChat['decide']
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -274,7 +282,7 @@ function MessageList({
           key={item.id}
           item={item}
           projectId={projectId}
-          onDecide={chat.decide}
+          onDecide={onDecide}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
         />
@@ -566,6 +574,13 @@ export function SolChat({
     (state) => selectSession(state, projectId).forceConfirmation ?? false
   )
   const { mode, setMode } = useSolActionMode()
+  // SOLUSDEV-317: an approved command resumes SOL in the surface's current mode;
+  // Cmd/Ctrl+Enter approves the newest command card inside THIS surface only.
+  const decideInMode = useCallback<SolChat['decide']>(
+    (confirmationId, decision) => chat.decide(confirmationId, decision, mode),
+    [chat, mode]
+  )
+  const [approvals] = useState(createApprovalRegistry)
   // The circled region (SOL window only — main pushes it to that renderer).
   // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
   // but only once that turn settled clean: a failed send keeps it attached so
@@ -593,33 +608,36 @@ export function SolChat({
   }
   const page = layout === 'page'
   return (
-    <div
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
-      }}
-    >
-      <MessageList chat={chat} projectId={projectId} page={page} />
-      {region && (
-        <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
-      )}
-      <Composer
-        streaming={chat.streaming}
-        page={page}
-        projectId={projectId}
-        mode={mode}
-        onModeChange={setMode}
-        regionAttached={region !== null}
-        onDismissRegion={clearRegion}
-        forceConfirmation={forceConfirmation}
-        onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
-        onSend={sendWithRegion}
-      />
-    </div>
+    <CommandApprovalContext.Provider value={approvals}>
+      <div
+        onKeyDownCapture={(event) => approveOnShortcut(event, approvals, chat.items)}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
+        }}
+      >
+        <MessageList chat={chat} projectId={projectId} page={page} onDecide={decideInMode} />
+        {region && (
+          <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
+        )}
+        <Composer
+          streaming={chat.streaming}
+          page={page}
+          projectId={projectId}
+          mode={mode}
+          onModeChange={setMode}
+          regionAttached={region !== null}
+          onDismissRegion={clearRegion}
+          forceConfirmation={forceConfirmation}
+          onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
+          onSend={sendWithRegion}
+        />
+      </div>
+    </CommandApprovalContext.Provider>
   )
 }
 

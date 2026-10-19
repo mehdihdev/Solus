@@ -146,6 +146,12 @@ export interface StreamSolMessageInput {
   /** Enforce central confirmation even for routine Build writes. */
   forceConfirmation?: boolean
   /**
+   * SOLUSDEV-317 (code-command-execution.md §5.5): continue the turn after an
+   * approved command card. With it, `content` may be empty and is then omitted
+   * from the body — the server stores no user turn.
+   */
+  resumeConfirmationId?: string
+  /**
    * Graph entity ids the user pointed at with `@`. Sent alongside the text
    * rather than encoded in it, so the composer's `trim()` and any later edit to
    * the prose cannot invalidate an offset.
@@ -181,7 +187,8 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
     method: 'POST',
     headers,
     body: JSON.stringify({
-      content: input.content,
+      ...(input.resumeConfirmationId && input.content === '' ? {} : { content: input.content }),
+      ...(input.resumeConfirmationId ? { resume_confirmation_id: input.resumeConfirmationId } : {}),
       action_mode: input.actionMode,
       mentions: input.mentions ?? [],
       ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
@@ -205,9 +212,7 @@ export async function streamSolMessage(input: StreamSolMessageInput): Promise<vo
     joinUrl(input.baseUrl ?? DEFAULT_BASE_URL, path),
     await turnRequest(input)
   )
-  if (!res.ok || res.body === null) {
-    throw new ApiError(res.status, 'sol_stream_failed', `SOL stream failed (${res.status})`)
-  }
+  if (!res.ok || res.body === null) throw await streamFailure(res)
 
   const reader = res.body.getReader()
   const decoder = new TextDecoder()
@@ -219,6 +224,26 @@ export async function streamSolMessage(input: StreamSolMessageInput): Promise<vo
       input.onEvent(event)
     }
   }
+}
+
+/** A refused turn's error, keeping the envelope's code (`resume_limit`,
+ *  `already_resumed`, …) when the body carries one. */
+async function streamFailure(res: Response): Promise<ApiError> {
+  const fallback = new ApiError(
+    res.status,
+    'sol_stream_failed',
+    `SOL stream failed (${res.status})`
+  )
+  if (res.ok) return fallback
+  try {
+    const body: unknown = JSON.parse(await res.text())
+    const error = (body as { error?: { code?: unknown } } | null)?.error
+    if (typeof error?.code !== 'string') return fallback
+    unwrapEnvelope<never>(res.status, body)
+  } catch (thrown) {
+    if (thrown instanceof ApiError) return thrown
+  }
+  return fallback
 }
 
 export interface ArtifactTransport {
