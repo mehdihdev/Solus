@@ -94,7 +94,12 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
       (`nextStep`, shared with Connected accounts: Pick documents, Pick
       repositories, Enter details, Add to project, Choose file) through the
       SAME connect wizard; the local folder offers **Open folder** (reveals
-      THIS machine's linked folder; nothing when it isn't linked here). Tools neither linked nor
+      THIS machine's linked folder; nothing when it isn't linked here).
+      **A local folder that is a clone of the project's GitHub/GitLab repo**
+      (its `remote` — docs/api/local-folder.md §2 — matches that source's
+      host and `config.repo`, case-insensitive) sits directly under the repo's
+      row, joined by an accent connector between the two logos; the repo row
+      says "Cloned on <machine>", the folder row "Clone of <owner/repo>". Tools neither linked nor
       used are left out. **Add additional sources** opens the Connected
       accounts view.
     - **.solus** — `SolusCard` on its own.
@@ -104,7 +109,10 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
       sources and .solus."
   - **Team & invites**: the roster and invites (`LiveMembers`), the GitHub
     organization card (collaborative teams only), and TEAM ACTIVITY.
-  - **Connected accounts**: `ConnectedAccountsCard`, unchanged.
+  - **Connected accounts**: `ConnectedAccountsCard`, unchanged. Opened from a
+    project's **Add additional sources**, it carries **← Back to <project>**
+    above the card, returning to that project's pane; opened from the sidebar
+    (or after any other navigation) it has no back link.
 - Every card keeps its own rules below; only WHERE it sits changed. Ask SOL
   from Home is deferred until SOL accepts a starting prompt.
 

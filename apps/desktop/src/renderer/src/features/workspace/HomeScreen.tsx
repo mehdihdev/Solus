@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
+import { Icons } from '../../components/ui/icons.constants'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import type { Project } from '../../lib/api/resources'
 import { personalTeam } from '../../lib/api/resources'
@@ -126,6 +127,10 @@ interface LiveProps {
   onUpgrade: (() => void) | undefined
   /** Linked git repos per live project, shared by the list and the pane. */
   repos: ReposByProject
+  /** Connected accounts was opened from the project ("Add additional sources"). */
+  backToProject: boolean
+  /** Open Connected accounts from the project, with a way back. */
+  onAddSources: () => void
   onNewProject: () => void
 }
 
@@ -198,6 +203,40 @@ function useReposByProject(home: HomeData, currentId: string | null): ReposByPro
   return { ...read, [currentId]: linkedRepos(live.sources) }
 }
 
+/** "← Back to <project>" above Connected accounts when it was opened from there. */
+function BackToProject({
+  name,
+  onClick
+}: {
+  name: string
+  onClick: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={`Back to ${name}`}
+      className="interactive"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        margin: '0 0 14px -6px',
+        background: 'transparent',
+        border: 'none',
+        borderRadius: 4,
+        color: 'var(--acc)',
+        cursor: 'pointer',
+        fontFamily: 'var(--font-ui)',
+        fontSize: 12.5,
+        padding: '4px 6px'
+      }}
+    >
+      <Icons.arrowL size={12} /> Back to {name}
+    </button>
+  )
+}
+
 /** Linked account grants by health for the ACCOUNT card; null until known. */
 function useAccountsPosition(view: HomePaneView): AccountsPosition | null {
   const { status, connections, refresh } = useAccountConnections()
@@ -222,12 +261,20 @@ function Pane(props: LiveProps): React.JSX.Element {
       <div style={{ maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }}>
         {props.view === 'members' && <MembersView {...props} />}
         {props.view === 'accounts' && (
-          // OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account here
-          // once; each project picks what it tracks from the same card.
-          <ConnectedAccountsCard
-            currentProject={props.currentProject}
-            onNavigate={props.onNavigate}
-          />
+          <>
+            {props.backToProject && props.currentProject && (
+              <BackToProject
+                name={props.currentProject.name}
+                onClick={() => props.onShow('project')}
+              />
+            )}
+            {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account
+                here once; each project picks what it tracks from the same card. */}
+            <ConnectedAccountsCard
+              currentProject={props.currentProject}
+              onNavigate={props.onNavigate}
+            />
+          </>
         )}
         {props.view === 'project' && <ProjectView {...props} />}
       </div>
@@ -239,7 +286,7 @@ function ProjectView({
   home,
   repos,
   currentProject,
-  onShow,
+  onAddSources,
   onOpenProject,
   onNavigate
 }: LiveProps): React.JSX.Element {
@@ -261,7 +308,7 @@ function ProjectView({
       repos={repos[currentProject.id] ?? []}
       onOpen={() => onOpenProject(currentProject)}
       onBench={() => onNavigate?.('bench')}
-      onManageSources={() => onShow('accounts')}
+      onManageSources={onAddSources}
     />
   )
 }
@@ -342,6 +389,12 @@ function LiveHome({
   const [creatingProject, setCreatingProject] = useState(false)
   const [modal, setModal] = useState<HomeTeamModal>(null)
   const [view, setView] = useState<HomePaneView>('project')
+  const [backToProject, setBackToProject] = useState(false)
+  // Any navigation clears the way back; only "Add additional sources" sets it.
+  const show = (next: HomePaneView): void => {
+    setBackToProject(false)
+    setView(next)
+  }
   const repos = useReposByProject(home, currentProject?.id ?? null)
   const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
   const live: LiveProps = {
@@ -350,7 +403,12 @@ function LiveHome({
     team,
     currentProject,
     view,
-    onShow: setView,
+    onShow: show,
+    backToProject,
+    onAddSources: () => {
+      setView('accounts')
+      setBackToProject(true)
+    },
     onOpenProject,
     onNavigate,
     openModal: setModal,

@@ -227,4 +227,59 @@ describe('ProjectSourcesSummary', () => {
     setup({ status: 'loading' })
     expect(screen.getByText(/loading sources/i)).toBeInTheDocument()
   })
+
+  it('marks a local folder that is a clone of the linked GitHub repo, and keeps the pair together', () => {
+    setup({
+      connections: [connection('github'), connection('onshape')],
+      sources: [
+        source({
+          id: 's9',
+          type: 'local',
+          name: 'mehdi-mbp',
+          remote: { repo: 'Strider/Rover-Firmware', host: 'github' }
+        }),
+        source({ id: 's1', config: { repo: 'strider/rover-firmware' } }),
+        source({ id: 's2', type: 'onshape', name: 'Chassis', config: {} })
+      ]
+    })
+    const order = screen.getAllByTestId(/^source-tool-/).map((el) => el.dataset.testid)
+    expect(order.indexOf('source-tool-local')).toBe(order.indexOf('source-tool-github') + 1)
+    expect(within(row('github')).getByText('Cloned on mehdi-mbp')).toBeInTheDocument()
+    expect(within(row('local')).getByText('Clone of strider/rover-firmware')).toBeInTheDocument()
+    expect(row('github')).toHaveAttribute('data-linked', 'below')
+    expect(row('local')).toHaveAttribute('data-linked', 'above')
+  })
+
+  it('does not pair a folder whose origin is another repo or another host', () => {
+    setup({
+      connections: [connection('github')],
+      sources: [
+        source({
+          id: 's9',
+          type: 'local',
+          name: 'mbp',
+          remote: { repo: 'strider/other', host: 'github' }
+        }),
+        source({ id: 's1', config: { repo: 'strider/rover-firmware' } })
+      ]
+    })
+    expect(screen.queryByText(/^Cloned on/)).toBeNull()
+    expect(row('local')).not.toHaveAttribute('data-linked')
+  })
+
+  it('does not pair across hosts with the same owner/name', () => {
+    setup({
+      connections: [connection('github')],
+      sources: [
+        source({
+          id: 's9',
+          type: 'local',
+          name: 'mbp',
+          remote: { repo: 'org/fw', host: 'gitlab' }
+        }),
+        source({ id: 's1', config: { repo: 'org/fw' } })
+      ]
+    })
+    expect(screen.queryByText(/^Clone of/)).toBeNull()
+  })
 })

@@ -72,6 +72,8 @@ export interface Source {
   last_synced_at: string | null
   last_error: SourceError | null
   entity_count?: number
+  /** SOLUSDEV-317: a `local` source's normalised git origin (docs/api/local-folder.md §2). */
+  remote?: { repo: string; host: string }
   created_at: string
   updated_at: string
 }

@@ -17,6 +17,7 @@ import { useProjectSources } from '../project/useProjectSources'
 import { CardWizardModal, ProviderMark } from './ConnectedAccountsCard'
 import { nextStep, useCardWizard } from './accountSteps'
 import { LOCAL_FOLDER_MARK, LOCAL_SOURCE_TYPE } from './connectedAccounts'
+import { sourceLabel, toolGroups, type ToolGroup } from './sourceGroups'
 import { linkedAccountFor, useAccountConnections } from './useAccountConnections'
 
 /** The meta text colour per state. */
@@ -34,46 +35,6 @@ export interface ProjectSourcesSummaryProps {
   onAdd: () => void
   /** Show at most this many tools, then "+N more"; omit for all. */
   limit?: number
-}
-
-/** One tool on the block: its catalog entry (null for a local folder) and what
- *  this project holds from it. */
-interface ToolGroup {
-  key: string
-  entry: CatalogEntry | null
-  linked: boolean
-  held: Source[]
-}
-
-/** A git source is its repo; anything else (a local folder's machine) its name. */
-function sourceLabel(source: Source): string {
-  // The row's title already says "Local folder": its items are machines.
-  if (source.type === LOCAL_SOURCE_TYPE) return source.name
-  const repo = source.config['repo']
-  return typeof repo === 'string' && repo.length > 0 ? repo : source.name
-}
-
-/** Tools holding something here first, then linked tools with nothing yet. */
-function toolGroups(
-  catalog: readonly CatalogEntry[],
-  sources: readonly Source[],
-  linkedProviders: ReadonlySet<string>
-): ToolGroup[] {
-  const groups: ToolGroup[] = catalog
-    .filter((e) => e.mode !== 'local-bridge')
-    .map((entry) => ({
-      key: entry.id,
-      entry,
-      linked: linkedProviders.has(entry.id),
-      held: sources.filter((s) => s.type === entry.id)
-    }))
-    .filter((g) => g.linked || g.held.length > 0)
-  const local = sources.filter((s) => s.type === LOCAL_SOURCE_TYPE)
-  const all =
-    local.length > 0
-      ? [...groups, { key: LOCAL_SOURCE_TYPE, entry: null, linked: false, held: local }]
-      : groups
-  return [...all].sort((a, b) => Number(b.held.length > 0) - Number(a.held.length > 0))
 }
 
 export function ProjectSourcesSummary({
@@ -154,8 +115,22 @@ function ToolRow({
   const { entry, held } = group
   const mark = entry ?? { id: LOCAL_SOURCE_TYPE, mark: LOCAL_FOLDER_MARK }
   return (
-    <div data-testid={`source-tool-${group.key}`} style={ROW}>
-      <ProviderMark entry={mark} />
+    <div
+      data-testid={`source-tool-${group.key}`}
+      data-linked={group.link}
+      style={{ ...ROW, borderBottom: group.link === 'below' ? 'none' : ROW.borderBottom }}
+    >
+      <span
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignSelf: 'stretch',
+          alignItems: 'center'
+        }}
+      >
+        <ProviderMark entry={mark} />
+        {group.link && <CloneConnector side={group.link} />}
+      </span>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{entry?.name ?? 'Local folder'}</div>
         {held.length === 0 ? (
@@ -163,6 +138,7 @@ function ToolRow({
         ) : (
           held.map((s) => <HeldItem key={s.id} source={s} />)
         )}
+        <CloneNote group={group} />
       </div>
       <Count held={held} />
       {entry ? (
@@ -195,6 +171,37 @@ function StepLink({
       {step.action} ›
     </button>
   )
+}
+
+/** The line joining a repo's row to the local folder that clones it: from
+ *  the logo to the row edge, toward the paired row. */
+function CloneConnector({ side }: { side: 'above' | 'below' }): React.JSX.Element {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        left: 13,
+        width: 2,
+        background: 'var(--acc)',
+        opacity: 0.6,
+        ...(side === 'below'
+          ? { top: 'calc(50% + 14px)', bottom: -10 }
+          : { top: -10, bottom: 'calc(50% + 14px)' })
+      }}
+    />
+  )
+}
+
+/** What the pairing means, in words, on each end. */
+function CloneNote({ group }: { group: ToolGroup }): React.JSX.Element | null {
+  const text = group.clonedOn
+    ? `Cloned on ${group.clonedOn}`
+    : group.cloneOf
+      ? `Clone of ${group.cloneOf}`
+      : null
+  if (!text) return null
+  return <div style={{ fontSize: 11, color: 'var(--acc)', marginTop: 2 }}>{text}</div>
 }
 
 /** Reveals THIS machine's linked folder; nothing when it isn't linked here. */

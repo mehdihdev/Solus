@@ -235,6 +235,25 @@ describe('HomeScreen — connected accounts view', () => {
     await userEvent.click(within(pane()).getByRole('button', { name: 'Add additional sources' }))
     expect(within(pane()).getByTestId('connected-accounts')).toBeInTheDocument()
   })
+
+  it('offers a way back to the project it was opened from', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(within(pane()).getByRole('button', { name: 'Add additional sources' }))
+    await userEvent.click(within(pane()).getByRole('button', { name: 'Back to Rover MK2' }))
+    expect(within(pane()).getByRole('heading', { name: 'Rover MK2' })).toBeInTheDocument()
+    expect(within(pane()).queryByTestId('connected-accounts')).toBeNull()
+  })
+
+  it('has no back button when opened from the sidebar', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await userEvent.click(within(pane()).getByRole('button', { name: 'Add additional sources' }))
+    await showAccounts()
+    expect(within(pane()).queryByRole('button', { name: /^back to/i })).toBeNull()
+  })
 })
 
 describe('HomeScreen — GitHub organization card', () => {
