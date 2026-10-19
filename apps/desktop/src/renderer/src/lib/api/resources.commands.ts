@@ -1,6 +1,7 @@
 // SOLUSDEV-317 — typed clients for SOL command execution
 // (docs/api/code-command-execution.md §6 and code-environment.md "Incremental
-// command output"). Hand-typed until schema.ts is regenerated. Every answer
+// command output"). Hand-typed: the regenerated schema.ts declares these
+// routes' 200 bodies as `unknown` (the routes return plain dicts). Every answer
 // crosses a process boundary from the user's machine, so rows are narrowed
 // defensively and malformed entries are dropped rather than rendered.
 import { api, type ApiClient } from './client'

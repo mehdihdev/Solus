@@ -102,41 +102,72 @@ describe('createApprovalRegistry', () => {
   })
 })
 
-describe('registration time', () => {
-  it('keeps the first registration time when a card re-registers its approver', () => {
+describe('preview in view (arming clock)', () => {
+  it('starts the clock when the preview comes into view, not at registration', () => {
     let now = 1000
     const registry = createApprovalRegistry(() => now)
-    const first = registry.register('a', () => true)
+    registry.register('a', () => true)
+    expect(registry.inViewSince('a')).toBeNull()
+    now = 4000
+    registry.setInView('a', true)
+    now = 9000
+    registry.setInView('a', true)
+    expect(registry.inViewSince('a')).toBe(4000)
+    expect(registry.inViewSince('missing')).toBeNull()
+  })
+
+  it('resets the clock when the preview leaves view before arming', () => {
+    let now = 0
+    const registry = createApprovalRegistry(() => now)
+    registry.setInView('a', true)
+    now = ARM_DELAY_MS - 1
+    registry.setInView('a', false)
+    expect(registry.inViewSince('a')).toBeNull()
     now = 5000
-    first()
-    registry.register('a', () => false)
-    expect(registry.registeredAt('a')).toBe(1000)
-    expect(registry.registeredAt('missing')).toBeNull()
+    registry.setInView('a', true)
+    expect(registry.inViewSince('a')).toBe(5000)
+  })
+
+  it('keeps an armed card armed when its preview later leaves view', () => {
+    let now = 0
+    const registry = createApprovalRegistry(() => now)
+    registry.setInView('a', true)
+    now = ARM_DELAY_MS
+    registry.setInView('a', false)
+    expect(registry.inViewSince('a')).toBe(0)
+  })
+
+  it('forgets the clock when the card unmounts', () => {
+    const registry = createApprovalRegistry(() => 5000)
+    registry.setInView('a', true)
+    registry.forgetView('a')
+    expect(registry.inViewSince('a')).toBeNull()
   })
 })
 
+const CTRL_ENTER = { ...key({ ctrlKey: true }), repeat: false }
+
+function setup(): {
+  clock: { now: number }
+  registry: ReturnType<typeof createApprovalRegistry>
+  gate: ReturnType<typeof createShortcutGate>
+  approveA: ReturnType<typeof vi.fn>
+  approveB: ReturnType<typeof vi.fn>
+} {
+  const clock = { now: 0 }
+  const registry = createApprovalRegistry(() => clock.now)
+  const gate = createShortcutGate(() => clock.now)
+  const approveA = vi.fn(() => true)
+  const approveB = vi.fn(() => true)
+  registry.register('a', approveA)
+  registry.setInView('a', true)
+  return { clock, registry, gate, approveA, approveB }
+}
+
+const one = [{ confirmations: [card('a', 'code.exec')] }]
+const two = [{ confirmations: [card('a', 'code.exec'), card('b', 'code.exec')] }]
+
 describe('createShortcutGate (consent race guards)', () => {
-  const CTRL_ENTER = { ...key({ ctrlKey: true }), repeat: false }
-
-  function setup(): {
-    clock: { now: number }
-    registry: ReturnType<typeof createApprovalRegistry>
-    gate: ReturnType<typeof createShortcutGate>
-    approveA: ReturnType<typeof vi.fn>
-    approveB: ReturnType<typeof vi.fn>
-  } {
-    const clock = { now: 0 }
-    const registry = createApprovalRegistry(() => clock.now)
-    const gate = createShortcutGate(() => clock.now)
-    const approveA = vi.fn(() => true)
-    const approveB = vi.fn(() => true)
-    registry.register('a', approveA)
-    return { clock, registry, gate, approveA, approveB }
-  }
-
-  const one = [{ confirmations: [card('a', 'code.exec')] }]
-  const two = [{ confirmations: [card('a', 'code.exec'), card('b', 'code.exec')] }]
-
   it('does nothing before the newest card has been armed for the delay', () => {
     const { clock, registry, gate, approveA } = setup()
     gate.noteNewest(one)
@@ -153,6 +184,7 @@ describe('createShortcutGate (consent race guards)', () => {
     gate.noteNewest(one)
     clock.now = 5000
     registry.register('b', approveB)
+    registry.setInView('b', true)
     gate.noteNewest(two)
     clock.now = 5000 + ARM_DELAY_MS - 1
     expect(gate.handle(CTRL_ENTER, registry, two, false).fired).toBe(false)
@@ -172,17 +204,59 @@ describe('createShortcutGate (consent race guards)', () => {
     expect(approveA).toHaveBeenCalledTimes(1)
   })
 
-  it('arms from registration, not from when the card was first noted', () => {
+  it('arms from when the preview came into view, not from when the card was noted', () => {
     const clock = { now: 0 }
     const registry = createApprovalRegistry(() => clock.now)
     const gate = createShortcutGate(() => clock.now)
+    registry.register('a', () => true)
     gate.noteNewest(one)
     clock.now = 2000
-    registry.register('a', () => true)
+    registry.setInView('a', true)
     clock.now = 2000 + ARM_DELAY_MS - 1
     expect(gate.handle(CTRL_ENTER, registry, one, false).fired).toBe(false)
+    clock.now = 2000 + ARM_DELAY_MS
+    expect(gate.handle(CTRL_ENTER, registry, one, false).fired).toBe(true)
+  })
+})
+
+describe('createShortcutGate (preview visibility and composer drafts)', () => {
+  it('never approves a card whose preview has not been in view', () => {
+    const clock = { now: 0 }
+    const registry = createApprovalRegistry(() => clock.now)
+    const gate = createShortcutGate(() => clock.now)
+    const approve = vi.fn(() => true)
+    registry.register('a', approve)
+    gate.noteNewest(one)
+    clock.now = 60_000
+    expect(gate.handle(CTRL_ENTER, registry, one, false)).toEqual({ fired: false, swallow: true })
+    expect(approve).not.toHaveBeenCalled()
   })
 
+  it('consumes the key without approving while the composer holds a draft', () => {
+    const { clock, registry, gate, approveA } = setup()
+    gate.noteNewest(one)
+    clock.now = 5000
+    expect(gate.handle({ ...CTRL_ENTER, composerDraft: true }, registry, one, false)).toEqual({
+      fired: false,
+      swallow: true
+    })
+    expect(approveA).not.toHaveBeenCalled()
+    expect(gate.handle({ ...CTRL_ENTER, composerDraft: false }, registry, one, false).fired).toBe(
+      true
+    )
+  })
+
+  it('leaves a drafted Ctrl+Enter alone when no command card is pending', () => {
+    const { registry, gate } = setup()
+    const none = [{ confirmations: [card('x', 'kicad.edit')] }]
+    expect(gate.handle({ ...CTRL_ENTER, composerDraft: true }, registry, none, false)).toEqual({
+      fired: false,
+      swallow: false
+    })
+  })
+})
+
+describe('createShortcutGate (key handling)', () => {
   it('ignores auto-repeat keydowns', () => {
     const { clock, registry, gate, approveA } = setup()
     gate.noteNewest(one)
@@ -200,6 +274,7 @@ describe('createShortcutGate (consent race guards)', () => {
     clock.now = 5000
     expect(gate.handle(CTRL_ENTER, registry, one, false).fired).toBe(true)
     registry.register('b', approveB)
+    registry.setInView('b', true)
     gate.noteNewest(two)
     clock.now = 50_000
     expect(gate.handle(CTRL_ENTER, registry, two, false).fired).toBe(false)
@@ -231,6 +306,7 @@ describe('createShortcutGate (consent race guards)', () => {
     const registry = createApprovalRegistry(() => clock.now)
     const gate = createShortcutGate(() => clock.now)
     registry.register('a', () => false)
+    registry.setInView('a', true)
     gate.noteNewest(one)
     clock.now = 5000
     expect(gate.handle(CTRL_ENTER, registry, one, false)).toEqual({ fired: false, swallow: true })

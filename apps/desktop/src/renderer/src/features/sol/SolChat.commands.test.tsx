@@ -9,6 +9,7 @@ import type { PendingConfirmation } from '../../lib/api/solStream'
 import * as solApi from './solApi'
 import { SolChat } from './SolChat'
 import { ARM_DELAY_MS } from './commandHotkey'
+import { PreviewObserverContext, type ObserveInView } from './previewInView'
 import { resetSolChatSessions } from './solChatStore'
 import { useSolSessionStore } from './solSessionStore'
 import { useSolWindowStore } from './solWindowStore'
@@ -68,6 +69,20 @@ beforeEach(() => {
   })
 })
 
+/** The jsdom seam for IntersectionObserver: by default every preview reports
+ *  itself in view the moment it is observed; a test can take over a card. */
+let observe: ObserveInView
+const inView = new Map<string, (visible: boolean) => void>()
+const previewsInViewAtOnce: ObserveInView = (_element, onChange) => {
+  onChange(true)
+  return () => undefined
+}
+
+beforeEach(() => {
+  inView.clear()
+  observe = previewsInViewAtOnce
+})
+
 /** Move the clock past the shortcut's arming delay (cards must have been on
  *  screen, newest, for ARM_DELAY_MS). */
 function armCards(): void {
@@ -83,7 +98,11 @@ async function park(
   stream.mockImplementationOnce(async ({ onEvent }) => {
     for (const pending of cards) onEvent({ type: 'tool_confirmation', pending })
   })
-  render(<SolChat projectId="p1" />)
+  render(
+    <PreviewObserverContext.Provider value={observe}>
+      <SolChat projectId="p1" />
+    </PreviewObserverContext.Provider>
+  )
   const input = screen.getByPlaceholderText('Ask about a signal, a change, a part…')
   await user.type(input, 'build it{Enter}')
   await screen.findAllByLabelText('Action needs your approval')
@@ -92,20 +111,82 @@ async function park(
 }
 
 describe('Cmd/Ctrl+Enter approval', () => {
-  it('approves the newest pending command card and does not submit the composer', async () => {
+  it('approves the newest pending command card from an empty composer', async () => {
     decide.mockResolvedValue({ ok: true, value: { exit_code: 0 } })
     const user = userEvent.setup()
     const input = await park(user, command('older'), command('newer'), ONSHAPE)
-    await user.type(input, 'draft')
+    input.focus()
     armCards()
     await user.keyboard('{Control>}{Enter}{/Control}')
     await waitFor(() => expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve'))
     expect(decide).toHaveBeenCalledTimes(1)
-    // The composer kept its text: the key approved, it did not send.
-    expect(input).toHaveValue('draft')
-    expect(stream.mock.calls.filter(([arg]) => arg.content === 'draft')).toEqual([])
+    // The key approved; it never sent a message (only the resume may follow).
+    expect(stream.mock.calls.filter(([arg]) => !arg.resumeConfirmationId)).toHaveLength(1)
+  })
+})
+
+describe('Cmd/Ctrl+Enter: composer drafts and preview visibility', () => {
+  it('never approves while the composer holds a draft, and does not send it', async () => {
+    const user = userEvent.setup()
+    const input = await park(user, command('newer'))
+    await user.type(input, 'no, do not run that')
+    armCards()
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(decide).not.toHaveBeenCalled()
+    expect(input).toHaveValue('no, do not run that')
+    expect(stream).toHaveBeenCalledTimes(1)
   })
 
+  it('approves from outside the composer even when the composer holds a draft', async () => {
+    decide.mockResolvedValue({ ok: true, value: { exit_code: 0 } })
+    const user = userEvent.setup()
+    const input = await park(user, command('newer'))
+    await user.type(input, 'draft')
+    armCards()
+    const approve = screen.getByRole('button', { name: /Approve/ })
+    act(() => {
+      fireEvent.keyDown(approve, { key: 'Enter', ctrlKey: true })
+    })
+    await waitFor(() => expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve'))
+  })
+
+  it('does not approve a card whose preview never came into view', async () => {
+    observe = () => () => undefined
+    const user = userEvent.setup()
+    const input = await park(user, command('newer'))
+    input.focus()
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 100 * ARM_DELAY_MS)
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(decide).not.toHaveBeenCalled()
+    expect(stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('restarts the clock when the preview leaves view before arming', async () => {
+    decide.mockResolvedValue({ ok: true, value: { exit_code: 0 } })
+    observe = (_element, onChange) => {
+      inView.set('newer', onChange)
+      return () => undefined
+    }
+    const user = userEvent.setup()
+    const input = await park(user, command('newer'))
+    input.focus()
+    const t0 = Date.now() + 10 * ARM_DELAY_MS
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(t0)
+    act(() => inView.get('newer')?.(true))
+    clock.mockReturnValue(t0 + ARM_DELAY_MS - 100)
+    act(() => inView.get('newer')?.(false))
+    clock.mockReturnValue(t0 + ARM_DELAY_MS)
+    act(() => inView.get('newer')?.(true))
+    clock.mockReturnValue(t0 + 2 * ARM_DELAY_MS - 1)
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    expect(decide).not.toHaveBeenCalled()
+    clock.mockReturnValue(t0 + 2 * ARM_DELAY_MS)
+    await user.keyboard('{Control>}{Enter}{/Control}')
+    await waitFor(() => expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve'))
+  })
+})
+
+describe('Cmd/Ctrl+Enter guards', () => {
   it('ignores the shortcut while the newest command card is busy', async () => {
     decide.mockReturnValue(new Promise(() => undefined))
     const user = userEvent.setup()
@@ -118,13 +199,12 @@ describe('Cmd/Ctrl+Enter approval', () => {
     expect(decide).toHaveBeenCalledWith('p1', 'newer', 'approve')
   })
 
-  it('does nothing — and does not send the draft — before the newest card is armed', async () => {
+  it('does nothing — and sends nothing — before the newest card is armed', async () => {
     const user = userEvent.setup()
     const input = await park(user, command('newer'))
-    await user.type(input, 'draft')
+    input.focus()
     await user.keyboard('{Control>}{Enter}{/Control}')
     expect(decide).not.toHaveBeenCalled()
-    expect(input).toHaveValue('draft')
     expect(stream).toHaveBeenCalledTimes(1)
   })
 
@@ -156,7 +236,9 @@ describe('Cmd/Ctrl+Enter approval', () => {
     expect(decide).toHaveBeenCalledTimes(2)
     expect(decide).toHaveBeenLastCalledWith('p1', 'older', 'approve')
   })
+})
 
+describe('Cmd/Ctrl+Enter: keys that never approve', () => {
   it('ignores the shortcut during IME composition', async () => {
     const user = userEvent.setup()
     const input = await park(user, command('newer'))
@@ -194,7 +276,7 @@ describe('Cmd/Ctrl+Enter approval', () => {
 
 describe('after an approved command', () => {
   it('keeps the output and exit status under the message and resumes SOL', async () => {
-    decide.mockResolvedValue({ ok: true, value: { exit_code: 2 } })
+    decide.mockResolvedValue({ ok: true, value: { ok: false, exit_code: 2, reason: null } })
     const user = userEvent.setup()
     await park(user, command('make'))
     const card = screen.getByLabelText('Action needs your approval')

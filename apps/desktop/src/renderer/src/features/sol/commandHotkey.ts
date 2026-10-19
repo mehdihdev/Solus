@@ -58,29 +58,49 @@ export function newestCommandConfirmation(items: readonly ConfirmationHolder[]):
   return null
 }
 
+/** Security review (consent race): a card's preview must have been in view
+ *  AND the card the newest command card for this long before the shortcut can
+ *  approve it, so a card that appears (e.g. from an auto-resume) under a key
+ *  press already on its way — or one never scrolled into view — is never
+ *  approved by it. */
+export const ARM_DELAY_MS = 700
+
 /** Each mounted command card registers how to approve itself; the approver
- *  returns false when the card is busy or spent. The FIRST registration time
- *  per card is kept (re-registering on a busy-state change does not reset it):
- *  it is when the card was rendered, which the arming delay measures from. */
+ *  returns false when the card is busy or spent. Separately, the card reports
+ *  when its verbatim preview is in view: that is when the arming clock starts
+ *  (sol-page.md "Command preview is open"). Leaving view before the clock has
+ *  run resets it; a card already armed stays armed. */
 export interface ApprovalRegistry {
   register: (confirmationId: string, approve: () => boolean) => () => void
   approve: (confirmationId: string) => boolean
-  registeredAt: (confirmationId: string) => number | null
+  setInView: (confirmationId: string, inView: boolean) => void
+  forgetView: (confirmationId: string) => void
+  inViewSince: (confirmationId: string) => number | null
 }
 
 export function createApprovalRegistry(now: () => number = () => Date.now()): ApprovalRegistry {
   const approvers = new Map<string, () => boolean>()
-  const firstSeen = new Map<string, number>()
+  const inViewSince = new Map<string, number>()
   return {
     register(confirmationId, approve) {
       approvers.set(confirmationId, approve)
-      if (!firstSeen.has(confirmationId)) firstSeen.set(confirmationId, now())
       return () => {
         if (approvers.get(confirmationId) === approve) approvers.delete(confirmationId)
       }
     },
     approve: (confirmationId) => approvers.get(confirmationId)?.() ?? false,
-    registeredAt: (confirmationId) => firstSeen.get(confirmationId) ?? null
+    setInView(confirmationId, inView) {
+      const since = inViewSince.get(confirmationId)
+      if (inView) {
+        if (since === undefined) inViewSince.set(confirmationId, now())
+        return
+      }
+      if (since !== undefined && now() - since < ARM_DELAY_MS) inViewSince.delete(confirmationId)
+    },
+    forgetView: (confirmationId) => {
+      inViewSince.delete(confirmationId)
+    },
+    inViewSince: (confirmationId) => inViewSince.get(confirmationId) ?? null
   }
 }
 
@@ -98,14 +118,11 @@ export function useRegisterCommandApproval(
   }, [registry, confirmationId, approve])
 }
 
-/** Security review (consent race): a card must have been rendered AND be the
- *  newest command card for this long before the shortcut can approve it, so a
- *  card that appears (e.g. from an auto-resume) under a key press already on
- *  its way is never approved by it. */
-export const ARM_DELAY_MS = 700
-
 interface ShortcutKey extends KeyLike {
   readonly repeat: boolean
+  /** The press came from the composer while it holds text (sol-page.md
+   *  "Composer drafts win"): consumed, never an approval. */
+  readonly composerDraft?: boolean
 }
 
 export interface ShortcutResult {
@@ -152,10 +169,10 @@ export function createShortcutGate(now: () => number = () => Date.now()): Shortc
       const newest = newestCommandConfirmation(items)
       if (newest === null) return PASS
       note(newest)
-      if (event.repeat || awaitingKeyUp) return BLOCKED
-      const rendered = registry.registeredAt(newest)
-      if (rendered === null) return BLOCKED
-      if (now() - Math.max(newestSince, rendered) < ARM_DELAY_MS) return BLOCKED
+      if (event.composerDraft === true || event.repeat || awaitingKeyUp) return BLOCKED
+      const inView = registry.inViewSince(newest)
+      if (inView === null) return BLOCKED
+      if (now() - Math.max(newestSince, inView) < ARM_DELAY_MS) return BLOCKED
       if (!registry.approve(newest)) return BLOCKED
       awaitingKeyUp = true
       return { fired: true, swallow: true }
@@ -163,8 +180,18 @@ export function createShortcutGate(now: () => number = () => Date.now()): Shortc
   }
 }
 
+/** Marks the SOL composer input; a press there while it holds text is a
+ *  draft, never an approval. */
+export const COMPOSER_ATTR = 'data-sol-composer'
+
+function isComposerDraft(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLInputElement && target.hasAttribute(COMPOSER_ATTR) && target.value !== ''
+  )
+}
+
 /** The surface's capture-phase keydown. Works from anywhere in the surface,
- *  including the composer; swallows the key whenever it targeted a command
+ *  including an empty composer; swallows the key whenever it targeted a command
  *  card, so a blocked shortcut never falls through to sending the draft. */
 export function approveOnShortcut(
   event: React.KeyboardEvent,
@@ -182,7 +209,8 @@ export function approveOnShortcut(
       altKey: event.altKey,
       shiftKey: event.shiftKey,
       isComposing: composing,
-      repeat: event.repeat
+      repeat: event.repeat,
+      composerDraft: isComposerDraft(event.target)
     },
     registry,
     items,

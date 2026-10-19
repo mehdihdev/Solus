@@ -4,6 +4,8 @@ import { render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PendingConfirmation } from '../../lib/api/solStream'
 import { ConfirmationCard } from './ConfirmationCard'
+import { CommandApprovalContext, createApprovalRegistry } from './commandHotkey'
+import { PreviewObserverContext, type ObserveInView } from './previewInView'
 
 const EXEC: PendingConfirmation = {
   confirmationId: 'cx',
@@ -73,5 +75,78 @@ describe('approve shortcut hint', () => {
     const approve = screen.getByRole('button', { name: 'Approve' })
     expect(within(approve).getByText('⌘↵')).toBeInTheDocument()
     expect(approve).toHaveAttribute('aria-keyshortcuts', 'Meta+Enter')
+  })
+})
+
+describe('command preview is open', () => {
+  it('renders the verbatim preview of a command card expanded and bounded', () => {
+    render(<ConfirmationCard pending={EXEC} onDecide={vi.fn()} />)
+    const region = screen.getByRole('region', { name: 'Complete proposed changes' })
+    expect(region.closest('details')).toHaveAttribute('open')
+    expect(region).toHaveClass('confirmation-card__scroll')
+  })
+
+  it('keeps a long non-command preview collapsed', () => {
+    const many = {
+      ...ONSHAPE,
+      preview: [1, 2, 3].map((n) => ({ ...ONSHAPE.preview[0], label: `v${n}` }))
+    }
+    render(<ConfirmationCard pending={many} onDecide={vi.fn()} />)
+    const region = screen.getByRole('region', { name: 'Complete proposed changes', hidden: true })
+    expect(region.closest('details')).not.toHaveAttribute('open')
+  })
+
+  it('reports the preview region in view to the arming clock, and forgets it on unmount', () => {
+    let now = 1000
+    const registry = createApprovalRegistry(() => now)
+    let report: ((visible: boolean) => void) | null = null
+    const observed: Element[] = []
+    const stop = vi.fn()
+    const observe: ObserveInView = (element, onChange) => {
+      observed.push(element)
+      report = onChange
+      return stop
+    }
+    const view = render(
+      <CommandApprovalContext.Provider value={registry}>
+        <PreviewObserverContext.Provider value={observe}>
+          <ConfirmationCard pending={EXEC} onDecide={vi.fn()} />
+        </PreviewObserverContext.Provider>
+      </CommandApprovalContext.Provider>
+    )
+    expect(observed).toEqual([screen.getByRole('region', { name: 'Complete proposed changes' })])
+    expect(registry.inViewSince('cx')).toBeNull()
+    now = 2000
+    report!(true)
+    expect(registry.inViewSince('cx')).toBe(2000)
+    view.unmount()
+    expect(stop).toHaveBeenCalled()
+    expect(registry.inViewSince('cx')).toBeNull()
+  })
+
+  it('does not observe a non-command card', () => {
+    const observe = vi.fn(() => () => undefined)
+    render(
+      <CommandApprovalContext.Provider value={createApprovalRegistry()}>
+        <PreviewObserverContext.Provider value={observe}>
+          <ConfirmationCard pending={ONSHAPE} onDecide={vi.fn()} />
+        </PreviewObserverContext.Provider>
+      </CommandApprovalContext.Provider>
+    )
+    expect(observe).not.toHaveBeenCalled()
+  })
+
+  it('keeps one keyboard registration across re-renders with a fresh onDecide', () => {
+    const registry = createApprovalRegistry()
+    const register = vi.spyOn(registry, 'register')
+    const wrap = (onDecide: () => Promise<void>): React.JSX.Element => (
+      <CommandApprovalContext.Provider value={registry}>
+        <ConfirmationCard pending={EXEC} onDecide={onDecide} />
+      </CommandApprovalContext.Provider>
+    )
+    const view = render(wrap(vi.fn()))
+    view.rerender(wrap(vi.fn()))
+    view.rerender(wrap(vi.fn()))
+    expect(register).toHaveBeenCalledTimes(1)
   })
 })

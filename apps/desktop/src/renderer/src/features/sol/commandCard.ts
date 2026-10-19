@@ -91,14 +91,16 @@ export function commandHeader(pending: PendingConfirmation): CommandHeader | nul
 
 const REASON_CAP = 200
 
-/** The exit status shown under a finished command's retained output. */
+/** The exit status shown under a finished command's retained output. A command
+ *  that ran and failed arrives as `{ok: false, exit_code: N}`, so the exit code
+ *  wins over `ok`; only `ok: false` with no exit code is a refusal (§7a). */
 export function commandExitStatus(outcome: ConfirmationOutcome): string {
   const value = outcome.value ?? {}
   if (value.timed_out === true) return 'timed out'
+  if (typeof value.exit_code === 'number') return `exited ${value.exit_code}`
   if (value.ok === false) {
     const reason = typeof value.reason === 'string' ? value.reason : 'not run'
     return `refused: ${reason.slice(0, REASON_CAP)}`
   }
-  if (typeof value.exit_code === 'number') return `exited ${value.exit_code}`
   return 'finished'
 }
