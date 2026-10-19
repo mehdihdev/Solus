@@ -226,3 +226,38 @@ function streamFramingBoundariesTests(): void {
     ])
   })
 }
+
+describe('auto-run tool_result (SOLUSDEV-317 §10.1)', () => {
+  it('carries an auto-run row on the tool_result event', () => {
+    const [event] = createSolStreamParser().push(
+      frame('tool_result', {
+        call_id: 'c1',
+        ok: true,
+        tool: 'code.exec',
+        auto: true,
+        program: 'ls',
+        status: 'exited 0',
+        stdout_tail: 'x\n',
+        stderr_tail: ''
+      })
+    )
+    expect(event).toEqual({
+      type: 'tool_result',
+      callId: 'c1',
+      ok: true,
+      errorCode: null,
+      autoRun: { callId: 'c1', program: 'ls', status: 'exited 0', output: 'x\n' }
+    })
+  })
+
+  it('keeps a plain tool_result (or a malformed auto payload) row-less', () => {
+    const events = createSolStreamParser().push(
+      frame('tool_result', { call_id: 'c1', ok: true }) +
+        frame('tool_result', { call_id: 'c2', ok: true, auto: true, tool: 'code.exec' })
+    )
+    expect(events).toEqual([
+      { type: 'tool_result', callId: 'c1', ok: true, errorCode: null },
+      { type: 'tool_result', callId: 'c2', ok: true, errorCode: null }
+    ])
+  })
+})

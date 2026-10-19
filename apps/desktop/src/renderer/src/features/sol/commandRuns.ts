@@ -4,6 +4,7 @@
 // authority and never decides the outcome: the exit status comes from the
 // decide response, not from these chunks.
 import type { ConfirmationOutput } from '../../lib/api/resources.commands'
+import { joinTails } from '../../lib/api/solStream'
 
 /** The SOLUSDEV-261 caps, unchanged: ≤256 chunks, ≤2048 chars each, ≤256 KiB. */
 export const MAX_RUN_CHUNKS = 256
@@ -31,22 +32,67 @@ interface RunCursor {
   readonly cursor: number
 }
 
-/** Fold one poll answer into the run. Pure; returns new objects. */
+/** Fold one poll answer into the run. Pure; returns new objects. `truncated`
+ *  is set only by a real loss: the route's flag or one of the caps above
+ *  biting — never by completion (§10.3). */
 export function appendRunOutput(state: RunCursor, output: ConfirmationOutput): RunCursor {
-  const next = output.chunks
-    .filter((chunk) => chunk.sequence > state.cursor)
-    .slice(0, MAX_RUN_CHUNKS)
-    .map((chunk) => chunk.text.slice(0, MAX_CHUNK_CHARS))
-    .join('')
+  const fresh = output.chunks.filter((chunk) => chunk.sequence > state.cursor)
+  const kept = fresh.slice(0, MAX_RUN_CHUNKS)
+  const next = kept.map((chunk) => chunk.text.slice(0, MAX_CHUNK_CHARS)).join('')
+  const joined = state.run.text + next
+  const capped =
+    kept.length < fresh.length ||
+    kept.some((chunk) => chunk.text.length > MAX_CHUNK_CHARS) ||
+    joined.length > MAX_RUN_CHARS
   return {
     run: {
       ...state.run,
-      text: (state.run.text + next).slice(0, MAX_RUN_CHARS),
-      truncated: state.run.truncated || output.truncated,
+      text: joined.slice(0, MAX_RUN_CHARS),
+      truncated: state.run.truncated || output.truncated || capped,
       unavailable: false
     },
     cursor: Math.min(MAX_RUN_CHUNKS, Math.max(state.cursor, output.cursor))
   }
+}
+
+/** The per-stream tail window of a command result (code server execute.py
+ *  MAX_TAIL_BYTES). A tail this long may have lost its beginning. */
+export const FINAL_TAIL_BYTES = 16 * 1024
+// A tail cut mid-character decodes with a replacement char (3 bytes for 1–3).
+const TAIL_SLACK_BYTES = 3
+
+/** The command's own output from its result — stdout then stderr tails. */
+export interface FinalOutput {
+  readonly text: string
+  /** A tail filled its window, so the start of that stream may be missing. */
+  readonly clipped: boolean
+}
+
+const byteLength = (text: string): number => new TextEncoder().encode(text).length
+
+/** Read `stdout_tail`/`stderr_tail` from an untrusted result value; null when
+ *  neither is a string. */
+export function finalOutputOf(
+  value: Readonly<Record<string, unknown>> | null | undefined
+): FinalOutput | null {
+  const out = value?.stdout_tail
+  const err = value?.stderr_tail
+  if (typeof out !== 'string' && typeof err !== 'string') return null
+  const tails = [out, err].map((tail) => (typeof tail === 'string' ? tail : ''))
+  return {
+    text: joinTails(tails[0], tails[1]).slice(0, MAX_RUN_CHARS),
+    clipped: tails.some((tail) => byteLength(tail) >= FINAL_TAIL_BYTES - TAIL_SLACK_BYTES)
+  }
+}
+
+/** A finished run with its result's output folded in. The live view is a
+ *  lossy observation (the code server drops lines when its progress queue
+ *  overflows); complete result tails replace it when it was truncated or
+ *  missed lines, and never shorten complete live output. Pure. */
+export function settleRun(run: CommandRun, final: FinalOutput | null): CommandRun {
+  if (final === null || final.clipped) return run
+  if (!run.truncated && final.text.length <= run.text.length) return run
+  return { ...run, text: final.text, truncated: false }
 }
 
 export interface RunPoller {

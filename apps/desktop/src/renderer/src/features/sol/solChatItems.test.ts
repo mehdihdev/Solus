@@ -40,4 +40,15 @@ describe('solChatItems', () => {
     expect(turnFailureText(new ApiError(429, 'x', 'raw'))).toMatch(/Too many/)
     expect(turnFailureText(new Error('secret detail'))).toBe('SOL is unreachable right now.')
   })
+
+  it('appends an auto-run row once per call, immutably', () => {
+    const before = blankItem('a', 'assistant', '')
+    const { patch, item } = patcher(before)
+    const autoRun = { callId: 'c1', program: 'ls', status: 'exited 0', output: 'x' }
+    const event = { type: 'tool_result' as const, callId: 'c1', ok: true, errorCode: null, autoRun }
+    applyEvent(patch, event)
+    applyEvent(patch, event)
+    expect(item().autoRuns).toEqual([autoRun])
+    expect(before.autoRuns).toBeUndefined()
+  })
 })

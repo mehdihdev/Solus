@@ -8,17 +8,36 @@
 //   that routes through shell.openExternal via preload, once a guard exists);
 // - images are dropped — the CSP blocks remote sources, so they could only
 //   ever render broken.
+// - fenced/indented code blocks render in the shared CodeBlock surface (plain
+//   text node + Copy button, §10.3); inline code keeps react-markdown's <code>.
 // Typography lives in main.css under `.sol-md`, design tokens only.
 import { memo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { CodeBlock } from './CodeBlock'
 import { splitSettled, stableTail } from './markdownSplit'
 
 const REMARK_PLUGINS = [remarkGfm]
 
-const COMPONENTS: Components = {
+/** The structural slice of a hast node this module reads. */
+interface HastNode {
+  readonly type: string
+  readonly value?: string
+  readonly children?: readonly HastNode[]
+}
+
+/** A hast subtree's plain text — what the block shows and copies. */
+export function hastText(node: HastNode | undefined): string {
+  if (!node) return ''
+  if (node.type === 'text') return node.value ?? ''
+  return (node.children ?? []).map(hastText).join('')
+}
+
+export const COMPONENTS: Components = {
   a: ({ children }) => <span className="sol-md-link">{children}</span>,
-  img: () => null
+  img: () => null,
+  // A fence's content ends with its newline; the block neither shows nor copies it.
+  pre: ({ node }) => <CodeBlock kind="code" text={hastText(node).replace(/\n$/, '')} />
 }
 
 export interface SolMarkdownProps {

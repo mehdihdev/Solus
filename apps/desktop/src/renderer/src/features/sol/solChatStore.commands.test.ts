@@ -106,6 +106,32 @@ describe('retained command output', () => {
     ])
   })
 
+  it('shows the complete result output, unlabelled, when only the live view was cut (ls -la)', async () => {
+    output.mockResolvedValue({
+      chunks: [
+        { sequence: 1, stream: 'stdout', text: 'total 8\n' },
+        { sequence: 2, stream: 'stdout', text: '[command output truncated]\n' }
+      ],
+      cursor: 2,
+      complete: true,
+      truncated: true
+    })
+    const listing = Array.from({ length: 30 }, (_, i) => `file${i}\n`).join('')
+    decide.mockResolvedValue({
+      ok: true,
+      value: { ok: true, exit_code: 0, stdout_tail: `total 8\n${listing}`, stderr_tail: '' }
+    })
+    seed(EXEC)
+    await decideConfirmation('p', 'cx', 'approve')
+    await flush()
+    await flush()
+    expect(items()[0].commandRuns?.[0]).toMatchObject({
+      text: `total 8\n${listing}`,
+      truncated: false,
+      status: 'exited 0'
+    })
+  })
+
   it('shows the run while the approve request is still pending', async () => {
     let resolve!: (value: { ok: boolean; value: Record<string, unknown> }) => void
     decide.mockReturnValue(new Promise((r) => (resolve = r)))

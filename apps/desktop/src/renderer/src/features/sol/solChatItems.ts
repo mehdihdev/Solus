@@ -2,6 +2,7 @@
 // solChatStore.ts to keep it focused): turning server turns and stream events
 // into immutable ChatItem updates. No store access, no side effects.
 import { ApiError } from '../../lib/api/envelope.types'
+import type { AutoRun } from '../../lib/api/solStream'
 import type { SolTurn } from './solApi'
 import type { ChatItem } from './solChatStore'
 import type { SolStreamEvent } from './solStream'
@@ -64,6 +65,13 @@ export function appendContent(patch: Patch, text: string): void {
   }))
 }
 
+/** SOLUSDEV-317 §10.1: a cardless Build-mode command's row, once per call. */
+function withAutoRun(item: ChatItem, autoRun: AutoRun | undefined): Partial<ChatItem> {
+  const runs = item.autoRuns ?? []
+  if (!autoRun || runs.some((r) => r.callId === autoRun.callId)) return {}
+  return { autoRuns: [...runs, autoRun] }
+}
+
 export function applyEvent(patch: Patch, event: SolStreamEvent): void {
   switch (event.type) {
     case 'token':
@@ -80,7 +88,8 @@ export function applyEvent(patch: Patch, event: SolStreamEvent): void {
         ...m,
         trace: m.trace.map((t) =>
           t.callId === event.callId ? { ...t, ok: event.ok, errorCode: event.errorCode } : t
-        )
+        ),
+        ...withAutoRun(m, event.autoRun)
       }))
       return
     case 'tool_confirmation':

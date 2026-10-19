@@ -308,3 +308,31 @@ describe('after an approved command', () => {
     expect(stream).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('Build auto-run (§10.1/§10.3)', () => {
+  it('shows a cardless command as a compact row with its output block', async () => {
+    stream.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({ type: 'tool_call', callId: 'k1', tool: 'code.exec' })
+      onEvent({
+        type: 'tool_result',
+        callId: 'k1',
+        ok: true,
+        errorCode: null,
+        autoRun: { callId: 'k1', program: 'ls', status: 'exited 0', output: 'README.md\n' }
+      })
+      onEvent({ type: 'message', role: 'assistant', content: 'Listed.', citations: [] })
+    })
+    const user = userEvent.setup()
+    render(<SolChat projectId="p1" />)
+    await user.type(
+      screen.getByPlaceholderText('Ask about a signal, a change, a part…'),
+      'ls{Enter}'
+    )
+    const row = await screen.findByRole('group', {
+      name: 'Command ls, exited 0, ran automatically'
+    })
+    expect(within(row).getByText('README.md')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: 'Copy output' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Action needs your approval')).toBeNull()
+  })
+})

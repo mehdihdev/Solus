@@ -3,9 +3,12 @@
 // without a network.
 import { describe, expect, it, vi } from 'vitest'
 import {
+  AUTO_RUN_TAIL_CHARS,
+  joinTails,
   parseSseBuffer,
   parseSseFrame,
   streamSolTurn,
+  toAutoRun,
   toPendingConfirmation,
   toSolArtifact,
   type SolEvent
@@ -206,5 +209,67 @@ describe('streamSolTurn', () => {
 
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe('error')
+  })
+})
+
+// SOLUSDEV-317 follow-up (code-command-execution.md §10.1/§10.3): a Build-mode
+// code.exec that ran without a card arrives on its tool_result frame.
+describe('toAutoRun', () => {
+  const base = {
+    call_id: 'c9',
+    ok: true,
+    tool: 'code.exec',
+    auto: true,
+    program: '/bin/ls',
+    status: 'exited 0',
+    stdout_tail: 'a\nb\n',
+    stderr_tail: 'warn'
+  }
+
+  it('reads the auto-run fields into a row: basename, status, stdout then stderr', () => {
+    expect(toAutoRun(base)).toEqual({
+      callId: 'c9',
+      program: 'ls',
+      status: 'exited 0',
+      output: 'a\nb\nwarn'
+    })
+  })
+
+  it('treats absent tails as no output', () => {
+    const rest = { ...base, program: 'colcon', stdout_tail: undefined, stderr_tail: undefined }
+    expect(toAutoRun(rest)?.output).toBe('')
+  })
+
+  it.each([
+    ['not auto', { auto: false }],
+    ['auto not literally true', { auto: 'true' }],
+    ['another tool', { tool: 'code.run' }],
+    ['no program', { program: undefined }],
+    ['empty program', { program: '' }],
+    ['no status', { status: undefined }],
+    ['numeric status', { status: 0 }],
+    ['junk tail', { stdout_tail: ['x'] }],
+    ['no call id', { call_id: 3 }]
+  ])('yields no row when %s', (_name, over) => {
+    expect(toAutoRun({ ...base, ...over })).toBeNull()
+  })
+
+  it('bounds every field', () => {
+    const row = toAutoRun({
+      ...base,
+      program: `/x/${'p'.repeat(5000)}`,
+      status: 's'.repeat(5000),
+      stdout_tail: 'o'.repeat(AUTO_RUN_TAIL_CHARS * 2)
+    })
+    expect(row?.program.length).toBeLessThanOrEqual(256)
+    expect(row?.status.length).toBeLessThanOrEqual(200)
+    expect(row?.output.length).toBeLessThanOrEqual(AUTO_RUN_TAIL_CHARS * 2 + 1)
+  })
+
+  it('joins tails with a newline only when stdout lacks one', () => {
+    expect(joinTails('a', 'b')).toBe('a\nb')
+    expect(joinTails('a\n', 'b')).toBe('a\nb')
+    expect(joinTails('', 'b')).toBe('b')
+    expect(joinTails('a', '')).toBe('a')
   })
 })

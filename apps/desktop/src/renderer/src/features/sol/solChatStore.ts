@@ -26,7 +26,7 @@ import {
 } from './solApi'
 import { preferencesForTurn } from '../preferences/preferencesStore'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
-import type { PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
+import type { AutoRun, PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
 import {
   purgeAllCachedChats,
   readCachedChat,
@@ -36,7 +36,7 @@ import {
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { createTokenBatcher, type TokenBatcher } from './tokenBatcher'
 import { commandExitStatus, hasCommandOutput, isCommandTool } from './commandCard'
-import type { CommandRun } from './commandRuns'
+import { finalOutputOf, type CommandRun } from './commandRuns'
 import { createRunTracker, refusalStatus } from './commandRunTracker'
 import {
   MAX_TURN_CHARS,
@@ -89,6 +89,9 @@ export interface ChatItem {
    *  the exit status under this message until the conversation is closed.
    *  Runtime only — never cached (solCache keeps role + content). */
   commandRuns?: readonly CommandRun[]
+  /** SOLUSDEV-317 §10.1: Build-mode commands that ran without a card, as
+   *  compact rows. Runtime only, like commandRuns. */
+  autoRuns?: readonly AutoRun[]
 }
 
 export type ChatStatus = 'loading' | 'ready' | 'offline'
@@ -582,7 +585,9 @@ async function postDecision(
   try {
     const outcome = await decideSolConfirmation(projectId, confirmationId, decision)
     if (generation !== identityGeneration) return null
-    if (tracked) runs.end(projectId, confirmationId, commandExitStatus(outcome))
+    if (tracked) {
+      runs.end(projectId, confirmationId, commandExitStatus(outcome), finalOutputOf(outcome.value))
+    }
     return outcome
   } catch (error: unknown) {
     if (tracked && generation === identityGeneration) {

@@ -2,7 +2,14 @@
 // them (sol-page.md "Output stays"). Store-agnostic — solChatStore hands in an
 // immutable items patcher — so the store module stays focused on turns.
 import { getConfirmationOutput } from '../../lib/api/resources.commands'
-import { newCommandRun, startRunPoller, type CommandRun, type RunPoller } from './commandRuns'
+import {
+  newCommandRun,
+  settleRun,
+  startRunPoller,
+  type CommandRun,
+  type FinalOutput,
+  type RunPoller
+} from './commandRuns'
 
 interface RunItem {
   readonly confirmations: readonly { readonly confirmationId: string }[]
@@ -12,9 +19,14 @@ interface RunItem {
 export interface RunTracker {
   /** Start polling an approved command's output while its approve is pending. */
   begin: (projectId: string, confirmationId: string, tool: string) => void
-  /** The approve settled: stamp the status (null drops the run) and read the
-   *  remaining output once. */
-  end: (projectId: string, confirmationId: string, status: string | null) => void
+  /** The approve settled: stamp the status (null drops the run), fold in the
+   *  result's own output, and read the remaining progress once. */
+  end: (
+    projectId: string,
+    confirmationId: string,
+    status: string | null,
+    final?: FinalOutput | null
+  ) => void
   /** Teardown (sign-out): stop every poller without another read. */
   stopAll: () => void
 }
@@ -44,8 +56,14 @@ export function createRunTracker(
   fetchOutput = getConfirmationOutput
 ): RunTracker {
   const pollers = new Map<string, RunPoller>()
-  // The decided status, so a final output read landing after it keeps it.
+  // The decided status and result output, so a final progress read landing
+  // after them keeps both.
   const finalStatus = new Map<string, string>()
+  const finalOutput = new Map<string, FinalOutput | null>()
+  const decided = (key: string, run: CommandRun): CommandRun => {
+    const status = finalStatus.get(key) ?? null
+    return status === null ? run : settleRun({ ...run, status }, finalOutput.get(key) ?? null)
+  }
   let generation = 0
 
   const set = (projectId: string, confirmationId: string, run: CommandRun | null): void =>
@@ -63,12 +81,12 @@ export function createRunTracker(
         (cursor) => fetchOutput(projectId, confirmationId, cursor),
         (run) => {
           if (mine !== generation) return
-          set(projectId, confirmationId, { ...run, status: finalStatus.get(key) ?? null })
+          set(projectId, confirmationId, decided(key, { ...run, status: null }))
         }
       )
       pollers.set(key, poller)
     },
-    end(projectId, confirmationId, status) {
+    end(projectId, confirmationId, status, final = null) {
       const key = `${projectId}:${confirmationId}`
       const poller = pollers.get(key)
       pollers.delete(key)
@@ -78,16 +96,21 @@ export function createRunTracker(
         return
       }
       finalStatus.set(key, status)
+      finalOutput.set(key, final)
       patchItems(projectId, (items) =>
-        withRun(items, confirmationId, (run) => (run ? { ...run, status } : null))
+        withRun(items, confirmationId, (run) => (run ? decided(key, run) : null))
       )
-      void poller?.finish().finally(() => finalStatus.delete(key))
+      void poller?.finish().finally(() => {
+        finalStatus.delete(key)
+        finalOutput.delete(key)
+      })
     },
     stopAll() {
       generation += 1
       for (const poller of pollers.values()) poller.stop()
       pollers.clear()
       finalStatus.clear()
+      finalOutput.clear()
     }
   }
 }
