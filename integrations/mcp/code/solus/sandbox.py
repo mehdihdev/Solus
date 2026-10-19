@@ -12,17 +12,17 @@ platform, or a failed probe, refuses to run anything.
 
 import functools
 import glob
-import hashlib
 import os
 import stat
 import subprocess
 import sys
 import tempfile
-import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+from .git_guard import git_metadata_digest as git_metadata_digest
+from .git_guard import protected_git_dirs as protected_git_dirs
 from .landlock_exec import Landlock
 
 KIND_MACOS = "sandbox-exec"
@@ -67,15 +67,22 @@ def _git_rules(directory: str, pattern: str) -> str:
     """Denials for one protected git directory (`directory` / its escaped `pattern` params)."""
     root = f'(param "{directory}")'
     regex = f'(param "{pattern}")'
+
+    def matching(suffix: str) -> str:
+        return f'(regex (string-append "^" {regex} "{suffix}"))'
+
     return (
         f"(literal {root})"
-        f'(regex (string-append "^" {regex} "/config[^/]*$"))'
-        f'(subpath (string-append {root} "/hooks"))'
-        f'(subpath (string-append {root} "/info"))'
-        f'(regex (string-append "^" {regex} "/modules/.+/config[^/]*$"))'
-        f'(regex (string-append "^" {regex} "/modules/(.+/)?hooks(/.*)?$"))'
-        f'(regex (string-append "^" {regex} "/worktrees/[^/]+/config[^/]*$"))'
-        f'(literal (string-append {root} "/commondir"))'
+        + matching("/config[^/]*$")
+        + f'(subpath (string-append {root} "/hooks"))'
+        + f'(subpath (string-append {root} "/info"))'
+        + matching("/modules/.+/config[^/]*$")
+        + matching("/modules/(.+/)?hooks(/.*)?$")
+        + matching("/modules/.+/info(/.*)?$")
+        + matching("/(modules/.+|worktrees/[^/]+)/(commondir|gitdir)$")
+        + matching("/worktrees/[^/]+/config[^/]*$")
+        + matching("/worktrees/[^/]+$")
+        + f'(literal (string-append {root} "/commondir"))'
     )
 
 
@@ -92,15 +99,14 @@ MACOS_PROFILE = (
     f"{_git_rules('GIT_DIR', 'GIT_DIR_RE')}{_git_rules('GIT_COMMON', 'GIT_COMMON_RE')}"
     '(subpath (string-append (param "HOME") "/.solus")))'
     "(deny process-exec" + "".join(f'(literal "{program}")' for program in MACOS_DENIED_EXEC) + ")"
-    '(deny mach-lookup (global-name "com.apple.coreservices.appleevents"))'
+    "(deny mach-lookup"
+    '(global-name "com.apple.coreservices.appleevents")'
+    '(global-name "com.apple.coreservices.launchservicesd")'
+    '(global-name-regex #"^com\\.apple\\.lsd\\."))'
 )
 LINUX_TMP: tuple[str, ...] = ("/tmp", "/var/tmp")  # noqa: S108 - the declared writable set
 LINUX_DEVICES: tuple[str, ...] = ("/dev/null", "/dev/zero", "/dev/tty")
 LINUX_SERIAL_GLOBS: tuple[str, ...] = ("/dev/ttyUSB*", "/dev/ttyACM*")
-MAX_GIT_ENTRIES = 4096
-MAX_GIT_BYTES = 64 * 1024 * 1024
-#: Pruned when looking for submodule config/hooks (bulk git state, not metadata).
-GIT_BULK_DIRS: frozenset[str] = frozenset({"objects", "refs", "logs", "lfs"})
 _REGEX_SPECIAL = frozenset(".[]{}()\\*+?^$|")
 SMOKE_TIMEOUT_SECONDS = 10
 
@@ -249,134 +255,15 @@ def limitations(kind: str | None) -> list[str]:
         return []
     gaps = ["reads, exec and network are not restricted"]
     if not kind.startswith(KIND_LINUX):
-        return gaps
+        return [*gaps, "launchd job submission not blocked"]
     abi = int(kind.rsplit("abi", 1)[-1]) if kind.rsplit("abi", 1)[-1].isdigit() else 0
     gaps.append("file metadata (chmod/chown/utimes) not confined")
-    gaps.append(".git hooks and config are protected by detection only")
+    gaps.append(
+        "git metadata protected by detection only; descendants that leave the process group"
+        " are not tracked"
+    )
     if abi < 3:
         gaps.append("truncate not confined")
     if abi < 6:
         gaps.append("unix-socket/signal scoping unavailable")
     return gaps
-
-
-def _gitfile_target(dot_git: Path) -> str | None:
-    try:
-        with open(dot_git, "rb") as handle:
-            text = handle.read(4096).decode("utf-8", errors="replace").strip()
-    except OSError:
-        return None
-    if not text.startswith("gitdir:"):
-        return None
-    target = text[len("gitdir:") :].strip()
-    return _real(dot_git.parent / target) if target else None
-
-
-def _commondir(git_dir: str) -> str:
-    try:
-        with open(os.path.join(git_dir, "commondir"), "rb") as handle:
-            target = handle.read(4096).decode("utf-8", errors="replace").strip()
-    except OSError:
-        return git_dir
-    return _real(os.path.join(git_dir, target)) if target else git_dir
-
-
-def protected_git_dirs(workspace: Path) -> tuple[str, str]:
-    """`(git dir, common dir)` whose metadata is protected: `.git` itself, or the
-    target of a `gitdir:` file and the `commondir` it names."""
-    dot_git = Path(workspace) / ".git"
-    default = str(dot_git)
-    if dot_git.is_file() and not dot_git.is_symlink():
-        target = _gitfile_target(dot_git)
-        if target is None:
-            return default, default
-        return target, _commondir(target)
-    if dot_git.is_dir():
-        return default, _commondir(default)
-    return default, default
-
-
-class _OverflowError(Exception):
-    """A digest cap was hit: the answer must compare as changed."""
-
-
-class _Digest:
-    def __init__(self) -> None:
-        self.hash = hashlib.sha256()
-        self.entries = 0
-        self.bytes = 0
-
-    def _count(self, size: int) -> None:
-        self.entries += 1
-        self.bytes += size
-        if self.entries > MAX_GIT_ENTRIES or self.bytes > MAX_GIT_BYTES:
-            raise _OverflowError
-
-    def entry(self, path: str) -> None:
-        try:
-            info = os.lstat(path)
-        except OSError:
-            self.hash.update(f"{path}:absent\0".encode(errors="replace"))
-            return
-        size = 0 if stat.S_ISDIR(info.st_mode) else info.st_size
-        self._count(size)
-        self.hash.update(f"{path}:{info.st_mode}:{size}\0".encode(errors="replace"))
-        if stat.S_ISLNK(info.st_mode):
-            self.hash.update(os.readlink(path).encode(errors="replace"))
-        elif stat.S_ISREG(info.st_mode):
-            self._stream(path)
-
-    def _stream(self, path: str) -> None:
-        try:
-            with open(path, "rb") as handle:
-                for block in iter(lambda: handle.read(1024 * 1024), b""):
-                    self.hash.update(block)
-        except OSError:
-            self.hash.update(b"unreadable")
-
-    def tree(self, root: str, keep: Callable[[str], bool] | None = None) -> None:
-        """Every entry under `root`; with `keep`, bulk dirs are pruned and only kept
-        entries are hashed (the rest still count against the caps)."""
-        self.entry(root)
-        for directory, dirs, files in os.walk(root, followlinks=False):
-            dirs[:] = sorted(name for name in dirs if keep is None or name not in GIT_BULK_DIRS)
-            for name in sorted([*dirs, *files]):
-                path = os.path.join(directory, name)
-                if keep is None or keep(os.path.relpath(path, root)):
-                    self.entry(path)
-                else:
-                    self._count(0)
-
-
-def _module_metadata(relative: str) -> bool:
-    parts = relative.split(os.sep)
-    return "hooks" in parts or parts[-1].startswith("config")
-
-
-def _digest_git_dir(digest: _Digest, git_dir: str) -> None:
-    digest.entry(git_dir)
-    for path in sorted(glob.glob(os.path.join(glob.escape(git_dir), "config*"))):
-        digest.entry(path)
-    digest.entry(os.path.join(git_dir, "commondir"))
-    digest.tree(os.path.join(git_dir, "hooks"))
-    digest.tree(os.path.join(git_dir, "info"))
-    digest.tree(os.path.join(git_dir, "modules"), _module_metadata)
-    worktrees = os.path.join(git_dir, "worktrees")
-    digest.entry(worktrees)
-    for path in sorted(glob.glob(os.path.join(glob.escape(worktrees), "*"))):
-        digest.entry(path)
-        for config in sorted(glob.glob(os.path.join(glob.escape(path), "config*"))):
-            digest.entry(config)
-
-
-def git_metadata_digest(workspace: Path) -> str:
-    """A digest of every protected git metadata path (full contents and modes).
-    Past any cap it answers a unique sentinel, which always compares as changed."""
-    digest = _Digest()
-    try:
-        digest.entry(os.path.join(workspace, ".git"))
-        for git_dir in dict.fromkeys(protected_git_dirs(workspace)):
-            _digest_git_dir(digest, git_dir)
-    except _OverflowError:
-        return f"overflow:{uuid.uuid4().hex}"
-    return digest.hash.hexdigest()
