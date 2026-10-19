@@ -424,3 +424,17 @@ Residual risks added for the reviewers:
   tests with injected openers here; the real-kernel test still only runs on Linux CI.
 
 - [ ] Both human reviewers ratify the changed source tree before shipping.
+
+### 2026-10-19 addendum (2) — review round on the fixes above (append-only)
+
+- [x] Tree tracking: every stop/kill path takes a forced, un-rate-limited snapshot before
+  SIGTERM and again before SIGKILL; an unknown start token is retried on later
+  snapshots, and a token-less pid is signalled only while it is in the leader's parent
+  chain in the fresh table; skipped pids are logged (pid only, no argv). Linux falls back
+  to the raw start time when `boot_id` is unreadable.
+- [x] Deny table: outside the workspace a known name followed by the end or ANY
+  non-letter is denied (`perl5.36.0-x86_64-linux`, `bash+x`, `sh~`; this supersedes the
+  version/token shape in addendum 1); workspace programs stay exact. node/bun
+  `--inspect`, `--inspect-brk`, `--inspect-wait` are bare flags or a loopback port only
+  (`0.0.0.0`, `[::]` and other hosts are refused). Loader values of short options inside
+  clusters (`-rX`, `-vr X`) get the same remote-scheme check as the long forms.

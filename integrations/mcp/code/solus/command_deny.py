@@ -11,9 +11,9 @@ package imports — keep it that way).
 
 Name matching depends on where the program comes from (derived from argv[0] alone):
 * a program that is NOT workspace-relative (a bare name or an absolute path) maps to
-  a denied name when its casefolded basename is that name followed by an optional
-  version `[0-9][0-9.]*` and/or `[-.][a-z0-9.]+` tokens (`zsh-5.9`, `php-cgi8.2`,
-  `sudo-rs`, `python3.12-intel64`), plus the GNU `g` prefix (`gtimeout`) — fail closed;
+  a denied name when its casefolded basename is that name followed by the end or any
+  non-letter (`zsh-5.9`, `php-cgi8.2`, `sudo-rs`, `python3.12-x86_64`, `sh~`), plus the
+  GNU `g` prefix (`gtimeout`) — fail closed;
 * a workspace-relative program (`./env_setup.sh`, `tools/x`) is denied only on the
   EXACT normalised name of argv[0] and of its resolved realpath (`./bash`).
 Every interpreter in INLINE_CODE FAILS CLOSED on leading options it does not know.
@@ -173,8 +173,6 @@ SAFE_OPTIONS: Mapping[str, Options] = MappingProxyType(
         "node": Options(
             _HELP
             | {
-                "--inspect",
-                "--inspect-brk",
                 "--enable-source-maps",
                 "--no-warnings",
                 "--no-deprecation",
@@ -194,8 +192,6 @@ SAFE_OPTIONS: Mapping[str, Options] = MappingProxyType(
                     "--loader",
                     "--experimental-loader",
                     "--conditions",
-                    "--inspect",
-                    "--inspect-brk",
                     "--max-old-space-size",
                     "--stack-size",
                     "--unhandled-rejections",
@@ -243,11 +239,12 @@ DENO_LEADING: frozenset[str] = frozenset({"-q", "--quiet", "--unstable", "-h", "
 
 HINT = "propose the program's argv directly (no shell, no &&, no pipes)"
 _SUFFIX = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
-#: What may follow a denied name outside the workspace (§9.11): a version and/or tokens.
-_TAIL = re.compile(r"(?:[0-9][0-9.]*)?(?:[-.][a-z0-9.]+)*")
+#: Inspector addresses: a port, optionally on a loopback host (never 0.0.0.0, [::], LAN).
+_INSPECT_VALUE = re.compile(r"^((127\.0\.0\.1|localhost|\[::1\]):)?[0-9]{1,5}$")
+INSPECT_FLAGS: frozenset[str] = frozenset({"--inspect", "--inspect-brk", "--inspect-wait"})
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 _INTERPRETERS = {name.casefold(): name for name in INLINE_CODE}
-#: Names matched by PREFIX outside the workspace (followed by `_TAIL`), longest first.
+#: Names matched by PREFIX outside the workspace (then the end or a non-letter), longest first.
 _PREFIX_NAMES = sorted(
     {*SHELLS, *WRAPPERS, *ELEVATION, *GIT_PROGRAMS, *_INTERPRETERS, *PROGRAM_ALIASES},
     key=len,
@@ -259,9 +256,10 @@ _ALLOW = "allow"
 
 
 def _by_prefix(name: str) -> str | None:
-    """A known denied name that `name` is, followed only by a version and/or tokens."""
+    """A known denied name that `name` starts with, followed by the end or ANY
+    non-letter (`zsh-5.9`, `perl5.36.0-x86_64-linux`, `bash+x`, `sh~`) — fail closed."""
     for known in _PREFIX_NAMES:
-        if name.startswith(known) and _TAIL.fullmatch(name[len(known) :]):
+        if name.startswith(known) and (len(name) == len(known) or not name[len(known)].isalpha()):
             return known
     return None
 
@@ -344,11 +342,29 @@ def _python_cluster(arg: str) -> str:
 
 
 def _loader(name: str, arg: str, following: str | None) -> bool:
+    """A node/bun loader option whose value is remote — long (`--import x`,
+    `--import=x`) or a short letter anywhere in a cluster (`-rX`, `-vr X`)."""
     flags = {"node": NODE_LOADER_FLAGS, "bun": BUN_LOADER_FLAGS}.get(name, frozenset())
-    head, equals, value = arg.partition("=")
-    if head not in flags:
+    if not flags:
         return False
-    return _remote(value if equals else following or "")
+    if arg.startswith("--") or not arg.startswith("-"):
+        head, equals, value = arg.partition("=")
+        return head in flags and _remote(value if equals else following or "")
+    values = SAFE_OPTIONS[name].short_values
+    for position, char in enumerate(arg[1:]):
+        if f"-{char}" in flags:
+            return _remote(arg[position + 2 :] or following or "")
+        if char in values:
+            return False
+    return False
+
+
+def _bad_inspect(name: str, arg: str) -> bool:
+    """`--inspect*` is a bare flag or a loopback port; anything else is refused."""
+    if name not in ("node", "bun"):
+        return False
+    head, equals, value = arg.partition("=")
+    return head in INSPECT_FLAGS and bool(equals) and _INSPECT_VALUE.match(value) is None
 
 
 def _bad_module_value(name: str, arg: str, following: str | None) -> bool:
@@ -411,10 +427,14 @@ def _generic(args: Sequence[str], name: str) -> str:
             arg.split("=", 1)[0] in flags
             or _loader(name, arg, following)
             or _bad_module_value(name, arg, following)
+            or _bad_inspect(name, arg)
         ):
             return _DENY
         if arg in ("--", "-") or not arg.startswith("-"):
             return _ALLOW
+        if arg.split("=", 1)[0] in INSPECT_FLAGS and name in ("node", "bun"):
+            index += 1
+            continue
         if not arg.startswith("--") and any(f"-{char}" in flags for char in _letters(arg, options)):
             return _DENY
         consumed = _long(arg, options) if arg.startswith("--") else _short(arg, options)
