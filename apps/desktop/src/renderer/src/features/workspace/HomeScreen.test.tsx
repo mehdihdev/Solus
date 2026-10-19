@@ -764,4 +764,17 @@ describe('HomeScreen — linked repos under project names', () => {
     expect(within(pane()).getByText('strider/rover-fw')).toBeInTheDocument()
     expect(projectRepos.useProjectRepos).toHaveBeenCalledWith(['p1', 'p2'])
   })
+
+  describe('HomeScreen — motion', () => {
+    it('fades the pane in, keyed to what it shows', async () => {
+      mockHome()
+      useWorkspaceStore.setState({ project: ROVER })
+      render(<HomeScreen onOpenProject={vi.fn()} />)
+      const before = pane().firstElementChild as HTMLElement
+      expect(before).toHaveClass('home-pane-in')
+      await showMembers()
+      expect(pane().firstElementChild).not.toBe(before)
+      expect(pane().firstElementChild).toHaveClass('home-pane-in')
+    })
+  })
 })

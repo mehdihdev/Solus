@@ -7,6 +7,7 @@
 // invites, GitHub org, team feed) or connected accounts. Offline (dev bypass /
 // unreachable API) shows an honest sign-in state — never a demo project
 // (SOLUSDEV-152); a team that is gone says so — never "restart the backend".
+import './home.css'
 import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -258,7 +259,12 @@ function Pane(props: LiveProps): React.JSX.Element {
       aria-label="Details"
       style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}
     >
-      <div style={{ maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }}>
+      {/* Keyed to what it shows, so each switch of view or project eases in. */}
+      <div
+        key={`${props.view}:${props.currentProject?.id ?? ''}`}
+        className="home-pane-in"
+        style={{ maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }}
+      >
         {props.view === 'members' && <MembersView {...props} />}
         {props.view === 'accounts' && (
           <>

@@ -113,6 +113,13 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
     project's **Add additional sources**, it carries **← Back to <project>**
     above the card, returning to that project's pane; opened from the sidebar
     (or after any other navigation) it has no back link.
+- **Motion** (`features/workspace/home.css`, the house fade-rise: transform
+  and opacity only, all of it off under `prefers-reduced-motion`): the pane
+  eases in on every change of view or project, the tab panel on every tab;
+  project rows, SOURCES rows and the RECENT rail stagger in (30 ms apart,
+  capped at the 9th row — `homeStagger`); one accent indicator slides between
+  the project tabs; cards ease their border and fill on hover and selection;
+  .solus segments ease as they fill.
 - Every card keeps its own rules below; only WHERE it sits changed. Ask SOL
   from Home is deferred until SOL accepts a starting prompt.
 

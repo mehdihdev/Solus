@@ -189,4 +189,19 @@ describe('HomeProjectPane', () => {
     setup({ repos: [] })
     expect(screen.queryByTestId(/^repo-logo-/)).toBeNull()
   })
+
+  it('fades each tab in and slides one indicator under the selected tab', async () => {
+    setup()
+    expect(screen.getByRole('tabpanel')).toHaveClass('home-pane-in')
+    const indicator = screen.getByTestId('tab-indicator')
+    expect(indicator).toHaveClass('home-tab-indicator')
+    await userEvent.click(tab('Sources'))
+    expect(screen.getByRole('tabpanel')).toHaveClass('home-pane-in')
+    expect(screen.getByTestId('tab-indicator')).toBe(indicator)
+  })
+
+  it('staggers the recent rail in', () => {
+    setup()
+    expect(screen.getByText(/created the project/).closest('.home-row-in')).not.toBeNull()
+  })
 })

@@ -3,6 +3,7 @@
 // sections filled", the filled sections with their counts, and "Add
 // instructions" (the pane opens its .solus tab, where notes are written).
 // Honest loading and offline states; the full card stays on the .solus tab.
+import './home.css'
 import { SOLUS_SECTIONS } from '../../lib/api/resources'
 import { SECTION_LABELS, useSolusConfig } from '../graph/useSolusConfig'
 
@@ -28,6 +29,7 @@ export function SolusSummaryRow({
             <span
               key={s}
               data-testid="solus-segment"
+              className="home-segment"
               data-filled={String(filled.includes(s))}
               title={SECTION_LABELS[s]}
               style={{

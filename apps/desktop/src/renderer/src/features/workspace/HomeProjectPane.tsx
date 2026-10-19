@@ -3,7 +3,7 @@
 // and four tabs. Overview is the at-a-glance row (ON THIS COMPUTER, SOURCES,
 // .solus) over RECENT IN THIS PROJECT; Sources, .solus and Activity are the
 // full versions. Each card keeps its own rules (docs/wireflows/home.md).
-import { useId, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import type { ActivityApi } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
 import { Button } from '../../components/ui/Button'
@@ -13,6 +13,7 @@ import { Icons } from '../../components/ui/icons.constants'
 import { ProjectFolderCard } from '../project/ProjectFolderCard'
 import { ProjectActivityFeed } from './ProjectActivityFeed'
 import { ProjectSetupList } from './ProjectSetupList'
+import { homeStagger } from './homeMotion'
 import { relativeTime } from '../../lib/relativeTime'
 import { activityText } from '../team/activityText'
 import { HOME_PANE_ACTIVITY_COUNT } from './projectActivity'
@@ -47,6 +48,7 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
   const base = useId()
   const tabId = (id: PaneTab): string => `${base}-tab-${id}`
   const panelId = `${base}-panel`
+  const indicator = useTabIndicator(tabId(tab))
   // Arrow keys move along the tabs (wrapping) and select as they go.
   const onKeyDown = (e: React.KeyboardEvent): void => {
     const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
@@ -64,7 +66,12 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
         role="tablist"
         aria-label="Project"
         onKeyDown={onKeyDown}
-        style={{ display: 'flex', gap: 22, borderBottom: '1px solid var(--bd)' }}
+        style={{
+          position: 'relative',
+          display: 'flex',
+          gap: 22,
+          borderBottom: '1px solid var(--bd)'
+        }}
       >
         {TABS.map((t) => (
           <TabButton
@@ -76,8 +83,30 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
             onClick={() => setTab(t.id)}
           />
         ))}
+        <span
+          ref={indicator}
+          aria-hidden="true"
+          data-testid="tab-indicator"
+          className="home-tab-indicator"
+          style={{
+            position: 'absolute',
+            left: 0,
+            bottom: -1,
+            height: 2,
+            background: 'var(--acc)',
+            borderRadius: 1
+          }}
+        />
       </div>
-      <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)} tabIndex={0}>
+      {/* Keyed per tab, so each switch eases in. */}
+      <div
+        key={tab}
+        role="tabpanel"
+        id={panelId}
+        aria-labelledby={tabId(tab)}
+        tabIndex={0}
+        className="home-pane-in"
+      >
         <TabBody
           tab={tab}
           pane={props}
@@ -87,6 +116,19 @@ export function HomeProjectPane(props: HomeProjectPaneProps): React.JSX.Element 
       </div>
     </div>
   )
+}
+
+/** Moves the one indicator under the selected tab. Written straight to the
+ *  bar's style (no state, no extra render); the CSS transition does the slide. */
+function useTabIndicator(selectedId: string): React.RefObject<HTMLSpanElement | null> {
+  const bar = useRef<HTMLSpanElement>(null)
+  useLayoutEffect(() => {
+    const tab = document.getElementById(selectedId)
+    if (!tab || !bar.current) return
+    bar.current.style.width = `${tab.offsetWidth}px`
+    bar.current.style.transform = `translateX(${tab.offsetLeft}px)`
+  }, [selectedId])
+  return bar
 }
 
 function TabBody({
@@ -182,7 +224,9 @@ function TabButton({
       style={{
         background: 'transparent',
         border: 'none',
-        borderBottom: `2px solid ${selected ? 'var(--acc)' : 'transparent'}`,
+        // The accent underline is the shared sliding indicator, not each tab's border.
+        borderBottom: '2px solid transparent',
+        transition: 'color 0.18s ease',
         color: selected ? 'var(--tx)' : 'var(--mut)',
         cursor: 'pointer',
         fontFamily: 'var(--font-ui)',
@@ -251,8 +295,8 @@ function RecentRail({
           No recent activity.
         </div>
       ) : (
-        preview.map((a) => (
-          <div key={a.id} style={RAIL_ROW}>
+        preview.map((a, i) => (
+          <div key={a.id} className="home-row-in" style={{ ...RAIL_ROW, ...homeStagger(i) }}>
             <span aria-hidden="true" style={{ ...RAIL_DOT, background: activityTone(a.type) }} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 12.5, lineHeight: 1.4 }}>{activityText(a)}</div>

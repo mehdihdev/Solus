@@ -135,4 +135,13 @@ describe('HomeProjectList', () => {
     expect(select.contains(menu)).toBe(false)
     expect(screen.getByTestId('project-row-p1')).toContainElement(menu)
   })
+
+  it('staggers rows in, and eases the card itself', () => {
+    setup()
+    const rows = [screen.getByTestId('project-row-p1'), screen.getByTestId('project-row-p2')]
+    expect(rows[0]).toHaveClass('home-row-in')
+    expect(rows[0].style.animationDelay).toBe('0ms')
+    expect(rows[1].style.animationDelay).not.toBe('0ms')
+    expect(screen.getByRole('button', { name: 'Select Rover MK2' })).toHaveClass('home-card')
+  })
 })

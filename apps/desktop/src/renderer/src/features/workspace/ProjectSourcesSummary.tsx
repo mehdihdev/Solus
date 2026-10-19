@@ -5,6 +5,7 @@
 // next step (Pick documents, Pick repositories, Choose file…) through the same
 // wizard as Connected accounts. "Add additional sources" opens that card for
 // tools not linked yet. Honest states; never an invented row.
+import { homeStagger } from './homeMotion'
 import type { Source, SourceStatus } from '../../lib/api/resources'
 import type { WorkspaceProject } from '../../store/workspaceStore'
 import { getDesktopFolderBridge } from '../../lib/desktopBridge'
@@ -95,8 +96,8 @@ function Rows({
     return <Note>No sources connected yet. Add a repo, export or document to start the graph.</Note>
   return (
     <>
-      {groups.map((g) => (
-        <ToolRow key={g.key} group={g} projectId={projectId} onStep={onStep} />
+      {groups.map((g, i) => (
+        <ToolRow key={g.key} index={i} group={g} projectId={projectId} onStep={onStep} />
       ))}
     </>
   )
@@ -104,10 +105,12 @@ function Rows({
 
 /** One tool: mark | name and its items | entities | the next step as a link. */
 function ToolRow({
+  index,
   group,
   projectId,
   onStep
 }: {
+  index: number
   group: ToolGroup
   projectId: string
   onStep: (entry: CatalogEntry, scope: WizardScope) => void
@@ -118,7 +121,12 @@ function ToolRow({
     <div
       data-testid={`source-tool-${group.key}`}
       data-linked={group.link}
-      style={{ ...ROW, borderBottom: group.link === 'below' ? 'none' : ROW.borderBottom }}
+      className="home-row-in"
+      style={{
+        ...ROW,
+        ...homeStagger(index),
+        borderBottom: group.link === 'below' ? 'none' : ROW.borderBottom
+      }}
     >
       <span
         style={{

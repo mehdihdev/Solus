@@ -3,6 +3,7 @@
 // through the switch choke point and shows it in the pane — it never opens
 // the project. The ⋯ menu, the New project button and the archived section
 // keep the grid's role gating (docs/wireflows/home.md "Project list").
+import { homeStagger } from './homeMotion'
 import type { ActivityApi, Project, TeamSummary } from '../../lib/api/resources'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
@@ -67,9 +68,10 @@ export function HomeProjectList({
         )}
       </div>
       <div data-testid="project-list" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {live.map((p) => (
+        {live.map((p, i) => (
           <ProjectRow
             key={p.id}
+            index={i}
             project={p}
             latest={activityByProject[p.id]?.[0] ?? null}
             repos={reposByProject[p.id] ?? []}
@@ -110,6 +112,8 @@ function EmptyList({
 }
 
 interface ProjectRowProps {
+  /** Position in the list, for the entrance stagger. */
+  index: number
   project: Project
   latest: ActivityApi | null
   repos: readonly LinkedRepo[]
@@ -122,6 +126,7 @@ interface ProjectRowProps {
 }
 
 function ProjectRow({
+  index,
   project,
   latest,
   repos,
@@ -138,12 +143,13 @@ function ProjectRow({
     <div
       data-testid={`project-row-${project.id}`}
       aria-current={isCurrent ? 'true' : undefined}
-      style={{ position: 'relative' }}
+      className="home-row-in"
+      style={{ position: 'relative', ...homeStagger(index) }}
     >
       <button
         type="button"
         aria-label={`Select ${project.name}`}
-        className="interactive"
+        className="interactive home-card"
         onClick={() => onSelect(project)}
         style={{
           ...ROW_BUTTON,

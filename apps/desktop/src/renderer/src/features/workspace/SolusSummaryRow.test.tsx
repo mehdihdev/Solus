@@ -61,4 +61,10 @@ describe('SolusSummaryRow', () => {
     render(<SolusSummaryRow projectId="p1" onAddInstructions={vi.fn()} />)
     expect(screen.getByText(/can't reach its api/i)).toBeInTheDocument()
   })
+
+  it('eases the segments as they fill', () => {
+    mockSolus('ready', 1)
+    render(<SolusSummaryRow projectId="p1" onAddInstructions={vi.fn()} />)
+    expect(screen.getAllByTestId('solus-segment')[0]).toHaveClass('home-segment')
+  })
 })

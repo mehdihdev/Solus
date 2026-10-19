@@ -282,4 +282,11 @@ describe('ProjectSourcesSummary', () => {
     })
     expect(screen.queryByText(/^Clone of/)).toBeNull()
   })
+
+  it('staggers tool rows in', () => {
+    setup({ connections: [connection('github'), connection('onshape')] })
+    const rows = screen.getAllByTestId(/^source-tool-/)
+    expect(rows[0]).toHaveClass('home-row-in')
+    expect(rows[1].style.animationDelay).not.toBe(rows[0].style.animationDelay)
+  })
 })
