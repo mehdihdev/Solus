@@ -86,6 +86,8 @@ class Plan:
     setup_file: str | None = None
     #: §10.1: "workspace" | "system" for an accepted plan, None when refused.
     program_scope: str | None = None
+    #: The planned program's realpath; execute refuses when it changed (TOCTOU).
+    program_realpath: str | None = None
 
     def answer(self) -> dict[str, Any]:
         """The §2.2 wire shape: the argv plus sandbox, profile and environment."""
@@ -351,6 +353,12 @@ def plan_action(root: Path, action: object, args: object, *, which: Which) -> Pl
     kind, why = sandbox.available()
     if kind is None:
         return _refuse(action, f"sandbox unavailable: {why}")
-    from .command_plan import program_scope
+    from .command_plan import planned_program, program_scope
 
-    return replace(planned, sandbox=kind, program_scope=program_scope(root, planned))
+    program = planned_program(root, planned.argv[0], which)
+    return replace(
+        planned,
+        sandbox=kind,
+        program_scope=program_scope(root, planned.argv, program, planned.setup_file),
+        program_realpath=os.path.realpath(program) if program is not None else None,
+    )

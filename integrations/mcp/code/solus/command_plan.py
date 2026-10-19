@@ -171,19 +171,88 @@ def _script_file(root: Path, cwd: str, script: str) -> bool:
     return resolved is not None and resolved.is_file()
 
 
-def program_scope(root: Path, planned: Plan) -> str:
-    """§10.1: "workspace" when the program's realpath is inside the workspace or it
-    is a binary of the selected workspace venv (whose interpreter links outside),
-    else "system". A bare name resolves from the pinned system roots."""
-    program = planned.argv[0]
-    if "/" not in program:
-        return SYSTEM_SCOPE
-    path = os.path.normpath(os.path.join(root, program))
-    if planned.environment is not None:
-        venv_bin = os.path.normpath(execute.venv_bin_dir(root, planned.environment))
-        if os.path.dirname(path) == venv_bin:
+#: §10.1: programs that run project code whatever their arguments...
+PROJECT_RUNNERS: frozenset[str] = frozenset(
+    {
+        "pytest",
+        "py.test",
+        "tox",
+        "nox",
+        "npm",
+        "npx",
+        "pnpm",
+        "yarn",
+        "bun",
+        "deno",
+        "cargo",
+        "go",
+        "make",
+        "gmake",
+        "ninja",
+        "cmake",
+        "colcon",
+        "catkin",
+        "catkin_make",
+        "gradle",
+        "gradlew",
+        "mvn",
+        "rake",
+    }
+)
+#: ...and programs that do so through one of these subcommands.
+SUBCOMMAND_RUNNERS: dict[str, frozenset[str]] = {
+    "ros2": frozenset({"run", "launch"}),
+    "bundle": frozenset({"exec"}),
+    "poetry": frozenset({"run"}),
+    "uv": frozenset({"run"}),
+    "pipenv": frozenset({"run"}),
+    "hatch": frozenset({"run"}),
+    "platformio": frozenset({"run"}),
+    "pio": frozenset({"run"}),
+}
+#: The only interpreter arguments that run no script or module.
+INFO_FLAGS: frozenset[str] = frozenset({"--version", "-V", "-VV", "--help", "-h", "-v"})
+
+
+def planned_program(root: Path, argv0: str, which: Which) -> str | None:
+    """The path that will be executed for `argv0` (not following its final link)."""
+    if os.path.isabs(argv0):
+        return argv0
+    if "/" in argv0:
+        return os.path.normpath(os.path.join(root, argv0))
+    return which(argv0)
+
+
+def _runs_project_code(path: str, args: Sequence[str]) -> bool:
+    name = command_deny.program_name(path, exact=True)
+    if name in command_deny.INLINE_CODE:
+        return not all(arg in INFO_FLAGS for arg in args)
+    # Runners match their normalised name (`cmake3`) or exact basename (`ros2`).
+    candidates = (name, os.path.basename(path).casefold())
+    if any(candidate in PROJECT_RUNNERS for candidate in candidates):
+        return True
+    return any(arg in SUBCOMMAND_RUNNERS.get(c, ()) for c in candidates for arg in args)
+
+
+def program_scope(
+    root: Path, argv: Sequence[str], program: str | None, setup_file: str | None = None
+) -> str:
+    """§10.1: "workspace" when what runs is project code — the program's path (before
+    or after following links) is in the workspace (any workspace venv's bin included),
+    a §10.2 shell script, an interpreter given a script or module, a project runner, or
+    a capture of a workspace setup file. Otherwise "system"."""
+    names = [argv[0]]
+    if program is not None:
+        if _within(root, os.path.dirname(program)) or _within(root, program):
             return WORKSPACE_SCOPE
-    return WORKSPACE_SCOPE if _within(root, path) else SYSTEM_SCOPE
+        names.append(os.path.realpath(program))
+    if setup_file is not None and _within(root, setup_file):
+        return WORKSPACE_SCOPE
+    if command_deny.shell_script(argv):
+        return WORKSPACE_SCOPE
+    if any(_runs_project_code(name, argv[1:]) for name in names):
+        return WORKSPACE_SCOPE
+    return SYSTEM_SCOPE
 
 
 def _finish(action: str, planned: Plan | str, **fields: Any) -> Plan:

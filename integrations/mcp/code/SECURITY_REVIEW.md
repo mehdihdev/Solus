@@ -472,3 +472,20 @@ Both items change what the planner lets through, so both are re-review triggers.
   `/bin/bash`, so the card for these commands depends on those cloud risks).
 - Residual: the script file is checked at plan time; it can change between approval and
   execution like any workspace program (same window as the re-plan residual above).
+
+### 2026-10-19 addendum (4) — program_scope follows what runs; plan-to-spawn check (append-only)
+
+- [x] `program_scope` is `"workspace"` (supersedes addendum 3 where they differ) when the
+  resolved program's path is in the workspace before OR after following links (so any
+  workspace venv `bin`, and a workspace link to a system binary); for a §10.2 shell script;
+  for an interpreter given anything but `--version`/`-V`/`-VV`/`--help`/`-h`/`-v`; for a
+  project runner (pytest, tox, nox, npm, npx, pnpm, yarn, bun, deno, cargo, go, make, gmake,
+  ninja, cmake, colcon, catkin, catkin_make, gradle, gradlew, mvn, rake) by argv[0] or
+  realpath name; for `ros2 run|launch`, `bundle exec`, `poetry|uv|pipenv|hatch|pio|platformio
+  run`; and for a profile capture of a workspace setup file.
+- [x] TOCTOU: the plan records the program's realpath; right before spawn the server
+  re-resolves the program, and refuses ("the program changed after it was planned") when the
+  realpath or the recomputed scope differs. The planned path (not the realpath) is still what
+  runs, so venv interpreters keep their link semantics. Plans not built by `plan_action`
+  carry no scope and are not compared.
+- Re-review relevance: the runner tables, the info-flag set, and the spawn-time comparison.
