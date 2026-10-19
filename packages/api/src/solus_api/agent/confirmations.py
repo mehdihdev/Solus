@@ -39,7 +39,12 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.command_gate import ARGV_TOOLS, policy_refusal, record_proposed
+from solus_api.agent.command_gate import (
+    ARGV_TOOLS,
+    COMPLETE_PREVIEW_TOOLS,
+    policy_refusal,
+    record_proposed,
+)
 from solus_api.agent.command_outcome import command_outcome_text, output_tail
 from solus_api.agent.command_output import STREAMING_TOOLS
 from solus_api.agent.command_policy import classify
@@ -206,6 +211,11 @@ async def _build_preview(
         return fallback
     if required and not _complete_preview(rows):
         return []
+    name = getattr(getattr(tool, "descriptor", None), "name", None)
+    if _hides_command(name, rows, allowed_paths):
+        if quota_failures is not None:
+            quota_failures.append(HIDDEN_COMMAND_MESSAGE)
+        return []
     cleaned: list[dict[str, Any]] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict) or "label" not in row:
@@ -231,6 +241,36 @@ async def _build_preview(
             }
         )
     return cleaned[:_MAX_PREVIEW_ROWS] if cleaned else fallback
+
+
+#: SOLUSDEV-317 §9 item 2: command-card rows that must render exactly as they run.
+_VERBATIM_ROWS: Final = frozenset(
+    {"program", "command", "cwd", "environment", "profile", "setup file"}
+)
+HIDDEN_COMMAND_MESSAGE: Final = (
+    "Refused: the command contains secret-shaped values that cannot be shown on the "
+    "approval card. Nothing was parked or run; pass secrets through the environment or a "
+    "file the command reads instead."
+)
+
+
+def _hides_command(tool_name: object, rows: Any, allowed_paths: frozenset[str]) -> bool:
+    """No hidden argv: a command row that redaction would alter cannot be shown
+    verbatim, so the person would approve something other than what runs."""
+    if tool_name not in COMPLETE_PREVIEW_TOOLS or not isinstance(rows, list):
+        return False
+    return any(
+        isinstance(row, dict)
+        and isinstance(row.get("after"), str)
+        and _verbatim(row.get("label"))
+        and redact_text(row["after"], allowed_paths=allowed_paths) != row["after"]
+        for row in rows
+    )
+
+
+def _verbatim(label: object) -> bool:
+    text = str(label)
+    return text in _VERBATIM_ROWS or text.startswith("command ")  # `command i/n` chunks
 
 
 def _complete_preview(rows: Any) -> bool:

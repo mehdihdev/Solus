@@ -482,3 +482,87 @@ def test_decision_summary_uses_the_tools_tail_and_git_warning() -> None:
     assert summary.count("q") == 3000 and summary.endswith(".git/config")
     short = _decision_summary("approve", ToolResult.success("c", value), "code.install")
     assert short.count("q") == 400
+
+
+# ------------------------------------------------- no hidden argv (§9 item 2)
+
+_TOKEN = "aB3dE5fG7hJ9kL1mN2pQ4rS6tU8vW0xY2zA4bC6dE8fG"
+_HIDDEN = "the command contains secret-shaped values that cannot be shown on the approval card"
+
+
+@pytest.mark.parametrize(
+    ("tool", "plan", "args"),
+    [
+        (
+            "code.exec",
+            _plan(["/usr/bin/curl", "-H", _TOKEN, "https://example.com"]),
+            {"argv": ["curl", "-H", _TOKEN, "https://example.com"]},
+        ),
+        (
+            "code.exec",
+            _plan(["/usr/bin/mysql", "password=hunter2"]),
+            {"argv": ["mysql", "password=hunter2"]},
+        ),
+        (
+            "code.process_start",
+            _plan([f"/opt/tools/{_TOKEN}", "serve"]),
+            {"argv": [f"/opt/tools/{_TOKEN}", "serve"]},
+        ),
+        (
+            "code.exec",
+            _plan(["/usr/bin/make"], cwd=f"build/{_TOKEN}"),
+            {"argv": ["make"], "cwd": f"build/{_TOKEN}"},
+        ),
+    ],
+)
+async def test_secret_shaped_command_rows_refuse_instead_of_parking_redacted(
+    maker: async_sessionmaker[AsyncSession],
+    tool: str,
+    plan: dict[str, Any],
+    args: dict[str, Any],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(plan)
+    registry = _registry(machine, maker, scope[0], scope[2], tool)
+
+    parked = await _park(maker, registry, scope, tool, args)
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None
+    assert _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+    assert machine.executed == []
+
+
+async def test_a_secret_shaped_setup_file_refuses_profile_capture(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from solus_api.bridge.command_previews import CAPTURE_SCRIPT
+
+    setup = f"vendor/{_TOKEN}/env.sh"
+    argv = ["/bin/bash", "--noprofile", "--norc", "-c", CAPTURE_SCRIPT, "solus-profile", setup]
+    scope = await _scope(maker)
+    machine = _Machine(_plan(argv))
+    registry = _registry(machine, maker, scope[0], scope[2], "code.profile_capture")
+
+    parked = await _park(
+        maker, registry, scope, "code.profile_capture", {"name": "vendor", "setup_file": setup}
+    )
+
+    assert parked.confirmation_id is None
+    assert parked.result.error is not None and _HIDDEN in parked.result.error.message
+    assert await _rows(maker) == []
+
+
+async def test_an_ordinary_command_is_not_refused_as_hidden(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan(["/opt/ros/jazzy/bin/colcon", "build", "--symlink-install"]))
+    registry = _registry(machine, maker, scope[0], scope[2])
+
+    parked = await _park(
+        maker, registry, scope, "code.exec", {"argv": ["colcon", "build", "--symlink-install"]}
+    )
+
+    assert parked.confirmation_id is not None

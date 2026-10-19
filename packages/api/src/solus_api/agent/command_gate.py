@@ -23,6 +23,9 @@ from solus_api.services.events import emit_event
 
 #: Tools whose model-proposed argv the policy judges (§4).
 ARGV_TOOLS: Final = frozenset({"code.exec", "code.process_start"})
+#: Tools whose card is the server's complete `code.plan` (§5.1): a failed plan
+#: refuses, and a card row that redaction would alter refuses too (§9 item 2).
+COMPLETE_PREVIEW_TOOLS: Final = ARGV_TOOLS | frozenset({"code.profile_capture"})
 #: Tools a resume may follow and whose approved result is a command outcome (§5.5).
 COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
     {
