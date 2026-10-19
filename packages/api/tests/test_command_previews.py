@@ -347,3 +347,11 @@ async def test_a_program_inside_the_workspace_is_a_project_script() -> None:
     )
     rows = await _rows("code.exec", plan, {"argv": ["mytool"], "environment": ".venv"})
     assert {r["label"]: r["after"] for r in rows}["risk"] == "project_scripts"
+
+
+async def test_a_workspace_program_is_judged_by_its_exact_name_on_the_card() -> None:
+    plan = _plan(argv=["/home/u/robot/env-check.sh"], environment=None, profile=None)
+    rows = await _rows("code.exec", plan, {"argv": ["./env-check.sh"]})
+    assert {r["label"]: r["after"] for r in rows}["program"] == "/home/u/robot/env-check.sh"
+    with pytest.raises(PreviewRefusal):
+        await _rows("code.exec", _plan(argv=["/usr/bin/env-x"]), {"argv": ["env-x"]})

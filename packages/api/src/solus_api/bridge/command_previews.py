@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
+from solus_api.agent.command_names import is_workspace_relative
 from solus_api.agent.command_policy import Risk, classify
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.untrusted import redact_text
@@ -197,8 +198,15 @@ def command_rows(
     """Rows for `code.exec` (and `code.process_start` when `process`)."""
     plan = parse_plan(raw)
     command = _chunked("command", json.dumps(list(plan.argv)), _JSON_COMMAND_CAP)
-    requested = classify(args.get("argv"))
-    for verdict in (requested, classify(plan.argv)):
+    requested_argv = args.get("argv")
+    requested = classify(requested_argv)
+    relative = (
+        isinstance(requested_argv, list)
+        and bool(requested_argv)
+        and isinstance(requested_argv[0], str)
+        and is_workspace_relative(requested_argv[0])
+    )
+    for verdict in (requested, classify(plan.argv, workspace_relative=relative)):
         if verdict.denied:
             raise _refuse(
                 f"The command is denied: {verdict.reason}. Propose a direct argv instead "
