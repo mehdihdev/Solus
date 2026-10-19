@@ -95,7 +95,9 @@ GRAMMARS: Final[Mapping[str, Grammar]] = {
     "bun": Grammar(
         short_flags="vhb",
         long_flags=_HELP | {"--watch", "--hot", "--smol", "--silent", "--bun"},
-        value_options=frozenset({"-r", "--preload", "--cwd", "--env-file", "--config"}),
+        value_options=frozenset(
+            {"-r", "--require", "--import", "--preload", "--cwd", "--env-file", "--config"}
+        ),
     ),
     "deno": Grammar(short_flags="qhV", long_flags=_HELP | {"--quiet", "--unstable"}),
     "Rscript": Grammar(
@@ -107,8 +109,11 @@ GRAMMARS: Final[Mapping[str, Grammar]] = {
 }
 
 _SCHEME: Final = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
-_PERL_MODULE: Final = re.compile(r"^[A-Za-z0-9_:]+(?:=[\w,]+)?$")
-_RUBY_NAME: Final = re.compile(r"^[\w./@+-]+$")
+#: Mirrored in the server table (MODULE_VALUE_FLAGS); `::` separators only.
+PERL_MODULE_PATTERN: Final = r"^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*(=[\w,]+)?$"
+RUBY_LIBRARY_PATTERN: Final = r"^[A-Za-z0-9_./-]+$"
+_PERL_MODULE: Final = re.compile(PERL_MODULE_PATTERN)
+_RUBY_NAME: Final = re.compile(RUBY_LIBRARY_PATTERN)
 _PHP_DENIED_INI: Final = frozenset({"allow_url_include", "auto_prepend_file", "auto_append_file"})
 _LOCAL_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
 _JS: Final = frozenset({"node", "bun", "deno"})
@@ -142,8 +147,8 @@ def _bad_value(interpreter: str, option: str, value: str) -> str | None:
         return f"{option} exposes the debugger beyond this machine" if _off_host(value) else None
     if interpreter in _JS and _remote(value):
         return f"{option} loads code that is not a workspace file"
-    if interpreter == "perl" and option in ("-M", "-m", "-I") and _unsafe_chars(value):
-        return f"{option} must name a module or directory"
+    if interpreter == "perl" and option == "-I" and not _RUBY_NAME.match(value):
+        return "-I must name a directory"
     if interpreter == "perl" and option in ("-M", "-m") and not _PERL_MODULE.match(value):
         return f"{option} with a non-module value runs code"
     if (

@@ -273,7 +273,9 @@ async def test_an_unknown_sandbox_kind_refuses() -> None:
 async def test_a_program_inside_the_workspace_is_a_project_script() -> None:
     plan = _plan(
         argv=["/home/u/robot/.venv/bin/mytool"],
-        sandbox={"kind": "landlock-abi3", "writable": ["/home/u/robot", "/tmp"]},
+        environment=".venv",
+        profile=None,
+        sandbox={"kind": "landlock-abi3", "writable": ["<workspace>", "<tmp>"]},
     )
     rows = await _rows("code.exec", plan, {"argv": ["mytool"], "environment": ".venv"})
     assert {r["label"]: r["after"] for r in rows}["risk"] == "project_scripts"

@@ -60,7 +60,6 @@ class CommandPlan:
     profile_digest: str | None
     sandbox_kind: str
     sandbox_limits: tuple[str, ...] = ()
-    writable: tuple[str, ...] = ()
 
 
 def _refuse(detail: str) -> PreviewRefusal:
@@ -124,7 +123,6 @@ def parse_plan(plan: object) -> CommandPlan:
         digest,
         kind,
         _strings(sandbox.get("limitations")),
-        _strings(sandbox.get("writable")),
     )
 
 
@@ -176,15 +174,6 @@ def _sandbox_row(plan: CommandPlan) -> dict[str, Any]:
     return _row("sandbox", text)
 
 
-def _inside_writable(plan: CommandPlan) -> bool:
-    """The resolved program lives where the project or a command could write it."""
-    program = plan.argv[0]
-    return any(
-        root.startswith("/") and program.startswith(root.rstrip("/") + "/")
-        for root in plan.writable
-    )
-
-
 def _profile_text(plan: CommandPlan) -> str:
     if plan.profile_name is None or plan.profile_digest is None:
         return "none"
@@ -211,7 +200,7 @@ def command_rows(
                 f"The command is denied: {verdict.reason}. Propose a direct argv instead "
                 "(no shell, no &&, no pipes)."
             )
-    found = set(requested.risks) | ({Risk.PROJECT_SCRIPTS} if _inside_writable(plan) else set())
+    found = set(requested.risks) | ({Risk.PROJECT_SCRIPTS} if _venv_program(plan) else set())
     risks = ", ".join(risk.value for risk in Risk if risk in found) or "none flagged"
     return [
         _row("program", plan.argv[0]),
@@ -224,6 +213,15 @@ def command_rows(
         *([_row("max runtime", _max_runtime(args))] if process else []),
         _row("plan fingerprint", _fingerprint(plan)),
     ]
+
+
+def _venv_program(plan: CommandPlan) -> bool:
+    """A program resolved from the workspace environment's `bin` is project-
+    installed code. (The plan's `writable` entries are labels such as
+    `<workspace>`, not paths, so a resolved absolute path cannot otherwise be
+    placed inside the workspace from here.)"""
+    env = plan.environment
+    return env is not None and f"/{env.strip('/')}/bin/" in plan.argv[0]
 
 
 def capture_rows(raw: object, args: Mapping[str, Any]) -> list[dict[str, Any]]:

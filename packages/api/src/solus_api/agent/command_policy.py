@@ -41,9 +41,6 @@ WRAPPERS: Final = frozenset(
         "open",
         "osascript",
         "stdbuf",
-        "chroot",
-        "unshare",
-        "nsenter",
         "flock",
         "ionice",
         "taskset",
@@ -61,7 +58,9 @@ WRAPPERS: Final = frozenset(
         "faketime",
     }
 )
-ELEVATION: Final = frozenset({"sudo", "su", "doas", "pkexec", "runuser"})
+ELEVATION: Final = frozenset(
+    {"sudo", "su", "doas", "pkexec", "runuser", "chroot", "unshare", "nsenter"}
+)
 #: Programs SOL never runs through `code.exec`: git has dedicated, previewed tools.
 DENIED_PROGRAMS: Final = frozenset({"git"})
 _GIT_MESSAGE: Final = (
