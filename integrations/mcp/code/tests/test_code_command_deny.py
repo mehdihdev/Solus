@@ -327,18 +327,14 @@ def test_a_workspace_link_to_an_outside_program_is_matched_fail_closed() -> None
     # workspace file name, so it gets the fail-closed prefix rule.
     outside = ("/ws/tools/x", "/usr/local/bin/bash-5.2")
     assert deny.denied_reason(["./tools/x"], resolved=outside) is not None
-    assert (
-        deny.denied_reason(["./tools/x"], resolved=outside, inside=lambda p: p.startswith("/ws/"))
-        is not None
-    )
+    in_ws = lambda path: path.startswith("/ws/")  # noqa: E731
+    assert deny.denied_reason(["./tools/x"], resolved=outside, inside=in_ws) is not None
 
 
 def test_a_workspace_program_staying_inside_keeps_exact_matching() -> None:
-    inside = ("/ws/env_setup.sh", "/ws/env_setup.sh")
-    assert (
-        deny.denied_reason(["./env_setup.sh"], resolved=inside, inside=lambda p: p.startswith("/ws/"))
-        is None
-    )
+    resolved = ("/ws/env_setup.sh", "/ws/env_setup.sh")
+    in_ws = lambda path: path.startswith("/ws/")  # noqa: E731
+    assert deny.denied_reason(["./env_setup.sh"], resolved=resolved, inside=in_ws) is None
 
 
 # --- §9.11 (revised): name matching by where the program comes from -------------------
