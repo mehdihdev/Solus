@@ -16,7 +16,27 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 
 SHELLS: frozenset[str] = frozenset(
-    {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh", "busybox"}
+    {
+        "sh",
+        "bash",
+        "zsh",
+        "fish",
+        "dash",
+        "ksh",
+        "csh",
+        "tcsh",
+        "pwsh",
+        "busybox",
+        "rbash",
+        "ash",
+        "mksh",
+        "yash",
+        "elvish",
+        "nu",
+        "xonsh",
+        "oksh",
+        "posh",
+    }
 )
 WRAPPERS: frozenset[str] = frozenset(
     {
@@ -41,6 +61,15 @@ WRAPPERS: frozenset[str] = frozenset(
         "caffeinate",
         "arch",
         "chrt",
+        "systemd-run",
+        "setpriv",
+        "prlimit",
+        "unbuffer",
+        "fakeroot",
+        "proot",
+        "firejail",
+        "cpulimit",
+        "faketime",
     }
 )
 ELEVATION: frozenset[str] = frozenset(
@@ -60,11 +89,33 @@ INLINE_CODE: Mapping[str, frozenset[str]] = MappingProxyType(
         "Rscript": frozenset({"-e"}),
     }
 )
-#: node options whose value is a module to load; refused with a remote/inline value.
+#: node/bun options whose value is a module specifier; refused with any URL scheme
+#: other than `file:` (data:, http(s):, node:, npm:, blob:, …).
 NODE_LOADER_FLAGS: frozenset[str] = frozenset(
     {"--import", "--loader", "--experimental-loader", "--require", "-r"}
 )
-REMOTE_PREFIXES: tuple[str, ...] = ("data:", "http:", "https:")
+BUN_LOADER_FLAGS: frozenset[str] = frozenset({"--preload", "--require", "-r", "--import"})
+ALLOWED_SCHEMES: frozenset[str] = frozenset({"file"})
+#: perl -M/-m and ruby -r/-I values must look like plain module / library names.
+#: Stricter than `^[A-Za-z0-9_:]+(=[\w,]+)?$`: `::` separators only, so `data:x` fails.
+PERL_MODULE_PATTERN = r"^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*(=[\w,]+)?$"
+RUBY_LIBRARY_PATTERN = r"^[A-Za-z0-9_./-]+$"
+MODULE_VALUE_FLAGS: Mapping[str, Mapping[str, str]] = MappingProxyType(
+    {
+        "perl": MappingProxyType({"-M": PERL_MODULE_PATTERN, "-m": PERL_MODULE_PATTERN}),
+        "ruby": MappingProxyType({"-r": RUBY_LIBRARY_PATTERN, "-I": RUBY_LIBRARY_PATTERN}),
+    }
+)
+#: git subcommands / options that execute a supplied command.
+GIT_DENIED_OPTIONS: frozenset[str] = frozenset({"--upload-pack", "--receive-pack", "--exec"})
+GIT_UPLOAD_PACK_SHORT: frozenset[str] = frozenset({"clone", "fetch", "ls-remote", "archive"})
+GIT_DENIED_SUBCOMMAND_OPTIONS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {"rebase": frozenset({"-x", "--exec"}), "difftool": frozenset({"-x", "--extcmd"})}
+)
+GIT_DENIED_SUBCOMMAND_ACTIONS: Mapping[str, frozenset[str]] = MappingProxyType(
+    {"bisect": frozenset({"run"}), "submodule": frozenset({"foreach"})}
+)
+GIT_DENIED_SUBCOMMANDS: frozenset[str] = frozenset({"filter-branch"})
 PROGRAM_ALIASES: Mapping[str, str] = MappingProxyType(
     {"nodejs": "node", "luajit": "lua", "pypy": "python"}
 )
@@ -104,19 +155,39 @@ GIT_SAFE_GLOBAL_OPTIONS: frozenset[str] = frozenset(
 GIT_VALUE_OPTIONS: frozenset[str] = frozenset({"-C", "--git-dir", "--work-tree", "--namespace"})
 #: Generic scanning: options that consume the next argument.
 OPTION_VALUES: Mapping[str, frozenset[str]] = MappingProxyType(
-    {"node": frozenset({"-r", "--require", "--import", "--loader", "-C", "--conditions"})}
+    {
+        "node": frozenset({"-r", "--require", "--import", "--loader", "-C", "--conditions"}),
+        "perl": frozenset({"-M", "-m", "-I"}),
+        "ruby": frozenset({"-r", "-I"}),
+    }
 )
 
 HINT = "propose the program's argv directly (no shell, no &&, no pipes)"
 _SUFFIX = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+_C0_AND_SPACE = "".join(chr(code) for code in range(33))
 _INTERPRETERS = {name.casefold(): name for name in INLINE_CODE}
+#: Names matched by PREFIX (followed by a non-letter or the end), longest first.
+_PREFIX_NAMES = sorted({*SHELLS, *_INTERPRETERS, *PROGRAM_ALIASES, "git"}, key=len, reverse=True)
 _DENY = "deny"
 _ALLOW = "allow"
 
 
+def _by_prefix(name: str) -> str | None:
+    """A known shell/interpreter name that `name` starts with, followed by a non-letter."""
+    for known in _PREFIX_NAMES:
+        if name.startswith(known) and (len(name) == len(known) or not name[len(known)].isalpha()):
+            return known
+    return None
+
+
 def program_name(path: str) -> str:
-    """Normalised program name: casefolded, version/build suffixes stripped, aliases mapped."""
+    """Normalised program name: casefolded, version/build suffixes stripped, aliases
+    mapped, and any `<known name><non-letter>…` mapped to the known name (fail closed)."""
     name = os.path.basename(path).casefold()
+    prefixed = _by_prefix(name)
+    if prefixed is not None:
+        name = prefixed
     if name.endswith("-dbg"):
         name = name[: -len("-dbg")]
     stripped = _SUFFIX.sub("", name) or name
@@ -129,7 +200,9 @@ def program_name(path: str) -> str:
 
 
 def _remote(value: str) -> bool:
-    return value.casefold().startswith(REMOTE_PREFIXES)
+    """True for any URL scheme except `file:` (after stripping blanks and C0 controls)."""
+    match = _SCHEME.match(value.strip(_C0_AND_SPACE))
+    return match is not None and match.group(1).casefold() not in ALLOWED_SCHEMES
 
 
 def _python(args: Sequence[str]) -> str:
@@ -165,11 +238,24 @@ def _python_cluster(arg: str) -> str:
     return "next"
 
 
-def _node_loader(arg: str, following: str | None) -> bool:
+def _loader(name: str, arg: str, following: str | None) -> bool:
+    flags = {"node": NODE_LOADER_FLAGS, "bun": BUN_LOADER_FLAGS}.get(name, frozenset())
     head, equals, value = arg.partition("=")
-    if head not in NODE_LOADER_FLAGS:
+    if head not in flags:
         return False
     return _remote(value if equals else following or "")
+
+
+def _bad_module_value(name: str, arg: str, following: str | None) -> bool:
+    """perl -M/-m and ruby -r/-I with a value that is not a plain module name."""
+    patterns = MODULE_VALUE_FLAGS.get(name)
+    if patterns is None or arg.startswith("--") or len(arg) < 2:
+        return False
+    pattern = patterns.get(arg[:2])
+    if pattern is None:
+        return False
+    value = arg[2:] or following or ""
+    return re.match(pattern, value) is None
 
 
 def _generic(args: Sequence[str], name: str) -> str:
@@ -180,7 +266,11 @@ def _generic(args: Sequence[str], name: str) -> str:
     while index < len(args):
         arg = args[index]
         following = args[index + 1] if index + 1 < len(args) else None
-        if arg.split("=", 1)[0] in flags or (name == "node" and _node_loader(arg, following)):
+        if (
+            arg.split("=", 1)[0] in flags
+            or _loader(name, arg, following)
+            or _bad_module_value(name, arg, following)
+        ):
             return _DENY
         if arg in ("--", "-") or not arg.startswith("-"):
             return _ALLOW
@@ -201,7 +291,7 @@ def _deno(args: Sequence[str]) -> str:
     for arg in args:
         if arg == "--":
             return _ALLOW
-        if _remote(arg.split("=", 1)[-1]):
+        if _remote(arg) or _remote(arg.split("=", 1)[-1]):
             return _DENY
         if arg.startswith("-"):
             continue
@@ -213,12 +303,32 @@ def _deno(args: Sequence[str]) -> str:
     return _ALLOW
 
 
+def _git_subcommand(subcommand: str, rest: Sequence[str]) -> str:
+    """Options and actions of a subcommand that execute a supplied command."""
+    if subcommand in GIT_DENIED_SUBCOMMANDS:
+        return _DENY
+    actions = GIT_DENIED_SUBCOMMAND_ACTIONS.get(subcommand, frozenset())
+    if rest and rest[0] in actions:
+        return _DENY
+    options = GIT_DENIED_SUBCOMMAND_OPTIONS.get(subcommand, frozenset())
+    for arg in rest:
+        if arg == "--":
+            break
+        head = arg.split("=", 1)[0]
+        short = arg[:2] if not arg.startswith("--") else head
+        if head in GIT_DENIED_OPTIONS or head in options or short in options:
+            return _DENY
+        if subcommand in GIT_UPLOAD_PACK_SHORT and short == "-u":
+            return _DENY
+    return _ALLOW
+
+
 def _git(args: Sequence[str]) -> str:
     index = 0
     while index < len(args):
         arg = args[index]
         if not arg.startswith("-"):
-            return _ALLOW
+            return _git_subcommand(arg, args[index + 1 :])
         head = arg.split("=", 1)[0]
         if head in GIT_DENIED_GLOBAL_OPTIONS or arg.startswith("-c"):
             return _DENY

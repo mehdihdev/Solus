@@ -10,8 +10,8 @@ deny = overlay_module("command_deny")
 
 
 def test_tables_are_plain_frozen_literals_matching_the_spec() -> None:
-    assert deny.SHELLS == frozenset(
-        {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh", "busybox"}
+    assert {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh", "busybox"} <= (
+        deny.SHELLS
     )
     assert {
         "env",
@@ -147,6 +147,62 @@ def test_tables_are_plain_frozen_literals_matching_the_spec() -> None:
         ["git", "--no-pager", "-c", "x=y", "log"],
         ["git", "--upload-pack=x", "fetch"],
         ["git", "-Z", "status"],
+        # round 3: prefix normalisation
+        ["python3.12-intel64", "-c", "x"],
+        ["/usr/bin/python-dbg", "-c", "x"],
+        ["perl5.34-thread-multi", "-e", "1"],
+        ["php-cgi", "-r", "1"],
+        ["node-arm64", "-e", "1"],
+        ["bash-5.2"],
+        # round 3: new shells and wrappers
+        *(
+            [shell]
+            for shell in ("rbash", "ash", "mksh", "yash", "elvish", "nu", "xonsh", "oksh", "posh")
+        ),
+        *(
+            [wrapper, "make"]
+            for wrapper in (
+                "systemd-run",
+                "setpriv",
+                "prlimit",
+                "unbuffer",
+                "fakeroot",
+                "proot",
+                "firejail",
+                "cpulimit",
+                "faketime",
+            )
+        ),
+        # round 3: perl/ruby module values
+        ["perl", "-Mdata:x", "s.pl"],
+        ["perl", "-M", "Foo;system('x')", "s.pl"],
+        ["perl", "-mFoo=bar;baz", "s.pl"],
+        ["ruby", "-r", "https://evil/x.rb", "s.rb"],
+        ["ruby", "-rjson;x", "s.rb"],
+        ["ruby", "-I", "data:x", "s.rb"],
+        # round 3: any URL scheme but file:
+        ["node", "--import", " ftp://x/y.mjs", "x.js"],
+        ["node", "--import", "\x01blob:x", "x.js"],
+        ["node", "--loader=node:module", "x.js"],
+        ["bun", "--preload", "https://x/p.ts", "x.ts"],
+        ["deno", "run", "npm:evil", "x"],
+        ["deno", "run", "jsr:@x/y"],
+        ["deno", "run", "--import-map=ftp://x", "main.ts"],
+        # round 3: git subcommands/options that run a supplied command
+        ["git", "fetch", "--upload-pack=touch x", "origin"],
+        ["git", "clone", "--upload-pack", "x", "repo"],
+        ["git", "push", "--receive-pack=x", "origin"],
+        ["git", "clone", "-u", "x", "repo"],
+        ["git", "ls-remote", "-ux", "origin"],
+        ["git", "archive", "--exec=x", "--remote=r", "HEAD"],
+        ["git", "push", "--exec", "x", "origin"],
+        ["git", "rebase", "-x", "make", "main"],
+        ["git", "rebase", "--exec=make", "main"],
+        ["git", "difftool", "-x", "x"],
+        ["git", "difftool", "--extcmd=x"],
+        ["git", "bisect", "run", "make"],
+        ["git", "submodule", "foreach", "make"],
+        ["git", "filter-branch", "--tree-filter", "x"],
     ],
 )
 def test_denied_argv(argv: list[str]) -> None:
@@ -181,6 +237,21 @@ def test_denied_argv(argv: list[str]) -> None:
         ["git", "--version"],
         ["git", "-P", "diff"],
         ["makeup"],
+        ["shasum", "-a", "256", "f"],
+        ["node-gyp", "rebuild"],
+        ["git-lfs", "install"],
+        ["perl", "-MData::Dumper", "s.pl"],
+        ["perl", "-MFoo=bar,baz", "s.pl"],
+        ["ruby", "-r", "json", "s.rb"],
+        ["ruby", "-I", "lib/x", "s.rb"],
+        ["node", "--import", "file:///w/x.mjs", "x.js"],
+        ["deno", "run", "file:///w/main.ts"],
+        ["git", "fetch", "origin"],
+        ["git", "rebase", "main"],
+        ["git", "bisect", "start"],
+        ["git", "submodule", "update", "--init"],
+        ["git", "config", "user.name", "x"],
+        ["git", "push", "-u", "origin", "main"],
     ],
 )
 def test_allowed_argv(argv: list[str]) -> None:
@@ -204,6 +275,11 @@ def test_allowed_argv(argv: list[str]) -> None:
         ("nodejs", "node"),
         ("luajit", "lua"),
         ("RSCRIPT", "Rscript"),
+        ("python3.12-intel64", "python"),
+        ("perl5.34-thread-multi", "perl"),
+        ("php-cgi", "php"),
+        ("node-arm64", "node"),
+        ("shasum", "shasum"),
     ],
 )
 def test_program_name_normalises_case_versions_and_aliases(path: str, name: str) -> None:
