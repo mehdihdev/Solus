@@ -131,7 +131,11 @@ describe('ProjectSourcesSummary', () => {
     })
     const gh = row('github')
     expect(within(gh).getByText('GitHub')).toBeInTheDocument()
-    expect(within(gh).getByText('strider/rover-firmware')).toBeInTheDocument()
+    // The repo gets its own line, in full — never clipped beside the count or the button.
+    expect(within(gh).getByText('strider/rover-firmware')).toHaveStyle({
+      overflowWrap: 'anywhere',
+      whiteSpace: 'normal'
+    })
     expect(within(gh).getByText('42 ENTITIES')).toBeInTheDocument()
     await userEvent.click(within(gh).getByRole('button', { name: 'Pick repositories for GitHub' }))
     expect(open).toHaveBeenCalledWith(GITHUB)

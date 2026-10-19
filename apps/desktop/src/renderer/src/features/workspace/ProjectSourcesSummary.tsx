@@ -170,11 +170,19 @@ function ToolRow({
 
 function HeldItem({ source }: { source: Source }): React.JSX.Element {
   const error = source.status === 'error' ? source.last_error : null
+  // The item (a GitHub repo, a document) gets its own line in full — beside
+  // the count and the step button it clipped to a few letters.
   return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginTop: 2, minWidth: 0 }}>
-      <span style={{ ...CLIP, fontSize: 11.5, color: 'var(--mut)' }}>{sourceLabel(source)}</span>
+    <div style={{ marginTop: 3, minWidth: 0 }}>
+      <div
+        style={{ fontSize: 12, color: 'var(--tx)', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+      >
+        {sourceLabel(source)}
+      </div>
       {error ? (
-        <span style={{ ...CLIP, fontSize: 11, color: 'var(--err)' }}>{error.message}</span>
+        <div style={{ fontSize: 11, color: 'var(--err)', overflowWrap: 'anywhere' }}>
+          {error.message}
+        </div>
       ) : (
         <Mono size={9} color={STATUS_TONE[source.status]} style={{ whiteSpace: 'nowrap' }}>
           {source.entity_count !== undefined
@@ -211,10 +219,4 @@ const ROW: React.CSSProperties = {
   gap: 10,
   padding: '10px 0',
   borderBottom: '1px solid var(--bd)'
-}
-
-const CLIP: React.CSSProperties = {
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  whiteSpace: 'nowrap'
 }
