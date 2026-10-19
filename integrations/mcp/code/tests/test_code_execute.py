@@ -84,11 +84,14 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
     recorder = Recorder()
     planned = _run_plan(ws)
     result = execute.execute_plan(ws, planned, runner=recorder)
-    ((argv, cwd, env, timeout),) = recorder.calls
-    assert argv == sandbox.wrap(
-        FAKE_KIND, [str(ws / ".venv" / "bin" / "python"), "a.py"], workspace=ws
-    )
+    ((argv, cwd, _runner_env, timeout),) = recorder.calls
+    # The sandbox prefix is platform-specific (Linux adds `--env-fd N`); the tail is exact.
+    expected = sandbox.wrap(FAKE_KIND, [str(ws / ".venv" / "bin" / "python"), "a.py"], workspace=ws)
+    assert argv[0] == expected[0] and argv[-2:] == expected[-2:]
     assert cwd == ws and timeout == 7
+    prepared = execute.prepare(ws, planned)
+    assert not isinstance(prepared, str)
+    env = prepared.child_env
     assert env["VIRTUAL_ENV"] == str(ws / ".venv") and "GITHUB_TOKEN" not in env
     assert result == {
         "ok": True,
@@ -274,8 +277,11 @@ def test_absolute_program_cwd_and_profile_environment(ws: Path, scrub: None) -> 
     recorder = Recorder()
     planned = _exec_plan(ws, cwd="sub", profile=profile, environment=".venv")
     result = execute.execute_plan(ws, planned, runner=recorder)
-    ((argv, cwd, env, timeout),) = recorder.calls
+    ((argv, cwd, _runner_env, timeout),) = recorder.calls
     assert argv[-2:] == [str(ws / "tools" / "t.sh"), "x"] and cwd == ws / "sub"
+    prepared = execute.prepare(ws, planned)
+    assert not isinstance(prepared, str)
+    env = prepared.child_env  # what the command runs with (Linux passes it over --env-fd)
     assert env["ROS_DISTRO"] == "jazzy" and env["HOME"] == "/home/u"
     assert env["PATH"] == f"{ws / '.venv' / 'bin'}:/opt/ros/bin:/usr/bin:/bin"
     assert result["cwd"] == "sub" and result["sandbox"] == FAKE_KIND and timeout == 5

@@ -64,15 +64,25 @@ def test_subreaper_is_requested_on_linux_only() -> None:
     assert calls == [(36, 1)]
 
 
+def _state(pid: int) -> str:
+    stat = Path(f"/proc/{pid}/stat")
+    if stat.parent.parent.is_dir() and Path("/proc/self").is_dir():
+        try:
+            return stat.read_text().rpartition(")")[2].split()[0]
+        except (OSError, IndexError):
+            return ""
+    return subprocess.run(
+        ["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout.strip()
+
+
 def _gone(pid: int) -> bool:
     for _ in range(60):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return True
-        state = subprocess.run(
-            ["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
-        ).stdout.strip()
+        state = _state(pid)
         if state.startswith("Z") or not state:
             return True
         time.sleep(0.1)
