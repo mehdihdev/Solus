@@ -21,16 +21,30 @@ _DEBUG_SUFFIX: Final = re.compile(r"-dbg$")
 _VERSION_SUFFIX: Final = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
 
 
+#: §9 item 11: what may follow a shell/interpreter name — a version, then dash
+#: tokens (`python3.12-intel64`, `perl5.34-thread-multi`, `php-cgi`, `bash5.2`).
+_VERSION_SHAPED: Final = r"(?:[0-9][0-9.]*)?(?:-[a-z0-9]+)*"
+
+
 def prefix_match(base: str, names: Iterable[str]) -> str | None:
-    """Fail closed by PREFIX (security review round 2): `python3.12-intel64`,
-    `perl5.34-thread-multi`, `php-cgi`, `node-arm64` are the interpreter they
-    start with — a known name followed by a non-letter (or the end)."""
+    """A shell or interpreter `base` is, by its name plus a VERSION-SHAPED suffix
+    only (§9 item 11). `sh_build.sh`, `nu_test` and `bashful` are not shells."""
     lowered = posixpath.basename(base).lower()
     for name in sorted(names, key=len, reverse=True):
-        key = name.lower()
-        if lowered == key or (lowered.startswith(key) and not lowered[len(key)].isalpha()):
+        if re.fullmatch(re.escape(name.lower()) + _VERSION_SHAPED, lowered):
             return name
     return None
+
+
+def exact_match(base: str, names: Iterable[str]) -> str | None:
+    """A wrapper or elevation tool: the exact lower-cased basename, or the GNU
+    `g`-prefixed build of one (`gtimeout`, `genv`)."""
+    lowered = posixpath.basename(base).lower()
+    table = {name.lower(): name for name in names}
+    found = table.get(lowered)
+    if found is None and lowered.startswith("g"):
+        found = table.get(lowered[1:])
+    return found
 
 
 def normalise(program: str) -> str:

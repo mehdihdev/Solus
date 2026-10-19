@@ -75,9 +75,7 @@ def command_outcome_text(value: dict[str, Any], *, tool: str | None = None) -> s
     return clause
 
 
-def _command_clause(
-    value: dict[str, Any], cap: int, *, success_tail: bool = False
-) -> str | None:
+def _command_clause(value: dict[str, Any], cap: int, *, success_tail: bool = False) -> str | None:
     """`success_tail` (§9 item 7): exec/run/test print the answer, so exit 0
     carries its output tail too."""
     if value.get("uncertain") is True:

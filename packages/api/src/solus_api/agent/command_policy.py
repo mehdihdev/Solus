@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Final, cast
 
 from solus_api.agent.command_interpreters import GRAMMARS, INLINE_CODE, interpreter_denial
-from solus_api.agent.command_names import INTERPRETERS, normalise, prefix_match
+from solus_api.agent.command_names import INTERPRETERS, exact_match, normalise, prefix_match
 from solus_api.agent.command_risks import Risk, risks_for
 
 #: Mirrored in the server deny table; keep both in lockstep (test cross-checks).
@@ -102,20 +102,12 @@ def _malformed(argv: object) -> str | None:
     return None
 
 
-def _wrapper(base: str) -> bool:
-    """A denied wrapper, including GNU `g`-prefixed builds (gtimeout, genv…)."""
-    if prefix_match(base, WRAPPERS) is not None:
-        return True
-    lowered = posixpath.basename(base).lower()
-    return lowered.startswith("g") and prefix_match(lowered[1:], WRAPPERS) is not None
-
-
 def _denial(base: str, args: Sequence[str]) -> str | None:
     if prefix_match(base, SHELLS) is not None:
         return f"{base} is a shell"
-    if _wrapper(base):
+    if exact_match(base, WRAPPERS) is not None:
         return f"{base} runs another program"
-    if prefix_match(base, ELEVATION) is not None:
+    if exact_match(base, ELEVATION) is not None:
         return f"{base} elevates privileges"
     if prefix_match(base, DENIED_PROGRAMS) is not None:
         return _GIT_MESSAGE
