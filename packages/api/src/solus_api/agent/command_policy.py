@@ -15,7 +15,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
-from solus_api.agent.command_git import GIT_CONFIG_FLAGS, git_denial
 from solus_api.agent.command_interpreters import GRAMMARS, INLINE_CODE, interpreter_denial
 from solus_api.agent.command_names import INTERPRETERS, normalise, prefix_match
 from solus_api.agent.command_risks import Risk, risks_for
@@ -63,6 +62,12 @@ WRAPPERS: Final = frozenset(
     }
 )
 ELEVATION: Final = frozenset({"sudo", "su", "doas", "pkexec", "runuser"})
+#: Programs SOL never runs through `code.exec`: git has dedicated, previewed tools.
+DENIED_PROGRAMS: Final = frozenset({"git"})
+_GIT_MESSAGE: Final = (
+    "git is not run through code.exec; use code.git_status, code.git_log, code.git_diff, "
+    "code.git_commit or code.git_push"
+)
 
 _MAX_ARGS: Final = 64
 _MAX_ARG_CHARS: Final = 1024
@@ -98,19 +103,27 @@ def _malformed(argv: object) -> str | None:
     return None
 
 
+def _wrapper(base: str) -> bool:
+    """A denied wrapper, including GNU `g`-prefixed builds (gtimeout, genv…)."""
+    if prefix_match(base, WRAPPERS) is not None:
+        return True
+    lowered = posixpath.basename(base).lower()
+    return lowered.startswith("g") and prefix_match(lowered[1:], WRAPPERS) is not None
+
+
 def _denial(base: str, args: Sequence[str]) -> str | None:
     if prefix_match(base, SHELLS) is not None:
         return f"{base} is a shell"
-    if prefix_match(base, WRAPPERS) is not None:
+    if _wrapper(base):
         return f"{base} runs another program"
     if prefix_match(base, ELEVATION) is not None:
         return f"{base} elevates privileges"
+    if prefix_match(base, DENIED_PROGRAMS) is not None:
+        return _GIT_MESSAGE
     interpreter = normalise(base)
     if interpreter in GRAMMARS:
         reason = interpreter_denial(interpreter, args)
         return None if reason is None else f"{base}: {reason}"
-    if prefix_match(base, ("git",)) is not None:
-        return git_denial(args)
     return None
 
 
@@ -127,8 +140,8 @@ def classify(argv: object) -> CommandVerdict:
 
 
 __all__ = [
+    "DENIED_PROGRAMS",
     "ELEVATION",
-    "GIT_CONFIG_FLAGS",
     "INLINE_CODE",
     "SHELLS",
     "WRAPPERS",

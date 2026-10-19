@@ -84,14 +84,6 @@ _SUBCOMMAND_RISKS: Final[Mapping[tuple[str, str], frozenset[Risk]]] = {
     ("uv", "add"): frozenset({_N, _I}),
     ("uv", "sync"): frozenset({_N, _I}),
     ("uv", "pip"): frozenset({_N, _I}),
-    ("git", "clone"): frozenset({_N}),
-    ("git", "fetch"): frozenset({_N}),
-    ("git", "pull"): frozenset({_N}),
-    ("git", "ls-remote"): frozenset({_N}),
-    ("git", "submodule"): frozenset({_N}),
-    ("git", "push"): frozenset({_N, _R}),
-    ("git", "clean"): frozenset({_D}),
-    ("git", "rm"): frozenset({_D}),
     ("docker", "pull"): frozenset({_N}),
     ("docker", "push"): frozenset({_N, _R}),
     ("docker", "run"): frozenset({_P}),
@@ -117,8 +109,6 @@ _PYTHON_MODULES: Final[Mapping[str, frozenset[Risk]]] = {
     "ensurepip": frozenset({_I}),
     "http.server": frozenset({_N}),
 }
-_GIT_SHELL_CONFIG: Final = ("alias.", "core.", "hook", "include")
-_GIT_GLOBAL_VALUES: Final = frozenset({"-C", "--git-dir", "--work-tree", "--namespace"})
 _FIND_EXEC: Final = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
 _SED_EXEC: Final = re.compile(
     r"(?:^|[;{}\n0-9$/]\s*)e(?:\s|;|$)|^s(.)(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1[A-Za-z0-9]*e"
@@ -129,21 +119,6 @@ def _first_positional(args: Sequence[str]) -> str | None:
     return next((arg for arg in args if not arg.startswith("-")), None)
 
 
-def _git_verb(args: Sequence[str]) -> tuple[str | None, Sequence[str]]:
-    index = 0
-    while index < len(args) and args[index].startswith("-"):
-        index += 2 if args[index] in _GIT_GLOBAL_VALUES else 1
-    return (args[index], args[index + 1 :]) if index < len(args) else (None, ())
-
-
-def _git_runs_shell(args: Sequence[str]) -> bool:
-    """Config writes that make later git commands run programs (aliases, core.*
-    pagers/editors/hooksPath, hooks, includes). Verbs that run programs from
-    their own arguments are DENIED in `command_git`."""
-    verb, rest = _git_verb(args)
-    return verb == "config" and any(arg.lower().startswith(_GIT_SHELL_CONFIG) for arg in rest)
-
-
 def _sed_runs_shell(args: Sequence[str]) -> bool:
     scripts = [arg for arg in args if not arg.startswith("-")]
     scripts += [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-e", "--expression")]
@@ -151,8 +126,6 @@ def _sed_runs_shell(args: Sequence[str]) -> bool:
 
 
 def _runs_shell(name: str, args: Sequence[str]) -> bool:
-    if name == "git":
-        return _git_runs_shell(args)
     if name == "find":
         return any(arg in _FIND_EXEC for arg in args)
     return name in ("sed", "gsed") and _sed_runs_shell(args)
@@ -164,8 +137,6 @@ def _argument_risks(name: str, args: Sequence[str]) -> set[Risk]:
         risks.add(_H)
     if name in ("scp", "rsync") and any(_REMOTE_TARGET.match(arg) for arg in args):
         risks.add(_R)
-    if name == "git" and "reset" in args and "--hard" in args:
-        risks.add(_D)
     if name == "cmake" and "--build" in args:
         risks.add(_P)
     if name in ("pio", "platformio") and "upload" in args:

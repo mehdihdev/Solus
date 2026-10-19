@@ -114,10 +114,17 @@ _LOCAL_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
 _JS: Final = frozenset({"node", "bun", "deno"})
 
 
+def _unsafe_chars(value: str) -> bool:
+    return any(ord(ch) < 0x20 or ch.isspace() for ch in value)
+
+
 def _remote(value: str) -> bool:
-    """A specifier with any scheme but `file:` (npm:, jsr:, node:, data:, http…),
-    judged after dropping whitespace and C0 control characters."""
-    match = _SCHEME.match("".join(ch for ch in value if ord(ch) > 0x20))
+    """A specifier that is not a plain workspace file: ANY whitespace or C0
+    control character anywhere, or any scheme but `file:` (npm:, jsr:, node:,
+    data:, blob:, http…)."""
+    if _unsafe_chars(value):
+        return True
+    match = _SCHEME.match(value)
     return match is not None and match.group(1).lower() != "file"
 
 
@@ -130,17 +137,13 @@ def _off_host(value: str) -> bool:
     return host.lower() not in _LOCAL_HOSTS
 
 
-def _short_value_option(arg: str, grammar: Grammar) -> str | None:
-    """`-Wignore` → `-W` when `-W` is a short value option."""
-    prefix = arg[:2]
-    return prefix if len(arg) > 2 and prefix in grammar.value_options else None
-
-
 def _bad_value(interpreter: str, option: str, value: str) -> str | None:
     if option.startswith("--inspect"):
         return f"{option} exposes the debugger beyond this machine" if _off_host(value) else None
     if interpreter in _JS and _remote(value):
         return f"{option} loads code that is not a workspace file"
+    if interpreter == "perl" and option in ("-M", "-m", "-I") and _unsafe_chars(value):
+        return f"{option} must name a module or directory"
     if interpreter == "perl" and option in ("-M", "-m") and not _PERL_MODULE.match(value):
         return f"{option} with a non-module value runs code"
     if (
@@ -180,16 +183,29 @@ def _option(
         return _bad_value(interpreter, name, value), index + 2
     if long:
         return _long_option(interpreter, grammar, name, attached if equals else None), index + 1
-    short = _short_value_option(arg, grammar)
-    if short is not None:
-        return _bad_value(interpreter, short, arg[2:]), index + 1
-    letters = arg[1:]
-    inline_letters = {flag[1] for flag in inline if len(flag) == 2 and flag[0] == "-"}
-    if any(letter in inline_letters for letter in letters):
-        return "an inline-code flag runs code that is not in a file", index + 1
-    if letters and all(letter in grammar.short_flags for letter in letters):
-        return None, index + 1
-    return f"unrecognised option {arg[:32]}", index + 1
+    return _short_cluster(interpreter, grammar, args, index)
+
+
+def _short_cluster(
+    interpreter: str, grammar: Grammar, args: Sequence[str], index: int
+) -> tuple[str | None, int]:
+    """`-wMfoo`, `-Sc`, `-lne`: each letter must be a safe flag until the first
+    value-taking letter, whose value is the rest of the group or the next arg."""
+    arg = args[index]
+    inline_letters = {f[1] for f in INLINE_CODE[interpreter] if len(f) == 2 and f[0] == "-"}
+    value_letters = {o[1] for o in grammar.value_options if len(o) == 2 and o[0] == "-"}
+    for position, letter in enumerate(arg[1:], start=2):
+        if letter in inline_letters:
+            return "an inline-code flag runs code that is not in a file", index + 1
+        if letter in value_letters:
+            rest = arg[position:]
+            if rest:
+                return _bad_value(interpreter, f"-{letter}", rest), index + 1
+            value = args[index + 1] if index + 1 < len(args) else ""
+            return _bad_value(interpreter, f"-{letter}", value), index + 2
+        if letter not in grammar.short_flags:
+            return f"unrecognised option {arg[:32]}", index + 1
+    return (None if len(arg) > 1 else "an empty option"), index + 1
 
 
 def _deno_denial(rest: Sequence[str]) -> str | None:

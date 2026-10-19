@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 from solus_api.agent.command_policy import (
+    DENIED_PROGRAMS,
     ELEVATION,
-    GIT_CONFIG_FLAGS,
     INLINE_CODE,
     SHELLS,
     WRAPPERS,
@@ -123,9 +123,6 @@ _ALLOW_CASES: list[list[str]] = [
     ["node", "--inspect", "app.js"],
     ["ruby", "app.rb"],
     ["perl", "script.pl"],
-    ["git", "log", "-c"],  # combined diff, not a global -c
-    ["git", "-C", "sub", "status"],
-    ["git", "status"],
     ["make", "-j4"],
     ["ros2", "launch", "bringup", "robot.launch.py"],
     ["ls", "-la"],
@@ -147,8 +144,6 @@ def test_ordinary_commands_are_allowed(argv: list[str]) -> None:
     [
         (["curl", "-O", "https://x"], Risk.NETWORK),
         (["wget", "https://x"], Risk.NETWORK),
-        (["git", "clone", "https://x"], Risk.NETWORK),
-        (["git", "pull"], Risk.NETWORK),
         (["pip", "install", "numpy"], Risk.INSTALL),
         (["pip", "install", "numpy"], Risk.NETWORK),
         (["uv", "pip", "install", "x"], Risk.INSTALL),
@@ -158,8 +153,6 @@ def test_ordinary_commands_are_allowed(argv: list[str]) -> None:
         (["brew", "install", "x"], Risk.INSTALL),
         (["rosdep", "install", "--from-paths", "src"], Risk.INSTALL),
         (["rm", "-rf", "build"], Risk.DESTRUCTIVE),
-        (["git", "clean", "-fdx"], Risk.DESTRUCTIVE),
-        (["git", "reset", "--hard"], Risk.DESTRUCTIVE),
         (["dd", "if=/dev/zero"], Risk.DESTRUCTIVE),
         (["avrdude", "-p", "m328p"], Risk.HARDWARE),
         (["arduino-cli", "upload", "-p", "/dev/ttyACM0"], Risk.HARDWARE),
@@ -168,7 +161,6 @@ def test_ordinary_commands_are_allowed(argv: list[str]) -> None:
         (["ssh", "robot@jetson", "ls"], Risk.REMOTE),
         (["scp", "a", "robot@jetson:/tmp"], Risk.REMOTE),
         (["rsync", "-a", "x", "pi:/home"], Risk.REMOTE),
-        (["git", "push"], Risk.REMOTE),
         (["make"], Risk.PROJECT_SCRIPTS),
         (["npm", "run", "build"], Risk.PROJECT_SCRIPTS),
         (["pnpm", "run", "dev"], Risk.PROJECT_SCRIPTS),
@@ -228,7 +220,7 @@ def test_tables_match_the_spec_and_the_security_review() -> None:
         "bun": {"-e", "--eval", "-p", "--print"},
         "Rscript": {"-e"},
     }
-    assert GIT_CONFIG_FLAGS == frozenset({"-c", "--config-env"})
+    assert DENIED_PROGRAMS == frozenset({"git"})
 
 
 # ---------------------------------------- cross-check with the server's mirror
@@ -288,8 +280,8 @@ def test_cloud_policy_matches_the_server_deny_table() -> None:
     assert frozenset(tables["ELEVATION"]) == ELEVATION
     inline = {str(k).lower(): frozenset(v) for k, v in tables["INLINE_CODE"].items()}
     assert inline == {k.lower(): frozenset(v) for k, v in INLINE_CODE.items()}
-    git = [value for name, value in tables.items() if "GIT" in name.upper()]
-    assert any(GIT_CONFIG_FLAGS <= frozenset(value) for value in git), git
+    sets = [frozenset(v) for v in tables.values() if isinstance(v, frozenset)]
+    assert any("git" in value for value in sets), "server must deny git as a program"
 
 
 # --------------------------- security review 2026-10-18 (fail-closed hardening)
@@ -352,10 +344,6 @@ def test_hardened_denials(argv: list[str]) -> None:
 
 
 _HARDENED_ALLOW: list[list[str]] = [
-    ["git", "--no-pager", "log"],
-    ["git", "--git-dir=.git", "--work-tree=.", "status"],
-    ["git", "--git-dir", ".git", "status"],
-    ["git", "-P", "--literal-pathspecs", "diff"],
     ["python", "-u", "-B", "-W", "ignore", "-X", "dev", "train.py"],
     ["python", "-Wignore", "train.py"],
     ["python", "--check-hash-based-pycs", "never", "x.py"],
@@ -380,9 +368,6 @@ def test_hardened_allows(argv: list[str]) -> None:
 @pytest.mark.parametrize(
     ("argv", "risk"),
     [
-        (["git", "config", "alias.x", "!sh"], Risk.RUNS_SHELL),
-        (["git", "config", "--local", "core.hooksPath", "h"], Risk.RUNS_SHELL),
-        (["git", "config", "set", "core.pager", "x"], Risk.RUNS_SHELL),
         (["find", ".", "-exec", "rm", "{}", ";"], Risk.RUNS_SHELL),
         (["find", ".", "-ok", "rm", "{}", ";"], Risk.RUNS_SHELL),
         (["awk", "{print}", "f"], Risk.RUNS_SHELL),
@@ -406,8 +391,6 @@ def test_hardened_risks(argv: list[str], risk: Risk) -> None:
 
 def test_runs_shell_is_not_flagged_for_plain_commands() -> None:
     assert Risk.RUNS_SHELL not in classify(["sed", "s/a/b/g", "f"]).risks
-    assert Risk.RUNS_SHELL not in classify(["git", "config", "user.name", "x"]).risks
-    assert Risk.RUNS_SHELL not in classify(["git", "rebase", "main"]).risks
 
 
 # ------------------------- security review round 2 (last policy hardening round)
@@ -492,11 +475,6 @@ _ROUND2_ALLOW: list[list[str]] = [
     ["perl", "-MData::Dumper=Dumper", "x.pl"],
     ["ruby", "-r", "json", "-I", "lib", "x.rb"],
     ["php", "-d", "memory_limit=1G", "x.php"],
-    ["git", "clone", "https://github.com/x/y"],
-    ["git", "fetch", "origin"],
-    ["git", "push", "origin", "main"],
-    ["git", "rebase", "main"],
-    ["git", "difftool", "HEAD~1"],
     ["shasum", "-a", "256", "f"],
     ["numactl", "--hardware"],
     ["environment-tool"],
@@ -505,5 +483,78 @@ _ROUND2_ALLOW: list[list[str]] = [
 
 @pytest.mark.parametrize("argv", _ROUND2_ALLOW, ids=lambda argv: " ".join(argv))
 def test_round2_allows(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is False, verdict.reason
+
+
+# ------------------------------------- design change: git is a program SOL never execs
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["git", "status"],
+        ["/usr/bin/git", "log"],
+        ["GIT", "diff"],
+        ["git-upload-pack", "."],
+        ["git-receive-pack", "."],
+        ["git-shell", "-c", "x"],
+        ["git2.43", "status"],
+    ],
+)
+def test_git_is_denied_with_a_pointer_to_the_git_tools(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is True
+    assert verdict.reason is not None
+    assert "code.git_status" in verdict.reason and "code.git_commit" in verdict.reason
+
+
+def test_git_lookalikes_are_not_git() -> None:
+    assert classify(["gitk"]).denied is False
+    assert classify(["github-cli-tool"]).denied is False
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # value letters inside short-option clusters
+        ["perl", "-wMfoo;system(1)", "x.pl"],
+        ["perl", "-wm-strict", "x.pl"],
+        ["perl", "-wM", "foo;system(1)", "x.pl"],
+        ["ruby", "-wrhttp://x/y", "x.rb"],
+        ["ruby", "-wr", "a;b", "x.rb"],
+        ["ruby", "-wI", "https://x", "x.rb"],
+        # control characters / whitespace anywhere in a loader or specifier
+        ["node", "--import", "./a\tb.js", "app.js"],
+        ["node", "-r", "da\x01ta:,1", "app.js"],
+        ["node", "--import", "npm :x", "app.js"],
+        ["node", "my script.js"],
+        ["deno", "run", "h\x0bttps://x/y.ts"],
+        ["perl", "-M", "Foo Bar", "x.pl"],
+        # GNU g-prefixed wrappers and prefix variants of wrappers/elevation
+        *([name, "make"] for name in ("gtimeout", "genv", "gxargs", "gstdbuf", "gnice", "gnohup")),
+        ["timeout-1.2", "5", "make"],
+        ["sudo-rs", "ls"],
+        ["doas.real", "ls"],
+    ],
+)
+def test_final_round_denials(argv: list[str]) -> None:
+    assert classify(argv).denied is True, argv
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["perl", "-wMData::Dumper", "x.pl"],
+        ["perl", "-wI", "lib", "x.pl"],
+        ["ruby", "-wrjson", "x.rb"],
+        ["ruby", "-wI", "lib", "x.rb"],
+        ["gcc", "-o", "x", "x.c"],
+        ["grep", "-r", "x", "."],
+        ["gdb", "x"],
+        ["go", "build"],
+    ],
+)
+def test_final_round_allows(argv: list[str]) -> None:
     verdict = classify(argv)
     assert verdict.denied is False, verdict.reason

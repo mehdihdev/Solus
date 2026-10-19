@@ -565,6 +565,7 @@ def test_build_mode_teaches_argv_commands_profiles_and_processes() -> None:
         "code.process_status",
         "approval",
         "never claim a command ran",
+        "code.git_status",
     ):
         assert phrase in text, phrase
 
