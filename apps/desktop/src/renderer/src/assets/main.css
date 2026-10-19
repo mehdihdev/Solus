@@ -66,6 +66,44 @@ body {
 }
 
 /*
+ * Scrollbars (SOLUSDEV-317): the system default — a wide bright track — read
+ * as foreign on every dark surface. App-wide instead: a 10px gutter with no
+ * track, and a rounded thumb inset 2px from each side (transparent border +
+ * padding-box clip) in the border token, brightening to the muted token on
+ * hover. Token-driven, so all five themes re-skin it. Do NOT add
+ * `scrollbar-color`/`scrollbar-width`: in Chromium they replace these
+ * ::-webkit-scrollbar rules with the plain standard bar.
+ */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--bd);
+  border: 2px solid transparent;
+  border-radius: 99px;
+  background-clip: padding-box;
+  min-height: 32px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--mut);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--mut);
+}
+
+/*
  * Clickable affordance (SOLUSDEV-164). A single opt-in class that makes any
  * element read as interactive — pointer cursor, a hover/active tint, and a
  * keyboard focus ring — WITHOUT fighting the app's pervasive inline styles.
