@@ -1,6 +1,8 @@
 """Linux sandbox helper for the `code` server (docs/api/code-command-execution.md §3).
 
-Run as `<python> -I landlock_exec.py --rw <path> … -- <program> <args…>`: it sets
+Run as `<python> -I landlock_exec.py [--env-fd N] --home <HOME> --rw <path> … --
+<program> <args…>`: it refuses any `--rw` path that equals or contains HOME or
+`HOME/.solus` (or lies inside `HOME/.solus`), then sets
 PR_SET_NO_NEW_PRIVS, creates a Landlock ruleset that HANDLES the filesystem write
 rights of the best available ABI, grants them beneath each `--rw` path, restricts
 itself, then `os.execv`s the program. Reads, exec and network stay unrestricted.
@@ -16,6 +18,7 @@ import stat
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 WRITE_FILE = 1 << 1
@@ -180,27 +183,41 @@ class Invocation:
     paths: list[str]
     command: list[str]
     env_fd: int | None
+    home: str
 
 
 def _parse(argv: Sequence[str]) -> Invocation | None:
     paths: list[str] = []
     env_fd: int | None = None
+    home: str | None = None
     index = 0
-    while index + 1 < len(argv) and argv[index] in ("--rw", "--env-fd"):
-        value = argv[index + 1]
-        if argv[index] == "--rw":
+    while index + 1 < len(argv) and argv[index] in ("--rw", "--env-fd", "--home"):
+        option, value = argv[index], argv[index + 1]
+        if option == "--rw":
             paths.append(value)
-        elif value.isdigit():
+        elif option == "--home" and home is None and os.path.isabs(value):
+            home = value
+        elif option == "--env-fd" and value.isdigit():
             env_fd = int(value)
         else:
             return None
         index += 2
-    if index >= len(argv) or argv[index] != "--":
+    if home is None or index >= len(argv) or argv[index] != "--":
         return None
     command = list(argv[index + 1 :])
     if not command or not os.path.isabs(command[0]):
         return None
-    return Invocation(paths, command, env_fd)
+    return Invocation(paths, command, env_fd, home)
+
+
+def holds_home(path: str, home: str) -> bool:
+    """`path` equals or contains HOME or HOME/.solus, or lies inside HOME/.solus."""
+    real = Path(os.path.realpath(path))
+    real_home = Path(os.path.realpath(home))
+    solus = real_home / ".solus"
+    return (
+        real_home.is_relative_to(real) or solus.is_relative_to(real) or real.is_relative_to(solus)
+    )
 
 
 def read_env(fd: int) -> dict[str, str] | None:
@@ -243,9 +260,12 @@ def main(
     parsed = _parse(argv)
     if parsed is None:
         sys.stderr.write(
-            "solus landlock: usage: [--env-fd N] --rw PATH ... -- /abs/program [args]\n"
+            "solus landlock: usage: [--env-fd N] --home HOME --rw PATH ... -- /abs/program [args]\n"
         )
         return EXIT_USAGE
+    if any(holds_home(path, parsed.home) for path in parsed.paths):
+        sys.stderr.write("solus landlock: refused: a writable path holds HOME or ~/.solus\n")
+        return EXIT_REFUSED
     env: dict[str, str] | None = dict(os.environ)
     if parsed.env_fd is not None:
         try:

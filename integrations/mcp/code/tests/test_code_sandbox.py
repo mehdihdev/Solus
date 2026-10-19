@@ -107,10 +107,14 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
     link = tmp_path / "link"
     (tmp_path / "real").mkdir()
     link.symlink_to(tmp_path / "real")
+    (tmp_path / "home").mkdir()
+    home_link = tmp_path / "home-link"
+    home_link.symlink_to(tmp_path / "home")
     argv = sandbox.wrap(
-        "sandbox-exec", ["/usr/bin/make", "-j4"], workspace=link, home=link, tmpdir=link
+        "sandbox-exec", ["/usr/bin/make", "-j4"], workspace=link, home=home_link, tmpdir=link
     )
     real = os.path.realpath(tmp_path / "real")
+    real_home = os.path.realpath(tmp_path / "home")
     git = f"{real}/.git"
     assert argv == [
         "/usr/bin/sandbox-exec",
@@ -121,7 +125,7 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         "-D",
         f"TMP={real}",
         "-D",
-        f"HOME={real}",
+        f"HOME={real_home}",
         "-D",
         f"DOTGIT={git}",
         "-D",
@@ -204,28 +208,37 @@ def test_linux_wrap_runs_the_isolated_helper_over_existing_writable_paths(tmp_pa
     (home / ".cache").mkdir()
     workspace = tmp_path / "ws"
     workspace.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
     argv = sandbox.wrap(
         "landlock",
         ["/opt/ros/bin/colcon", "build"],
         workspace=workspace,
         home=home,
-        tmpdir=tmp_path,
+        tmpdir=tmpdir,
     )
     assert argv[:3] == [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py")]
     separator = argv.index("--")
     assert argv[separator + 1 :] == ["/opt/ros/bin/colcon", "build"]
-    granted = argv[3:separator:2]
-    assert set(argv[3:separator:2]) == {"--rw"}
-    paths = argv[4:separator:2]
-    assert paths[0] == os.path.realpath(workspace) and paths[1] == os.path.realpath(tmp_path)
+    assert argv[3:5] == ["--home", os.path.realpath(home)]
+    granted = argv[5:separator:2]
+    assert set(argv[5:separator:2]) == {"--rw"}
+    paths = argv[6:separator:2]
+    assert paths[0] == os.path.realpath(workspace) and paths[1] == os.path.realpath(tmpdir)
     assert os.path.realpath(home / ".ros") in paths and os.path.realpath(home / ".cache") in paths
     assert not any(path.endswith(".npm") for path in paths), "missing caches grant nothing"
     assert "/dev/null" in paths and granted
 
 
 def test_linux_wrap_passes_the_environment_descriptor(tmp_path: Path) -> None:
+    home = tmp_path / "home"
     argv = sandbox.wrap(
-        "landlock-abi1", ["/bin/true"], workspace=tmp_path, home=tmp_path, tmpdir=tmp_path, env_fd=9
+        "landlock-abi1",
+        ["/bin/true"],
+        workspace=tmp_path / "ws",
+        home=home,
+        tmpdir=tmp_path,
+        env_fd=9,
     )
     assert argv[3:5] == ["--env-fd", "9"] and argv[-2:] == ["--", "/bin/true"]
     assert set(sandbox.helper_env({"PATH": "/evil", "LANG": "C.UTF-8", "LD_PRELOAD": "x"})) == {
@@ -233,6 +246,25 @@ def test_linux_wrap_passes_the_environment_descriptor(tmp_path: Path) -> None:
         "LANG",
     }
     assert sandbox.helper_env({})["PATH"] == "/usr/bin:/bin"
+
+
+@pytest.mark.parametrize("kind", ["sandbox-exec", "landlock-abi3"])
+def test_wrap_refuses_a_workspace_that_holds_home(tmp_path: Path, kind: str) -> None:
+    home = tmp_path / "me"
+    (home / ".solus").mkdir(parents=True)
+    for workspace in (home, tmp_path, home / ".solus"):
+        with pytest.raises(ValueError, match="home folder"):
+            sandbox.wrap(kind, ["/bin/true"], workspace=workspace, home=home, tmpdir=tmp_path)
+
+
+def test_linux_writable_never_grants_a_temp_root_that_holds_home(tmp_path: Path) -> None:
+    home = tmp_path / "tmproot" / "me"
+    home.mkdir(parents=True)
+    workspace = home / "robot"
+    workspace.mkdir()
+    paths = sandbox.linux_writable(workspace, home, tmp_path / "tmproot")
+    assert os.path.realpath(workspace) in paths
+    assert os.path.realpath(tmp_path / "tmproot") not in paths
 
 
 def test_unknown_kind_is_refused() -> None:
@@ -391,8 +423,8 @@ def test_real_sandbox_runs_python_with_network_and_reads_unrestricted(tmp_path: 
         sandbox.wrap(
             "sandbox-exec",
             [sys.executable, "-c", code],
-            workspace=tmp_path,
-            home=tmp_path,
+            workspace=tmp_path / "ws",
+            home=tmp_path / "home",
             tmpdir=tmp_path,
         ),
         capture_output=True,

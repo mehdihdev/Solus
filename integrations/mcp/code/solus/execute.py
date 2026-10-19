@@ -313,7 +313,11 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
         descriptor = sandbox.env_descriptor(env)
     except (ValueError, OSError) as exc:
         return str(exc)
-    wrapped = sandbox.wrap(plan.sandbox, program, workspace=root, env_fd=descriptor)
+    try:
+        wrapped = sandbox.wrap(plan.sandbox, program, workspace=root, env_fd=descriptor)
+    except ValueError as exc:
+        os.close(descriptor)
+        return str(exc)
     return Prepared(wrapped, cwd, sandbox.helper_env(env), env, (descriptor,))
 
 

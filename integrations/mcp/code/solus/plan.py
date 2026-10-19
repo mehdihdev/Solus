@@ -329,11 +329,15 @@ def _planner(action: str) -> Callable[[Path, Args, Which], Plan] | None:
 
 def plan_action(root: Path, action: object, args: object, *, which: Which) -> Plan:
     """The plan for `action` over untrusted `args`. Never raises on shape. Every
-    executing action is refused unless an OS sandbox is available (§3)."""
+    executing action is refused unless an OS sandbox is available (§3), and when
+    the workspace holds HOME or ~/.solus (§9.4)."""
     planner = _planner(action) if isinstance(action, str) else None
     if planner is None:
         return _refuse(_echo(action), f"unknown action; expected one of {', '.join(ACTIONS)}")
     assert isinstance(action, str)
+    conflict = sandbox.home_conflict(root)
+    if conflict is not None:
+        return _refuse(action, conflict)
     if args is None:
         args = {}
     if not isinstance(args, dict):

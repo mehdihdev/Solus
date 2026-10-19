@@ -92,6 +92,43 @@ def test_restrict_refuses_without_landlock() -> None:
         landlock.Landlock(FakeSyscalls(abi=0)).restrict(["/"])
 
 
+#: A HOME unrelated to every test's writable paths.
+HOME_ARGS = ["--home", "/nonexistent/solus-test-home"]
+
+
+@pytest.mark.parametrize("relation", ["home", "parent", "dot_solus", "inside_dot_solus"])
+def test_main_refuses_a_writable_path_that_holds_home(tmp_path: Path, relation: str) -> None:
+    """§9.4: HOME arrives as an explicit argument (never from the environment)."""
+    home = tmp_path / "users" / "me"
+    (home / ".solus" / "code-profiles").mkdir(parents=True)
+    path = {
+        "home": home,
+        "parent": tmp_path / "users",
+        "dot_solus": home / ".solus",
+        "inside_dot_solus": home / ".solus" / "code-profiles",
+    }[relation]
+    fake = FakeSyscalls()
+    execs: list[object] = []
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(home / "project"), "--rw", str(path), "--", "/bin/true"],
+        landlock=landlock.Landlock(fake),
+        execve=lambda *args: execs.append(args),
+    )
+    assert code == 126 and execs == [] and fake.calls == []
+
+
+def test_main_allows_a_project_inside_home(tmp_path: Path) -> None:
+    home = tmp_path / "me"
+    (home / "robot").mkdir(parents=True)
+    execs: list[object] = []
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(home / "robot"), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: execs.append(args),
+    )
+    assert code == 0 and len(execs) == 1
+
+
 def test_main_execs_the_program_only_after_restriction(tmp_path: Path) -> None:
     fake = FakeSyscalls()
     execs: list[tuple[str, list[str], dict[str, str]]] = []
@@ -99,7 +136,7 @@ def test_main_execs_the_program_only_after_restriction(tmp_path: Path) -> None:
     os.write(write, b"PATH=/opt/ros/bin:/usr/bin\0ROS_DISTRO=jazzy\0EMPTY=\0")
     os.close(write)
     code = landlock.main(
-        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/echo", "hi"],
+        ["--env-fd", str(read), *HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/echo", "hi"],
         landlock=landlock.Landlock(fake),
         execve=lambda program, argv, env: execs.append((program, list(argv), dict(env))),
     )
@@ -133,7 +170,7 @@ def test_main_refuses_an_oversized_or_malformed_environment(tmp_path: Path, payl
     writer.start()
     execs: list[object] = []
     code = landlock.main(
-        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/true"],
+        ["--env-fd", str(read), *HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/true"],
         landlock=landlock.Landlock(FakeSyscalls()),
         execve=lambda *args: execs.append(args),
     )
@@ -150,6 +187,9 @@ def test_main_refuses_an_oversized_or_malformed_environment(tmp_path: Path, payl
         ["--", "relative"],
         ["--bogus", "--", "/x"],
         ["--env-fd", "x", "--", "/x"],
+        ["--rw", "/tmp", "--", "/bin/true"],
+        ["--home", "relative", "--", "/bin/true"],
+        [*["--home", "/h"] * 2, "--", "/bin/true"],
     ],
 )
 def test_main_refuses_malformed_arguments(argv: list[str]) -> None:
@@ -163,7 +203,7 @@ def test_main_refuses_malformed_arguments(argv: list[str]) -> None:
 def test_main_fails_closed_when_restriction_fails(tmp_path: Path) -> None:
     execs: list[object] = []
     code = landlock.main(
-        ["--rw", str(tmp_path), "--", "/bin/true"],
+        [*HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/true"],
         landlock=landlock.Landlock(FakeSyscalls(fail="create")),
         execve=lambda *args: execs.append(args),
     )
@@ -191,7 +231,7 @@ def test_real_landlock_confines_writes(tmp_path: Path) -> None:
     os.close(write)
     subprocess.run(
         [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py"), "--env-fd", str(read)]
-        + ["--rw", str(workspace), "--", "/bin/sh", "-c", script],
+        + [*HOME_ARGS, "--rw", str(workspace), "--", "/bin/sh", "-c", script],
         check=True,
         env={"PATH": "/usr/bin:/bin"},
         pass_fds=(read,),

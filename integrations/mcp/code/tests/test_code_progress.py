@@ -140,8 +140,14 @@ async def test_async_queue_is_bounded_and_reports_overflow() -> None:
     assert chunks[-1]["text"] == progress.TRUNCATED
 
 
+@pytest.fixture
+def base(tmp_path: Path) -> Path:
+    (tmp_path / "home").mkdir()
+    return tmp_path
+
+
 @pytest.mark.real_sandbox
-async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Path) -> None:
+async def test_actual_stdio_mcp_reports_output_before_final_result(base: Path) -> None:
     import asyncio
     import json
 
@@ -149,6 +155,7 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    tmp_path = base / "ws"
     binary = tmp_path / ".venv" / "bin"
     binary.mkdir(parents=True)
     (binary / "python").symlink_to(sys.executable)
@@ -167,7 +174,8 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
         env={
             "SOLUS_MCP_WORKSPACE": str(tmp_path),
             "PATH": "/usr/bin:/bin",
-            "HOME": str(tmp_path),
+            # HOME is never the workspace (§9.4): a separate temp home.
+            "HOME": str(base / "home"),
         },
     )
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
