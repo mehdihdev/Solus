@@ -369,3 +369,116 @@ def test_git_metadata_change_is_a_warning_in_the_outcome() -> None:
     assert "WARNING" not in (
         command_outcome_text({**value, "git_metadata_changed": False}, tool="code.exec") or ""
     )
+
+
+# ------------------------------------------------------- decide route (§5.3, §5.6)
+
+
+@pytest.mark.parametrize(
+    ("tool", "value", "expected"),
+    [
+        (
+            "code.exec",
+            {
+                "ok": False,
+                "exit_code": 2,
+                "argv": ["/usr/bin/make", "SECRET_ARG"],
+                "stdout_tail": "z" * 3500,
+                "timed_out": False,
+                "duration_ms": 120,
+                "sandbox": "landlock-abi3",
+                "git_metadata_changed": True,
+            },
+            [
+                (
+                    "sol.command.completed",
+                    {
+                        "tool": "code.exec",
+                        "program": "make",
+                        "exit_code": 2,
+                        "timed_out": False,
+                        "duration_ms": 120,
+                        "sandbox": "landlock-abi3",
+                        "git_metadata_changed": True,
+                    },
+                )
+            ],
+        ),
+        (
+            "code.process_stop",
+            {"ok": True, "process_id": "p1", "state": "stopped", "exit_code": -15},
+            [("code.process.stopped", {"via": "sol", "state": "stopped"})],
+        ),
+        (
+            "code.profile_capture",
+            {"ok": True, "name": "ros", "variables": ["A", "B"], "dropped": ["AWS_KEY"]},
+            [
+                (
+                    "sol.command.completed",
+                    {
+                        "tool": "code.profile_capture",
+                        "program": None,
+                        "exit_code": None,
+                        "timed_out": False,
+                        "duration_ms": None,
+                        "sandbox": None,
+                        "git_metadata_changed": False,
+                    },
+                ),
+                ("code.profile.captured", {"variable_count": 2, "dropped_count": 1}),
+            ],
+        ),
+    ],
+)
+async def test_the_decide_route_emits_basename_only_command_events(
+    client: Any,
+    alice_headers: dict[str, str],
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    value: dict[str, Any],
+    expected: list[tuple[str, dict[str, Any]]],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.models import ConversationTurn
+    from solus_api.routers import sol
+    from sqlalchemy import update
+    from test_confirmations import _seeded_confirmation
+
+    project_id, confirmation_id = await _seeded_confirmation(
+        client, alice_headers, maker, tool=tool
+    )
+    async with maker() as db:
+        await db.execute(update(User).values(data_collection_consent=True))
+        await db.commit()
+    monkeypatch.setattr(
+        sol, "decide_confirmation", AsyncMock(return_value=ToolResult.success("c", value))
+    )
+    url = f"/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}"
+    response = await client.post(url, headers=alice_headers, json={"decision": "approve"})
+    assert response.status_code == 200, response.text
+    kinds = {kind for kind, _ in expected}
+    async with maker() as db:
+        rows = (
+            await db.scalars(
+                select(DataEvent)
+                .where(DataEvent.event_type.in_(kinds))
+                .order_by(DataEvent.created_at)
+            )
+        ).all()
+        assert [(row.event_type, row.payload) for row in rows] == expected
+        assert "SECRET_ARG" not in json.dumps([row.payload for row in rows])
+        assert not (await db.scalars(select(ConversationTurn))).all()  # no conversation
+
+
+def test_decision_summary_uses_the_tools_tail_and_git_warning() -> None:
+    from solus_api.agent.tools.shapes import ToolResult
+    from solus_api.routers.sol import _decision_summary
+
+    value = {"ok": False, "exit_code": 1, "stdout_tail": "q" * 5000, "git_metadata_changed": True}
+    summary = _decision_summary("approve", ToolResult.success("c", value), "code.exec")
+    assert summary.count("q") == 3000 and summary.endswith(".git/config")
+    short = _decision_summary("approve", ToolResult.success("c", value), "code.install")
+    assert short.count("q") == 400

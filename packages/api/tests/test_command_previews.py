@@ -259,7 +259,9 @@ async def test_landlock_abi_kinds_and_limitations_render_on_the_sandbox_row() ->
         "landlock-abi3 — writes limited to the workspace, temp and tool caches; "
         "limits: no .git/hooks write denial (detected instead); truncate unchecked"
     )
-    assert plan_fingerprint(plan) != plan_fingerprint(_plan(sandbox={**sandbox, "kind": "landlock-abi2"}))
+    assert plan_fingerprint(plan) != plan_fingerprint(
+        _plan(sandbox={**sandbox, "kind": "landlock-abi2"})
+    )
     assert len(row) <= 500
 
 
