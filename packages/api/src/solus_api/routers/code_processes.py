@@ -42,6 +42,8 @@ STOP_LIMIT: Final = 20
 _WINDOW_SECONDS: Final = 60
 _TIMEOUT_SECONDS: Final = 15.0
 _MAX_PROCESSES: Final = 16
+#: The server's own answer for a process it does not know (`processes.stop`).
+_UNKNOWN: Final = "unknown process"
 _PROCESS_KEYS: Final = (
     "process_id",
     "name",
@@ -164,8 +166,13 @@ async def stop_process(
     value = await _call(
         live, STOP_TOOL, {"process_id": process_id}, settings.bridge_tool_call_max_bytes
     )
-    if value is None or value.get("ok") is not True:
+    if value is not None and value.get("ok") is not True and value.get("reason") == _UNKNOWN:
         raise APIError(404, "not_found", "No such running process.")
+    if value is None or value.get("ok") is not True:
+        # §9 item 14: no confirmed result within the bound — it may have landed.
+        raise APIError(
+            504, "stop_unconfirmed", "The stop was sent but not confirmed; check the process list."
+        )
     emit_event(
         session,
         user=ctx.user,
