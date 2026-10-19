@@ -68,7 +68,7 @@ MACOS_PROFILE = (
     "(version 1)(allow default)(deny file-write*)"
     "(allow file-write*"
     '(subpath (param "WORKSPACE"))(subpath (param "TMP"))'
-    '(subpath "/private/tmp")(subpath "/private/var/folders")'
+    '(subpath "/private/tmp")(subpath (param "USER_CACHE"))'
     '(literal "/dev/null")(literal "/dev/zero")(literal "/dev/tty")'
     '(regex #"^/dev/fd/")(regex #"^/dev/cu\\.")(regex #"^/dev/tty\\.")'
     f"{_HOME_RULES})"
@@ -211,6 +211,22 @@ def linux_writable(workspace: Path, home: Path, tmpdir: Path) -> list[str]:
     return unique
 
 
+#: macOS per-user temp/cache roots live at /private/var/folders/<xx>/<id>/{T,C}.
+DARWIN_FOLDERS = "/private/var/folders"
+
+
+def user_cache_dir(tmpdir: Path, *, folders: str = DARWIN_FOLDERS) -> str:
+    """This user's Darwin cache dir (the `C` sibling of `T`), else the temp dir itself.
+
+    Only this user's own temp and cache dirs are writable, never the whole
+    /private/var/folders tree.
+    """
+    real = Path(_real(tmpdir))
+    if real.is_relative_to(Path(folders).resolve()) and real.name == "T":
+        return str(real.parent / "C")
+    return str(real)
+
+
 def wrap(
     kind: str | None,
     argv: Sequence[str],
@@ -242,6 +258,8 @@ def wrap(
             f"GIT_DIR={git_dir}",
             "-D",
             f"GIT_COMMON={common}",
+            "-D",
+            f"USER_CACHE={user_cache_dir(tmpdir)}",
             *argv,
         ]
     if kind is not None and kind.startswith(KIND_LINUX):

@@ -128,6 +128,8 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         f"GIT_DIR={git}",
         "-D",
         f"GIT_COMMON={git}",
+        "-D",
+        f"USER_CACHE={sandbox.user_cache_dir(link)}",
         "/usr/bin/make",
         "-j4",
     ]
@@ -138,8 +140,10 @@ def test_macos_profile_states_the_writable_set_and_denials() -> None:
     assert profile.startswith("(version 1)(allow default)(deny file-write*)")
     for cache in CACHES:
         assert f'(string-append (param "HOME") "/{cache}")' in profile, cache
-    for literal in ('"/private/tmp"', '"/private/var/folders"', '"/dev/null"', '"/dev/zero"'):
+    for literal in ('"/private/tmp"', '(param "USER_CACHE")', '"/dev/null"', '"/dev/zero"'):
         assert literal in profile
+    # Only this user's own temp and cache dirs, never every app's /private/var/folders tree.
+    assert '"/private/var/folders"' not in profile
     denials = profile.split("(deny file-write*", 2)[2]
     for fragment in (
         '(literal (param "DOTGIT"))',
@@ -530,3 +534,15 @@ def test_real_sandbox_protects_submodule_and_worktree_metadata(tmp_path: Path) -
         "w-entry-denied",
         "m-objects-denied",
     ]
+
+
+def test_user_cache_dir_is_the_darwin_sibling_of_the_temp_dir(tmp_path: Path) -> None:
+    darwin_tmp = tmp_path / "xx" / "yyyy" / "T"
+    darwin_tmp.mkdir(parents=True)
+    assert sandbox.user_cache_dir(darwin_tmp, folders=str(tmp_path)) == str(
+        (tmp_path / "xx" / "yyyy" / "C").resolve()
+    )
+    # Outside the per-user folders tree it adds nothing beyond the temp dir itself.
+    other = tmp_path / "plain"
+    other.mkdir()
+    assert sandbox.user_cache_dir(other, folders="/nonexistent") == str(other.resolve())

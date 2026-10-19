@@ -202,8 +202,8 @@ Arduino keeps its existing bubblewrap posture; git tools are not changed.
 Writable set (everything else is read-only; reads, exec and network are not restricted):
 
 - the workspace (realpath), which contains any selected venv;
-- the process temporary directory (`TMPDIR` realpath, `/private/tmp`, `/private/var/folders`
-  on macOS; `/tmp` and `/var/tmp` on Linux);
+- the process temporary directory (`TMPDIR` realpath, `/private/tmp`, and on macOS this user's own Darwin cache dir — the `C`
+sibling of `TMPDIR`, never all of `/private/var/folders`; `/tmp` and `/var/tmp` on Linux);
 - device nodes `/dev/null`, `/dev/zero`, `/dev/tty`, `/dev/fd/*`, and serial devices
   (`/dev/cu.*`, `/dev/tty.*` on macOS; `/dev/ttyUSB*`, `/dev/ttyACM*` on Linux);
 - declared tool caches under `HOME`: `.cache`, `Library/Caches`, `.ros`, `.npm`, `.pnpm-store`,
@@ -383,6 +383,8 @@ resume after an approved command, and the Running processes strip with Stop.
 
 - The decide route's `ToolResult` envelope carries the tool's result dict in `value` (`ok`,
   `exit_code`, `timed_out`, `reason`, tails, `sandbox`, `git_metadata_changed`).
+- `code.process_status` with an unknown `process_id` answers `output: null` and does not list
+  it. The cloud maps that to `404 not_found`.
 - Output chunk fields: the confirmation-output route uses `sequence`; the process-output route
   uses `seq`. Both are strictly increasing integers.
 - A resume turn uses the action mode currently shown on the SOL surface.
