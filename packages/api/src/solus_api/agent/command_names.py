@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Iterable
 from typing import Final
 
 from solus_api.agent.command_interpreters import INLINE_CODE
@@ -20,12 +21,27 @@ _DEBUG_SUFFIX: Final = re.compile(r"-dbg$")
 _VERSION_SUFFIX: Final = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
 
 
+def prefix_match(base: str, names: Iterable[str]) -> str | None:
+    """Fail closed by PREFIX (security review round 2): `python3.12-intel64`,
+    `perl5.34-thread-multi`, `php-cgi`, `node-arm64` are the interpreter they
+    start with — a known name followed by a non-letter (or the end)."""
+    lowered = posixpath.basename(base).lower()
+    for name in sorted(names, key=len, reverse=True):
+        key = name.lower()
+        if lowered == key or (lowered.startswith(key) and not lowered[len(key)].isalpha()):
+            return name
+    return None
+
+
 def normalise(program: str) -> str:
-    """Lower-cased basename with debug/version/build suffixes stripped:
-    `/usr/bin/Python3.13t` → `python`, `python3-dbg` → `python`, `pythonw` →
-    `python`, `nodejs` → `node`. Unknown names are returned stripped but not
-    aliased (`ros2` → `ros`); callers check both spellings."""
-    stem = _VERSION_SUFFIX.sub("", _DEBUG_SUFFIX.sub("", posixpath.basename(program).lower()))
-    if stem not in INTERPRETERS and stem.endswith("w") and stem[:-1] in INTERPRETERS:
-        stem = stem[:-1]
-    return INTERPRETERS.get(stem, stem)
+    """The interpreter `program` is (`/usr/bin/Python3.13t`, `python3-dbg`,
+    `pythonw`, `nodejs`, `php-cgi` → its canonical name), else the lower-cased
+    basename with version/build suffixes stripped (`pip3.12` → `pip`)."""
+    lowered = posixpath.basename(program).lower()
+    matched = prefix_match(lowered, INTERPRETERS)
+    if matched is not None:
+        return INTERPRETERS[matched]
+    stem = _VERSION_SUFFIX.sub("", _DEBUG_SUFFIX.sub("", lowered))
+    if stem.endswith("w") and stem[:-1] in INTERPRETERS:
+        return INTERPRETERS[stem[:-1]]
+    return stem

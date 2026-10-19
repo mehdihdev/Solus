@@ -206,11 +206,15 @@ def test_verdict_is_frozen() -> None:
 
 
 def test_tables_match_the_spec_and_the_security_review() -> None:
-    assert SHELLS == frozenset("sh bash zsh fish dash ksh csh tcsh pwsh busybox".split())
+    assert SHELLS == frozenset(
+        "sh bash zsh fish dash ksh csh tcsh pwsh busybox "
+        "rbash ash mksh yash elvish nu xonsh oksh posh".split()
+    )
     assert WRAPPERS == frozenset(
         "env xargs nohup setsid nice timeout time watch script expect "
         "sandbox-exec launchctl open osascript stdbuf chroot unshare nsenter flock "
-        "ionice taskset caffeinate arch chrt".split()
+        "ionice taskset caffeinate arch chrt systemd-run setpriv prlimit unbuffer "
+        "fakeroot proot firejail cpulimit faketime".split()
     )
     assert ELEVATION == frozenset({"sudo", "su", "doas", "pkexec", "runuser"})
     assert INLINE_CODE == {
@@ -379,10 +383,6 @@ def test_hardened_allows(argv: list[str]) -> None:
         (["git", "config", "alias.x", "!sh"], Risk.RUNS_SHELL),
         (["git", "config", "--local", "core.hooksPath", "h"], Risk.RUNS_SHELL),
         (["git", "config", "set", "core.pager", "x"], Risk.RUNS_SHELL),
-        (["git", "rebase", "-x", "make", "main"], Risk.RUNS_SHELL),
-        (["git", "rebase", "--exec=make", "main"], Risk.RUNS_SHELL),
-        (["git", "bisect", "run", "make"], Risk.RUNS_SHELL),
-        (["git", "submodule", "foreach", "ls"], Risk.RUNS_SHELL),
         (["find", ".", "-exec", "rm", "{}", ";"], Risk.RUNS_SHELL),
         (["find", ".", "-ok", "rm", "{}", ";"], Risk.RUNS_SHELL),
         (["awk", "{print}", "f"], Risk.RUNS_SHELL),
@@ -408,3 +408,102 @@ def test_runs_shell_is_not_flagged_for_plain_commands() -> None:
     assert Risk.RUNS_SHELL not in classify(["sed", "s/a/b/g", "f"]).risks
     assert Risk.RUNS_SHELL not in classify(["git", "config", "user.name", "x"]).risks
     assert Risk.RUNS_SHELL not in classify(["git", "rebase", "main"]).risks
+
+
+# ------------------------- security review round 2 (last policy hardening round)
+
+_ROUND2_DENY: list[list[str]] = [
+    # names: fail closed by prefix
+    ["python3.12-intel64", "-c", "x"],
+    ["perl5.34-thread-multi", "-e", "1"],
+    ["php-cgi", "-r", "1"],
+    ["node-arm64", "-e", "1"],
+    ["python-dbg", "-c", "x"],
+    ["bash-5.2", "x"],
+    *([name] for name in "rbash ash mksh yash elvish nu xonsh oksh posh".split()),
+    *(
+        [name, "make"]
+        for name in (
+            "systemd-run setpriv prlimit unbuffer fakeroot proot firejail cpulimit faketime"
+        ).split()
+    ),
+    # specifier schemes other than file:
+    ["deno", "run", "--allow-read", "npm:cowsay"],
+    ["deno", "run", "-A", "jsr:@x/y"],
+    ["deno", "run", "--config", "deno.json", "https://x/y.ts"],
+    ["deno", "run", " \tdata:,1"],
+    ["deno", "task", "x", "eval"],
+    ["node", "node:child_process"],
+    ["node", "--import", "npm:x", "app.js"],
+    ["node", "-r", "blob:x", "app.js"],
+    ["node", "--import", "\x01data:,1", "app.js"],
+    ["bun", "--preload", "https://x/y.js", "run", "a.ts"],
+    ["bun", "https://x/y.ts"],
+    # module values
+    ["perl", "-M-strict", "x.pl"],
+    ["perl", "-MPOSIX=system;1", "x.pl"],
+    ["ruby", "-r", "https://x/y.rb", "x.rb"],
+    ["ruby", "-Ihttp://x", "x.rb"],
+    ["ruby", "-r", "a;b", "x.rb"],
+    # php ini injection
+    ["php", "-d", "allow_url_include=1", "x.php"],
+    ["php", "-dauto_prepend_file=/tmp/x.php", "x.php"],
+    ["php", "-d", " AUTO_APPEND_FILE = x", "x.php"],
+    # node inspector bound off-host; attached values on plain flags
+    ["node", "--inspect=0.0.0.0:9229", "app.js"],
+    ["node", "--inspect-brk=192.168.1.5", "app.js"],
+    ["node", "--inspect-port", "0.0.0.0:9229", "app.js"],
+    ["node", "--expose-gc=1", "app.js"],
+    ["python", "--version=1"],
+    # git: commands that run programs
+    ["git", "clone", "--upload-pack=touch /tmp/x", "repo"],
+    ["git", "fetch", "--upload-pack", "x", "origin"],
+    ["git", "push", "--receive-pack=x", "origin"],
+    ["git", "clone", "-u", "x", "repo"],
+    ["git", "ls-remote", "-u", "x", "origin"],
+    ["git", "archive", "--exec=x", "--remote=r", "HEAD"],
+    ["git", "push", "--exec", "x", "origin"],
+    ["git", "rebase", "-x", "make", "main"],
+    ["git", "rebase", "--exec=make", "main"],
+    ["git", "difftool", "-x", "x"],
+    ["git", "difftool", "--extcmd=x"],
+    ["git", "bisect", "run", "make"],
+    ["git", "submodule", "foreach", "ls"],
+    ["git", "-C", "repo", "filter-branch", "--tree-filter", "x"],
+]
+
+
+@pytest.mark.parametrize("argv", _ROUND2_DENY, ids=lambda argv: " ".join(argv))
+def test_round2_denials(argv: list[str]) -> None:
+    assert classify(argv).denied is True, argv
+
+
+_ROUND2_ALLOW: list[list[str]] = [
+    ["deno", "run", "--allow-read", "main.ts"],
+    ["deno", "run", "file:///home/u/main.ts"],
+    ["deno", "test", "--allow-env"],
+    ["node", "--inspect", "app.js"],
+    ["node", "--inspect=9229", "app.js"],
+    ["node", "--inspect=127.0.0.1:9229", "app.js"],
+    ["node", "--inspect-brk=localhost:9230", "app.js"],
+    ["node", "--inspect=[::1]:9229", "app.js"],
+    ["node", "--max-old-space-size=4096", "app.js"],
+    ["node", "file:///home/u/app.js"],
+    ["perl", "-MData::Dumper=Dumper", "x.pl"],
+    ["ruby", "-r", "json", "-I", "lib", "x.rb"],
+    ["php", "-d", "memory_limit=1G", "x.php"],
+    ["git", "clone", "https://github.com/x/y"],
+    ["git", "fetch", "origin"],
+    ["git", "push", "origin", "main"],
+    ["git", "rebase", "main"],
+    ["git", "difftool", "HEAD~1"],
+    ["shasum", "-a", "256", "f"],
+    ["numactl", "--hardware"],
+    ["environment-tool"],
+]
+
+
+@pytest.mark.parametrize("argv", _ROUND2_ALLOW, ids=lambda argv: " ".join(argv))
+def test_round2_allows(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is False, verdict.reason

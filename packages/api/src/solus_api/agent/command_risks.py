@@ -137,14 +137,11 @@ def _git_verb(args: Sequence[str]) -> tuple[str | None, Sequence[str]]:
 
 
 def _git_runs_shell(args: Sequence[str]) -> bool:
+    """Config writes that make later git commands run programs (aliases, core.*
+    pagers/editors/hooksPath, hooks, includes). Verbs that run programs from
+    their own arguments are DENIED in `command_git`."""
     verb, rest = _git_verb(args)
-    if verb == "config":
-        return any(arg.lower().startswith(_GIT_SHELL_CONFIG) for arg in rest)
-    if verb == "rebase":
-        return any(arg in ("-x", "--exec") or arg.startswith("--exec=") for arg in rest)
-    if verb == "bisect":
-        return _first_positional(rest) == "run"
-    return verb == "submodule" and "foreach" in rest
+    return verb == "config" and any(arg.lower().startswith(_GIT_SHELL_CONFIG) for arg in rest)
 
 
 def _sed_runs_shell(args: Sequence[str]) -> bool:

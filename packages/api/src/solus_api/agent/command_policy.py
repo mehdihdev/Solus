@@ -15,19 +15,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final, cast
 
-from solus_api.agent.command_interpreters import (
-    GIT_CONFIG_FLAGS,
-    GRAMMARS,
-    INLINE_CODE,
-    git_denial,
-    interpreter_denial,
-)
-from solus_api.agent.command_names import INTERPRETERS, normalise
+from solus_api.agent.command_git import GIT_CONFIG_FLAGS, git_denial
+from solus_api.agent.command_interpreters import GRAMMARS, INLINE_CODE, interpreter_denial
+from solus_api.agent.command_names import INTERPRETERS, normalise, prefix_match
 from solus_api.agent.command_risks import Risk, risks_for
 
 #: Mirrored in the server deny table; keep both in lockstep (test cross-checks).
 SHELLS: Final = frozenset(
     {"sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh", "pwsh", "busybox"}
+    | {"rbash", "ash", "mksh", "yash", "elvish", "nu", "xonsh", "oksh", "posh"}
 )
 WRAPPERS: Final = frozenset(
     {
@@ -55,6 +51,15 @@ WRAPPERS: Final = frozenset(
         "caffeinate",
         "arch",
         "chrt",
+        "systemd-run",
+        "setpriv",
+        "prlimit",
+        "unbuffer",
+        "fakeroot",
+        "proot",
+        "firejail",
+        "cpulimit",
+        "faketime",
     }
 )
 ELEVATION: Final = frozenset({"sudo", "su", "doas", "pkexec", "runuser"})
@@ -94,18 +99,17 @@ def _malformed(argv: object) -> str | None:
 
 
 def _denial(base: str, args: Sequence[str]) -> str | None:
-    names = {base.lower(), normalise(base)}
-    if names & SHELLS:
+    if prefix_match(base, SHELLS) is not None:
         return f"{base} is a shell"
-    if names & WRAPPERS:
+    if prefix_match(base, WRAPPERS) is not None:
         return f"{base} runs another program"
-    if names & ELEVATION:
+    if prefix_match(base, ELEVATION) is not None:
         return f"{base} elevates privileges"
     interpreter = normalise(base)
     if interpreter in GRAMMARS:
         reason = interpreter_denial(interpreter, args)
         return None if reason is None else f"{base}: {reason}"
-    if "git" in names:
+    if prefix_match(base, ("git",)) is not None:
         return git_denial(args)
     return None
 

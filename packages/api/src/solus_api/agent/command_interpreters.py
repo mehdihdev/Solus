@@ -36,6 +36,7 @@ class Grammar:
     short_flags: str = ""  # single letters that take no value (clusterable)
     long_flags: frozenset[str] = frozenset()
     value_options: frozenset[str] = frozenset()  # value attached (`-Wx`, `--a=b`) or next
+    attached_flags: frozenset[str] = frozenset()  # long flags with an OPTIONAL `=value`
     stop: frozenset[str] = frozenset({"--", "-"})  # end of options
 
 
@@ -65,13 +66,14 @@ GRAMMARS: Final[Mapping[str, Grammar]] = {
             "--abort-on-uncaught-exception",
             "--watch",
             "--test",
-            "--max-old-space-size",
-            "--stack-size",
-            "--unhandled-rejections",
         },
         value_options=frozenset(
             {"-r", "--require", "--import", "--loader", "--experimental-loader", "-C"}
             | {"--conditions", "--input-type", "--env-file", "--title", "--inspect-port"}
+        ),
+        attached_flags=frozenset(
+            {"--inspect", "--inspect-brk", "--inspect-wait", "--max-old-space-size"}
+            | {"--stack-size", "--unhandled-rejections"}
         ),
     ),
     "ruby": Grammar(
@@ -104,9 +106,28 @@ GRAMMARS: Final[Mapping[str, Grammar]] = {
     ),
 }
 
-_REMOTE_SPECIFIER: Final = re.compile(r"^(?:data|https?|blob):", re.IGNORECASE)
-_PERL_MODULE: Final = re.compile(r"^-?[A-Za-z_][\w:]*(?:=[\w,:]*)?$")
+_SCHEME: Final = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+_PERL_MODULE: Final = re.compile(r"^[A-Za-z0-9_:]+(?:=[\w,]+)?$")
+_RUBY_NAME: Final = re.compile(r"^[\w./@+-]+$")
+_PHP_DENIED_INI: Final = frozenset({"allow_url_include", "auto_prepend_file", "auto_append_file"})
+_LOCAL_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
 _JS: Final = frozenset({"node", "bun", "deno"})
+
+
+def _remote(value: str) -> bool:
+    """A specifier with any scheme but `file:` (npm:, jsr:, node:, data:, http…),
+    judged after dropping whitespace and C0 control characters."""
+    match = _SCHEME.match("".join(ch for ch in value if ord(ch) > 0x20))
+    return match is not None and match.group(1).lower() != "file"
+
+
+def _off_host(value: str) -> bool:
+    """`--inspect=<[host:]port>` bound anywhere but loopback."""
+    if not value or value.isdigit():
+        return False
+    host = value[1 : value.find("]")] if value.startswith("[") else value.rpartition(":")[0]
+    host = host or value
+    return host.lower() not in _LOCAL_HOSTS
 
 
 def _short_value_option(arg: str, grammar: Grammar) -> str | None:
@@ -116,11 +137,30 @@ def _short_value_option(arg: str, grammar: Grammar) -> str | None:
 
 
 def _bad_value(interpreter: str, option: str, value: str) -> str | None:
-    if interpreter in _JS and _REMOTE_SPECIFIER.match(value):
-        return f"{option} loads remote or inline code"
+    if option.startswith("--inspect"):
+        return f"{option} exposes the debugger beyond this machine" if _off_host(value) else None
+    if interpreter in _JS and _remote(value):
+        return f"{option} loads code that is not a workspace file"
     if interpreter == "perl" and option in ("-M", "-m") and not _PERL_MODULE.match(value):
         return f"{option} with a non-module value runs code"
+    if (
+        interpreter == "ruby"
+        and option in ("-r", "-I")
+        and (_remote(value) or not _RUBY_NAME.match(value))
+    ):
+        return f"{option} must name a library or directory"
+    if interpreter == "php" and option == "-d":
+        if value.partition("=")[0].strip().lower() in _PHP_DENIED_INI:
+            return "-d sets an ini option that loads code"
     return None
+
+
+def _long_option(interpreter: str, grammar: Grammar, name: str, attached: str | None) -> str | None:
+    if name in grammar.attached_flags:
+        return None if attached is None else _bad_value(interpreter, name, attached)
+    if name in grammar.long_flags:
+        return None if attached is None else f"{name} takes no value"
+    return f"unrecognised option {name[:32]}"
 
 
 def _option(
@@ -129,17 +169,17 @@ def _option(
     """Judge the option at `index`: (denial reason | None, next index)."""
     arg = args[index]
     inline = INLINE_CODE[interpreter]
-    name, _, attached = arg.partition("=") if arg.startswith("--") else (arg, "", "")
+    long = arg.startswith("--")
+    name, equals, attached = arg.partition("=") if long else (arg, "", "")
     if name in inline:
         return "an inline-code flag runs code that is not in a file", index + 1
     if name in grammar.value_options:
-        if attached or "=" in arg:
+        if equals:
             return _bad_value(interpreter, name, attached), index + 1
         value = args[index + 1] if index + 1 < len(args) else ""
         return _bad_value(interpreter, name, value), index + 2
-    if arg.startswith("--"):
-        known = name in grammar.long_flags
-        return (None if known else f"unrecognised option {name}"), index + 1
+    if long:
+        return _long_option(interpreter, grammar, name, attached if equals else None), index + 1
     short = _short_value_option(arg, grammar)
     if short is not None:
         return _bad_value(interpreter, short, arg[2:]), index + 1
@@ -150,6 +190,18 @@ def _option(
     if letters and all(letter in grammar.short_flags for letter in letters):
         return None, index + 1
     return f"unrecognised option {arg[:32]}", index + 1
+
+
+def _deno_denial(rest: Sequence[str]) -> str | None:
+    """Every argument after deno's global options: no eval/repl subcommand
+    anywhere, and no non-`file:` specifier in any argument or `--x=value`."""
+    for arg in rest:
+        value = arg.partition("=")[2] if arg.startswith("--") else arg
+        if not arg.startswith("-") and arg in INLINE_CODE["deno"]:
+            return f"deno {arg} runs code that is not in a file"
+        if _remote(value):
+            return "a non-file specifier runs code that is not in the workspace"
+    return None
 
 
 def interpreter_denial(interpreter: str, args: Sequence[str]) -> str | None:
@@ -164,54 +216,11 @@ def interpreter_denial(interpreter: str, args: Sequence[str]) -> str | None:
         if reason is not None:
             return reason
     rest = args[index:]
-    positional = next((a for a in rest if not a.startswith("-")), None)
     if interpreter == "deno":
-        if positional in INLINE_CODE["deno"]:
-            return f"deno {positional} runs code that is not in a file"
-        positional = next((a for a in rest[1:] if not a.startswith("-")), None)
-    if interpreter in _JS and positional is not None and _REMOTE_SPECIFIER.match(positional):
-        return "a data: or remote specifier runs code that is not in the workspace"
-    return None
-
-
-#: Git global options before the subcommand (security review: fail closed).
-GIT_CONFIG_FLAGS: Final = frozenset({"-c", "--config-env"})
-_GIT_DENIED_PREFIXES: Final = ("-c", "--config-env", "--exec-path")
-_GIT_VALUE_OPTIONS: Final = frozenset({"-C", "--git-dir", "--work-tree", "--namespace"})
-_GIT_SAFE_FLAGS: Final = frozenset(
-    {
-        "--no-pager",
-        "-P",
-        "-p",
-        "--paginate",
-        "--bare",
-        "--version",
-        "--help",
-        "-h",
-        "--no-replace-objects",
-        "--literal-pathspecs",
-        "--glob-pathspecs",
-        "--noglob-pathspecs",
-        "--icase-pathspecs",
-        "--no-optional-locks",
-        "--no-advice",
-    }
-)
-
-
-def git_denial(args: Sequence[str]) -> str | None:
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if not arg.startswith("-"):
-            return None  # the subcommand: its own options are not global
-        if arg.startswith(_GIT_DENIED_PREFIXES):
-            return "git -c / --config-env / --exec-path injects configuration or programs"
-        name = arg.partition("=")[0]
-        if name in _GIT_VALUE_OPTIONS:
-            index += 1 if "=" in arg else 2
-        elif arg in _GIT_SAFE_FLAGS:
-            index += 1
-        else:
-            return f"unrecognised git global option {name[:32]}"
+        return _deno_denial(rest)
+    positionals = [a for a in rest if not a.startswith("-")]
+    # node: the script is the specifier; bun: a subcommand may precede it.
+    specifiers = positionals[:1] if interpreter == "node" else positionals
+    if interpreter in _JS and any(_remote(spec) for spec in specifiers):
+        return "a non-file specifier runs code that is not in the workspace"
     return None
