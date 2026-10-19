@@ -344,3 +344,48 @@ def test_a_directory_with_a_planted_interpreter_is_not_a_venv(tmp_path: Path) ->
     # A venv whose interpreter links outside the workspace is accepted.
     fake_venv(tmp_path, "real")
     assert plan.venv_python(tmp_path, "real") == "real/bin/python"
+
+
+# --- §9.4: HOME is never the workspace -----------------------------------------------
+
+ALL_ACTION_ARGS: dict[str, dict[str, Any]] = {
+    "create_environment": {"path": "env2"},
+    "install": {"packages": ["six"]},
+    "run": {"script": "policy/train.py"},
+    "test": {},
+    "exec": {"argv": ["ls"]},
+    "process_start": {"argv": ["ls"]},
+    "profile_capture": {"name": "ros", "setup_file": "setup.bash"},
+}
+
+
+@pytest.mark.parametrize("relation", ["home", "parent", "dot_solus", "inside_dot_solus"])
+@pytest.mark.parametrize("action", sorted(ALL_ACTION_ARGS))
+def test_every_executing_action_refuses_a_workspace_that_holds_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relation: str, action: str
+) -> None:
+    home = tmp_path / "users" / "me"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    root = {
+        "home": home,
+        "parent": tmp_path / "users",
+        "dot_solus": home / ".solus",
+        "inside_dot_solus": home / ".solus" / "code-profiles",
+    }[relation]
+    root.mkdir(parents=True, exist_ok=True)
+    _venv(root)
+    (root / "policy").mkdir()
+    (root / "policy" / "train.py").write_text("print(1)\n")
+    (root / "tests").mkdir()
+    (root / "setup.bash").write_text("export A=1\n")
+    result = _plan(root, action, ALL_ACTION_ARGS[action], {**UV_ONLY, "ls": "/bin/ls"})
+    assert result.ok is False and "home folder" in (result.reason or "")
+
+
+def test_a_project_inside_home_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "me"
+    monkeypatch.setenv("HOME", str(home))
+    project = home / "robot"
+    project.mkdir(parents=True)
+    assert _plan(project, "create_environment", {"path": "env2"}, UV_ONLY).ok is True

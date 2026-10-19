@@ -2,16 +2,24 @@
 (docs/api/code-command-execution.md §2.3). Injected by tests; never PR_SET_PDEATHSIG."""
 
 import ctypes
+import logging
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Protocol
 
 from .sandbox import PASS_FDS
 
+logger = logging.getLogger("solus.code.process_os")
+
 PS = "/bin/ps"
+PROC = Path("/proc")
+BOOT_ID = Path("sys/kernel/random/boot_id")
+#: Process-table snapshot interval: `ps -A` is costly on macOS, `/proc` is cheap.
+OBSERVE_SECONDS = 1.0 if sys.platform == "darwin" else 0.5
 
 
 class Child(Protocol):
@@ -46,15 +54,22 @@ def default_killpg(pgid: int, sig: int) -> None:
         pass  # gone, or (macOS) only zombies left in the group
 
 
-def start_token(pid: int) -> str | None:
-    """When `pid` started, as the OS reports it (None when it is not running)."""
-    proc = Path(f"/proc/{pid}/stat")
+def start_token(pid: int, *, proc_root: Path = PROC) -> str | None:
+    """When `pid` started, as the OS reports it (None when it is not running or
+    unknowable). On Linux the start time (clock ticks since boot) is qualified by the
+    boot id, so a token recorded before a reboot never matches afterwards."""
+    proc = proc_root / str(int(pid)) / "stat"
     if proc.exists():
         try:
-            fields = proc.read_text().rpartition(")")[2].split()
-            return fields[19]
+            started = proc.read_text().rpartition(")")[2].split()[19]
         except (OSError, IndexError):
             return None
+        try:
+            boot = (proc_root / BOOT_ID).read_text().strip()
+        except OSError:
+            boot = ""
+        # No boot id: the raw start time still tells a recycled pid apart.
+        return f"{boot}:{started}" if boot else started
     try:
         result = subprocess.run(  # noqa: S603 - fixed binary, argv only
             [PS, "-o", "lstart=", "-p", str(int(pid))],
@@ -133,9 +148,10 @@ def _signal(pid: int, sig: int) -> None:
 
 class TreeTracker:
     """Descendants of one leader, accumulated from process-table snapshots, so the
-    ones that left its process group (setsid) can still be killed. A pid seen earlier
-    is only signalled while its parent is still the tree, init or this server
-    (recycled pids are left alone)."""
+    ones that left its process group (setsid) can still be killed. Each pid's start
+    token is recorded when first seen; vanished pids are pruned on every snapshot,
+    and a pid is only signalled while its parent is still the tree, init or this
+    server AND its start token still matches (recycled pids are left alone)."""
 
     def __init__(
         self,
@@ -143,23 +159,61 @@ class TreeTracker:
         *,
         table: Callable[[], Mapping[int, int]] = process_table,
         kill: Callable[[int, int], None] = _signal,
+        token: Callable[[int], str | None] = start_token,
+        clock: Callable[[], float] = time.monotonic,
+        interval: float = OBSERVE_SECONDS,
     ) -> None:
         self.leader = leader
         self._table = table
         self._kill = kill
-        self.seen: set[int] = set()
+        self._token = token
+        self._clock = clock
+        self._interval = interval
+        self._next = float("-inf")
+        self.tokens: dict[int, str | None] = {}
 
-    def observe(self) -> None:
-        self.seen.update(descendants(self.leader, self._table()))
+    @property
+    def seen(self) -> set[int]:
+        return set(self.tokens)
+
+    def _update(self, table: Mapping[int, int]) -> list[int]:
+        """Prune vanished pids, add new descendants, retry unknown tokens; answer the
+        current descendants."""
+        current = descendants(self.leader, table)
+        self.tokens = {pid: token for pid, token in self.tokens.items() if pid in table}
+        for pid in current:
+            if self.tokens.get(pid) is None:
+                self.tokens[pid] = self._token(pid)
+        return current
+
+    def observe(self, force: bool = False) -> None:
+        """Snapshot the table: at most once per `interval` for the periodic sweep,
+        unconditionally with `force` (every stop/kill path)."""
+        now = self._clock()
+        if not force and now < self._next:
+            return
+        self._next = now + self._interval
+        self._update(self._table())
 
     def kill(self, sig: int) -> None:
-        if not self.seen:
-            return
+        """Signal every tracked descendant still ours, judged on a FRESH table: a pid
+        whose start token still matches (parent: the tree, init or this server), or —
+        token still unknown — one that is in the leader's parent chain right now."""
         table = self._table()
-        owners = {self.leader, 1, os.getpid(), *self.seen}
-        for pid in sorted(self.seen):
-            if pid in table and table[pid] in owners:
+        chain = set(self._update(table))
+        owners = {self.leader, 1, os.getpid(), *self.tokens}
+        for pid, token in sorted(self.tokens.items()):
+            if token is None:
+                ours = pid in chain
+            else:
+                ours = table.get(pid) in owners and self._token(pid) == token
+            if ours:
                 self._kill(pid, sig)
+            else:
+                logger.info(
+                    "tree pid skipped",
+                    extra={"leader": self.leader, "pid": pid, "token_known": token is not None},
+                )
 
 
 def become_subreaper(

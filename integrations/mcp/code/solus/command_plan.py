@@ -17,7 +17,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import command_deny, execute, profiles
+from . import command_deny, execute, profiles, sandbox
 from .plan import Args, Plan, Which, _echo, _refuse, _relative, venv_python
 from .workspace import resolve_inside
 
@@ -97,7 +97,14 @@ def _executable_file(path: str) -> bool:
 
 
 def resolve_program(root: Path, name: str, roots: Sequence[str]) -> str | None:
-    """The absolute program for `name` per the documented order, or None."""
+    """The absolute program for `name` per the documented order, or None. A program
+    whose realpath is in the sandbox's writable set outside the workspace is never
+    resolved (§9.5)."""
+    found = _locate(root, name, roots)
+    return None if found is None or sandbox.foreign_writable(found, root) else found
+
+
+def _locate(root: Path, name: str, roots: Sequence[str]) -> str | None:
     if "/" in name and not os.path.isabs(name):
         inside = resolve_inside(name, root) if _relative(name) else None
         return str(inside) if inside is not None and _executable_file(str(inside)) else None

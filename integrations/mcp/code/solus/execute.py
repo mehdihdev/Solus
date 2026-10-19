@@ -27,7 +27,7 @@ from typing import IO, Any
 
 from . import profiles, sandbox
 from .plan import Plan
-from .process_os import TreeTracker
+from .process_os import OBSERVE_SECONDS, TreeTracker
 from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, LineOutput
 from .workspace import resolve_inside
 
@@ -56,11 +56,7 @@ CHILD_PATH = "/usr/bin:/bin"
 PASSTHROUGH_NAMES: tuple[str, ...] = ("HOME", "LANG", "TMPDIR")
 MAX_TAIL_BYTES = 16 * 1024
 #: How often a running command's descendant tree is snapshotted.
-TREE_SNAPSHOT_SECONDS = 0.5
-#: Never passed to any child, whatever a profile says (loader / iconv injection).
-LOADER_INJECTION: frozenset[str] = frozenset(
-    {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"}
-)
+TREE_SNAPSHOT_SECONDS = OBSERVE_SECONDS
 _VENV_BIN_DIRS = ("bin", "Scripts")
 
 Which = Callable[[str], str | None]
@@ -82,8 +78,9 @@ def search_path() -> str:
 
 
 def pinned_which(name: str) -> str | None:
-    """`shutil.which` over SEARCH_ROOTS only."""
-    return shutil.which(name, path=search_path())
+    """`shutil.which` over SEARCH_ROOTS only; never a program in the writable set (§9.5)."""
+    found = shutil.which(name, path=search_path())
+    return None if found is None or sandbox.foreign_writable(found, None) else found
 
 
 def venv_bin_dir(root: Path, environment: str) -> Path:
@@ -141,6 +138,81 @@ def _drain_output(
     observer.suppress(stream)
 
 
+@dataclass
+class _Spools:
+    """Private output spools with independent read descriptors (reading never seeks
+    the child's shared write offset)."""
+
+    out: IO[bytes]
+    err: IO[bytes]
+    out_reader: IO[bytes]
+    err_reader: IO[bytes]
+
+    def readers(self) -> tuple[tuple[str, IO[bytes]], ...]:
+        return (("stdout", self.out_reader), ("stderr", self.err_reader))
+
+
+@contextlib.contextmanager
+def _spools() -> Iterator[_Spools]:
+    with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
+        base = Path(directory)
+        with (
+            open(base / "stdout", "w+b") as out,
+            open(base / "stderr", "w+b") as err,
+            open(base / "stdout", "rb") as out_reader,
+            open(base / "stderr", "rb") as err_reader,
+        ):
+            yield _Spools(out, err, out_reader, err_reader)
+
+
+def _spawn(argv: list[str], cwd: Path, env: dict[str, str], spools: _Spools) -> Any:
+    return subprocess.Popen(  # noqa: S603 - validated argv, no shell
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=spools.out,
+        stderr=spools.err,
+        start_new_session=True,
+        close_fds=True,
+        pass_fds=sandbox.PASS_FDS.get(),
+    )
+
+
+def _supervise(
+    proc: subprocess.Popen[bytes],
+    spools: _Spools,
+    observer: LineOutput,
+    deadline: float,
+    cancelled: Event | None,
+) -> bool:
+    """Stream output and snapshot the descendant tree until the leader exits; kill the
+    group on the deadline or a cancel. Then kill whatever it left behind (its group and
+    descendants that left the group), so a git metadata check afterwards sees the
+    command's final effect. True when it timed out (or was cancelled)."""
+    tree = TreeTracker(proc.pid)
+    snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
+    timed_out = False
+    while proc.poll() is None:
+        if time.monotonic() >= snapshot_at:
+            tree.observe()
+            snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
+        for stream, reader in spools.readers():
+            observer.feed(stream, reader.read(8192))
+        if time.monotonic() >= deadline or (cancelled is not None and cancelled.is_set()):
+            timed_out = True
+            _kill_group(proc)
+            break
+        time.sleep(0.025)
+    proc.wait()
+    _kill_group(proc)
+    tree.kill(signal.SIGKILL)
+    for stream, reader in spools.readers():
+        _drain_output(observer, stream, reader, deadline, cancelled)
+    observer.finish()
+    return timed_out
+
+
 def default_runner(
     argv: list[str],
     cwd: Path,
@@ -151,72 +223,39 @@ def default_runner(
 ) -> Outcome:
     """argv list, no shell, own session, closed stdin, spooled output (last
     `tail_bytes` of each stream kept)."""
-    # Private spools and independent read descriptors are established before launch.
-    # Reading never seeks the child's shared write offset.
-    with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
-        with (
-            open(Path(directory) / "stdout", "w+b") as out,
-            open(Path(directory) / "stderr", "w+b") as err,
-            open(Path(directory) / "stdout", "rb") as out_reader,
-            open(Path(directory) / "stderr", "rb") as err_reader,
-        ):
-            cancelled = CANCEL_EVENT.get()
-            if cancelled is not None and cancelled.is_set():
-                return Outcome(None, b"", b"", True)
-            proc = subprocess.Popen(  # noqa: S603 - validated argv, no shell
-                argv,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=err,
-                start_new_session=True,
-                close_fds=True,
-                pass_fds=sandbox.PASS_FDS.get(),
-            )
-            observer = LineOutput(OUTPUT_CALLBACK.get())
-            deadline = time.monotonic() + timeout_seconds
-            timed_out = False
-            tree = TreeTracker(proc.pid)
-            snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
-            try:
-                while proc.poll() is None:
-                    if time.monotonic() >= snapshot_at:
-                        tree.observe()
-                        snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
-                    observer.feed("stdout", out_reader.read(8192))
-                    observer.feed("stderr", err_reader.read(8192))
-                    if time.monotonic() >= deadline or (cancelled and cancelled.is_set()):
-                        timed_out = True
-                        _kill_group(proc)
-                        break
-                    time.sleep(0.025)
-                proc.wait()
-                # Whatever the leader left running (its group, and descendants that
-                # left the group) dies with it, so the git metadata check afterwards
-                # sees the command's final effect.
+    with _spools() as spools:
+        cancelled = CANCEL_EVENT.get()
+        if cancelled is not None and cancelled.is_set():
+            return Outcome(None, b"", b"", True)
+        proc = _spawn(argv, cwd, env, spools)
+        observer = LineOutput(OUTPUT_CALLBACK.get())
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            timed_out = _supervise(proc, spools, observer, deadline, cancelled)
+        finally:
+            if proc.poll() is None:
                 _kill_group(proc)
-                tree.kill(signal.SIGKILL)
-                for stream, reader in (("stdout", out_reader), ("stderr", err_reader)):
-                    _drain_output(observer, stream, reader, deadline, cancelled)
-                observer.finish()
-            finally:
-                if proc.poll() is None:
-                    _kill_group(proc)
-                    proc.wait()
-            return Outcome(
-                None if timed_out else proc.returncode,
-                _tail(out, tail_bytes),
-                _tail(err, tail_bytes),
-                timed_out,
-            )
+                proc.wait()
+        return Outcome(
+            None if timed_out else proc.returncode,
+            _tail(spools.out, tail_bytes),
+            _tail(spools.err, tail_bytes),
+            timed_out,
+        )
 
 
 def resolve_executable(root: Path, argv0: str, which: Which = pinned_which) -> str | None:
     """An absolute program (already resolved by the planner) must still be an
     executable file; a workspace-relative interpreter must sit inside the
     workspace (its directory is confined; the file itself may be the symlink
-    every venv has); a bare name resolves against SEARCH_ROOTS."""
+    every venv has); a bare name resolves against SEARCH_ROOTS. Whatever it
+    resolves to, its realpath may not lie in the writable set outside the
+    workspace (§9.5)."""
+    found = _locate(root, argv0, which)
+    return None if found is None or sandbox.foreign_writable(found, root) else found
+
+
+def _locate(root: Path, argv0: str, which: Which) -> str | None:
     if os.path.isabs(argv0):
         return argv0 if os.path.isfile(argv0) and os.access(argv0, os.X_OK) else None
     if "/" not in argv0:
@@ -250,7 +289,7 @@ def child_env(root: Path, plan: Plan) -> dict[str, str]:
     if plan.profile is not None:
         venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
         env = profiles.apply(env, plan.profile.variables, venv_bin)
-    return {name: value for name, value in env.items() if name not in LOADER_INJECTION}
+    return {name: value for name, value in env.items() if name not in profiles.LOADER_NAMES}
 
 
 @dataclass(frozen=True)
@@ -313,7 +352,11 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
         descriptor = sandbox.env_descriptor(env)
     except (ValueError, OSError) as exc:
         return str(exc)
-    wrapped = sandbox.wrap(plan.sandbox, program, workspace=root, env_fd=descriptor)
+    try:
+        wrapped = sandbox.wrap(plan.sandbox, program, workspace=root, env_fd=descriptor)
+    except ValueError as exc:
+        os.close(descriptor)
+        return str(exc)
     return Prepared(wrapped, cwd, sandbox.helper_env(env), env, (descriptor,))
 
 

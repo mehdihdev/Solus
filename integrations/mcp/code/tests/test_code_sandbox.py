@@ -17,19 +17,17 @@ from code_paths import SOLUS_DIR, overlay_module  # isort: skip
 sandbox = overlay_module("sandbox")
 git_guard = overlay_module("git_guard")
 
+#: §9.5: caches are data only — nothing that later runs outside the sandbox.
 CACHES = (
     ".cache",
     "Library/Caches",
     ".ros",
-    ".npm",
+    ".npm/_cacache",
     ".pnpm-store",
-    ".local/share/pnpm",
-    ".local/share/uv",
-    ".cargo/registry",
-    ".cargo/git",
-    ".platformio",
-    ".arduino15",
-    ".gradle",
+    ".cargo/registry/cache",
+    ".gradle/caches",
+    ".platformio/.cache",
+    ".arduino15/staging",
     ".colcon",
 )
 
@@ -107,10 +105,14 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
     link = tmp_path / "link"
     (tmp_path / "real").mkdir()
     link.symlink_to(tmp_path / "real")
+    (tmp_path / "home").mkdir()
+    home_link = tmp_path / "home-link"
+    home_link.symlink_to(tmp_path / "home")
     argv = sandbox.wrap(
-        "sandbox-exec", ["/usr/bin/make", "-j4"], workspace=link, home=link, tmpdir=link
+        "sandbox-exec", ["/usr/bin/make", "-j4"], workspace=link, home=home_link, tmpdir=link
     )
     real = os.path.realpath(tmp_path / "real")
+    real_home = os.path.realpath(tmp_path / "home")
     git = f"{real}/.git"
     assert argv == [
         "/usr/bin/sandbox-exec",
@@ -121,7 +123,7 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         "-D",
         f"TMP={real}",
         "-D",
-        f"HOME={real}",
+        f"HOME={real_home}",
         "-D",
         f"DOTGIT={git}",
         "-D",
@@ -182,6 +184,7 @@ def test_limitations_are_reported_per_kind() -> None:
         "git operations inside sandboxed commands cannot write the repository",
         "launchd job submission not blocked",
         "a descendant that double-forks between process-table snapshots can survive a stop",
+        "a copied launchctl/osascript binary is not covered by the exec denial",
     ]
     old = sandbox.limitations("landlock-abi1")
     assert "git operations inside sandboxed commands cannot write the repository" in old
@@ -204,28 +207,37 @@ def test_linux_wrap_runs_the_isolated_helper_over_existing_writable_paths(tmp_pa
     (home / ".cache").mkdir()
     workspace = tmp_path / "ws"
     workspace.mkdir()
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
     argv = sandbox.wrap(
         "landlock",
         ["/opt/ros/bin/colcon", "build"],
         workspace=workspace,
         home=home,
-        tmpdir=tmp_path,
+        tmpdir=tmpdir,
     )
     assert argv[:3] == [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py")]
     separator = argv.index("--")
     assert argv[separator + 1 :] == ["/opt/ros/bin/colcon", "build"]
-    granted = argv[3:separator:2]
-    assert set(argv[3:separator:2]) == {"--rw"}
-    paths = argv[4:separator:2]
-    assert paths[0] == os.path.realpath(workspace) and paths[1] == os.path.realpath(tmp_path)
+    assert argv[3:5] == ["--home", os.path.realpath(home)]
+    granted = argv[5:separator:2]
+    assert set(argv[5:separator:2]) == {"--rw"}
+    paths = argv[6:separator:2]
+    assert paths[0] == os.path.realpath(workspace) and paths[1] == os.path.realpath(tmpdir)
     assert os.path.realpath(home / ".ros") in paths and os.path.realpath(home / ".cache") in paths
     assert not any(path.endswith(".npm") for path in paths), "missing caches grant nothing"
     assert "/dev/null" in paths and granted
 
 
 def test_linux_wrap_passes_the_environment_descriptor(tmp_path: Path) -> None:
+    home = tmp_path / "home"
     argv = sandbox.wrap(
-        "landlock-abi1", ["/bin/true"], workspace=tmp_path, home=tmp_path, tmpdir=tmp_path, env_fd=9
+        "landlock-abi1",
+        ["/bin/true"],
+        workspace=tmp_path / "ws",
+        home=home,
+        tmpdir=tmp_path,
+        env_fd=9,
     )
     assert argv[3:5] == ["--env-fd", "9"] and argv[-2:] == ["--", "/bin/true"]
     assert set(sandbox.helper_env({"PATH": "/evil", "LANG": "C.UTF-8", "LD_PRELOAD": "x"})) == {
@@ -233,6 +245,25 @@ def test_linux_wrap_passes_the_environment_descriptor(tmp_path: Path) -> None:
         "LANG",
     }
     assert sandbox.helper_env({})["PATH"] == "/usr/bin:/bin"
+
+
+@pytest.mark.parametrize("kind", ["sandbox-exec", "landlock-abi3"])
+def test_wrap_refuses_a_workspace_that_holds_home(tmp_path: Path, kind: str) -> None:
+    home = tmp_path / "me"
+    (home / ".solus").mkdir(parents=True)
+    for workspace in (home, tmp_path, home / ".solus"):
+        with pytest.raises(ValueError, match="home folder"):
+            sandbox.wrap(kind, ["/bin/true"], workspace=workspace, home=home, tmpdir=tmp_path)
+
+
+def test_linux_writable_never_grants_a_temp_root_that_holds_home(tmp_path: Path) -> None:
+    home = tmp_path / "tmproot" / "me"
+    home.mkdir(parents=True)
+    workspace = home / "robot"
+    workspace.mkdir()
+    paths = sandbox.linux_writable(workspace, home, tmp_path / "tmproot")
+    assert os.path.realpath(workspace) in paths
+    assert os.path.realpath(tmp_path / "tmproot") not in paths
 
 
 def test_unknown_kind_is_refused() -> None:
@@ -391,8 +422,8 @@ def test_real_sandbox_runs_python_with_network_and_reads_unrestricted(tmp_path: 
         sandbox.wrap(
             "sandbox-exec",
             [sys.executable, "-c", code],
-            workspace=tmp_path,
-            home=tmp_path,
+            workspace=tmp_path / "ws",
+            home=tmp_path / "home",
             tmpdir=tmp_path,
         ),
         capture_output=True,
@@ -546,3 +577,70 @@ def test_user_cache_dir_is_the_darwin_sibling_of_the_temp_dir(tmp_path: Path) ->
     other = tmp_path / "plain"
     other.mkdir()
     assert sandbox.user_cache_dir(other, folders="/nonexistent") == str(other.resolve())
+
+
+# --- §9.5: programs never resolve into the writable set outside the workspace ---------
+
+
+def _exe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.real_writable_roots
+def test_foreign_writable_covers_tmp_and_caches_but_not_the_workspace(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    tmpdir = tmp_path / "tmp"
+    workspace = tmpdir / "ws"  # a workspace inside TMP stays executable
+    inside = _exe(workspace / "bin" / "tool")
+    in_tmp = _exe(tmpdir / "planted")
+    in_cache = _exe(home / ".cache" / "x" / "tool")
+    in_cargo_cache = _exe(home / ".cargo" / "registry" / "cache" / "tool")
+    uv_python = _exe(home / ".local" / "share" / "uv" / "python" / "python3")
+    link = workspace / "link"
+    link.symlink_to(in_tmp)
+
+    def foreign(path: Path, ws: Path | None = workspace) -> bool:
+        return bool(sandbox.foreign_writable(str(path), ws, home=home, tmpdir=tmpdir))
+
+    assert not foreign(inside)
+    assert foreign(in_tmp) and foreign(in_cache) and foreign(in_cargo_cache)
+    assert foreign(link), "a workspace symlink into TMP is judged by its realpath"
+    assert not foreign(uv_python), "~/.local/share/uv is no longer writable"
+    assert foreign(inside, None), "without a workspace every writable root counts"
+    assert foreign(Path("/private/tmp/x") if sys.platform == "darwin" else Path("/tmp/x"))
+
+
+@pytest.mark.real_writable_roots
+def test_foreign_writable_is_judged_by_inode_not_spelling(tmp_path: Path) -> None:
+    """APFS is usually case-insensitive: `~/.Cache/…` is `~/.cache/…`."""
+    probe = tmp_path / "CaseProbe"
+    probe.mkdir()
+    insensitive = (tmp_path / "caseprobe").exists()
+    probe.rmdir()
+    if not insensitive:
+        pytest.skip("case-sensitive file system")
+    home = tmp_path / "home"
+    planted = _exe(home / ".cache" / "x" / "tool")
+    variant = home / ".Cache" / "x" / "tool"
+    workspace = tmp_path / "ws"
+    inside = _exe(workspace / "bin" / "tool")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    def foreign(path: Path) -> bool:
+        return bool(sandbox.foreign_writable(str(path), workspace, home=home, tmpdir=other))
+
+    assert planted.exists() and foreign(variant)
+    assert not foreign(tmp_path / "WS" / "bin" / "tool") and inside.exists()
+
+
+def test_home_conflict_catches_a_symlinked_dot_solus_and_case_variants(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "ws"
+    (workspace / "data").mkdir(parents=True)
+    (home / ".solus").symlink_to(workspace / "data", target_is_directory=True)
+    assert sandbox.home_conflict(workspace, home) is not None

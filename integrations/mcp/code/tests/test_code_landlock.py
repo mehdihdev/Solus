@@ -34,6 +34,7 @@ class FakeSyscalls:
         self.version = abi
         self.fail = fail
         self.calls: list[tuple[Any, ...]] = []
+        self.rule_fds: list[int] = []
 
     def abi(self) -> int:
         return self.version
@@ -49,6 +50,7 @@ class FakeSyscalls:
 
     def add_rule(self, ruleset_fd: int, allowed: int, parent_fd: int) -> None:
         self.calls.append(("add", ruleset_fd, allowed))
+        self.rule_fds.append(parent_fd)
 
     def restrict_self(self, ruleset_fd: int) -> None:
         self.calls.append(("restrict", ruleset_fd))
@@ -92,6 +94,43 @@ def test_restrict_refuses_without_landlock() -> None:
         landlock.Landlock(FakeSyscalls(abi=0)).restrict(["/"])
 
 
+#: A HOME unrelated to every test's writable paths.
+HOME_ARGS = ["--home", "/nonexistent/solus-test-home"]
+
+
+@pytest.mark.parametrize("relation", ["home", "parent", "dot_solus", "inside_dot_solus"])
+def test_main_refuses_a_writable_path_that_holds_home(tmp_path: Path, relation: str) -> None:
+    """§9.4: HOME arrives as an explicit argument (never from the environment)."""
+    home = tmp_path / "users" / "me"
+    (home / ".solus" / "code-profiles").mkdir(parents=True)
+    path = {
+        "home": home,
+        "parent": tmp_path / "users",
+        "dot_solus": home / ".solus",
+        "inside_dot_solus": home / ".solus" / "code-profiles",
+    }[relation]
+    fake = FakeSyscalls()
+    execs: list[object] = []
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(home / "project"), "--rw", str(path), "--", "/bin/true"],
+        landlock=landlock.Landlock(fake),
+        execve=lambda *args: execs.append(args),
+    )
+    assert code == 126 and execs == [] and fake.calls == []
+
+
+def test_main_allows_a_project_inside_home(tmp_path: Path) -> None:
+    home = tmp_path / "me"
+    (home / "robot").mkdir(parents=True)
+    execs: list[object] = []
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(home / "robot"), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: execs.append(args),
+    )
+    assert code == 0 and len(execs) == 1
+
+
 def test_main_execs_the_program_only_after_restriction(tmp_path: Path) -> None:
     fake = FakeSyscalls()
     execs: list[tuple[str, list[str], dict[str, str]]] = []
@@ -99,7 +138,7 @@ def test_main_execs_the_program_only_after_restriction(tmp_path: Path) -> None:
     os.write(write, b"PATH=/opt/ros/bin:/usr/bin\0ROS_DISTRO=jazzy\0EMPTY=\0")
     os.close(write)
     code = landlock.main(
-        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/echo", "hi"],
+        ["--env-fd", str(read), *HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/echo", "hi"],
         landlock=landlock.Landlock(fake),
         execve=lambda program, argv, env: execs.append((program, list(argv), dict(env))),
     )
@@ -133,7 +172,7 @@ def test_main_refuses_an_oversized_or_malformed_environment(tmp_path: Path, payl
     writer.start()
     execs: list[object] = []
     code = landlock.main(
-        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/true"],
+        ["--env-fd", str(read), *HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/true"],
         landlock=landlock.Landlock(FakeSyscalls()),
         execve=lambda *args: execs.append(args),
     )
@@ -150,6 +189,9 @@ def test_main_refuses_an_oversized_or_malformed_environment(tmp_path: Path, payl
         ["--", "relative"],
         ["--bogus", "--", "/x"],
         ["--env-fd", "x", "--", "/x"],
+        ["--rw", "/tmp", "--", "/bin/true"],
+        ["--home", "relative", "--", "/bin/true"],
+        [*["--home", "/h"] * 2, "--", "/bin/true"],
     ],
 )
 def test_main_refuses_malformed_arguments(argv: list[str]) -> None:
@@ -163,7 +205,7 @@ def test_main_refuses_malformed_arguments(argv: list[str]) -> None:
 def test_main_fails_closed_when_restriction_fails(tmp_path: Path) -> None:
     execs: list[object] = []
     code = landlock.main(
-        ["--rw", str(tmp_path), "--", "/bin/true"],
+        [*HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/true"],
         landlock=landlock.Landlock(FakeSyscalls(fail="create")),
         execve=lambda *args: execs.append(args),
     )
@@ -191,7 +233,7 @@ def test_real_landlock_confines_writes(tmp_path: Path) -> None:
     os.close(write)
     subprocess.run(
         [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py"), "--env-fd", str(read)]
-        + ["--rw", str(workspace), "--", "/bin/sh", "-c", script],
+        + [*HOME_ARGS, "--rw", str(workspace), "--", "/bin/sh", "-c", script],
         check=True,
         env={"PATH": "/usr/bin:/bin"},
         pass_fds=(read,),
@@ -212,3 +254,109 @@ def test_abi_six_scopes_abstract_sockets_and_signals_but_not_network(tmp_path: P
         older = FakeSyscalls(abi=abi)
         landlock.Landlock(older).restrict([str(tmp_path)])
         assert next(call for call in older.calls if call[0] == "create")[2] == 0
+
+
+# --- review: one open per --rw path; the check and the rule use the SAME descriptor ----
+
+
+class RecordingOpener:
+    """Opens `redirect.get(path, path)`: simulates a path swapped for another target
+    between any string check and the open (the helper must judge the descriptor)."""
+
+    def __init__(self, redirect: dict[str, str] | None = None) -> None:
+        self.redirect = redirect or {}
+        self.opened: list[tuple[str, int]] = []
+
+    def __call__(self, path: str) -> int:
+        fd = os.open(self.redirect.get(path, path), os.O_RDONLY | os.O_CLOEXEC)
+        self.opened.append((path, fd))
+        return fd
+
+
+def test_each_rw_path_is_opened_once_and_ruled_from_that_descriptor(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / "robot").mkdir(parents=True)
+    other = tmp_path / "tmpdir"
+    other.mkdir()
+    fake = FakeSyscalls()
+    opener = RecordingOpener()
+    seen_fds: list[int] = []
+
+    def record_rule(ruleset_fd: int, allowed: int, parent_fd: int) -> None:
+        seen_fds.append(parent_fd)
+        os.fstat(parent_fd)  # still open while the rule is added
+
+    fake.add_rule = record_rule  # type: ignore[method-assign]
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(home / "robot"), "--rw", str(other), "--", "/bin/true"],
+        landlock=landlock.Landlock(fake),
+        execve=lambda *args: None,
+        opener=opener,
+    )
+    assert code == 0
+    assert [path for path, _ in opener.opened] == [str(home / "robot"), str(other)]
+    assert seen_fds == [fd for _, fd in opener.opened]
+
+
+def test_a_path_swapped_to_home_after_any_string_check_is_refused(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".solus").mkdir(parents=True)
+    innocent = tmp_path / "project"
+    innocent.mkdir()
+    fake = FakeSyscalls()
+    execs: list[object] = []
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(innocent), "--", "/bin/true"],
+        landlock=landlock.Landlock(fake),
+        execve=lambda *args: execs.append(args),
+        opener=RecordingOpener({str(innocent): str(home)}),
+        fd_path=lambda _fd, path: str(innocent),  # the descriptor's path lies too
+    )
+    assert code == 126 and execs == [] and fake.rule_fds == []
+
+
+def test_symlinked_dot_solus_into_the_workspace_is_refused(tmp_path: Path) -> None:
+    """~/.solus may itself be a symlink: the resolved target counts as ~/.solus."""
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "ws"
+    (workspace / "data").mkdir(parents=True)
+    (home / ".solus").symlink_to(workspace / "data", target_is_directory=True)
+    assert landlock.holds_home(str(workspace), str(home))
+    assert landlock.holds_home(str(workspace / "data"), str(home))
+    code = landlock.main(
+        ["--home", str(home), "--rw", str(workspace), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: None,
+    )
+    assert code == 126
+
+
+def test_a_symlinked_rw_path_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real", target_is_directory=True)
+    code = landlock.main(
+        ["--home", "/nonexistent/h", "--rw", str(tmp_path / "link"), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: None,
+    )
+    assert code == 126
+
+
+def _case_insensitive(path: Path) -> bool:
+    probe = path / "CaseProbe"
+    probe.mkdir()
+    try:
+        return (path / "caseprobe").exists()
+    finally:
+        probe.rmdir()
+
+
+def test_home_containment_is_judged_by_inode_not_spelling(tmp_path: Path) -> None:
+    if not _case_insensitive(tmp_path):
+        pytest.skip("case-sensitive file system")
+    home = tmp_path / "Users" / "me"
+    (home / ".solus").mkdir(parents=True)
+    assert landlock.holds_home(str(tmp_path / "USERS"), str(home))
+    assert landlock.holds_home(str(tmp_path / "users" / "ME" / ".SOLUS" / "x"), str(home))
+    assert not landlock.holds_home(str(tmp_path / "users" / "me" / "robot"), str(home))

@@ -5,8 +5,10 @@ the probe to this platform's kind. Tests that really execute through the sandbox
 are marked `real_sandbox`: they see the real probe and skip when it fails.
 """
 
+import os
 import sys
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,9 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers", "real_sandbox: executes through the real OS sandbox (skips without one)"
     )
     config.addinivalue_line("markers", "own_sandbox_probe: the test manages the probe itself")
+    config.addinivalue_line(
+        "markers", "real_writable_roots: the §9.5 program check sees the real temp roots"
+    )
 
 
 def real_sandbox_kind() -> str | None:
@@ -40,3 +45,23 @@ def pinned_sandbox_probe(
     else:
         monkeypatch.setattr(sandbox, "available", lambda: (FAKE_KIND, "available"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def test_writable_roots(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Fixtures live under the system temp dir, which the §9.5 program check treats as
+    writable. Unless a test opts in to the real roots, the check sees the HOME caches
+    plus a dedicated scratch dir instead (the sandbox itself is unchanged)."""
+    if request.node.get_closest_marker("real_writable_roots") is not None:
+        return
+    scratch = str(tmp_path_factory.mktemp("sandbox-writable").resolve())
+
+    def roots(home: Path | None = None, tmpdir: Path | None = None) -> list[str]:
+        base = home if home is not None else sandbox.default_home()
+        return [scratch, *(os.path.realpath(base / cache) for cache in sandbox.HOME_CACHES)]
+
+    monkeypatch.setattr(sandbox, "writable_roots", roots)

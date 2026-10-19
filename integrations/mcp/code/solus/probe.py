@@ -1,15 +1,19 @@
 """`probe_environment` (docs/api/code-environment.md §4): read-only.
 
-Interpreters via `which` over a fixed name list (resolved against the
+System interpreters via `which` over a fixed name list (resolved against the
 pinned search roots in `execute.py`, never the inherited PATH), versions via
 argv `[exe, "--version"]` with a 10 s timeout, the workspace venv = the
-first of `.venv`/`venv`/`env` that carries an interpreter, its packages via
-`[venv_python, "-m", "pip", "list", "--format", "json"]`, or
-`uv pip list --python <venv_python>` when the venv has no pip (60 s, ≤ 300 +
-`truncated`), conda envs via `[conda, "env", "list", "--json"]` (≤ 32
-names). Every probe is injectable, every failure reads as null/empty, and
-nothing here raises. Interpreter `path`s are absolute (the contract's
-shape); the venv is reported by its workspace-relative name.
+first of `.venv`/`venv`/`env` that is a real venv, conda envs via
+`[conda, "env", "list", "--json"]` (≤ 32 names).
+
+The workspace venv is NEVER executed (docs/api/code-command-execution.md §9.1):
+its interpreter, pip and `uv pip list` would import workspace content (`.pth`
+files, `sitecustomize`). Its packages are read from
+`site-packages/*.dist-info/METADATA` (Name/Version headers; bounded entries,
+bytes and ≤ 300 packages + `truncated`) and its Python version from
+`pyvenv.cfg`. Every probe is injectable, every failure reads as null/empty, and
+nothing here raises. Interpreter `path`s are absolute (the contract's shape);
+the venv is reported by its workspace-relative name.
 """
 
 import json
@@ -23,6 +27,8 @@ from typing import Any
 
 from .execute import CHILD_PATH, PASSTHROUGH_NAMES, _kill_group, pinned_which, search_path
 from .plan import _relative, venv_python
+from .safe_read import read_regular
+from .workspace import resolve_inside
 
 logger = logging.getLogger("solus.code.probe")
 
@@ -32,8 +38,13 @@ MAX_INTERPRETERS = 8
 MAX_PACKAGES = 300
 MAX_CONDA_ENVS = 32
 VERSION_TIMEOUT_SECONDS = 10
-PIP_LIST_TIMEOUT_SECONDS = 60
-#: Captured stdout is cut here before parsing (pip list of a huge env).
+#: site-packages directory entries scanned per venv (all site dirs together).
+MAX_SITE_ENTRIES = 4096
+#: Site-packages directories considered (`lib/python3.X/site-packages`, `Lib/…`).
+MAX_SITE_DIRS = 4
+#: Bytes read from one METADATA / pyvenv.cfg file (headers come first).
+MAX_METADATA_BYTES = 64 * 1024
+#: Captured stdout is cut here before parsing (conda env list, --version).
 MAX_CAPTURE_BYTES = 1024 * 1024
 #: Under the cloud's 40-char entropic-redaction threshold.
 MAX_WIRE_CHARS = 39
@@ -100,53 +111,100 @@ def _interpreters(which: Which, capture: Capture) -> list[dict[str, str]]:
     return found
 
 
-def _packages(
-    python: str, capture: Capture, uv: str | None
-) -> tuple[list[dict[str, str]], bool] | None:
-    text = capture([python, "-m", "pip", "list", "--format", "json"], PIP_LIST_TIMEOUT_SECONDS)
-    if text is None and uv is not None:
-        # A `uv venv` ships no pip: read the same list through uv.
-        text = capture(
-            [uv, "pip", "list", "--python", python, "--format", "json"], PIP_LIST_TIMEOUT_SECONDS
-        )
-    try:
-        listed = json.loads(text) if text is not None else None
-    except ValueError:
-        return None
-    if not isinstance(listed, list):
-        return None
-    packages: list[dict[str, str]] = []
-    truncated = False
-    for item in listed:
-        if not isinstance(item, dict):
-            return None
-        name, version = item.get("name"), item.get("version")
-        if not isinstance(name, str) or not isinstance(version, str) or not name or not version:
-            return None
-        if len(packages) == MAX_PACKAGES:
-            return packages, True
+def _read_small(path: Path) -> str | None:
+    """A regular, non-symlinked file's first MAX_METADATA_BYTES as text, else None
+    (a FIFO never blocks: see `safe_read`)."""
+    data = read_regular(path, MAX_METADATA_BYTES)
+    return None if data is None else data.decode("utf-8", errors="replace")
+
+
+def _headers(text: str) -> dict[str, str]:
+    """The first `Name`/`Version` of an RFC 822 header block (stops at the body)."""
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            break
+        key, separator, value = line.partition(":")
+        key = key.strip().casefold()
+        if separator and key in ("name", "version") and key not in found:
+            found[key] = value.strip()
+    return found
+
+
+def _site_dirs(base: Path) -> list[Path]:
+    """`lib/python*/site-packages` and `Lib/site-packages`, real dirs inside `base`."""
+    candidates = sorted(base.glob("lib/python*/site-packages")) + [base / "Lib" / "site-packages"]
+    found: list[Path] = []
+    for candidate in candidates[:MAX_SITE_DIRS]:
+        if not candidate.is_symlink() and candidate.is_dir():
+            if Path(os.path.realpath(candidate)).is_relative_to(base):
+                found.append(candidate)
+    return found
+
+
+def _dist_infos(sites: list[Path]) -> tuple[list[Path], bool]:
+    """`*.dist-info` directories (never via a symlink), and whether the scan was cut."""
+    infos: list[Path] = []
+    scanned = 0
+    for site in sites:
+        try:
+            entries = sorted(os.scandir(site), key=lambda entry: entry.name)
+        except OSError:
+            continue
+        for entry in entries:
+            scanned += 1
+            if scanned > MAX_SITE_ENTRIES:
+                return infos, True
+            if entry.name.endswith(".dist-info") and entry.is_dir(follow_symlinks=False):
+                infos.append(Path(entry.path))
+    return infos, False
+
+
+def _packages(base: Path) -> tuple[list[dict[str, str]], bool]:
+    """The venv's installed distributions read from disk; `truncated` when the list
+    is cut, shortened, or a distribution's metadata is unreadable."""
+    infos, truncated = _dist_infos(_site_dirs(base))
+    found: dict[str, dict[str, str]] = {}
+    for info in infos:
+        headers = _headers(_read_small(info / "METADATA") or "")
+        name, version = headers.get("name"), headers.get("version")
+        if not name or not version:
+            truncated = True
+            continue
         truncated |= len(name) > MAX_WIRE_CHARS or len(version) > MAX_WIRE_CHARS
-        packages.append({"name": name[:MAX_WIRE_CHARS], "version": version[:MAX_WIRE_CHARS]})
+        found.setdefault(
+            name.casefold(), {"name": name[:MAX_WIRE_CHARS], "version": version[:MAX_WIRE_CHARS]}
+        )
+    packages = [found[key] for key in sorted(found)]
+    if len(packages) > MAX_PACKAGES:
+        return packages[:MAX_PACKAGES], True
     return packages, truncated
 
 
-def _venv(
-    root: Path, capture: Capture, uv: str | None, environment: str | None
-) -> dict[str, Any] | None:
+def _cfg_version(base: Path) -> str | None:
+    """`version` / `version_info` from `pyvenv.cfg` (never by running the interpreter)."""
+    for line in (_read_small(base / "pyvenv.cfg") or "").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip().casefold() in ("version", "version_info"):
+            match = _VERSION.match(value.strip())
+            if match:
+                return match.group()
+    return None
+
+
+def _venv(root: Path, environment: str | None) -> dict[str, Any] | None:
     if environment is not None and not _relative(environment):
         return None
     for name in VENV_DIR_NAMES if environment is None else (environment,):
-        relative = venv_python(root, name)
-        if relative is None:
+        if venv_python(root, name) is None:
             continue
-        python = str(root / relative)
-        inventory = _packages(python, capture, uv)
-        if inventory is None:
+        base = resolve_inside(name, root)
+        if base is None:
             return None
-        packages, truncated = inventory
+        packages, truncated = _packages(base)
         return {
             "path": name,
-            "python_version": _version(python, capture),
+            "python_version": _cfg_version(base),
             "packages": packages,
             "truncated": truncated,
         }
@@ -203,7 +261,7 @@ def probe_environment(
     return {
         "python": interpreters[0] if interpreters else None,
         "interpreters": interpreters,
-        "venv": _guard("venv", lambda: _venv(root, capture, which("uv"), environment), None),
+        "venv": _guard("venv", lambda: _venv(root, environment), None),
         "conda": _guard("conda", lambda: _conda(which, capture), None),
         "uv": _guard("uv", lambda: _uv(which, capture), None),
     }

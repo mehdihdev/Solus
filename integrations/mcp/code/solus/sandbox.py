@@ -24,26 +24,25 @@ from typing import Any
 
 from .git_guard import git_metadata_digest as git_metadata_digest
 from .git_guard import protected_git_dirs as protected_git_dirs
-from .landlock_exec import MAX_ENV_BYTES, Landlock
+from .landlock_exec import MAX_ENV_BYTES, Landlock, contains, holds_home
 
 KIND_MACOS = "sandbox-exec"
 KIND_LINUX = "landlock"  # reported as `landlock-abi<N>`
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 LANDLOCK_HELPER = Path(__file__).resolve().with_name("landlock_exec.py")
-#: Declared tool caches under HOME. Adding one is a SECURITY_REVIEW re-review trigger.
+#: Declared tool caches under HOME — data only (§9.5): nothing here may hold code that
+#: later runs outside the sandbox (so no `.local/share/uv`, `.cargo/git`, or the roots of
+#: `.gradle`/`.platformio`/`.arduino15`). Adding one is a SECURITY_REVIEW re-review trigger.
 HOME_CACHES: tuple[str, ...] = (
     ".cache",
     "Library/Caches",
     ".ros",
-    ".npm",
+    ".npm/_cacache",
     ".pnpm-store",
-    ".local/share/pnpm",
-    ".local/share/uv",
-    ".cargo/registry",
-    ".cargo/git",
-    ".platformio",
-    ".arduino15",
-    ".gradle",
+    ".cargo/registry/cache",
+    ".gradle/caches",
+    ".platformio/.cache",
+    ".arduino15/staging",
     ".colcon",
 )
 #: What the plan answer shows (no absolute machine paths).
@@ -198,16 +197,28 @@ def _real(path: Path | str) -> str:
     return os.path.realpath(path)
 
 
+def home_conflict(workspace: Path, home: Path | None = None) -> str | None:
+    """Why `workspace` may not be written by a sandboxed command (§9.4): its realpath
+    equals or contains HOME or ~/.solus, or lies inside ~/.solus (the rule the Linux
+    helper applies to every `--rw` path). None when fine."""
+    real = Path(_real(workspace))
+    if not holds_home(str(real), str(home if home is not None else default_home())):
+        return None
+    return "the linked folder is (or contains) your home folder or ~/.solus; link a project folder"
+
+
 def linux_writable(workspace: Path, home: Path, tmpdir: Path) -> list[str]:
-    """The existing writable paths, realpath'd and deduplicated (missing ones grant nothing)."""
+    """The existing writable paths, realpath'd and deduplicated (missing ones grant
+    nothing). A temp root that contains HOME is never granted (§9.4)."""
     candidates = [_real(workspace), _real(tmpdir), *LINUX_TMP, *LINUX_DEVICES]
     for pattern in LINUX_SERIAL_GLOBS:
         candidates.extend(sorted(glob.glob(pattern)))
     candidates.extend(_real(home / cache) for cache in HOME_CACHES)
     unique: list[str] = []
     for path in candidates:
-        if path not in unique and os.path.exists(path):
-            unique.append(path)
+        if path in unique or not os.path.exists(path) or holds_home(path, str(home)):
+            continue
+        unique.append(path)
     return unique
 
 
@@ -227,6 +238,31 @@ def user_cache_dir(tmpdir: Path, *, folders: str = DARWIN_FOLDERS) -> str:
     return str(real)
 
 
+#: Temp roots a sandboxed command can write on either platform.
+SHARED_TMP: tuple[str, ...] = ("/private/tmp", *LINUX_TMP)
+
+
+def writable_roots(home: Path | None = None, tmpdir: Path | None = None) -> list[str]:
+    """Every directory a sandboxed command may write besides the workspace (realpaths)."""
+    home = home if home is not None else default_home()
+    tmpdir = tmpdir if tmpdir is not None else default_tmpdir()
+    roots = [_real(tmpdir), user_cache_dir(tmpdir), *(_real(path) for path in SHARED_TMP)]
+    roots.extend(_real(home / cache) for cache in HOME_CACHES)
+    return list(dict.fromkeys(roots))
+
+
+def foreign_writable(
+    path: str, workspace: Path | None, *, home: Path | None = None, tmpdir: Path | None = None
+) -> bool:
+    """True when `path`'s realpath lies in the sandbox's writable set but outside the
+    workspace (§9.5): an earlier sandboxed command could have planted it there, so it
+    is never resolved as a program. With no workspace every writable root counts.
+    Containment is judged by inode as well as spelling (case-insensitive APFS)."""
+    if workspace is not None and contains(str(workspace), path):
+        return False
+    return any(contains(root, path) for root in writable_roots(home, tmpdir))
+
+
 def wrap(
     kind: str | None,
     argv: Sequence[str],
@@ -239,6 +275,9 @@ def wrap(
     """The final argv that runs `argv` (absolute program first) inside the sandbox."""
     home = home if home is not None else default_home()
     tmpdir = tmpdir if tmpdir is not None else default_tmpdir()
+    conflict = home_conflict(workspace, home)
+    if conflict is not None:
+        raise ValueError(conflict)
     if kind == KIND_MACOS:
         real = _real(workspace)
         git_dir, common = protected_git_dirs(Path(real))
@@ -264,6 +303,7 @@ def wrap(
         ]
     if kind is not None and kind.startswith(KIND_LINUX):
         grants: list[str] = ["--env-fd", str(env_fd)] if env_fd is not None else []
+        grants.extend(("--home", _real(home)))
         for path in linux_writable(workspace, home, tmpdir):
             grants.extend(("--rw", path))
         return [sys.executable, "-I", str(LANDLOCK_HELPER), *grants, "--", *argv]
@@ -283,6 +323,7 @@ def limitations(kind: str | None) -> list[str]:
             *gaps,
             "launchd job submission not blocked",
             "a descendant that double-forks between process-table snapshots can survive a stop",
+            "a copied launchctl/osascript binary is not covered by the exec denial",
         ]
     abi = int(kind.rsplit("abi", 1)[-1]) if kind.rsplit("abi", 1)[-1].isdigit() else 0
     gaps.append("file metadata (chmod/chown/utimes) not confined")

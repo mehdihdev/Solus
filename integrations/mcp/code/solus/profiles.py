@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from .safe_read import read_regular
 from .workspace import is_safe_relative, resolve_inside
 
 SCHEMA_VERSION = 1
@@ -53,15 +54,24 @@ SECRET_PREFIXES: tuple[str, ...] = (
     "ANTHROPIC_",
 )
 SECRET_NAMES: frozenset[str] = frozenset({"SSH_AUTH_SOCK"})
+#: THE loader / option-injection list (§2.4, §9.8): never stored in a profile and never
+#: passed to any child, whatever a profile says. Search paths (PYTHONPATH,
+#: LD_LIBRARY_PATH) are kept: a ROS profile needs them.
 LOADER_NAMES: frozenset[str] = frozenset(
     {
         "LD_PRELOAD",
         "LD_AUDIT",
         "DYLD_INSERT_LIBRARIES",
+        "GCONV_PATH",
         "BASH_ENV",
         "ENV",
         "PROMPT_COMMAND",
         "PYTHONSTARTUP",
+        "NODE_OPTIONS",
+        "PERL5OPT",
+        "RUBYOPT",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
     }
 )
 #: Never taken from a profile: Solus sets these for every child.
@@ -294,11 +304,10 @@ def _valid_record(record: object, name: str) -> bool:
 
 
 def _read(path: Path) -> bytes:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(descriptor, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise OSError("not a regular file")
-        return handle.read(MAX_PROFILE_BYTES + 1)
+    data = read_regular(path, MAX_PROFILE_BYTES + 1)
+    if data is None:
+        raise OSError("not a regular file")
+    return data
 
 
 def load(root: Path, name: object) -> Profile | str:
@@ -347,7 +356,7 @@ def delete(root: Path, name: object) -> dict[str, Any]:
     return {"ok": True, "name": name, "reason": None}
 
 
-def _capture_refusal(name: str, reason: str) -> dict[str, Any]:
+def capture_refusal(name: str, reason: str) -> dict[str, Any]:
     return {
         "ok": False,
         "name": name,
@@ -381,17 +390,17 @@ def finish_capture(
     """Turn the capture's `env -0` output into a stored profile; names only in the answer."""
     error = _outcome_error(outcome)
     if error is not None:
-        return _capture_refusal(name, error)
+        return capture_refusal(name, error)
     captured = parse_env0(outcome.stdout)
     if captured is None:
-        return _capture_refusal(name, "unparseable environment output")
+        return capture_refusal(name, "unparseable environment output")
     kept, dropped = filter_capture(captured, base)
     if len(kept) > MAX_VARIABLES:
-        return _capture_refusal(name, f"the profile has more than {MAX_VARIABLES} variables")
+        return capture_refusal(name, f"the profile has more than {MAX_VARIABLES} variables")
     try:
         save(root, name, setup_file, extends, kept)
     except OSError as exc:
-        return _capture_refusal(name, f"profile could not be stored: {type(exc).__name__}")
+        return capture_refusal(name, f"profile could not be stored: {type(exc).__name__}")
     path = kept.get("PATH", "")
     return {
         "ok": True,

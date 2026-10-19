@@ -311,3 +311,50 @@ def test_real_capture_script_sources_a_setup_file(ws: Path, home: Path) -> None:
     result = profiles.finish_capture(ws, "ros", str(setup), None, outcome, base)
     assert result["ok"] is True, result
     assert result["variables"] == ["PATH", "ROS_DISTRO"]
+
+
+# --- §9.8: one loader/option-injection list, applied at capture AND at spawn ----------
+
+INJECTION = (
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "GCONV_PATH",
+    "BASH_ENV",
+    "ENV",
+    "PROMPT_COMMAND",
+    "PYTHONSTARTUP",
+    "NODE_OPTIONS",
+    "PERL5OPT",
+    "RUBYOPT",
+    "JAVA_TOOL_OPTIONS",
+    "_JAVA_OPTIONS",
+)
+
+
+def test_one_loader_list_drops_option_injection_and_keeps_search_paths() -> None:
+    assert set(INJECTION) <= profiles.LOADER_NAMES
+    assert not hasattr(execute, "LOADER_INJECTION"), "a single list, in profiles.py"
+    for name in INJECTION:
+        assert not profiles.allowed_variable(name), name
+    assert profiles.allowed_variable("PYTHONPATH")
+    assert profiles.allowed_variable("LD_LIBRARY_PATH")
+    kept, dropped = profiles.filter_capture(
+        {"NODE_OPTIONS": "--require=/x", "PYTHONPATH": "/opt/ros/lib"}, {}
+    )
+    assert kept == {"PYTHONPATH": "/opt/ros/lib"} and dropped == ["NODE_OPTIONS"]
+
+
+def test_child_env_never_carries_an_injection_name(tmp_path: Path) -> None:
+    plan_module = overlay_module("plan")
+    profile = profiles.Profile(
+        name="p",
+        setup_file="/opt/ros/setup.bash",
+        extends=None,
+        captured_at="x",
+        variables=tuple((name, "x") for name in (*INJECTION, "PYTHONPATH")),
+        digest="d",
+    )
+    plan = plan_module.Plan(action="exec", ok=True, argv=["/bin/true"], profile=profile)
+    env = execute.child_env(tmp_path, plan)
+    assert not set(INJECTION) & set(env) and env["PYTHONPATH"] == "x"

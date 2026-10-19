@@ -1,6 +1,8 @@
 """Linux sandbox helper for the `code` server (docs/api/code-command-execution.md §3).
 
-Run as `<python> -I landlock_exec.py --rw <path> … -- <program> <args…>`: it sets
+Run as `<python> -I landlock_exec.py [--env-fd N] --home <HOME> --rw <path> … --
+<program> <args…>`: it refuses any `--rw` path that equals or contains HOME or
+`HOME/.solus` (or lies inside `HOME/.solus`), then sets
 PR_SET_NO_NEW_PRIVS, creates a Landlock ruleset that HANDLES the filesystem write
 rights of the best available ABI, grants them beneath each `--rw` path, restricts
 itself, then `os.execv`s the program. Reads, exec and network stay unrestricted.
@@ -16,6 +18,7 @@ import stat
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 WRITE_FILE = 1 << 1
@@ -154,6 +157,20 @@ class Landlock:
 
     def restrict(self, paths: Sequence[str]) -> None:
         """Grant handled rights beneath `paths` (missing ones grant nothing), then restrict."""
+        fds: list[int] = []
+        try:
+            for path in paths:
+                try:
+                    fds.append(open_rw(path))
+                except OSError:
+                    continue
+            self.restrict_fds(fds)
+        finally:
+            for fd in fds:
+                os.close(fd)
+
+    def restrict_fds(self, fds: Sequence[int]) -> None:
+        """Grant handled rights beneath each already-open descriptor, then restrict."""
         abi = self._syscalls.abi()
         if abi < 1:
             raise OSError("landlock is not available on this kernel")
@@ -161,18 +178,86 @@ class Landlock:
         handled = handled_access(abi)
         scoped = SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL if abi >= 6 else 0
         ruleset = self._syscalls.create_ruleset(handled, scoped)
-        for path in paths:
-            try:
-                fd = os.open(path, O_PATH | os.O_CLOEXEC)
-            except OSError:
-                continue
-            try:
-                is_dir = stat.S_ISDIR(os.fstat(fd).st_mode)
-                allowed = handled if is_dir else file_access(abi)
-                self._syscalls.add_rule(ruleset, allowed, fd)
-            finally:
-                os.close(fd)
+        for fd in fds:
+            is_dir = stat.S_ISDIR(os.fstat(fd).st_mode)
+            allowed = handled if is_dir else file_access(abi)
+            self._syscalls.add_rule(ruleset, allowed, fd)
         self._syscalls.restrict_self(ruleset)
+
+
+def open_rw(path: str) -> int:
+    """One descriptor per `--rw` path, never through a final symlink: the HOME check
+    and the Landlock rule both use it, so a swap after the check changes nothing."""
+    flags = (O_PATH or os.O_RDONLY) | os.O_NOFOLLOW | os.O_CLOEXEC
+    return os.open(path, flags)
+
+
+def descriptor_path(fd: int, fallback: str) -> str:
+    """The path the kernel reports for `fd` (Linux), else the realpath of `fallback`."""
+    try:
+        return os.readlink(f"/proc/self/fd/{fd}")
+    except OSError:
+        return os.path.realpath(fallback)
+
+
+FileId = tuple[int, int]
+
+
+def _file_id(path: str) -> FileId | None:
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def ancestor_ids(path: str) -> set[FileId]:
+    """(st_dev, st_ino) of `path`'s realpath and every ancestor that exists. Inodes,
+    not spellings: a case-insensitive file system cannot fool the comparison."""
+    current = os.path.realpath(path)
+    ids: set[FileId] = set()
+    while True:
+        found = _file_id(current)
+        if found is not None:
+            ids.add(found)
+        parent = os.path.dirname(current)
+        if parent == current:
+            return ids
+        current = parent
+
+
+def contains(outer: str, inner: str) -> bool:
+    """`inner` equals or lies beneath `outer`, by realpath spelling or by inode."""
+    outer_real, inner_real = os.path.realpath(outer), os.path.realpath(inner)
+    if Path(inner_real).is_relative_to(outer_real):
+        return True
+    found = _file_id(outer_real)
+    return found is not None and found in ancestor_ids(inner_real)
+
+
+def solus_forms(home: str) -> list[str]:
+    """`~/.solus` unresolved and resolved (it may itself be a symlink)."""
+    joined = os.path.join(os.path.realpath(home), ".solus")
+    return list(dict.fromkeys([joined, os.path.realpath(joined)]))
+
+
+def holds_home(path: str, home: str) -> bool:
+    """`path` equals or contains HOME or ~/.solus, or lies inside ~/.solus."""
+    if contains(path, home):
+        return True
+    return any(contains(path, solus) or contains(solus, path) for solus in solus_forms(home))
+
+
+def descriptor_holds_home(fd: int, path: str, home: str) -> bool:
+    """`holds_home` judged on an open descriptor: its own inode against the ancestry
+    of HOME and ~/.solus, plus the path the kernel reports for it."""
+    info = os.fstat(fd)
+    own = (info.st_dev, info.st_ino)
+    targets = [home, *solus_forms(home)]
+    if any(own in ancestor_ids(target) for target in targets):
+        return True
+    solus_ids = {found for solus in solus_forms(home) if (found := _file_id(solus))}
+    return bool(solus_ids & ancestor_ids(path)) or holds_home(path, home)
 
 
 @dataclass(frozen=True)
@@ -180,27 +265,31 @@ class Invocation:
     paths: list[str]
     command: list[str]
     env_fd: int | None
+    home: str
 
 
 def _parse(argv: Sequence[str]) -> Invocation | None:
     paths: list[str] = []
     env_fd: int | None = None
+    home: str | None = None
     index = 0
-    while index + 1 < len(argv) and argv[index] in ("--rw", "--env-fd"):
-        value = argv[index + 1]
-        if argv[index] == "--rw":
+    while index + 1 < len(argv) and argv[index] in ("--rw", "--env-fd", "--home"):
+        option, value = argv[index], argv[index + 1]
+        if option == "--rw":
             paths.append(value)
-        elif value.isdigit():
+        elif option == "--home" and home is None and os.path.isabs(value):
+            home = value
+        elif option == "--env-fd" and value.isdigit():
             env_fd = int(value)
         else:
             return None
         index += 2
-    if index >= len(argv) or argv[index] != "--":
+    if home is None or index >= len(argv) or argv[index] != "--":
         return None
     command = list(argv[index + 1 :])
     if not command or not os.path.isabs(command[0]):
         return None
-    return Invocation(paths, command, env_fd)
+    return Invocation(paths, command, env_fd, home)
 
 
 def read_env(fd: int) -> dict[str, str] | None:
@@ -230,6 +319,39 @@ def read_env(fd: int) -> dict[str, str] | None:
 
 
 Execve = Callable[[str, list[str], dict[str, str]], object]
+Opener = Callable[[str], int]
+FdPath = Callable[[int, str], str]
+
+
+def _close(fds: Sequence[int]) -> None:
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def open_grants(paths: Sequence[str], home: str, opener: Opener, fd_path: FdPath) -> list[int]:
+    """Open every `--rw` path once (missing ones grant nothing). Raises PermissionError
+    for a symlink, an unopenable path, or one that holds HOME or ~/.solus."""
+    fds: list[int] = []
+    try:
+        for path in paths:
+            try:
+                fd = opener(path)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise PermissionError(f"{path}: {exc.strerror}") from exc
+            fds.append(fd)
+            if stat.S_ISLNK(os.fstat(fd).st_mode):
+                raise PermissionError(f"{path} is a symlink")
+            if descriptor_holds_home(fd, fd_path(fd, path), home):
+                raise PermissionError("a writable path holds HOME or ~/.solus")
+    except BaseException:
+        _close(fds)
+        raise
+    return fds
 
 
 def main(
@@ -237,15 +359,22 @@ def main(
     *,
     landlock: Landlock | None = None,
     execve: Execve = os.execve,
+    opener: Opener = open_rw,
+    fd_path: FdPath = descriptor_path,
 ) -> int:
     """The helper runs with a minimal fixed environment; the child's environment
     arrives over `--env-fd` and is applied only by the final `execve`."""
     parsed = _parse(argv)
     if parsed is None:
         sys.stderr.write(
-            "solus landlock: usage: [--env-fd N] --rw PATH ... -- /abs/program [args]\n"
+            "solus landlock: usage: [--env-fd N] --home HOME --rw PATH ... -- /abs/program [args]\n"
         )
         return EXIT_USAGE
+    try:
+        grants = open_grants(parsed.paths, parsed.home, opener, fd_path)
+    except PermissionError as exc:
+        sys.stderr.write(f"solus landlock: refused: {exc}\n")
+        return EXIT_REFUSED
     env: dict[str, str] | None = dict(os.environ)
     if parsed.env_fd is not None:
         try:
@@ -253,13 +382,16 @@ def main(
         except OSError:
             env = None
     if env is None:
+        _close(grants)
         sys.stderr.write("solus landlock: refused: unreadable or oversized environment\n")
         return EXIT_REFUSED
     try:
-        (landlock or Landlock()).restrict(parsed.paths)
+        (landlock or Landlock()).restrict_fds(grants)
     except OSError as exc:
         sys.stderr.write(f"solus landlock: sandbox unavailable: {exc}\n")
         return EXIT_REFUSED
+    finally:
+        _close(grants)
     try:
         execve(parsed.command[0], parsed.command, env)
     except OSError as exc:

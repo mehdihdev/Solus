@@ -240,3 +240,19 @@ def test_unknown_action_lists_the_new_actions(ws: Path) -> None:
     reason = _plan(ws, "shell", {}).reason
     for action in ("exec", "process_start", "profile_capture"):
         assert action in reason
+
+
+@pytest.mark.real_writable_roots
+def test_profile_path_into_tmp_never_resolves_a_program(
+    ws: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§9.5: a program planted in TMP (or a cache) by an earlier command is never run,
+    however it is reached: a profile PATH entry, an absolute path, or a pinned root."""
+    planted = _executable(tmp_path / "scratch" / "planted-tool")
+    roots = [str(planted.parent)]
+    assert plan.plan_action  # the planner and its resolver share the rule
+    command_plan = overlay_module("command_plan")
+    assert command_plan.resolve_program(ws, "planted-tool", roots) is None
+    assert command_plan.resolve_program(ws, str(planted), roots) is None
+    inside = _executable(ws / "bin" / "tool")
+    assert command_plan.resolve_program(ws, "bin/tool", roots) == str(inside)

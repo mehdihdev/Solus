@@ -1,13 +1,22 @@
 """The server-side deny table for `code.exec` / `code.process_start`
-(docs/api/code-command-execution.md §4, widened by the 2026-10-18 security review).
+(docs/api/code-command-execution.md §4, widened by the 2026-10-18 security review
+and §9.11 of the 2026-10-19 Phase 4 amendments).
 
 The cloud `CommandPolicy` refuses these before an approval card exists; the
 planner refuses them again here, for both the proposed `argv[0]` and the resolved
 program (and its realpath). The tables are plain frozen literals so a cross-check
-test can compare them with the cloud's mirror. Program names are normalised
-case-insensitively with version/build suffixes stripped (`Bash5.2` → `bash`,
-`python3.13t` → `python`) and aliases mapped (`nodejs` → `node`, `pypy3` → `python`).
-Python and git option parsing FAILS CLOSED on options it does not know.
+test can compare them with the cloud's mirror; `classify_denial(argv)` is the pure
+entry point the cloud's behavioural parity test loads BY PATH (stdlib only, no
+package imports — keep it that way).
+
+Name matching depends on where the program comes from (derived from argv[0] alone):
+* a program that is NOT workspace-relative (a bare name or an absolute path) maps to
+  a denied name when its casefolded basename is that name followed by the end or any
+  non-letter (`zsh-5.9`, `php-cgi8.2`, `sudo-rs`, `python3.12-x86_64`, `sh~`), plus the
+  GNU `g` prefix (`gtimeout`) — fail closed;
+* a workspace-relative program (`./env_setup.sh`, `tools/x`) is denied only on the
+  EXACT normalised name of argv[0] and of its resolved realpath (`./bash`).
+Every interpreter in INLINE_CODE FAILS CLOSED on leading options it does not know.
 """
 
 import os
@@ -100,12 +109,14 @@ ALLOWED_SCHEMES: frozenset[str] = frozenset({"file"})
 #: Stricter than `^[A-Za-z0-9_:]+(=[\w,]+)?$`: `::` separators only, so `data:x` fails.
 PERL_MODULE_PATTERN = r"^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*(=[\w,]+)?$"
 RUBY_LIBRARY_PATTERN = r"^[A-Za-z0-9_./-]+$"
+LUA_MODULE_PATTERN = r"^[A-Za-z0-9_.]+(=[A-Za-z0-9_.]+)?$"
 MODULE_VALUE_FLAGS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
         "perl": MappingProxyType(
             {"-M": PERL_MODULE_PATTERN, "-m": PERL_MODULE_PATTERN, "-I": RUBY_LIBRARY_PATTERN}
         ),
         "ruby": MappingProxyType({"-r": RUBY_LIBRARY_PATTERN, "-I": RUBY_LIBRARY_PATTERN}),
+        "lua": MappingProxyType({"-l": LUA_MODULE_PATTERN}),
     }
 )
 #: git and every `git-*` helper are denied programs: SOL uses the dedicated, previewed
@@ -127,14 +138,113 @@ OPTION_VALUES: Mapping[str, frozenset[str]] = MappingProxyType(
         "node": frozenset({"-r", "--require", "--import", "--loader", "-C", "--conditions"}),
         "perl": frozenset({"-M", "-m", "-I"}),
         "ruby": frozenset({"-r", "-I"}),
+        "lua": frozenset({"-l"}),
     }
 )
 
+
+class Options:
+    """Leading options an interpreter may take before its script (anything else is
+    refused): long flags, long options with a value (`--x=v` or `--x v`), short
+    flag letters (clusterable), short letters taking a value (rest of the cluster
+    or the next argument), and whether digits may appear in a cluster (`-W0`, `-0777`)."""
+
+    __slots__ = ("long_flags", "long_values", "short_flags", "short_values", "digits")
+
+    def __init__(
+        self,
+        long_flags: frozenset[str] = frozenset(),
+        long_values: frozenset[str] = frozenset(),
+        short_flags: str = "",
+        short_values: str = "",
+        digits: bool = False,
+    ) -> None:
+        self.long_flags = long_flags
+        self.long_values = long_values
+        self.short_flags = short_flags
+        self.short_values = short_values
+        self.digits = digits
+
+
+_HELP = frozenset({"--help", "--version"})
+#: Known-safe leading options per interpreter (python and deno have their own scanners).
+SAFE_OPTIONS: Mapping[str, Options] = MappingProxyType(
+    {
+        "node": Options(
+            _HELP
+            | {
+                "--enable-source-maps",
+                "--no-warnings",
+                "--no-deprecation",
+                "--trace-warnings",
+                "--trace-deprecation",
+                "--trace-uncaught",
+                "--expose-gc",
+                "--preserve-symlinks",
+                "--abort-on-uncaught-exception",
+                "--experimental-vm-modules",
+                "--watch",
+            },
+            frozenset(
+                {
+                    "--require",
+                    "--import",
+                    "--loader",
+                    "--experimental-loader",
+                    "--conditions",
+                    "--max-old-space-size",
+                    "--stack-size",
+                    "--unhandled-rejections",
+                    "--title",
+                }
+            ),
+            short_flags="vh",
+            short_values="rC",
+        ),
+        "bun": Options(
+            _HELP | {"--hot", "--watch", "--smol", "--silent", "--bun"},
+            frozenset({"--preload", "--require", "--import"}),
+            short_flags="bvh",
+            short_values="r",
+        ),
+        "ruby": Options(
+            _HELP | {"--verbose", "--disable-gems"},
+            frozenset({"--encoding", "--external-encoding", "--internal-encoding"}),
+            short_flags="wvdhUWcynpal",
+            short_values="rIE",
+            digits=True,
+        ),
+        "perl": Options(_HELP, short_flags="wWXtTlcnpasvhU0", short_values="MmI", digits=True),
+        "php": Options(_HELP, short_flags="nqvhlsimH", short_values="f"),
+        "lua": Options(short_flags="viEW", short_values="l"),
+        "Rscript": Options(
+            _HELP
+            | {
+                "--vanilla",
+                "--no-save",
+                "--no-restore",
+                "--no-restore-data",
+                "--no-environ",
+                "--no-site-file",
+                "--no-init-file",
+                "--verbose",
+                "--quiet",
+                "--silent",
+            },
+            frozenset({"--default-packages", "--encoding"}),
+        ),
+    }
+)
+DENO_LEADING: frozenset[str] = frozenset({"-q", "--quiet", "--unstable", "-h", "-V", *_HELP})
+
 HINT = "propose the program's argv directly (no shell, no &&, no pipes)"
 _SUFFIX = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
+#: Inspector addresses: a port, optionally on a loopback host (never 0.0.0.0, [::], LAN).
+_INSPECT_VALUE = re.compile(r"^((127\.0\.0\.1|localhost|\[::1\]):)?[0-9]{1,5}$")
+INSPECT_FLAGS: frozenset[str] = frozenset({"--inspect", "--inspect-brk", "--inspect-wait"})
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
 _INTERPRETERS = {name.casefold(): name for name in INLINE_CODE}
-#: Names matched by PREFIX (followed by a non-letter or the end), longest first.
+#: Names matched by PREFIX outside the workspace (then the end or a non-letter), longest first.
 _PREFIX_NAMES = sorted(
     {*SHELLS, *WRAPPERS, *ELEVATION, *GIT_PROGRAMS, *_INTERPRETERS, *PROGRAM_ALIASES},
     key=len,
@@ -146,18 +256,28 @@ _ALLOW = "allow"
 
 
 def _by_prefix(name: str) -> str | None:
-    """A known shell/interpreter name that `name` starts with, followed by a non-letter."""
+    """A known denied name that `name` starts with, followed by the end or ANY
+    non-letter (`zsh-5.9`, `perl5.36.0-x86_64-linux`, `bash+x`, `sh~`) — fail closed."""
     for known in _PREFIX_NAMES:
         if name.startswith(known) and (len(name) == len(known) or not name[len(known)].isalpha()):
             return known
     return None
 
 
-def program_name(path: str) -> str:
+def _gnu(name: str, exact: bool) -> str | None:
+    """The wrapper behind a GNU coreutils `g` prefix (`gtimeout`, `genv`, …)."""
+    if not name.startswith("g"):
+        return None
+    inner = name[1:] if exact else _by_prefix(name[1:])
+    return inner if inner in WRAPPERS else None
+
+
+def program_name(path: str, *, exact: bool = False) -> str:
     """Normalised program name: casefolded, version/build suffixes stripped, aliases
-    mapped, and any `<known name><non-letter>…` mapped to the known name (fail closed)."""
+    mapped. Unless `exact` (workspace-relative programs), any denied name followed by a
+    version and/or `[-.]` tokens maps to that name (fail closed)."""
     name = os.path.basename(path).casefold()
-    prefixed = _by_prefix(name)
+    prefixed = None if exact else _by_prefix(name)
     if prefixed is not None:
         name = prefixed
     if name.endswith("-dbg"):
@@ -168,10 +288,15 @@ def program_name(path: str) -> str:
     stripped = PROGRAM_ALIASES.get(stripped, stripped)
     if stripped.endswith(("w", "t")) and stripped[:-1] in _INTERPRETERS:
         stripped = stripped[:-1]
-    gnu = _by_prefix(stripped[1:]) if stripped.startswith("g") else None
-    if gnu is not None and gnu in WRAPPERS:
-        return gnu  # GNU coreutils prefix: gtimeout, genv, gxargs, …
+    gnu = _gnu(stripped, exact)
+    if gnu is not None:
+        return gnu
     return _INTERPRETERS.get(stripped, stripped)
+
+
+def workspace_relative(argv0: str) -> bool:
+    """argv[0] names a workspace program (`./x`, `tools/x`), judged by syntax alone."""
+    return "/" in argv0 and not os.path.isabs(argv0)
 
 
 def _remote(value: str) -> bool:
@@ -217,11 +342,29 @@ def _python_cluster(arg: str) -> str:
 
 
 def _loader(name: str, arg: str, following: str | None) -> bool:
+    """A node/bun loader option whose value is remote — long (`--import x`,
+    `--import=x`) or a short letter anywhere in a cluster (`-rX`, `-vr X`)."""
     flags = {"node": NODE_LOADER_FLAGS, "bun": BUN_LOADER_FLAGS}.get(name, frozenset())
-    head, equals, value = arg.partition("=")
-    if head not in flags:
+    if not flags:
         return False
-    return _remote(value if equals else following or "")
+    if arg.startswith("--") or not arg.startswith("-"):
+        head, equals, value = arg.partition("=")
+        return head in flags and _remote(value if equals else following or "")
+    values = SAFE_OPTIONS[name].short_values
+    for position, char in enumerate(arg[1:]):
+        if f"-{char}" in flags:
+            return _remote(arg[position + 2 :] or following or "")
+        if char in values:
+            return False
+    return False
+
+
+def _bad_inspect(name: str, arg: str) -> bool:
+    """`--inspect*` is a bare flag or a loopback port; anything else is refused."""
+    if name not in ("node", "bun"):
+        return False
+    head, equals, value = arg.partition("=")
+    return head in INSPECT_FLAGS and bool(equals) and _INSPECT_VALUE.match(value) is None
 
 
 def _bad_module_value(name: str, arg: str, following: str | None) -> bool:
@@ -243,10 +386,39 @@ def _bad_module_value(name: str, arg: str, following: str | None) -> bool:
     return False
 
 
+def _long(arg: str, options: Options) -> int | None:
+    """Arguments consumed by a long option, None when it is not known-safe."""
+    head, equals, _ = arg.partition("=")
+    if equals:
+        return 1 if head in options.long_values else None
+    if head in options.long_flags:
+        return 1
+    return 2 if head in options.long_values else None
+
+
+def _short(arg: str, options: Options) -> int | None:
+    """Arguments consumed by a short cluster, None when any letter is not known-safe."""
+    for position, char in enumerate(arg[1:]):
+        if char in options.short_values:
+            return 2 if position == len(arg) - 2 else 1
+        if char not in options.short_flags and not (options.digits and char.isdigit()):
+            return None
+    return 1
+
+
+def _letters(arg: str, options: Options) -> str:
+    """A short cluster's option letters, up to and including the first value letter."""
+    for position, char in enumerate(arg[1:]):
+        if char in options.short_values:
+            return arg[1 : position + 2]
+    return arg[1:]
+
+
 def _generic(args: Sequence[str], name: str) -> str:
-    """Inline-code options anywhere before the first positional (short clusters too)."""
+    """Leading options up to the first positional: inline code, remote loaders and
+    bad module values are refused, and so is any option not known-safe (fail closed)."""
     flags = INLINE_CODE[name]
-    values = OPTION_VALUES.get(name, frozenset())
+    options = SAFE_OPTIONS[name]
     index = 0
     while index < len(args):
         arg = args[index]
@@ -255,19 +427,20 @@ def _generic(args: Sequence[str], name: str) -> str:
             arg.split("=", 1)[0] in flags
             or _loader(name, arg, following)
             or _bad_module_value(name, arg, following)
+            or _bad_inspect(name, arg)
         ):
             return _DENY
         if arg in ("--", "-") or not arg.startswith("-"):
             return _ALLOW
-        consumes = arg.split("=", 1)[0] in values and "=" not in arg
-        if not arg.startswith("--"):
-            for char in arg[1:]:
-                if f"-{char}" in flags:
-                    return _DENY
-                if f"-{char}" in values:
-                    consumes = arg.endswith(char)
-                    break
-        index += 2 if consumes else 1
+        if arg.split("=", 1)[0] in INSPECT_FLAGS and name in ("node", "bun"):
+            index += 1
+            continue
+        if not arg.startswith("--") and any(f"-{char}" in flags for char in _letters(arg, options)):
+            return _DENY
+        consumed = _long(arg, options) if arg.startswith("--") else _short(arg, options)
+        if consumed is None:
+            return _DENY
+        index += consumed
     return _ALLOW
 
 
@@ -279,6 +452,10 @@ def _deno(args: Sequence[str]) -> str:
         if _remote(arg) or _remote(arg.split("=", 1)[-1]):
             return _DENY
         if arg.startswith("-"):
+            # Before the subcommand only known-safe global options (fail closed).
+            known = arg in DENO_LEADING or arg.startswith("--log-level=")
+            if positionals == 0 and not known:
+                return _DENY
             continue
         if arg in INLINE_CODE["deno"]:
             return _DENY
@@ -315,11 +492,19 @@ def _check(name: str, args: Sequence[str]) -> str | None:
 
 def denied_reason(argv: Sequence[str], *, resolved: Sequence[str] = ()) -> str | None:
     """Why `argv` is refused, or None. `resolved` adds the resolved program path and
-    its realpath: each name is checked against the same arguments."""
+    its realpath: each name is checked against the same arguments, with the matching
+    mode (exact for workspace programs, prefix otherwise) chosen from argv[0]."""
     if not argv:
         return f"an empty argv is refused; {HINT}"
+    exact = workspace_relative(argv[0])
     for path in (argv[0], *resolved):
-        reason = _check(program_name(path), argv[1:])
+        reason = _check(program_name(path, exact=exact), argv[1:])
         if reason is not None:
             return reason
     return None
+
+
+def classify_denial(argv: Sequence[str]) -> str | None:
+    """The refusal reason for `argv` from argv alone (what the cloud sees), or None.
+    Pure; imported by path by the cloud's behavioural parity test."""
+    return denied_reason(list(argv))
