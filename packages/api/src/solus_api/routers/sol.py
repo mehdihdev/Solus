@@ -18,10 +18,11 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, StrictBool, field_validator
+from pydantic import Field, StrictBool, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.command_gate import completion_events
 from solus_api.agent.confirmations import (
     ParkedCall,
     _feed_back_outcome,
@@ -95,6 +96,12 @@ from solus_api.orchestration.gates import (
     check_frequency_cap,
 )
 from solus_api.orchestration.providers import ProviderTransientError
+from solus_api.routers.sol_resume import (
+    RESUME_PROMPT,
+    ResumeTicket,
+    check_resume,
+    claim_resume,
+)
 from solus_api.schemas import ConfirmationDecision, StrictModel
 from solus_api.services.events import emit_event
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
@@ -224,7 +231,12 @@ class ScreenshotIn(StrictModel):
 
 
 class MessageCreate(StrictModel):
-    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    #: Required unless `resume_confirmation_id` is set (SOLUSDEV-317 §5.5).
+    content: str | None = Field(default=None, min_length=1, max_length=MAX_MESSAGE_CHARS)
+    #: SOLUSDEV-317 §5.5: continue after a decided command card. Mutually
+    #: exclusive with `content` and `screenshot` — a resume carries no words or
+    #: pixels from the person, and no user turn is stored.
+    resume_confirmation_id: uuid.UUID | None = None
     #: SOLX-01: how SOL may act on this message — guide (explain + point) or do
     #: (operate the tool). Guide is the safe default; per-action resolution
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
@@ -260,6 +272,16 @@ class MessageCreate(StrictModel):
     #: SOLUSDEV-252 S3: at most one screenshot per turn. Pixels live for this
     #: turn only — the transcript keeps `{width, height, app}`.
     screenshot: ScreenshotIn | None = None
+
+    @model_validator(mode="after")
+    def _content_or_resume(self) -> "MessageCreate":
+        if self.resume_confirmation_id is None and self.content is None:
+            raise ValueError("content is required unless resume_confirmation_id is set")
+        if self.resume_confirmation_id is not None and (
+            self.content is not None or self.screenshot is not None
+        ):
+            raise ValueError("a resume carries no content or screenshot")
+        return self
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -455,7 +477,7 @@ def _refusal_result(call_id: str, message: str) -> ToolResult:
     )
 
 
-def _decision_summary(decision: str, result: ToolResult) -> str:
+def _decision_summary(decision: str, result: ToolResult, tool: str | None = None) -> str:
     """What the decision did, in the words the next turn's model reads.
 
     Deliberately distinguishes the three outcomes a person can produce from the
@@ -464,7 +486,11 @@ def _decision_summary(decision: str, result: ToolResult) -> str:
     the one the model most needs to understand before it tries again.
     """
     if result.ok:
-        outcome = command_outcome_text(result.value) if isinstance(result.value, dict) else None
+        outcome = (
+            command_outcome_text(result.value, tool=tool)
+            if isinstance(result.value, dict)
+            else None
+        )
         if outcome is not None:
             return "approved by you" + outcome
         sync = result.value.get("graph_sync") if isinstance(result.value, dict) else None
@@ -495,6 +521,7 @@ async def _persist_turn(
     final_text: str,
     aborted: str | None,
     parked_tools: frozenset[str] = frozenset(),
+    assistant_attrs: dict[str, Any] | None = None,
 ) -> uuid.UUID:
     """Persist the completed turn (tool turns + the assistant turn) in a FRESH session and
     log the interaction. Returns the assistant turn id for the `done` marker."""
@@ -526,6 +553,7 @@ async def _persist_turn(
                 "action_mode": action_mode,
                 "tool_calls": len(tool_turns),
                 "aborted": aborted,
+                **(assistant_attrs or {}),
             },
         )
         user = await session.get(User, user_id)
@@ -642,6 +670,7 @@ async def _run_and_persist(
     action_mode: str,
     parked: list[ParkedCall],
     turn_sync: OnshapeTurnSync | None = None,
+    assistant_attrs: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream the runner's events and, once the turn completes, persist the tool and
     assistant turns in a FRESH session (the request session is gone by the time the
@@ -708,6 +737,7 @@ async def _run_and_persist(
             final_text=final_text,
             aborted=aborted,
             parked_tools=frozenset(p.tool for p in parked if p.confirmation_id is not None),
+            assistant_attrs=assistant_attrs,
         )
         if aborted is not None:
             yield format_sse(_abort_event(aborted, abort_error))
@@ -811,6 +841,88 @@ async def _record_build_outcome(
     return result
 
 
+async def _resume_ticket(
+    session: AsyncSession, ctx: ProjectCtx, conversation_id: uuid.UUID, body: MessageCreate
+) -> ResumeTicket | None:
+    if body.resume_confirmation_id is None:
+        return None
+    return await check_resume(
+        session,
+        confirmation_id=body.resume_confirmation_id,
+        conversation_id=conversation_id,
+        project_id=ctx.project.id,
+        team_id=ctx.team.id,
+        user_id=ctx.user.id,
+    )
+
+
+async def _admit_resume(
+    session: AsyncSession, ctx: ProjectCtx, conversation_id: uuid.UUID, ticket: ResumeTicket
+) -> None:
+    """SOLUSDEV-317 §5.5: claim the resume (after the budget pre-flight, so a
+    402/429 never consumes it) and log it. No user turn is stored."""
+    await claim_resume(session, ticket, conversation_id=conversation_id, project_id=ctx.project.id)
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="sol.turn_resumed",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={
+            "confirmation_id": str(ticket.confirmation_id),
+            "tool": ticket.tool,
+            "chain": ticket.chain,
+        },
+    )
+
+
+async def _record_user_message(
+    session: AsyncSession,
+    ctx: ProjectCtx,
+    conversation_id: uuid.UUID,
+    content: str,
+    body: MessageCreate,
+    attribution: Any,
+    screenshot: ScreenshotBlock | None,
+) -> None:
+    # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
+    # on `attrs`; the Solus-authored framing exists only in model input. S3: a
+    # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
+    user_attrs: dict[str, Any] = {}
+    if attribution:
+        user_attrs["extension_slug"] = attribution.slug
+    if screenshot is not None:
+        user_attrs["screenshot"] = screenshot.summary()
+    await SERVICE.append_turn(
+        session,
+        conversation_id=conversation_id,
+        project_id=ctx.project.id,
+        role=TurnRole.USER,
+        content=content,
+        attrs=user_attrs or None,
+    )
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="sol.message",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={
+            "conversation_id": str(conversation_id),
+            "chars": len(content),
+            # SOLUSDEV-244: how much the person's conventions add to the system
+            # prompt this turn — a COUNT for cost attribution, never the text.
+            "preference_chars": (
+                sum(len(v) for v in body.preferences.prompt_payload().values())
+                if body.preferences is not None
+                else 0
+            ),
+            # S3: a flag for cost/usage attribution — never dims, title or pixels.
+            "screenshot": screenshot is not None,
+        },
+    )
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(
     request: Request,
@@ -833,10 +945,12 @@ async def post_message(
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
     turns are persisted as the stream completes."""
     require_role(ctx, Role.MEMBER)
-    content = body.content.strip()
+    resuming = body.resume_confirmation_id is not None
+    content = RESUME_PROMPT if resuming else (body.content or "").strip()
     if not content:
         raise APIError(422, "validation_error", "Message content must not be blank")
     await _owned_or_404(ctx, session, conversation_id)
+    ticket = await _resume_ticket(session, ctx, conversation_id, body)
     # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
     screenshot = body.screenshot.decode() if body.screenshot is not None else None
 
@@ -874,42 +988,12 @@ async def post_message(
         TurnView(role=role, content=content)
         for role, content in enrich_history([(t.role.value, t.content, t.attrs) for t in prior])
     )
-    # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
-    # on `attrs`; the Solus-authored framing exists only in model input. S3: a
-    # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
-    user_attrs: dict[str, Any] = {}
-    if attribution:
-        user_attrs["extension_slug"] = attribution.slug
-    if screenshot is not None:
-        user_attrs["screenshot"] = screenshot.summary()
-    await SERVICE.append_turn(
-        session,
-        conversation_id=conversation_id,
-        project_id=ctx.project.id,
-        role=TurnRole.USER,
-        content=content,
-        attrs=user_attrs or None,
-    )
-    emit_event(
-        session,
-        user=ctx.user,
-        event_type="sol.message",
-        team_id=ctx.team.id,
-        project_id=ctx.project.id,
-        payload={
-            "conversation_id": str(conversation_id),
-            "chars": len(content),
-            # SOLUSDEV-244: how much the person's conventions add to the system
-            # prompt this turn — a COUNT for cost attribution, never the text.
-            "preference_chars": (
-                sum(len(v) for v in body.preferences.prompt_payload().values())
-                if body.preferences is not None
-                else 0
-            ),
-            # S3: a flag for cost/usage attribution — never dims, title or pixels.
-            "screenshot": screenshot is not None,
-        },
-    )
+    if ticket is not None:
+        await _admit_resume(session, ctx, conversation_id, ticket)
+    else:
+        await _record_user_message(
+            session, ctx, conversation_id, content, body, attribution, screenshot
+        )
     await session.commit()
 
     # Scope is bound by Solus code, before the runner sees any user content (§7) —
@@ -1039,6 +1123,9 @@ async def post_message(
         user_id=ctx.user.id,
         sol_mode=ctx.user.sol_mode.value,
         action_mode=body.action_mode.value,
+        assistant_attrs=(
+            {"resume_of": str(ticket.confirmation_id)} if ticket is not None else None
+        ),
     )
     from solus_api.graph.read_scope import current_scope, scoped_stream
 
@@ -1165,7 +1252,7 @@ async def decide_tool_confirmation(
             conversation_id=decided.conversation_id,
             project_id=ctx.project.id,
             role=TurnRole.TOOL,
-            content=f"{tool_name} → {_decision_summary(body.decision, result)}",
+            content=f"{tool_name} → {_decision_summary(body.decision, result, tool_name)}",
             attrs=redact_value(
                 {
                     "confirmation_id": str(confirmation_id),
@@ -1185,6 +1272,19 @@ async def decide_tool_confirmation(
             ),
         )
 
+    if body.decision == "approve" and result.ok and decided is not None:
+        # SOLUSDEV-317 §5.6: basename-only command facts, never the argv.
+        for event_type, payload in completion_events(
+            decided.tool, dict(decided.args), result.value if isinstance(result.value, dict) else {}
+        ):
+            emit_event(
+                session,
+                user=ctx.user,
+                event_type=event_type,
+                team_id=ctx.team.id,
+                project_id=ctx.project.id,
+                payload=payload,
+            )
     emit_event(
         session,
         user=ctx.user,
