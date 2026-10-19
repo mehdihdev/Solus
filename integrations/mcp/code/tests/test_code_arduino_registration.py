@@ -116,9 +116,9 @@ async def test_upload_transport_binds_workspace_and_retains_device_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(tmp_path))
-    calls = []
+    calls: list[tuple[Any, dict[str, Any]]] = []
 
-    def upload(root, **args):
+    def upload(root: Any, **args: Any) -> dict[str, Any]:
         calls.append((root, args))
         return {"ok": False, "started": True, "device_state": "unknown", "stderr_tail": "failed"}
 

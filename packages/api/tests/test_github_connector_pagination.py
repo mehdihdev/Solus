@@ -11,8 +11,7 @@ import httpx
 import pytest
 import respx
 from fixtures.github_sample import installation_metadata, many_repos, next_link
-from solus_api.connectors import github
-from solus_api.connectors.contracts import Credentials
+from solus_api.connectors.contracts import ConnectorError, Credentials
 from solus_api.connectors.github import MAX_REPO_PAGES, GitHubConnector
 
 API = "https://api.github.com"
@@ -136,7 +135,7 @@ async def test_oauth_listing_is_not_capped_at_100_repos() -> None:
 @respx.mock
 async def test_non_list_page_still_raises_clean_error() -> None:
     respx.get(f"{API}/user/repos").mock(return_value=httpx.Response(200, json={"message": "x"}))
-    with pytest.raises(github.ConnectorError) as exc:
+    with pytest.raises(ConnectorError) as exc:
         await GitHubConnector().list_repositories(OAUTH_CREDS)
     assert exc.value.code == "github_error"
 
@@ -154,6 +153,6 @@ async def test_error_on_a_later_page_surfaces() -> None:
             headers={"Link": next_link(f"{API}/user/repos?per_page=100&page=2")},
         )
     )
-    with pytest.raises(github.ConnectorError) as exc:
+    with pytest.raises(ConnectorError) as exc:
         await GitHubConnector().list_repositories(OAUTH_CREDS)
     assert exc.value.code == "github_error"

@@ -274,7 +274,7 @@ async def test_actual_mcp_commit_readback_failure_remains_uncertain_in_history(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from solus_api.agent.tools.shapes import ToolResult
-    from solus_api.routers.sol import _decision_summary
+    from solus_api.routers.sol_confirmations import _decision_summary
 
     (repo / "a.txt").write_text("approved change\n")
     command(repo, "add", "a.txt")

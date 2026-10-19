@@ -2,6 +2,7 @@
 
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,7 @@ from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F
 process = overlay_module("arduino_process")
 
 
-def test_process_captures_tail_and_exit_without_inherited_environment(tmp_path):
+def test_process_captures_tail_and_exit_without_inherited_environment(tmp_path: Path) -> None:
     result = process.run_bounded(
         [sys.executable, "-c", "import os; print(os.environ.get('PRIVATE_FIXTURE', 'absent'))"],
         cwd=tmp_path,
@@ -22,7 +23,7 @@ def test_process_captures_tail_and_exit_without_inherited_environment(tmp_path):
     assert not result["timed_out"]
 
 
-def test_output_cap_terminates_process(tmp_path, monkeypatch):
+def test_output_cap_terminates_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(process, "HARD_OUTPUT_BYTES", 1024)
     result = process.run_bounded(
         [sys.executable, "-c", "import os,time; os.write(1,b'x'*65536); time.sleep(30)"],
@@ -34,7 +35,7 @@ def test_output_cap_terminates_process(tmp_path, monkeypatch):
     assert result["stdout_truncated"]
 
 
-def test_timeout_kills_group_and_returns_unknown_exit(tmp_path):
+def test_timeout_kills_group_and_returns_unknown_exit(tmp_path: Path) -> None:
     start = time.monotonic()
     result = process.run_bounded(
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -46,7 +47,7 @@ def test_timeout_kills_group_and_returns_unknown_exit(tmp_path):
     assert result["timed_out"] and result["exit_code"] is None
 
 
-def test_closed_environment_is_fixed(tmp_path, monkeypatch):
+def test_closed_environment_is_fixed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS", "https://example.invalid")
     monkeypatch.setenv("HTTPS_PROXY", "https://example.invalid")
     env = process.closed_environment(tmp_path)
@@ -54,7 +55,7 @@ def test_closed_environment_is_fixed(tmp_path, monkeypatch):
     assert env["HOME"] == str(tmp_path / "home")
 
 
-def test_cancel_after_child_closes_both_pipes_is_prompt(tmp_path):
+def test_cancel_after_child_closes_both_pipes_is_prompt(tmp_path: Path) -> None:
     import threading
 
     event = threading.Event()
@@ -76,7 +77,9 @@ def test_cancel_after_child_closes_both_pipes_is_prompt(tmp_path):
     assert result["reason"] == "cancelled" and result["started"]
 
 
-def test_sealed_cli_cannot_change_when_source_path_is_replaced(tmp_path, monkeypatch):
+def test_sealed_cli_cannot_change_when_source_path_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import hashlib
     import os
 
@@ -95,7 +98,9 @@ def test_sealed_cli_cannot_change_when_source_path_is_replaced(tmp_path, monkeyp
         process.sealed_cli(binary)
 
 
-def test_prelaunch_cancel_is_not_a_timeout_or_started_process(tmp_path, monkeypatch):
+def test_prelaunch_cancel_is_not_a_timeout_or_started_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import threading
 
     event = threading.Event()
@@ -111,7 +116,7 @@ def test_prelaunch_cancel_is_not_a_timeout_or_started_process(tmp_path, monkeypa
     assert result["reason"] == "cancelled" and not result["timed_out"] and not result["started"]
 
 
-def test_server_import_and_neutral_probe_without_fcntl():
+def test_server_import_and_neutral_probe_without_fcntl() -> None:
     import subprocess
     from pathlib import Path
 
@@ -145,7 +150,9 @@ assert probe["cli"]["reason"] == "Arduino toolchain not available on Windows/AMD
     assert result.returncode == 0, result.stderr
 
 
-def test_real_bubblewrap_accepts_sealed_file_and_directory_descriptors(tmp_path, monkeypatch):
+def test_real_bubblewrap_accepts_sealed_file_and_directory_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import hashlib
     import os
     import platform
@@ -176,7 +183,9 @@ def test_real_bubblewrap_accepts_sealed_file_and_directory_descriptors(tmp_path,
     assert result["ok"], result["stderr_tail"]
 
 
-def test_real_directory_mount_uses_held_inode_after_path_replacement(tmp_path, monkeypatch):
+def test_real_directory_mount_uses_held_inode_after_path_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import hashlib
     import os
     import platform
@@ -215,7 +224,9 @@ def test_real_directory_mount_uses_held_inode_after_path_replacement(tmp_path, m
 
 
 @pytest.mark.parametrize("success", [True, False, None])
-def test_complete_bounded_json_is_validated_before_returning_only_tail(tmp_path, success):
+def test_complete_bounded_json_is_validated_before_returning_only_tail(
+    tmp_path: Path, success: bool | None
+) -> None:
     import json
 
     body = json.dumps({"success": success, "compiler_out": "x" * 20_000})

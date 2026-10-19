@@ -20,7 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 def _headers(user: User) -> dict[str, str]:
-    return bearer(user.supabase_user_id, user.email)
+    headers: dict[str, str] = bearer(user.supabase_user_id, user.email)
+    return headers
 
 
 async def _viewer(db: AsyncSession, seeded: SeededTeam) -> User:

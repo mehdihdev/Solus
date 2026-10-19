@@ -75,7 +75,8 @@ async def world(
 
 
 def headers_for(user: User) -> dict[str, str]:
-    return bearer(user.supabase_user_id, user.email)
+    headers: dict[str, str] = bearer(user.supabase_user_id, user.email)
+    return headers
 
 
 async def get_repos(

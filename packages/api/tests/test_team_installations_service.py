@@ -29,6 +29,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
+def _mutated[T](obj: T) -> T:
+    """The same object, re-bound after a service call mutated it in place. mypy keeps
+    attribute narrowing from earlier asserts across such calls; this drops it."""
+    return obj
+
+
 async def _activities(db: AsyncSession, team_id: Any) -> list[Activity]:
     return list((await db.scalars(select(Activity).where(Activity.team_id == team_id))).all())
 
@@ -306,6 +312,7 @@ async def test_suspend_unsuspend_round_trip_restores_only_suspended_sources(
     assert broken.last_error["code"] == "repo_deleted"  # untouched
 
     await svc.mark_unsuspended(db, inst)
+    inst, ok = _mutated(inst), _mutated(ok)
     assert inst.status is InstallationStatus.ACTIVE
     assert inst.suspended_at is None
     assert ok.status is SourceStatus.CONNECTED
@@ -360,6 +367,7 @@ async def test_refresh_follows_github_suspension_state(db: AsyncSession) -> None
     assert inst.status is InstallationStatus.SUSPENDED
     assert source.status is SourceStatus.ERROR
     await svc.refresh_installation_fields(db, inst, _info())
+    inst, source = _mutated(inst), _mutated(source)
     assert inst.status is InstallationStatus.ACTIVE
     assert source.status is SourceStatus.CONNECTED
 

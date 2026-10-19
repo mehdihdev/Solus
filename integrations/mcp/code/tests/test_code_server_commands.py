@@ -340,6 +340,7 @@ def test_real_server_process_exits_stop_their_children(tmp_path: Path) -> None:
 
 def test_server_uses_only_public_refusal_helpers() -> None:
     """Phase 4 LOW: no reach into another module's private helpers."""
+    assert server.__file__ is not None
     source = Path(server.__file__).read_text()
     assert "._start_refusal" not in source and "._capture_refusal" not in source
     assert server.Registry.start_refusal("x")["reason"] == "x"

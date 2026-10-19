@@ -131,7 +131,7 @@ def test_the_shipped_allowlists_declare_who_launches_them() -> None:
     assert declared["kicad"] == "companion"
 
 
-def test_workspace_upload_requires_complete_human_preview():
+def test_workspace_upload_requires_complete_human_preview() -> None:
     from solus_api.bridge.allowlist import requires_complete_preview, supports_dry_run
 
     assert requires_complete_preview("code.arduino_upload")

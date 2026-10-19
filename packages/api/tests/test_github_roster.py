@@ -44,7 +44,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 def headers_for(user: User) -> dict[str, str]:
-    return bearer(user.supabase_user_id, user.email)
+    headers: dict[str, str] = bearer(user.supabase_user_id, user.email)
+    return headers
 
 
 def gh_member(gid: int, login: str | None = None) -> dict[str, Any]:

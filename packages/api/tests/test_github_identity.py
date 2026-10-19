@@ -66,7 +66,7 @@ async def test_connection_is_the_first_source(db: AsyncSession) -> None:
     await connect(db, user, "4242")
     admin = FakeAdmin(999)
 
-    assert await verified_github_id(db, user, admin=admin) == 4242  # type: ignore[arg-type]
+    assert await verified_github_id(db, user, admin=admin) == 4242
     assert admin.calls == []  # the admin API is not even asked
 
 
@@ -74,14 +74,14 @@ async def test_admin_identity_is_the_fallback(db: AsyncSession) -> None:
     user = await seed_user(db)
     admin = FakeAdmin(999)
 
-    assert await verified_github_id(db, user, admin=admin) == 999  # type: ignore[arg-type]
+    assert await verified_github_id(db, user, admin=admin) == 999
     assert admin.calls == [user.supabase_user_id]
 
 
 async def test_no_source_gives_none(db: AsyncSession) -> None:
     user = await seed_user(db)
     assert await verified_github_id(db, user, admin=None) is None
-    assert await verified_github_id(db, user, admin=FakeAdmin(None)) is None  # type: ignore[arg-type]
+    assert await verified_github_id(db, user, admin=FakeAdmin(None)) is None
 
 
 async def test_dead_or_foreign_connections_do_not_prove_identity(db: AsyncSession) -> None:

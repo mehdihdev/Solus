@@ -53,7 +53,7 @@ USER_TOKEN = "ghu_usertoken"
 
 
 @pytest.fixture
-def settings(settings: Settings) -> Settings:  # type: ignore[override]
+def settings(settings: Settings) -> Settings:
     return app_settings(settings, generate_key_pair()[0])
 
 
@@ -82,7 +82,8 @@ class World:
 
     def headers(self, who: str, **kwargs: Any) -> dict[str, str]:
         user = self.users[who]
-        return bearer(user.supabase_user_id, user.email, **kwargs)
+        headers: dict[str, str] = bearer(user.supabase_user_id, user.email, **kwargs)
+        return headers
 
     def url(self, suffix: str) -> str:
         return f"/api/v1/teams/{self.team_id}/github/{suffix}"
