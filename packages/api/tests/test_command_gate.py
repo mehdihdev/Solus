@@ -568,3 +568,40 @@ async def test_an_ordinary_command_is_not_refused_as_hidden(
     )
 
     assert parked.confirmation_id is not None
+
+
+# ------------------------------------------------ event program values (§9 item 9)
+
+
+@pytest.mark.parametrize(
+    ("argv0", "program"),
+    [
+        ("/usr/bin/make", "make"),
+        ("./tools/build_v2.sh", "build_v2.sh"),
+        ("/usr/bin/g++", "g++"),
+        ("./run me", "other"),
+        ("./bu‮ild", "other"),
+        ("./café", "other"),
+        ("./" + "x" * 65, "other"),
+        ("./" + "x" * 64, "x" * 64),
+    ],
+)
+def test_event_program_values_are_charset_bounded(argv0: str, program: str) -> None:
+    from solus_api.agent.command_gate import completion_events
+
+    events = completion_events("code.exec", {"argv": [argv0]}, {"ok": True, "exit_code": 0})
+    assert events[0][1]["program"] == program
+
+
+async def test_a_parked_command_event_never_carries_an_odd_program_name(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    scope = await _scope(maker)
+    machine = _Machine(_plan(["/w/café-build"]))
+    registry = _registry(machine, maker, scope[0], scope[2])
+
+    parked = await _park(maker, registry, scope, "code.exec", {"argv": ["./café-build"]})
+
+    assert parked.confirmation_id is not None
+    events = await _events(maker, "sol.command.proposed")
+    assert [event["program"] for event in events] == ["other"]

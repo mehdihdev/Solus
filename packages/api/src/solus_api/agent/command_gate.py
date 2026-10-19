@@ -39,9 +39,16 @@ COMMAND_TOOLS: Final = ARGV_TOOLS | frozenset(
 _SANDBOX_KIND: Final = re.compile(r"^(?:sandbox-exec|landlock(?:-abi[0-9]{1,2})?)$")
 
 
+#: §9 item 9: an event `program` is a plain basename or the literal "other".
+_EVENT_PROGRAM: Final = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
+
+
 def _basename(argv: object) -> str | None:
     if isinstance(argv, list | tuple) and argv and isinstance(argv[0], str) and argv[0]:
-        return posixpath.basename(argv[0])[:128] or None
+        base = posixpath.basename(argv[0])
+        if not base:
+            return None
+        return base if _EVENT_PROGRAM.fullmatch(base) else "other"
     return None
 
 

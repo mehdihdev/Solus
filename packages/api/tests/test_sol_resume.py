@@ -347,3 +347,54 @@ async def test_the_claim_is_atomic(
         with pytest.raises(APIError) as caught:
             await claim_resume(second, ticket, **scope)
     assert caught.value.status_code == 409
+
+
+async def test_concurrent_resumes_at_chain_five_respect_the_cap(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, engine: Any
+) -> None:
+    """§9 item 9: the chain check locks the conversation row, so two resumes that
+    both read chain 5 cannot both start a turn (the sixth claim is visible to the
+    second check before any assistant turn has been written)."""
+    import asyncio
+
+    from solus_api.core.errors import APIError
+    from solus_api.routers.sol_resume import check_resume, claim_resume
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    project, convo = await _setup(client, alice_headers)
+    owner = await db.get(Conversation, uuid.UUID(convo))
+    assert owner is not None
+    for _ in range(5):
+        db.add(
+            ConversationTurn(
+                conversation_id=owner.id,
+                project_id=uuid.UUID(project),
+                role=TurnRole.ASSISTANT,
+                content="continued",
+                attrs={"resume_of": str(uuid.uuid4())},
+            )
+        )
+    await db.commit()
+    first = await _seed(db, project_id=project, conversation_id=convo)
+    second = await _seed(db, project_id=project, conversation_id=convo)
+    scope = {
+        "conversation_id": owner.id,
+        "project_id": uuid.UUID(project),
+        "team_id": owner.team_id,
+        "user_id": owner.created_by,
+    }
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    async with maker() as a, maker() as b:
+        ticket = await check_resume(a, confirmation_id=first, **scope)
+        assert ticket.chain == 6
+        racing = asyncio.create_task(check_resume(b, confirmation_id=second, **scope))
+        await asyncio.sleep(0.3)
+        assert not racing.done()  # blocked on the conversation row lock
+        await claim_resume(
+            a, ticket, conversation_id=owner.id, project_id=uuid.UUID(project)
+        )
+        await a.commit()
+        with pytest.raises(APIError) as caught:
+            await racing
+    assert caught.value.status_code == 409
+    assert caught.value.code == "resume_limit"
