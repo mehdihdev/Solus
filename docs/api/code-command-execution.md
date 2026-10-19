@@ -210,11 +210,12 @@ Writable set (everything else is read-only; reads, exec and network are not rest
   `.local/share/pnpm`, `.local/share/uv`, `.cargo/registry`, `.cargo/git`, `.platformio`,
   `.arduino15`, `.gradle`, `.colcon`. Adding a cache is a SECURITY_REVIEW re-review trigger.
 
-Denied even inside the workspace (macOS rule; Linux detects, see below), for the workspace
-gitdir (or the gitdir a `.git` file points to, when it resolves inside the workspace): the
-`.git` entry itself (no rename/replace), `config*`, `hooks/**`, `info/**`, `commondir`,
-`modules/*/config*`, `modules/**/hooks/**`, `worktrees/*/config*`. Objects, refs, index, HEAD
-and logs stay writable so ordinary `git` commands work. `~/.solus/**` is denied everywhere.
+Denied even inside the workspace: on macOS, the whole workspace gitdir is read-only (the `.git`
+entry and everything beneath it, plus the gitdir a `.git` file points to when that resolves
+inside the workspace). Sandboxed commands can read the repository but cannot write it. Git
+writes go through the dedicated git tools. On Linux, the protected metadata (`config*`,
+`hooks/**`, `info/**`, `commondir`, `gitdir`, all of `modules/**` metadata, `worktrees/**`,
+`.gitmodules`) is guarded by detection (below). `~/.solus/**` is denied everywhere.
 
 macOS IPC hardening: the profile denies `process-exec` of `/bin/launchctl`,
 `/usr/bin/osascript`, `/usr/bin/osacompile`, `/usr/bin/open`, `/usr/bin/automator` and
@@ -265,11 +266,11 @@ of `argv[0]`, with a trailing version suffix stripped for interpreters (`python3
 - Privilege elevation: `sudo su doas pkexec runuser`.
 - Inline code: `python -c`/`-<flags>c`, `node -e/--eval/-p/--print`, `ruby -e`, `perl -e/-E`,
   `php -r`, `lua -e`, `deno eval`, `bun -e/--eval`, `Rscript -e`.
-- Git options and subcommands that execute a supplied command: `--upload-pack`,
-  `--receive-pack`, `-u` (clone/fetch/ls-remote/archive), `--exec` (push/archive/rebase),
-  `rebase -x`, `difftool -x/--extcmd`, `bisect run`, `submodule foreach`, `filter-branch`.
-- Git config injection: `-c`, `-c<value>`, `--config-env`, `--exec-path` anywhere before the
-  subcommand, and any global option that is not on the known-safe list (fail closed).
+- Git: `git` and every `git-*` helper (`git-upload-pack`, `git-receive-pack`, `git-shell`, …)
+  are denied in `code.exec`/`code.process_start`. SOL uses the dedicated `code.git_status`,
+  `code.git_log`, `code.git_diff`, `code.git_commit` and `code.git_push` tools. Git's option
+  grammar (abbreviations, short-option clusters, per-verb command options, config injection)
+  cannot be denied reliably, so it fails closed.
 - Interpreter option parsing fails closed: an inline-code flag anywhere among the leading
   options (including combined short flags) denies, and so does an unknown leading option.
   Also denied: node `--import/--loader/--experimental-loader/--require/-r` with `data:` or
@@ -286,8 +287,8 @@ trailing `w` are stripped, and `nodejs`→`node`, `pypy*`→`python`, `luajit`�
 checks both the `argv[0]` basename and the resolved realpath basename.
 
 **Risks** (badges on the card; never a denial): `network`, `install`, `destructive`,
-`hardware`, `remote`, `runs_shell` (allowed programs that can run shell text: git config
-writes to `alias.*`/`core.*`/hooks, `find -exec/-execdir/-ok`, `awk`, `sed` with `e`), `project_scripts` (runs code defined by the project: `make`, `npm run`,
+`hardware`, `remote`, `runs_shell` (allowed programs that can run shell text: `find -exec/-execdir/-ok`, `awk`,
+`sed` with `e`), `project_scripts` (runs code defined by the project: `make`, `npm run`,
 `pnpm run`, `yarn run`, `colcon build`, `cmake --build`, workspace-relative executables).
 The full table lives in the module and its tests.
 

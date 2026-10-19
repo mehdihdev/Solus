@@ -168,11 +168,19 @@ Governing spec: `docs/api/code-command-execution.md`. Applies identically to the
   read from the `sandbox` row. The badges are presentation only. The renderer does not
   classify anything; the verbatim rows (program, command, cwd, environment, profile,
   sandbox, risk, fingerprint) are unchanged in the expandable preview.
-- **Cmd/Ctrl+Enter approves.** While focus is inside a SOL chat surface (page or window),
-  Cmd+Enter (macOS) / Ctrl+Enter (Linux) approves the newest pending **command** card in that
-  surface. It does nothing when the card is busy, when IME composition is active, or when no
-  command card is pending. When it fires it takes precedence over composer submit. The Approve
-  button shows the hint `⌘↵` / `Ctrl↵`. Non-command cards still need a click.
+- **Cmd/Ctrl+Enter approves.** While focus is inside a SOL chat surface (page or window,
+  composer included), Cmd+Enter (macOS) / Ctrl+Enter (Linux) approves the newest pending
+  **command** card in that surface. The shortcut is never registered globally.
+  - A card is approvable by shortcut only after it has been rendered and the newest command card
+    for at least 700 ms. A newer card restarts that clock, so an auto-resumed card cannot be
+    approved by a press meant for the previous one.
+  - Key auto-repeat is ignored. After a shortcut approval, the next one needs a fresh keydown
+    (any keyup, or the window losing focus).
+  - Ignored when the card is busy or permanently failed, during IME composition, with Alt/Shift
+    held, or when no command card is pending. With a command card pending, a blocked press is
+    consumed and never submits the composer. With none pending, Cmd/Ctrl+Enter behaves as before.
+  - The Approve button shows `⌘↵` / `Ctrl↵` (hidden from screen readers; `aria-keyshortcuts`
+    set). Non-command cards still need a click.
 - **Output stays.** The output region is shown while an approved command runs, and the final
   output stays under the resulting "Approval recorded" message with the exit status
   (`exited 0`, `exited 2`, `timed out`, `refused: …`) until the conversation is closed.
