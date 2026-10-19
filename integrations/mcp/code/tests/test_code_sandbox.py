@@ -127,20 +127,10 @@ def test_macos_wrap_uses_realpaths_and_the_constant_profile(tmp_path: Path) -> N
         "-D",
         f"GIT_DIR={git}",
         "-D",
-        f"GIT_DIR_RE={sandbox.sbpl_regex_escape(git)}",
-        "-D",
         f"GIT_COMMON={git}",
-        "-D",
-        f"GIT_COMMON_RE={sandbox.sbpl_regex_escape(git)}",
         "/usr/bin/make",
         "-j4",
     ]
-
-
-def test_regex_escape_neutralises_metacharacters() -> None:
-    assert sandbox.sbpl_regex_escape("/a.b+c(d)[e]{f}*?^$|\\g-h") == (
-        "/a\\.b\\+c\\(d\\)\\[e\\]\\{f\\}\\*\\?\\^\\$\\|\\\\g-h"
-    )
 
 
 def test_macos_profile_states_the_writable_set_and_denials() -> None:
@@ -153,26 +143,17 @@ def test_macos_profile_states_the_writable_set_and_denials() -> None:
     denials = profile.split("(deny file-write*", 2)[2]
     for fragment in (
         '(literal (param "DOTGIT"))',
-        '"/hooks"',
-        '"/info"',
-        '"/config[^/]*$"',
-        '"/modules/',
-        '"/worktrees/[^/]+/config[^/]*$"',
-        '"/commondir"',
+        '(subpath (param "GIT_DIR"))',
+        '(subpath (param "GIT_COMMON"))',
         '"/.solus"',
     ):
         assert fragment in denials, fragment
+    assert "regex (string-append" not in profile, "per-path git regexes are gone"
     for program in sandbox.MACOS_DENIED_EXEC:
         assert f'(literal "{program}")' in profile
     assert '(global-name "com.apple.coreservices.appleevents")' in profile
     assert '(global-name "com.apple.coreservices.launchservicesd")' in profile
     assert '(global-name-regex #"^com\\.apple\\.lsd\\.")' in profile
-    for fragment in (
-        '"/(modules/.+|worktrees/[^/]+)/(commondir|gitdir)$"',
-        '"/modules/.+/info(/.*)?$"',
-        '"/worktrees/[^/]+$"',
-    ):
-        assert fragment in profile, fragment
 
 
 def test_protected_git_dirs_follow_gitfile_and_commondir(tmp_path: Path) -> None:
@@ -194,10 +175,12 @@ def test_limitations_are_reported_per_kind() -> None:
     mac = sandbox.limitations("sandbox-exec")
     assert mac == [
         "reads, exec and network are not restricted",
+        "git operations inside sandboxed commands cannot write the repository",
         "launchd job submission not blocked",
         "a descendant that double-forks between process-table snapshots can survive a stop",
     ]
     old = sandbox.limitations("landlock-abi1")
+    assert "git operations inside sandboxed commands cannot write the repository" in old
     assert "truncate not confined" in old
     assert "file metadata (chmod/chown/utimes) not confined" in old
     assert "unix-socket/signal scoping unavailable" in old
@@ -275,9 +258,9 @@ def test_git_metadata_digest_detects_hook_and_config_changes(tmp_path: Path) -> 
     before = sandbox.git_metadata_digest(tmp_path)
     (git / "modules" / "s" / "objects" / "ab" / "cd").write_bytes(b"blob")
     (git / "modules" / "s" / "HEAD").write_text("x")
+    assert sandbox.git_metadata_digest(tmp_path) == before, "bulk submodule state"
     (git / "worktrees" / "w0" / "HEAD").write_text("x")
-    (git / "worktrees" / "w0" / "index").write_bytes(b"x")
-    assert sandbox.git_metadata_digest(tmp_path) == before, "bulk submodule/worktree state"
+    assert sandbox.git_metadata_digest(tmp_path) != before, "worktrees/** is protected"
     for change in (
         lambda: (git / "hooks" / "pre-commit").write_text("#!/bin/sh\n"),
         lambda: (git / "config").write_text("[core]\nhooksPath = /x\n"),
@@ -441,33 +424,29 @@ def _git_repo(path: Path) -> None:
 
 
 @pytest.mark.skipif(not _macos_sandbox(), reason="needs macOS with /usr/bin/sandbox-exec")
-def test_real_sandbox_keeps_git_usable_but_protects_its_metadata(tmp_path: Path) -> None:
+def test_real_sandbox_makes_the_whole_gitdir_read_only(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     _git_repo(workspace)
     (workspace / "a.txt").write_text("a\n")
     script = "; ".join(
         [
-            "/usr/bin/git add a.txt >/dev/null 2>&1 && echo add-ok",
+            "/usr/bin/git add a.txt >/dev/null 2>&1 || echo add-denied",
             "/usr/bin/git status --porcelain >/dev/null 2>&1 && echo status-ok",
             "mv .git .gitx 2>/dev/null || echo rename-denied",
             "echo x > .git/config.worktree 2>/dev/null || echo worktree-config-denied",
-            "mkdir -p .git/info 2>/dev/null; echo x > .git/info/attributes 2>/dev/null"
-            " || echo info-denied",
-            "echo x > .git/commondir 2>/dev/null || echo commondir-denied",
-            "mkdir -p .git/modules/sub/hooks 2>/dev/null;"
-            " echo x > .git/modules/sub/hooks/post 2>/dev/null || echo module-hook-denied",
-            "echo x > .git/modules/sub/config 2>/dev/null || echo module-config-denied",
+            "mkdir -p .git/objects/zz 2>/dev/null || echo objects-denied",
+            "echo x > .git/HEAD 2>/dev/null || echo head-denied",
+            "echo x > other.txt && echo workspace-ok",
         ]
     )
     assert _run_sandboxed(workspace, script, tmp_path) == [
-        "add-ok",
+        "add-denied",
         "status-ok",
         "rename-denied",
         "worktree-config-denied",
-        "info-denied",
-        "commondir-denied",
-        "module-hook-denied",
-        "module-config-denied",
+        "objects-denied",
+        "head-denied",
+        "workspace-ok",
     ]
     assert (workspace / ".git").is_dir()
 
@@ -541,15 +520,13 @@ def test_real_sandbox_protects_submodule_and_worktree_metadata(tmp_path: Path) -
         [
             "echo x > .git/modules/sub/gitdir 2>/dev/null || echo m-gitdir-denied",
             "echo x > .git/worktrees/w/commondir 2>/dev/null || echo w-commondir-denied",
-            "mkdir .git/modules/sub/info 2>/dev/null || echo m-info-denied",
             "mkdir .git/worktrees/evil 2>/dev/null || echo w-entry-denied",
-            "echo x > .git/modules/sub/objects/ab && echo m-objects-ok",
+            "echo x > .git/modules/sub/objects/ab 2>/dev/null || echo m-objects-denied",
         ]
     )
     assert _run_sandboxed(workspace, script, tmp_path) == [
         "m-gitdir-denied",
         "w-commondir-denied",
-        "m-info-denied",
         "w-entry-denied",
-        "m-objects-ok",
+        "m-objects-denied",
     ]

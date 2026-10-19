@@ -274,25 +274,28 @@ Posture:
   → `SEARCH_ROOTS`) and the result shows the resolved path.
 - [x] **Deny table** (`solus/command_deny.py`, plain literals mirrored by the cloud
   `CommandPolicy`), checked on the proposed name, the resolved program and its realpath:
-  shells, wrappers, elevation/namespace tools, inline-code interpreter options (python
-  fails closed on unknown leading options), loader specifiers with any non-`file:` URL
-  scheme, perl/ruby module values, git config injection, unknown git global options and
-  git options/subcommands that run a supplied command. Names are normalised (case,
-  version/build suffixes, `<known name><non-letter>…` prefixes, aliases).
+  shells, wrappers, elevation/namespace tools, `git` and every `git-*` helper (SOL uses
+  the dedicated, previewed git tools), inline-code interpreter options (python fails
+  closed on unknown leading options), loader specifiers containing whitespace/controls or
+  any non-`file:` URL scheme, perl/ruby module values (also inside short-option
+  clusters). Names are normalised (case, version/build suffixes, `<known name><non-letter>…`
+  prefixes, GNU `g` prefixes of wrappers, aliases).
 - [x] **Sandbox or refuse** for EVERY executing tool (`create_environment`, `install`,
   `run`, `test`, `exec`, `process_start`, `profile_capture`): the planner refuses with
   `sandbox unavailable: …` when the cached probe fails. macOS: root-owned
   `/usr/bin/sandbox-exec` with a constant profile (writes only to the workspace, temp, a
-  few devices and the declared HOME caches; `.git` itself, git metadata — config*,
-  hooks, info, commondir, gitfile targets, modules/worktrees metadata — and `~/.solus`
-  denied; launchctl/osascript/open/osacompile/automator exec denied; AppleEvents and
+  few devices and the declared HOME caches; the WHOLE gitdir is read-only — the `.git`
+  entry, the resolved gitdir (gitfile targets) and its common dir — and `~/.solus` is
+  denied, so git operations inside sandboxed commands cannot write the repository; launchctl/osascript/open/osacompile/automator exec denied; AppleEvents and
   LaunchServices lookups denied). Linux: Solus-authored `solus/landlock_exec.py` (ctypes
   only, `-I`, fixed minimal environment, child environment over an inherited descriptor,
   NO_NEW_PRIVS, best-ABI write rights, ABI ≥ 6 socket/signal scoping, network left open
   by decision). Real sandbox-exec tests run on macOS; real Landlock tests skip off Linux.
 - [x] **Git metadata detection** around every sandboxed command: full-content, mode-aware
   digest of the protected set; any cap → always "changed" (`git_metadata_changed: true`).
-  The command's process group is killed after the leader exits, before the check.
+  The command's process group — and every descendant seen in process-table snapshots,
+  including ones that left the group via setsid — is killed after the leader exits,
+  before the check. Linux servers set PR_SET_CHILD_SUBREAPER so orphans stay visible.
 - [x] **Loader injection**: `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES`,
   `GCONV_PATH` never reach a child; profiles additionally drop `BASH_ENV ENV
   PROMPT_COMMAND PYTHONSTARTUP` and secret-shaped names.
@@ -301,7 +304,8 @@ Posture:
   `~/.solus/code-profiles/<key>/` atomically (0600/0700, `schema_version 1`), re-validated
   on load (corrupt or tampered → refusal, never a crash), values never returned.
 - [x] **Processes**: ≤ 4 running, ≤ 16 entries, 30 min retention, 256 KiB ring of complete
-  lines, 64 KiB per answer, `max_runtime_seconds` enforced, SIGTERM → 5 s → SIGKILL,
+  lines, 64 KiB per answer, `max_runtime_seconds` enforced, SIGTERM → 5 s → SIGKILL to
+  the group and the snapshotted descendant tree,
   stop-all on stdin EOF/SIGTERM/SIGINT (real-server test), orphan reaping by start token
   (`/bin/ps -o lstart=` / `/proc/<pid>/stat`), no PR_SET_PDEATHSIG, never restarted.
 - [x] Companion: `code.exec` progress relayed like `code.run`; `run test exec
@@ -317,9 +321,9 @@ card and the sandbox; it is intentionally not expanded further):
   AppleEvents/LaunchServices lookups are); `sandbox-exec` is deprecated by Apple.
   DYLD_* variables are stripped by SIP when crossing `/usr/bin/sandbox-exec`, so a ROS
   profile's `DYLD_LIBRARY_PATH` may not reach the target.
-- Linux: Landlock grants only — git metadata is protected by detection, not prevention;
-  descendants that leave the process group (setsid/double fork) are not tracked or
-  killed; file metadata (chmod/chown/utimes) is not confined; ABI < 3 cannot confine
+- Descendant tracking is snapshot-based (every 0.5 s): a descendant that double-forks
+  between snapshots (macOS has no subreaper) can survive a stop. No cgroups by decision.
+- Linux: Landlock grants only — git metadata is protected by detection, not prevention; file metadata (chmod/chown/utimes) is not confined; ABI < 3 cannot confine
   truncate, ABI < 6 cannot scope abstract sockets/signals. Cache directories that do not
   exist yet are not writable on Linux (Landlock needs an existing path).
 - The deny table cannot see what an allowed program does (`make`, `npm run`, workspace

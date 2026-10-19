@@ -64,29 +64,6 @@ MACOS_DENIED_EXEC: tuple[str, ...] = (
 )
 
 
-def _git_rules(directory: str, pattern: str) -> str:
-    """Denials for one protected git directory (`directory` / its escaped `pattern` params)."""
-    root = f'(param "{directory}")'
-    regex = f'(param "{pattern}")'
-
-    def matching(suffix: str) -> str:
-        return f'(regex (string-append "^" {regex} "{suffix}"))'
-
-    return (
-        f"(literal {root})"
-        + matching("/config[^/]*$")
-        + f'(subpath (string-append {root} "/hooks"))'
-        + f'(subpath (string-append {root} "/info"))'
-        + matching("/modules/.+/config[^/]*$")
-        + matching("/modules/(.+/)?hooks(/.*)?$")
-        + matching("/modules/.+/info(/.*)?$")
-        + matching("/(modules/.+|worktrees/[^/]+)/(commondir|gitdir)$")
-        + matching("/worktrees/[^/]+/config[^/]*$")
-        + matching("/worktrees/[^/]+$")
-        + f'(literal (string-append {root} "/commondir"))'
-    )
-
-
 MACOS_PROFILE = (
     "(version 1)(allow default)(deny file-write*)"
     "(allow file-write*"
@@ -96,8 +73,7 @@ MACOS_PROFILE = (
     '(regex #"^/dev/fd/")(regex #"^/dev/cu\\.")(regex #"^/dev/tty\\.")'
     f"{_HOME_RULES})"
     "(deny file-write*"
-    '(literal (param "DOTGIT"))'
-    f"{_git_rules('GIT_DIR', 'GIT_DIR_RE')}{_git_rules('GIT_COMMON', 'GIT_COMMON_RE')}"
+    '(literal (param "DOTGIT"))(subpath (param "GIT_DIR"))(subpath (param "GIT_COMMON"))'
     '(subpath (string-append (param "HOME") "/.solus")))'
     "(deny process-exec" + "".join(f'(literal "{program}")' for program in MACOS_DENIED_EXEC) + ")"
     "(deny mach-lookup"
@@ -108,7 +84,6 @@ MACOS_PROFILE = (
 LINUX_TMP: tuple[str, ...] = ("/tmp", "/var/tmp")  # noqa: S108 - the declared writable set
 LINUX_DEVICES: tuple[str, ...] = ("/dev/null", "/dev/zero", "/dev/tty")
 LINUX_SERIAL_GLOBS: tuple[str, ...] = ("/dev/ttyUSB*", "/dev/ttyACM*")
-_REGEX_SPECIAL = frozenset(".[]{}()\\*+?^$|")
 SMOKE_TIMEOUT_SECONDS = 10
 
 Probe = tuple[str | None, str]
@@ -266,11 +241,7 @@ def wrap(
             "-D",
             f"GIT_DIR={git_dir}",
             "-D",
-            f"GIT_DIR_RE={sbpl_regex_escape(git_dir)}",
-            "-D",
             f"GIT_COMMON={common}",
-            "-D",
-            f"GIT_COMMON_RE={sbpl_regex_escape(common)}",
             *argv,
         ]
     if kind is not None and kind.startswith(KIND_LINUX):
@@ -281,16 +252,14 @@ def wrap(
     raise ValueError(f"sandbox unavailable: {kind!r}")
 
 
-def sbpl_regex_escape(path: str) -> str:
-    """Escape a path for use inside a sandbox-profile regular expression."""
-    return "".join(f"\\{char}" if char in _REGEX_SPECIAL else char for char in path)
-
-
 def limitations(kind: str | None) -> list[str]:
     """Known gaps of `kind`, shown on the approval card."""
     if kind is None:
         return []
-    gaps = ["reads, exec and network are not restricted"]
+    gaps = [
+        "reads, exec and network are not restricted",
+        "git operations inside sandboxed commands cannot write the repository",
+    ]
     if not kind.startswith(KIND_LINUX):
         return [
             *gaps,

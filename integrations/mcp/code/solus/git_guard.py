@@ -1,11 +1,11 @@
 """Git metadata protection shared by both sandboxes (docs/api/code-command-execution.md §3).
 
 `protected_git_dirs` resolves `.git` (or the `gitdir:` file's target and its
-`commondir`); macOS denies writes there by profile, Linux (Landlock grants only)
+`commondir`); macOS makes those whole directories read-only by profile, Linux (Landlock grants only)
 relies on `git_metadata_digest` before/after every command. The digest covers
-`.git` itself, `.gitmodules`, `config*`, `commondir`, `hooks/**`, `info/**` and,
-at any depth under `modules/` and `worktrees/`, `config*`, `hooks/**`, `info/**`,
-`commondir` and `gitdir` (plus the worktree entries) — full contents and modes.
+`.git` itself, `.gitmodules`, `config*`, `commondir`, `hooks/**`, `info/**`,
+`worktrees/**` and, at any depth under `modules/`, `config*`, `hooks/**`, `info/**`,
+`commondir` and `gitdir` — full contents and modes.
 Past any cap it answers a unique sentinel: always "changed" (fail closed).
 """
 
@@ -140,14 +140,7 @@ def _digest_git_dir(digest: _Digest, git_dir: str) -> None:
     digest.tree(os.path.join(git_dir, "hooks"))
     digest.tree(os.path.join(git_dir, "info"))
     digest.tree(os.path.join(git_dir, "modules"), nested=True)
-    worktrees = os.path.join(git_dir, "worktrees")
-    digest.tree(worktrees, nested=True)
-    try:
-        entries = sorted(os.listdir(worktrees))
-    except OSError:
-        entries = []
-    for name in entries:
-        digest.entry(os.path.join(worktrees, name))
+    digest.tree(os.path.join(git_dir, "worktrees"))
 
 
 def git_metadata_digest(workspace: Path) -> str:

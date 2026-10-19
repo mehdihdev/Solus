@@ -119,7 +119,7 @@ Contract: `docs/api/code-command-execution.md`. All confirmation-gated except th
   list, never a shell. `argv[0]` resolves to an absolute program without the inherited PATH
   (workspace file → absolute in an allowed root → `<env>/bin` → profile PATH →
   `SEARCH_ROOTS`); `solus/command_deny.py` refuses shells, wrappers, elevation, inline code
-  and git command injection. Answers the `run` shape plus `sandbox` and
+  and `git`/`git-*` (use the dedicated git tools). Answers the `run` shape plus `sandbox` and
   `git_metadata_changed`; output streams like `run`/`test`.
 - `process_start {argv, cwd?, environment?, profile?, name?, max_runtime_seconds?: 60–14400}`,
   `process_stop {process_id}`, `process_status {process_id?, cursor?}` — at most 4 running,
@@ -133,5 +133,7 @@ Contract: `docs/api/code-command-execution.md`. All confirmation-gated except th
 
 **Sandbox (every executing tool).** macOS: root-owned `/usr/bin/sandbox-exec` with a constant
 profile; Linux: `solus/landlock_exec.py` (Landlock ABI ≥ 1, kind `landlock-abi<N>`). Writes are
-limited to the workspace, temp, a few devices and the declared HOME caches; git metadata and
-`~/.solus` are protected (by profile on macOS, by detection on Linux). No sandbox → refused.
+limited to the workspace, temp, a few devices and the declared HOME caches; `~/.solus` is
+denied, the whole gitdir is read-only on macOS and git metadata changes are detected on Linux.
+Leftover descendants (group and snapshotted tree) are killed when a command ends. No sandbox →
+refused.

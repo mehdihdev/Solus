@@ -102,20 +102,15 @@ PERL_MODULE_PATTERN = r"^[A-Za-z0-9_]+(::[A-Za-z0-9_]+)*(=[\w,]+)?$"
 RUBY_LIBRARY_PATTERN = r"^[A-Za-z0-9_./-]+$"
 MODULE_VALUE_FLAGS: Mapping[str, Mapping[str, str]] = MappingProxyType(
     {
-        "perl": MappingProxyType({"-M": PERL_MODULE_PATTERN, "-m": PERL_MODULE_PATTERN}),
+        "perl": MappingProxyType(
+            {"-M": PERL_MODULE_PATTERN, "-m": PERL_MODULE_PATTERN, "-I": RUBY_LIBRARY_PATTERN}
+        ),
         "ruby": MappingProxyType({"-r": RUBY_LIBRARY_PATTERN, "-I": RUBY_LIBRARY_PATTERN}),
     }
 )
-#: git subcommands / options that execute a supplied command.
-GIT_DENIED_OPTIONS: frozenset[str] = frozenset({"--upload-pack", "--receive-pack", "--exec"})
-GIT_UPLOAD_PACK_SHORT: frozenset[str] = frozenset({"clone", "fetch", "ls-remote", "archive"})
-GIT_DENIED_SUBCOMMAND_OPTIONS: Mapping[str, frozenset[str]] = MappingProxyType(
-    {"rebase": frozenset({"-x", "--exec"}), "difftool": frozenset({"-x", "--extcmd"})}
-)
-GIT_DENIED_SUBCOMMAND_ACTIONS: Mapping[str, frozenset[str]] = MappingProxyType(
-    {"bisect": frozenset({"run"}), "submodule": frozenset({"foreach"})}
-)
-GIT_DENIED_SUBCOMMANDS: frozenset[str] = frozenset({"filter-branch"})
+#: git and every `git-*` helper are denied programs: SOL uses the dedicated, previewed
+#: git tools (`code.git_*`), never git through exec.
+GIT_PROGRAMS: frozenset[str] = frozenset({"git"})
 PROGRAM_ALIASES: Mapping[str, str] = MappingProxyType(
     {"nodejs": "node", "luajit": "lua", "pypy": "python"}
 )
@@ -126,33 +121,6 @@ PYTHON_LONG_SAFE: frozenset[str] = frozenset(
     {"--help", "--version", "--help-env", "--help-xoptions", "--help-all"}
 )
 PYTHON_LONG_VALUE: frozenset[str] = frozenset({"--check-hash-based-pycs"})
-#: git global options (before the subcommand).
-GIT_DENIED_GLOBAL_OPTIONS: frozenset[str] = frozenset({"-c", "--config-env", "--exec-path"})
-GIT_SAFE_GLOBAL_OPTIONS: frozenset[str] = frozenset(
-    {
-        "-C",
-        "--git-dir",
-        "--work-tree",
-        "--namespace",
-        "--no-pager",
-        "-P",
-        "--paginate",
-        "-p",
-        "--bare",
-        "--version",
-        "-v",
-        "--help",
-        "-h",
-        "--no-replace-objects",
-        "--literal-pathspecs",
-        "--glob-pathspecs",
-        "--noglob-pathspecs",
-        "--icase-pathspecs",
-        "--no-optional-locks",
-        "--no-advice",
-    }
-)
-GIT_VALUE_OPTIONS: frozenset[str] = frozenset({"-C", "--git-dir", "--work-tree", "--namespace"})
 #: Generic scanning: options that consume the next argument.
 OPTION_VALUES: Mapping[str, frozenset[str]] = MappingProxyType(
     {
@@ -165,10 +133,14 @@ OPTION_VALUES: Mapping[str, frozenset[str]] = MappingProxyType(
 HINT = "propose the program's argv directly (no shell, no &&, no pipes)"
 _SUFFIX = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
-_C0_AND_SPACE = "".join(chr(code) for code in range(33))
 _INTERPRETERS = {name.casefold(): name for name in INLINE_CODE}
 #: Names matched by PREFIX (followed by a non-letter or the end), longest first.
-_PREFIX_NAMES = sorted({*SHELLS, *_INTERPRETERS, *PROGRAM_ALIASES, "git"}, key=len, reverse=True)
+_PREFIX_NAMES = sorted(
+    {*SHELLS, *WRAPPERS, *ELEVATION, *GIT_PROGRAMS, *_INTERPRETERS, *PROGRAM_ALIASES},
+    key=len,
+    reverse=True,
+)
+_UNSAFE_CHARS = frozenset(chr(code) for code in range(32)) | {chr(127)}
 _DENY = "deny"
 _ALLOW = "allow"
 
@@ -196,12 +168,18 @@ def program_name(path: str) -> str:
     stripped = PROGRAM_ALIASES.get(stripped, stripped)
     if stripped.endswith(("w", "t")) and stripped[:-1] in _INTERPRETERS:
         stripped = stripped[:-1]
+    gnu = _by_prefix(stripped[1:]) if stripped.startswith("g") else None
+    if gnu is not None and gnu in WRAPPERS:
+        return gnu  # GNU coreutils prefix: gtimeout, genv, gxargs, …
     return _INTERPRETERS.get(stripped, stripped)
 
 
 def _remote(value: str) -> bool:
-    """True for any URL scheme except `file:` (after stripping blanks and C0 controls)."""
-    match = _SCHEME.match(value.strip(_C0_AND_SPACE))
+    """True for a value with any whitespace or control character, or with any URL
+    scheme except `file:` (fail closed on anything a loader could reinterpret)."""
+    if any(char in _UNSAFE_CHARS or char.isspace() for char in value):
+        return True
+    match = _SCHEME.match(value)
     return match is not None and match.group(1).casefold() not in ALLOWED_SCHEMES
 
 
@@ -247,15 +225,22 @@ def _loader(name: str, arg: str, following: str | None) -> bool:
 
 
 def _bad_module_value(name: str, arg: str, following: str | None) -> bool:
-    """perl -M/-m and ruby -r/-I with a value that is not a plain module name."""
+    """perl -M/-m/-I and ruby -r/-I (also inside a short cluster, at the first
+    value-taking letter) with a value that is not a plain module / library name."""
     patterns = MODULE_VALUE_FLAGS.get(name)
-    if patterns is None or arg.startswith("--") or len(arg) < 2:
+    if patterns is None or arg.startswith("--") or not arg.startswith("-"):
         return False
-    pattern = patterns.get(arg[:2])
-    if pattern is None:
-        return False
-    value = arg[2:] or following or ""
-    return re.match(pattern, value) is None
+    values = OPTION_VALUES.get(name, frozenset())
+    for position, char in enumerate(arg[1:]):
+        option = f"-{char}"
+        if option in patterns:
+            value = arg[position + 2 :] or following or ""
+            # The patterns admit no whitespace/controls; perl's `::` is not a scheme.
+            schemed = name != "perl" and _remote(value)
+            return schemed or re.fullmatch(patterns[option], value) is None
+        if option in values:
+            return False
+    return False
 
 
 def _generic(args: Sequence[str], name: str) -> str:
@@ -303,46 +288,12 @@ def _deno(args: Sequence[str]) -> str:
     return _ALLOW
 
 
-def _git_subcommand(subcommand: str, rest: Sequence[str]) -> str:
-    """Options and actions of a subcommand that execute a supplied command."""
-    if subcommand in GIT_DENIED_SUBCOMMANDS:
-        return _DENY
-    actions = GIT_DENIED_SUBCOMMAND_ACTIONS.get(subcommand, frozenset())
-    if rest and rest[0] in actions:
-        return _DENY
-    options = GIT_DENIED_SUBCOMMAND_OPTIONS.get(subcommand, frozenset())
-    for arg in rest:
-        if arg == "--":
-            break
-        head = arg.split("=", 1)[0]
-        short = arg[:2] if not arg.startswith("--") else head
-        if head in GIT_DENIED_OPTIONS or head in options or short in options:
-            return _DENY
-        if subcommand in GIT_UPLOAD_PACK_SHORT and short == "-u":
-            return _DENY
-    return _ALLOW
-
-
-def _git(args: Sequence[str]) -> str:
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if not arg.startswith("-"):
-            return _git_subcommand(arg, args[index + 1 :])
-        head = arg.split("=", 1)[0]
-        if head in GIT_DENIED_GLOBAL_OPTIONS or arg.startswith("-c"):
-            return _DENY
-        if head not in GIT_SAFE_GLOBAL_OPTIONS:
-            return _DENY
-        index += 2 if head in GIT_VALUE_OPTIONS and "=" not in arg else 1
-    return _ALLOW
-
-
 def _category(name: str) -> str | None:
     for label, table in (
         ("shells", SHELLS),
         ("command wrappers", WRAPPERS),
         ("privilege elevation", ELEVATION),
+        ("git — use the dedicated git tools", GIT_PROGRAMS),
     ):
         if name in table:
             return label
@@ -353,8 +304,6 @@ def _check(name: str, args: Sequence[str]) -> str | None:
     category = _category(name)
     if category is not None:
         return f"{name[:64]} is refused ({category}); {HINT}"
-    if name == "git" and _git(args) == _DENY:
-        return f"git configuration injection or an unknown global option is refused; {HINT}"
     if name not in INLINE_CODE:
         return None
     scanner = {"python": _python, "deno": _deno}.get(name)

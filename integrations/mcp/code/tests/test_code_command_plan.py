@@ -143,7 +143,7 @@ def test_profile_path_entries_resolve_before_search_roots(ws: Path, tmp_path: Pa
         ["bash", "-c", "ls"],
         ["python3.12", "-c", "1"],
         ["sudo", "make"],
-        ["git", "-c", "core.hooksPath=/x", "status"],
+        ["git", "status"],
     ],
 )
 def test_denied_programs_are_refused_by_the_planner(ws: Path, argv: list[str]) -> None:
