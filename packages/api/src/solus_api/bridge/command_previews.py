@@ -22,6 +22,8 @@ from solus_api.agent.command_policy import Risk, classify
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.untrusted import redact_text
 
+#: §10.1: where the server resolved the program. Anything else is "unknown".
+PROGRAM_SCOPES: Final = frozenset({"system", "workspace"})
 #: The fixed Solus capture script (§2.4); the setup file is `$1`, never interpolated.
 CAPTURE_SCRIPT: Final = 'source "$1" >/dev/null 2>&1 </dev/null || exit 97; exec /usr/bin/env -0'
 _CAPTURE_PREFIX: Final = (
@@ -63,6 +65,16 @@ class CommandPlan:
     profile_digest: str | None
     sandbox_kind: str
     sandbox_limits: tuple[str, ...] = ()
+    program_scope: str | None = None
+
+
+class PlanRows(list[dict[str, Any]]):
+    """Card rows plus the plan's `program_scope` (§10.1), which is not a card
+    row: it decides only whether Build may skip the card, never what it shows."""
+
+    def __init__(self, rows: list[dict[str, Any]], *, program_scope: str | None) -> None:
+        super().__init__(rows)
+        self.program_scope = program_scope
 
 
 def _refuse(detail: str) -> PreviewRefusal:
@@ -118,6 +130,7 @@ def parse_plan(plan: object) -> CommandPlan:
         raise _refuse("The command plan has no usable OS sandbox (sandbox unavailable).")
     assert isinstance(sandbox, Mapping)
     name, digest = _profile(plan.get("profile"))
+    scope = plan.get("program_scope")
     return CommandPlan(
         tuple(argv),
         cwd,
@@ -126,6 +139,7 @@ def parse_plan(plan: object) -> CommandPlan:
         digest,
         kind,
         _strings(sandbox.get("limitations")),
+        scope if isinstance(scope, str) and scope in PROGRAM_SCOPES else None,
     )
 
 
@@ -192,9 +206,7 @@ def _max_runtime(args: Mapping[str, Any]) -> str:
     return f"{value} s"
 
 
-def command_rows(
-    raw: object, args: Mapping[str, Any], *, process: bool = False
-) -> list[dict[str, Any]]:
+def command_rows(raw: object, args: Mapping[str, Any], *, process: bool = False) -> PlanRows:
     """Rows for `code.exec` (and `code.process_start` when `process`)."""
     plan = parse_plan(raw)
     command = _chunked("command", json.dumps(list(plan.argv)), _JSON_COMMAND_CAP)
@@ -214,7 +226,7 @@ def command_rows(
             )
     found = set(requested.risks) | ({Risk.PROJECT_SCRIPTS} if _venv_program(plan) else set())
     risks = ", ".join(risk.value for risk in Risk if risk in found) or "none flagged"
-    return [
+    rows = [
         _row("program", plan.argv[0]),
         *command,
         _row("cwd", plan.cwd),
@@ -225,6 +237,7 @@ def command_rows(
         *([_row("max runtime", _max_runtime(args))] if process else []),
         _row("plan fingerprint", _fingerprint(plan)),
     ]
+    return PlanRows(rows, program_scope=plan.program_scope)
 
 
 def _venv_program(plan: CommandPlan) -> bool:

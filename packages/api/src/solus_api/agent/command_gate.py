@@ -132,9 +132,10 @@ async def record_proposed(
 
 
 def completion_events(
-    tool: str, args: dict[str, Any], value: dict[str, Any]
+    tool: str, args: dict[str, Any], value: dict[str, Any], *, auto: bool = False
 ) -> list[tuple[str, dict[str, Any]]]:
-    """Events for an APPROVED command tool that returned `value` (§5.6)."""
+    """Events for an APPROVED (or, `auto`, Build auto-run §10.1) command tool
+    that returned `value` (§5.6)."""
     events: list[tuple[str, dict[str, Any]]] = []
     if tool in COMMAND_TOOLS:
         sandbox = value.get("sandbox")
@@ -155,6 +156,7 @@ def completion_events(
                     if isinstance(sandbox, str) and _SANDBOX_KIND.fullmatch(sandbox)
                     else None,
                     "git_metadata_changed": value.get("git_metadata_changed") is True,
+                    "auto": auto,
                 },
             )
         )

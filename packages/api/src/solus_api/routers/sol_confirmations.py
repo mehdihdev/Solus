@@ -225,7 +225,7 @@ def _emit_decision_events(
     if decision == "approve" and result.ok and decided is not None:
         # SOLUSDEV-317 §5.6: basename-only command facts, never the argv.
         value = result.value if isinstance(result.value, dict) else {}
-        events.extend(completion_events(decided.tool, dict(decided.args), value))
+        events.extend(completion_events(decided.tool, dict(decided.args), value, auto=False))
     # SEC-L3: abuse detection must answer "which destructive tool was approved"
     # from the event stream alone.
     events.append(

@@ -22,6 +22,7 @@ from pydantic import Field, StrictBool, ValidationError, field_validator, model_
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.command_gate import completion_events
 from solus_api.agent.confirmations import (
     ParkedCall,
     _feed_back_outcome,
@@ -780,6 +781,19 @@ async def _record_build_outcome(
                 team_id=ctx.team.id,
                 project_id=ctx.project.id,
             )
+            # §10.1: an auto-run command reports like an approved one, `auto: true`.
+            value = result.value if result.ok and isinstance(result.value, dict) else None
+            for event_type, payload in (
+                completion_events(call.tool, call.args, value, auto=True) if value else []
+            ):
+                emit_event(
+                    recording,
+                    user=ctx.user,
+                    event_type=event_type,
+                    team_id=ctx.team.id,
+                    project_id=ctx.project.id,
+                    payload=payload,
+                )
             emit_event(
                 recording,
                 user=ctx.user,

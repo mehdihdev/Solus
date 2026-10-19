@@ -580,6 +580,18 @@ def test_build_mode_says_to_use_bare_program_names() -> None:
     assert "never guess an absolute path" in text
 
 
+def test_build_mode_says_no_risk_commands_run_directly_and_scripts_go_through_bash() -> None:
+    # ADR-031 amendment 2026-10-19 / code-command-execution.md §10.
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    assert "runs straight away" in text
+    assert "waits for the person's approval on its card" in text
+    assert "bash scripts/build.sh" in text
+    assert "never bash -c" in text
+    assert "Every command waits" not in text
+
+
 def test_guide_mode_never_proposes_execution() -> None:
     from solus_api.agent.modes import ActionMode
 
