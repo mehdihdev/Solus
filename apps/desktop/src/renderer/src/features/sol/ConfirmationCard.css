@@ -179,15 +179,6 @@
   outline-offset: 2px;
 }
 
-.confirmation-card__output pre {
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 11px;
-  text-transform: none;
-}
-
 /* SOLUSDEV-317: command card header — program + risk badges (presentation only). */
 .confirmation-card__command {
   display: flex;
@@ -233,14 +224,22 @@
   opacity: 0.75;
 }
 
-.confirmation-card__output pre:focus-visible {
-  outline: 2px solid var(--acc);
-  outline-offset: 2px;
-}
-
 .confirmation-card__exit {
   margin: 4px 0 0;
   color: var(--mut);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* SOLUSDEV-317 follow-up: the output block itself is CodeBlock (§10.3). */
+.confirmation-card__output {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.confirmation-card__output p {
+  margin: 0;
+  color: var(--mut);
+  font-size: 11.5px;
 }
