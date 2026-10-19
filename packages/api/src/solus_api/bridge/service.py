@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent.command_output import current_output
+from solus_api.agent.command_output import STREAMING_TOOLS, current_output
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import call_display_paths
@@ -73,7 +73,7 @@ async def dispatch(
             if paths:
                 session.write_paths[call.call_id] = next(iter(paths))
             sink = current_output.get()
-            if tool_name in {"code.run", "code.test"} and sink is not None:
+            if tool_name in STREAMING_TOOLS and sink is not None:
                 session.output_sinks[call.call_id] = sink
             try:
                 try:

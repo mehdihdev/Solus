@@ -8,7 +8,12 @@ from solus_api.bridge.previews import preview_builder
 
 
 async def test_late_argv_changes_alter_the_preview() -> None:
-    plan: dict[str, Any] = {"ok": True, "argv": ["python", "a" * 490, "first"], "cwd": "."}
+    plan: dict[str, Any] = {
+        "ok": True,
+        "argv": ["python", "a" * 490, "first"],
+        "cwd": ".",
+        "sandbox": {"kind": "landlock", "writable": []},
+    }
 
     async def read(tool: str, args: dict[str, Any]) -> dict[str, Any]:
         assert tool == "code.plan"

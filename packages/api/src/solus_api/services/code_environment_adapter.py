@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,6 +23,17 @@ from solus_api.services.code_env import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+#: Code tools whose card is the server's own `code.plan`, guarded by the one-use
+#: plan snapshot below (SOLUSDEV-250; SOLUSDEV-317 adds the executing tools).
+COMPLETE_PREVIEW_TOOLS: Final = frozenset(
+    {"code.exec", "code.process_start", "code.profile_capture"}
+)
+PLANNED_TOOLS: Final = (
+    frozenset({"code.create_environment", "code.install", "code.run", "code.test"})
+    | COMPLETE_PREVIEW_TOOLS
+)
 
 
 class EnvironmentFetch(Protocol):
@@ -108,12 +119,7 @@ def with_environment_recording(
     undo the action, so return a portable recording status with its original result.
     The original preview and confirmation descriptor remain authoritative.
     """
-    if tool.descriptor.name not in {
-        "code.create_environment",
-        "code.install",
-        "code.run",
-        "code.test",
-    }:
+    if tool.descriptor.name not in PLANNED_TOOLS:
         return tool
 
     previews: OrderedDict[str, str] = OrderedDict()
@@ -152,7 +158,12 @@ def with_environment_recording(
             tool.descriptor.name, args, result, fetch, sessions, project_id, user_id
         )
 
-    return InProcessTool(tool.descriptor, invoke, preview=preview)
+    wrapped = InProcessTool(tool.descriptor, invoke, preview=preview)
+    if tool.descriptor.name in COMPLETE_PREVIEW_TOOLS:
+        # SOLUSDEV-317 §5.1: a failed or unrenderable plan REFUSES the call; the
+        # gate must never fall back to argument rows for an arbitrary argv.
+        wrapped.requires_complete_preview = True  # type: ignore[attr-defined]
+    return wrapped
 
 
 async def _record_environment(

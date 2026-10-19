@@ -255,14 +255,25 @@ async def test_code_preview_shows_the_real_plan_and_runs_nothing(
     script = tmp_path / "run.py"
     script.write_text("from pathlib import Path\nPath('executed').write_text('ran')\n")
     original = script.read_bytes()
-    rows = await _build_preview(tool("run"), {"script": "run.py", "args": ["two words"]})
-    by = {row["label"]: row["after"] for row in rows}
-    assert by["command"] == ".venv/bin/python run.py 'two words'"
-    assert by["cwd"] == "." and by["plan fingerprint"]
-    steps = await _build_preview(tool("create_environment"), {"path": "vision", "python": "3.12"})
-    by = {row["label"]: row["after"] for row in steps}
-    assert by["command"] == "python3.12 -m venv vision"
-    assert by["cwd"] == "." and by["plan fingerprint"]
+    # SOLUSDEV-317: the card needs the plan's OS sandbox. Where this host has
+    # none (or the server predates it) the preview REFUSES — still running nothing.
+    refusals: list[str] = []
+    rows = await _build_preview(
+        tool("run"), {"script": "run.py", "args": ["two words"]}, quota_failures=refusals
+    )
+    steps = await _build_preview(
+        tool("create_environment"), {"path": "vision", "python": "3.12"}, quota_failures=refusals
+    )
+    if refusals:
+        assert rows == [] and steps == []
+        assert all("sandbox" in message and "Nothing was" in message for message in refusals)
+    else:
+        by = {row["label"]: row["after"] for row in rows}
+        assert by["command"] == ".venv/bin/python run.py 'two words'"
+        assert by["cwd"] == "." and by["plan fingerprint"] and by["sandbox"]
+        by = {row["label"]: row["after"] for row in steps}
+        assert by["command"] == "python3.12 -m venv vision"
+        assert by["cwd"] == "." and by["plan fingerprint"] and by["sandbox"]
     assert dispatched == ["code.plan", "code.plan"]
     assert not (tmp_path / "vision").exists()
     assert not (tmp_path / "executed").exists()

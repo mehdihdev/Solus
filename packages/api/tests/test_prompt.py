@@ -545,3 +545,34 @@ def test_repository_read_guidance_precedes_untrusted_preferences(mode: SolMode) 
     assert "related repository files" in instructions
     assert "Do not use machine.read_file for connected repository explanations" in instructions
     assert "other explicit machine tasks" in instructions
+
+
+# ------------------------------------------- SOLUSDEV-317: running commands (Build only)
+
+
+def test_build_mode_teaches_argv_commands_profiles_and_processes() -> None:
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    for phrase in (
+        "code.exec",
+        "argv",
+        "&&",
+        "cwd",
+        "code.profile_capture",
+        "setup.bash",
+        "code.process_start",
+        "code.process_status",
+        "approval",
+        "never claim a command ran",
+        "code.git_status",
+    ):
+        assert phrase in text, phrase
+
+
+def test_guide_mode_never_proposes_execution() -> None:
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.GUIDE, action_mode=ActionMode.GUIDE)
+    assert "code.exec" not in text
+    assert "never execute changes" in text

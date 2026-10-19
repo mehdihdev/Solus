@@ -39,11 +39,12 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from solus_api.agent.errors_filing import (
-    UNCERTAIN_COMMAND_OUTCOME,
-    command_failure,
-    file_tool_error,
-)
+from solus_api.agent.command_gate import ARGV_TOOLS, policy_refusal, record_proposed
+from solus_api.agent.command_outcome import command_outcome_text, output_tail
+from solus_api.agent.command_output import STREAMING_TOOLS
+from solus_api.agent.command_policy import classify
+from solus_api.agent.errors_filing import file_tool_error
+from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.exec import run_tool
 from solus_api.agent.tools.knowledge import record_write_outcome
 from solus_api.agent.tools.registry import ToolRegistry
@@ -54,7 +55,6 @@ from solus_api.agent.tools.shapes import (
     ToolErrorCode,
     ToolResult,
 )
-from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
 from solus_api.models import ConfirmationStatus, Conversation, ToolConfirmation, User, utcnow
 
@@ -150,17 +150,16 @@ def _single_line(value: object, cap: int) -> str:
     return _RUNS.sub(" ", "".join(ch for ch in spaced if ch.isprintable()))[:cap].strip()
 
 
-class QuotaPreviewUnavailable(ToolException):
-    """Only connector-owned quota classification crosses the preview refusal boundary."""
+class QuotaPreviewUnavailable(PreviewRefusal):
+    """Connector-owned quota classification crosses the preview refusal boundary."""
 
     def __init__(self, *, exhausted: bool) -> None:
-        self.safe_message = (
+        super().__init__(
             "Onshape API quota is exhausted. Nothing was executed."
             if exhausted
             else "Onshape API quota has reached its conservation threshold. "
             "SOL actions are paused to reserve the remaining allowance. Nothing was executed."
         )
-        super().__init__(self.safe_message, code=ToolErrorCode.UNAVAILABLE, retryable=False)
 
 
 async def _build_preview(
@@ -195,7 +194,9 @@ async def _build_preview(
         # runs under a row lock — a hanging tool must not pin the connection.
         async with asyncio.timeout(_PREVIEW_TIMEOUT_SECONDS):
             rows = await builder(dict(args))
-    except QuotaPreviewUnavailable as error:
+    except PreviewRefusal as error:
+        # A quota block or a refused `code.plan` (SOLUSDEV-317): the reason is
+        # Solus-composed and sanitised, and the call is refused, not parked.
         if quota_failures is not None:
             quota_failures.append(error.safe_message)
         return []
@@ -333,6 +334,13 @@ async def request_confirmation(
             ),
         )
 
+    # SOLUSDEV-317 §4: a denied argv is refused BEFORE any preview read or park.
+    denied = await policy_refusal(
+        session, call, user_id=user_id, team_id=team_id, project_id=project_id
+    )
+    if denied is not None:
+        return ParkedCall(None, call.tool, {}, "", [], denied)
+
     if conversation_id is not None:
         # Serialize cross-turn check/insert under the same owner-private chat.
         # The caller commits immediately after parking, releasing this lock.
@@ -425,6 +433,17 @@ async def request_confirmation(
     )
     session.add(row)
     await session.flush()
+    if call.tool in ARGV_TOOLS:
+        argv = call.args.get("argv")
+        await record_proposed(
+            session,
+            call.tool,
+            argv,
+            classify(argv),
+            user_id=user_id,
+            team_id=team_id,
+            project_id=project_id,
+        )
     logger.info("parked %s for confirmation (project=%s)", call.tool, project_id)
     return ParkedCall(
         confirmation_id=row.id,
@@ -567,7 +586,7 @@ async def decide_confirmation(
 
     progress = (
         output_store.start((project_id, user_id, confirmation_id))
-        if row.tool in {"code.run", "code.test"}
+        if row.tool in STREAMING_TOOLS
         else None
     )
     token = current_output.set(progress)
@@ -600,73 +619,6 @@ async def decide_confirmation(
         executed=True,
     )
     return result
-
-
-def output_tail(value: dict[str, Any], cap: int) -> str:
-    """The last `cap` characters of what the command printed — stdout then
-    stderr. pytest reports its FAILED lines on stdout; a crashing script puts
-    its traceback on stderr; keeping only one of them loses the other.
-
-    Security review H3: this text is persisted (Error logging, the tool turn)
-    and replayed into the next prompt's history block, so it goes through the
-    same scalar redaction as every other untrusted machine text, and control
-    characters never ride along."""
-    parts = [
-        str(value[key]).strip()
-        for key in ("stdout_tail", "stderr_tail")
-        if isinstance(value.get(key), str) and str(value[key]).strip()
-    ]
-    joined = "\n".join(parts)
-    printable = "".join(ch for ch in joined if ch.isprintable() or ch == "\n")
-    return redact_text(printable)[-cap:]
-
-
-_OUTCOME_TAIL_CAP: Final = 400
-_REASON_CAP: Final = 200
-
-
-def command_outcome_text(value: dict[str, Any]) -> str | None:
-    """A short clause naming what a confirmed COMMAND did, for the tool turn
-    the next model reads (SOLUSDEV-250). `ToolResult.ok` is the transport; the
-    command's own exit lives in the value, and without it the model can only
-    say "applied ok" about a test run that failed. Command evidence includes
-    exit codes, timeouts, uncertainty, or failed ordered results. A null exit
-    without evidence of execution retains the legacy refusal meaning. A reason
-    alone is not command evidence (`local.open_in_tool` may return one)."""
-    if value.get("uncertain") is True:
-        return "; " + UNCERTAIN_COMMAND_OUTCOME
-    if value.get("timed_out") is True:
-        return _timeout_outcome(value)
-    if "exit_code" not in value:
-        failure = command_failure(value)
-        if failure is None:
-            return None
-        return "; the command " + output_tail({"stderr_tail": failure}, _OUTCOME_TAIL_CAP)
-    exit_code = value["exit_code"]
-    reason = output_tail({"stderr_tail": str(value.get("reason") or "unknown reason")}, _REASON_CAP)
-    if value.get("ok") is False and (
-        (value.get("started") is True and exit_code is None)
-        or (type(exit_code) is int and exit_code == 0)
-    ):
-        tail = output_tail(value, _OUTCOME_TAIL_CAP)
-        return f"; the command failed: {reason}" + (f" — output tail: {tail}" if tail else "")
-    if exit_code is None:
-        return f"; the server refused to run it: {reason}"
-    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
-        return None
-    if exit_code == 0:
-        if value.get("ok") is True and value.get("started") is False:
-            return "; verified existing result; no command was started"
-        return "; the command exited 0"
-    tail = output_tail(value, _OUTCOME_TAIL_CAP)
-    return f"; the command exited {exit_code}" + (f" — output tail: {tail}" if tail else "")
-
-
-def _timeout_outcome(value: dict[str, Any]) -> str:
-    if value.get("started") is False:
-        return "; the command did not start before its deadline"
-    tail = output_tail(value, _OUTCOME_TAIL_CAP)
-    return "; the command timed out" + (f" — output tail: {tail}" if tail else "")
 
 
 async def _feed_back_outcome(
@@ -725,6 +677,8 @@ def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
 __all__ = [
     "CONFIRMATION_TTL",
     "ParkedCall",
+    "command_outcome_text",
+    "output_tail",
     "decide_confirmation",
     "request_confirmation",
 ]
