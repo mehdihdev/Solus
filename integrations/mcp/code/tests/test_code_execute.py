@@ -426,3 +426,11 @@ def test_resolve_executable_refuses_a_venv_interpreter_linked_into_tmp(
     inside.write_text("#!/bin/sh\n")
     inside.chmod(0o755)
     assert execute.resolve_executable(ws, "bin/tool.sh") == str(inside)
+
+
+def test_runner_functions_stay_small() -> None:
+    """Phase 4 LOW: default_runner is split into focused pieces (< 50 lines each)."""
+    import inspect
+
+    for function in (execute.default_runner, execute._supervise, execute._spawn):
+        assert len(inspect.getsource(function).splitlines()) < 50, function.__name__

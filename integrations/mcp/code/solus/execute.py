@@ -138,6 +138,81 @@ def _drain_output(
     observer.suppress(stream)
 
 
+@dataclass
+class _Spools:
+    """Private output spools with independent read descriptors (reading never seeks
+    the child's shared write offset)."""
+
+    out: IO[bytes]
+    err: IO[bytes]
+    out_reader: IO[bytes]
+    err_reader: IO[bytes]
+
+    def readers(self) -> tuple[tuple[str, IO[bytes]], ...]:
+        return (("stdout", self.out_reader), ("stderr", self.err_reader))
+
+
+@contextlib.contextmanager
+def _spools() -> Iterator[_Spools]:
+    with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
+        base = Path(directory)
+        with (
+            open(base / "stdout", "w+b") as out,
+            open(base / "stderr", "w+b") as err,
+            open(base / "stdout", "rb") as out_reader,
+            open(base / "stderr", "rb") as err_reader,
+        ):
+            yield _Spools(out, err, out_reader, err_reader)
+
+
+def _spawn(argv: list[str], cwd: Path, env: dict[str, str], spools: _Spools) -> Any:
+    return subprocess.Popen(  # noqa: S603 - validated argv, no shell
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=spools.out,
+        stderr=spools.err,
+        start_new_session=True,
+        close_fds=True,
+        pass_fds=sandbox.PASS_FDS.get(),
+    )
+
+
+def _supervise(
+    proc: subprocess.Popen[bytes],
+    spools: _Spools,
+    observer: LineOutput,
+    deadline: float,
+    cancelled: Event | None,
+) -> bool:
+    """Stream output and snapshot the descendant tree until the leader exits; kill the
+    group on the deadline or a cancel. Then kill whatever it left behind (its group and
+    descendants that left the group), so a git metadata check afterwards sees the
+    command's final effect. True when it timed out (or was cancelled)."""
+    tree = TreeTracker(proc.pid)
+    snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
+    timed_out = False
+    while proc.poll() is None:
+        if time.monotonic() >= snapshot_at:
+            tree.observe()
+            snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
+        for stream, reader in spools.readers():
+            observer.feed(stream, reader.read(8192))
+        if time.monotonic() >= deadline or (cancelled is not None and cancelled.is_set()):
+            timed_out = True
+            _kill_group(proc)
+            break
+        time.sleep(0.025)
+    proc.wait()
+    _kill_group(proc)
+    tree.kill(signal.SIGKILL)
+    for stream, reader in spools.readers():
+        _drain_output(observer, stream, reader, deadline, cancelled)
+    observer.finish()
+    return timed_out
+
+
 def default_runner(
     argv: list[str],
     cwd: Path,
@@ -148,65 +223,25 @@ def default_runner(
 ) -> Outcome:
     """argv list, no shell, own session, closed stdin, spooled output (last
     `tail_bytes` of each stream kept)."""
-    # Private spools and independent read descriptors are established before launch.
-    # Reading never seeks the child's shared write offset.
-    with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
-        with (
-            open(Path(directory) / "stdout", "w+b") as out,
-            open(Path(directory) / "stderr", "w+b") as err,
-            open(Path(directory) / "stdout", "rb") as out_reader,
-            open(Path(directory) / "stderr", "rb") as err_reader,
-        ):
-            cancelled = CANCEL_EVENT.get()
-            if cancelled is not None and cancelled.is_set():
-                return Outcome(None, b"", b"", True)
-            proc = subprocess.Popen(  # noqa: S603 - validated argv, no shell
-                argv,
-                cwd=cwd,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=out,
-                stderr=err,
-                start_new_session=True,
-                close_fds=True,
-                pass_fds=sandbox.PASS_FDS.get(),
-            )
-            observer = LineOutput(OUTPUT_CALLBACK.get())
-            deadline = time.monotonic() + timeout_seconds
-            timed_out = False
-            tree = TreeTracker(proc.pid)
-            snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
-            try:
-                while proc.poll() is None:
-                    if time.monotonic() >= snapshot_at:
-                        tree.observe()
-                        snapshot_at = time.monotonic() + TREE_SNAPSHOT_SECONDS
-                    observer.feed("stdout", out_reader.read(8192))
-                    observer.feed("stderr", err_reader.read(8192))
-                    if time.monotonic() >= deadline or (cancelled and cancelled.is_set()):
-                        timed_out = True
-                        _kill_group(proc)
-                        break
-                    time.sleep(0.025)
-                proc.wait()
-                # Whatever the leader left running (its group, and descendants that
-                # left the group) dies with it, so the git metadata check afterwards
-                # sees the command's final effect.
+    with _spools() as spools:
+        cancelled = CANCEL_EVENT.get()
+        if cancelled is not None and cancelled.is_set():
+            return Outcome(None, b"", b"", True)
+        proc = _spawn(argv, cwd, env, spools)
+        observer = LineOutput(OUTPUT_CALLBACK.get())
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            timed_out = _supervise(proc, spools, observer, deadline, cancelled)
+        finally:
+            if proc.poll() is None:
                 _kill_group(proc)
-                tree.kill(signal.SIGKILL)
-                for stream, reader in (("stdout", out_reader), ("stderr", err_reader)):
-                    _drain_output(observer, stream, reader, deadline, cancelled)
-                observer.finish()
-            finally:
-                if proc.poll() is None:
-                    _kill_group(proc)
-                    proc.wait()
-            return Outcome(
-                None if timed_out else proc.returncode,
-                _tail(out, tail_bytes),
-                _tail(err, tail_bytes),
-                timed_out,
-            )
+                proc.wait()
+        return Outcome(
+            None if timed_out else proc.returncode,
+            _tail(spools.out, tail_bytes),
+            _tail(spools.err, tail_bytes),
+            timed_out,
+        )
 
 
 def resolve_executable(root: Path, argv0: str, which: Which = pinned_which) -> str | None:
