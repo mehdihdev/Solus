@@ -266,7 +266,9 @@ async def test_a_workspace_setup_file_is_a_project_script() -> None:
 async def test_the_capture_fingerprint_covers_the_profile_name() -> None:
     plan = _capture_plan("/opt/ros/jazzy/setup.bash")
     first, _ = await _capture({"name": "ros", "setup_file": "/opt/ros/jazzy/setup.bash"}, plan, [])
-    second, _ = await _capture({"name": "ros2", "setup_file": "/opt/ros/jazzy/setup.bash"}, plan, [])
+    second, _ = await _capture(
+        {"name": "ros2", "setup_file": "/opt/ros/jazzy/setup.bash"}, plan, []
+    )
     assert first[-1]["after"] != second[-1]["after"]
     assert plan_fingerprint(plan, profile_name="ros") != plan_fingerprint(plan)
 

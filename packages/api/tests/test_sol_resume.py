@@ -390,9 +390,7 @@ async def test_concurrent_resumes_at_chain_five_respect_the_cap(
         racing = asyncio.create_task(check_resume(b, confirmation_id=second, **scope))
         await asyncio.sleep(0.3)
         assert not racing.done()  # blocked on the conversation row lock
-        await claim_resume(
-            a, ticket, conversation_id=owner.id, project_id=uuid.UUID(project)
-        )
+        await claim_resume(a, ticket, conversation_id=owner.id, project_id=uuid.UUID(project))
         await a.commit()
         with pytest.raises(APIError) as caught:
             await racing

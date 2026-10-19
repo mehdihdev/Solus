@@ -445,7 +445,7 @@ async def test_the_decide_route_emits_basename_only_command_events(
 
     from solus_api.agent.tools.shapes import ToolResult
     from solus_api.models import ConversationTurn
-    from solus_api.routers import sol
+    from solus_api.routers import sol_confirmations as sol
     from sqlalchemy import update
     from test_confirmations import _seeded_confirmation
 
@@ -477,7 +477,7 @@ async def test_the_decide_route_emits_basename_only_command_events(
 
 def test_decision_summary_uses_the_tools_tail_and_git_warning() -> None:
     from solus_api.agent.tools.shapes import ToolResult
-    from solus_api.routers.sol import _decision_summary
+    from solus_api.routers.sol_confirmations import _decision_summary
 
     value = {"ok": False, "exit_code": 1, "stdout_tail": "q" * 5000, "git_metadata_changed": True}
     summary = _decision_summary("approve", ToolResult.success("c", value), "code.exec")

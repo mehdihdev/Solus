@@ -22,12 +22,9 @@ from pydantic import Field, StrictBool, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent.command_gate import completion_events
 from solus_api.agent.confirmations import (
     ParkedCall,
     _feed_back_outcome,
-    command_outcome_text,
-    decide_confirmation,
     request_confirmation,
 )
 from solus_api.agent.conversation import (
@@ -65,7 +62,6 @@ from solus_api.core.responses import envelope
 from solus_api.deps import (
     AgentRunnerDep,
     ProjectCtx,
-    RequireVerified,
     SecretStoreDep,
     SessionDep,
     SessionMakerDep,
@@ -96,13 +92,14 @@ from solus_api.orchestration.gates import (
     check_frequency_cap,
 )
 from solus_api.orchestration.providers import ProviderTransientError
+from solus_api.routers.sol_confirmations import sync_enqueuer
 from solus_api.routers.sol_resume import (
     RESUME_PROMPT,
     ResumeTicket,
     check_resume,
     claim_resume,
 )
-from solus_api.schemas import ConfirmationDecision, StrictModel
+from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
 
@@ -477,37 +474,6 @@ def _refusal_result(call_id: str, message: str) -> ToolResult:
     )
 
 
-def _decision_summary(decision: str, result: ToolResult, tool: str | None = None) -> str:
-    """What the decision did, in the words the next turn's model reads.
-
-    Deliberately distinguishes the three outcomes a person can produce from the
-    one the gate produces: a rejection is not a failure, and a STALE refusal is
-    not a rejection — it means the world moved and NOTHING was applied, which is
-    the one the model most needs to understand before it tries again.
-    """
-    if result.ok:
-        outcome = (
-            command_outcome_text(result.value, tool=tool)
-            if isinstance(result.value, dict)
-            else None
-        )
-        if outcome is not None:
-            return "approved by you" + outcome
-        sync = result.value.get("graph_sync") if isinstance(result.value, dict) else None
-        sync_note = ""
-        if isinstance(sync, dict):
-            sync_note = (
-                "; graph sync queued"
-                if sync.get("status") == "queued"
-                else "; graph sync unavailable — retry source sync, not the CAD change"
-            )
-        return "approved by you and applied ok" + (outcome or "") + sync_note
-    if decision != "approve":
-        return "rejected by you; nothing was applied"
-    code = result.error.code.value if result.error is not None else "error"
-    return f"not applied ({code}) — ask again to see the current change"
-
-
 async def _persist_turn(
     *,
     sessionmaker: async_sessionmaker[Any],
@@ -788,19 +754,6 @@ async def _record_build_outcome(
     if turn_sync is not None:
         result = turn_sync.outcome(call, result)
     if result.ok and turn_sync is None:
-        from solus_api.routers.sources import enqueue_sync
-
-        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
-            return await enqueue_sync(
-                sync_session,
-                ctx,
-                source,
-                request,
-                background_tasks,
-                settings.model_copy(update={"sync_inline": False}),
-                Response(),
-            )
-
         graph_sync = await schedule_onshape_write_sync(
             sessionmaker,
             project_id=ctx.project.id,
@@ -808,7 +761,7 @@ async def _record_build_outcome(
             tool_name=call.tool,
             args=call.args,
             store=getattr(request.app.state, "integration_store", None),
-            enqueue=enqueue_after_write,
+            enqueue=sync_enqueuer(request, background_tasks, settings, ctx),
         )
         if graph_sync is not None and result.value is not None:
             result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
@@ -1134,174 +1087,6 @@ async def post_message(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
-
-
-@router.get("/confirmations/{confirmation_id}/output")
-async def confirmation_output(
-    confirmation_id: uuid.UUID,
-    ctx: ProjectCtx,
-    session: SessionDep,
-    cursor: Annotated[int, Query(ge=0, le=256)] = 0,
-) -> dict[str, Any]:
-    from solus_api.agent.command_output import output_store
-
-    owned = await session.scalar(
-        select(ToolConfirmation.id).where(
-            ToolConfirmation.id == confirmation_id,
-            ToolConfirmation.project_id == ctx.project.id,
-            ToolConfirmation.user_id == ctx.user.id,
-        )
-    )
-    if owned is None:
-        raise APIError(404, "not_found", "No such action.")
-    return {"data": output_store.read((ctx.project.id, ctx.user.id, confirmation_id), cursor)}
-
-
-@router.post("/confirmations/{confirmation_id}")
-async def decide_tool_confirmation(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    confirmation_id: uuid.UUID,
-    body: ConfirmationDecision,
-    ctx: ProjectCtx,
-    session: SessionDep,
-    registry: SolRegistryDep,
-    settings: SettingsDep,
-    _verified: RequireVerified,
-) -> dict[str, Any]:
-    """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
-
-    The turn that proposed it has long since ended — a one-shot SSE stream cannot
-    block for a click — so the tool runs HERE, with the registry rebuilt under
-    the deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.
-    The request body carries a decision and nothing else, so what the user
-    approved is what executes (CLAUDE.md §7).
-    """
-    require_role(ctx, Role.MEMBER)
-    # SEC (SOLX-04 review): the decide endpoint is a destructive EXECUTION
-    # point — REST source creation requires a verified account (ADR-009), so
-    # executing the identical mutation from chat must too; and it gets the
-    # same admission gate as the message route.
-    try:
-        await check_frequency_cap(
-            ctx.user.id,
-            redis=getattr(request.app.state, "redis", None),
-            limits=_ORCHESTRATION_LIMITS,
-            session=session,
-        )
-    except FrequencyCapExceededError as exc:
-        raise APIError(429, "frequency_cap", "Too many decisions right now; slow down.") from exc
-    result = await decide_confirmation(
-        session,
-        registry,
-        confirmation_id,
-        approve=body.decision == "approve",
-        project_id=ctx.project.id,
-        user_id=ctx.user.id,
-    )
-    # SCOPED, like `decide_confirmation`'s own read. `session.get` by id alone
-    # would let another project's confirmation name a tool in this project's
-    # event stream — the same no-existence-oracle rule, applied to the audit path.
-    decided = (
-        await session.execute(
-            select(
-                ToolConfirmation.tool, ToolConfirmation.conversation_id, ToolConfirmation.args
-            ).where(
-                ToolConfirmation.id == confirmation_id,
-                ToolConfirmation.project_id == ctx.project.id,
-                ToolConfirmation.user_id == ctx.user.id,
-            )
-        )
-    ).first()
-    tool_name = decided.tool if decided is not None else None
-
-    if body.decision == "approve" and result.ok and decided is not None:
-        from solus_api.routers.sources import enqueue_sync
-
-        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
-            return await enqueue_sync(
-                sync_session,
-                ctx,
-                source,
-                request,
-                background_tasks,
-                settings.model_copy(update={"sync_inline": False}),
-                Response(),
-            )
-
-        graph_sync = await schedule_onshape_write_sync(
-            request.app.state.sessionmaker,
-            project_id=ctx.project.id,
-            team_id=ctx.team.id,
-            tool_name=decided.tool,
-            args=decided.args,
-            store=getattr(request.app.state, "integration_store", None),
-            enqueue=enqueue_after_write,
-        )
-        if graph_sync is not None and isinstance(result.value, dict):
-            result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
-
-    # THE OTHER HALF OF THE HISTORY FIX. The turn that proposed this recorded it
-    # as "parked, awaiting your approval" and then ended. Without a second turn
-    # recording what the decision actually did, the transcript stops at "parked"
-    # forever — so the next message shows SOL a change it proposed, never learned
-    # the fate of, and will helpfully propose again.
-    if decided is not None and decided.conversation_id is not None and tool_name is not None:
-        await SERVICE.append_turn(
-            session,
-            conversation_id=decided.conversation_id,
-            project_id=ctx.project.id,
-            role=TurnRole.TOOL,
-            content=f"{tool_name} → {_decision_summary(body.decision, result, tool_name)}",
-            attrs=redact_value(
-                {
-                    "confirmation_id": str(confirmation_id),
-                    "call": {
-                        "tool": decided.tool,
-                        "args": {
-                            key: value
-                            for key, value in decided.args.items()
-                            if key in {"path", "schematic_path"}
-                            and isinstance(value, str)
-                            and value in call_display_paths(decided.tool, decided.args)
-                        },
-                    },
-                    "result": result.model_dump(mode="json"),
-                },
-                allowed_paths=call_display_paths(decided.tool, decided.args),
-            ),
-        )
-
-    if body.decision == "approve" and result.ok and decided is not None:
-        # SOLUSDEV-317 §5.6: basename-only command facts, never the argv.
-        for event_type, payload in completion_events(
-            decided.tool, dict(decided.args), result.value if isinstance(result.value, dict) else {}
-        ):
-            emit_event(
-                session,
-                user=ctx.user,
-                event_type=event_type,
-                team_id=ctx.team.id,
-                project_id=ctx.project.id,
-                payload=payload,
-            )
-    emit_event(
-        session,
-        user=ctx.user,
-        event_type="sol.tool_confirmation_decided",
-        team_id=ctx.team.id,
-        project_id=ctx.project.id,
-        # SEC-L3: abuse detection must answer "which destructive tool was
-        # approved" from the event stream alone.
-        payload={
-            "decision": body.decision,
-            "ok": result.ok,
-            "confirmation_id": str(confirmation_id),
-            "tool": tool_name,
-        },
-    )
-    await session.commit()
-    return envelope(result.model_dump(mode="json"))
 
 
 def create_scene_enqueue(

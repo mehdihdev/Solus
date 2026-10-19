@@ -554,6 +554,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     app.include_router(isaac_connection.router)
     app.include_router(sol.router)
+    from solus_api.routers import sol_confirmations
+
+    app.include_router(sol_confirmations.router)
     from solus_api.livebench.stream import router as bench_stream_router
 
     app.include_router(bench_stream_router)
