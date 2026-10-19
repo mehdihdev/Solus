@@ -26,7 +26,7 @@ from solus_api.agent.command_policy import (
 _DENY_CASES: list[list[str]] = [
     # shells, however argv[0] is spelled
     ["bash", "-c", "echo hi"],
-    ["sh", "script.sh"],
+    ["sh", "-s", "script.sh"],
     ["/bin/bash"],
     ["/usr/local/bin/zsh", "-l"],
     ["./bash", "-c", "id"],
@@ -437,3 +437,196 @@ def test_cloud_and_server_classifiers_agree_on_the_shared_corpus() -> None:
 )
 def test_a_path_that_climbs_out_is_not_workspace_relative(argv: list[str]) -> None:
     assert classify(argv).denied
+
+
+# ------------------------------------- §10.2: bash/sh running a workspace script
+
+
+_SHELL_SCRIPT_ALLOWED: list[list[str]] = [
+    ["bash", "scripts/build.sh"],
+    ["sh", "script.sh"],
+    ["sh", "./setup.sh", "--fast", "-c", "x"],  # options AFTER the script are its own
+    ["bash", "tools/flash.bash", "robot"],
+    ["/bin/bash", "scripts/build.sh"],
+    ["/bin/sh", "scripts/build.sh"],
+]
+
+_SHELL_SCRIPT_DENIED: list[list[str]] = [
+    ["bash"],
+    ["bash", "-c", "scripts/build.sh"],
+    ["bash", "-e", "scripts/build.sh"],
+    ["bash", "-x", "scripts/build.sh"],
+    ["bash", "--rcfile", "x.sh", "scripts/build.sh"],
+    ["bash", "--init-file", "x.sh"],
+    ["bash", "-o", "errexit", "scripts/build.sh"],
+    ["bash", "+o", "posix", "scripts/build.sh"],
+    ["bash", "-s", "scripts/build.sh"],
+    ["bash", "-i", "scripts/build.sh"],
+    ["bash", "-"],
+    ["bash", "-.sh"],
+    ["bash", "+x.sh"],
+    ["bash", "../build.sh"],
+    ["bash", "scripts/../../build.sh"],
+    ["bash", "/tmp/build.sh"],
+    ["bash", "~/build.sh"],
+    ["bash", "scripts/build.py"],
+    ["bash", "scripts/build.sh.txt"],
+    ["zsh", "scripts/build.sh"],
+    ["dash", "scripts/build.sh"],
+    ["fish", "scripts/build.fish"],
+    ["bash5", "scripts/build.sh"],
+    ["BASH", "scripts/build.sh"],
+    ["bash-5.2", "scripts/build.sh"],
+    ["env", "bash", "scripts/build.sh"],
+    ["sudo", "bash", "scripts/build.sh"],
+]
+
+
+@pytest.mark.parametrize("argv", _SHELL_SCRIPT_ALLOWED, ids=lambda argv: " ".join(argv))
+def test_bash_or_sh_may_run_a_workspace_script_behind_a_card(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is False, verdict.reason
+    assert Risk.RUNS_SHELL in verdict.risks
+    assert Risk.PROJECT_SCRIPTS in verdict.risks
+    assert list(verdict.risks) == sorted(set(verdict.risks), key=list(Risk).index)
+
+
+@pytest.mark.parametrize("argv", _SHELL_SCRIPT_DENIED, ids=lambda argv: " ".join(argv))
+def test_every_other_shell_form_stays_denied(argv: list[str]) -> None:
+    assert classify(argv).denied
+
+
+@pytest.mark.parametrize("argv", _SHELL_SCRIPT_DENIED, ids=lambda argv: " ".join(argv))
+def test_the_server_denies_the_other_shell_forms_too(argv: list[str]) -> None:
+    assert _server_denied(_server_classifier()(argv))
+
+
+@pytest.mark.xfail(strict=False, reason="server shell-script rule lands at integration")
+@pytest.mark.parametrize("argv", _SHELL_SCRIPT_ALLOWED, ids=lambda argv: " ".join(argv))
+def test_the_server_allows_the_same_shell_scripts(argv: list[str]) -> None:
+    assert not _server_denied(_server_classifier()(argv))
+
+
+# ---------------- security review 2026-10-19: system programs running project code
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python3", "train.py"],
+        ["python", "-u", "scripts/run.py"],
+        ["python3", "-m", "pytest"],
+        ["/usr/bin/python3.12", "-m", "http.server"],
+        ["node", "app.js"],
+        ["ruby", "x.rb"],
+        ["perl", "script.pl"],
+        ["php", "index.php"],
+        ["deno", "run", "main.ts"],
+        ["bun", "test"],
+        ["lua", "x.lua"],
+        ["Rscript", "x.R"],
+        ["pytest"],
+        ["pytest", "-q", "tests"],
+        ["py.test"],
+        ["tox"],
+        ["nox", "-s", "lint"],
+        ["npm", "test"],
+        ["npx", "tsc"],
+        ["pnpm", "lint"],
+        ["yarn"],
+        ["cargo", "run"],
+        ["cargo", "build"],
+        ["go", "test", "./..."],
+        ["make"],
+        ["gmake", "all"],
+        ["ninja"],
+        ["cmake", "--build", "build"],
+        ["cmake", "-S", ".", "-B", "build"],
+        ["cmake", "."],
+        ["colcon", "build"],
+        ["catkin", "build"],
+        ["catkin_make"],
+        ["ros2", "run", "pkg", "node"],
+        ["ros2", "launch", "pkg", "x.launch.py"],
+        ["gradle", "build"],
+        ["gradlew", "build"],
+        ["mvn", "test"],
+        ["rake"],
+        ["bundle", "exec", "rspec"],
+        ["poetry", "run", "pytest"],
+        ["uv", "run", "main.py"],
+        ["pipenv", "run", "x"],
+        ["hatch", "run", "test"],
+        ["pio", "run"],
+        ["platformio", "test"],
+        # Orchestrator addition 2026-10-19 (2)
+        ["pip", "wheel", "."],
+        ["pip3", "download", "x"],
+        ["uv", "sync"],
+        ["uv", "pip", "install", "x"],
+        ["uv", "build"],
+        ["uv", "tool", "run", "x"],
+        ["poetry", "install"],
+        ["poetry", "build"],
+        ["pdm", "run", "x"],
+        ["rye", "sync"],
+        ["pixi", "run", "x"],
+        ["conda", "run", "-n", "x", "y"],
+        ["mamba", "install", "x"],
+        ["micromamba", "env", "create"],
+        ["rosrun", "pkg", "node"],
+        ["roslaunch", "pkg", "x.launch"],
+        ["ctest"],
+        ["meson", "compile"],
+        ["scons"],
+        ["bazel", "build", "//..."],
+        ["bazelisk", "test", "//..."],
+        ["just"],
+        ["task", "build"],
+        ["invoke", "build"],
+        ["pre-commit", "run"],
+        # Runners load workspace plugins/toolchains even for version or help.
+        ["pytest", "--help"],
+        ["pytest", "--version"],
+        ["make", "--version"],
+        ["cargo", "--version"],
+        ["go", "version"],
+        ["npm", "--version"],
+        ["cmake", "--version"],
+        ["ninja", "--version"],
+        ["bazelisk", "--version"],
+        ["bazel", "--help"],
+        ["pre-commit", "--version"],
+        ["hatch", "--version"],
+    ],
+    ids=lambda argv: " ".join(argv),
+)
+def test_system_programs_running_project_code_are_flagged(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is False, verdict.reason
+    assert Risk.PROJECT_SCRIPTS in verdict.risks
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python3", "--version"],
+        ["python3", "-V"],
+        ["python", "--help"],
+        ["node", "--version"],
+        ["ros2", "topic", "list"],
+        ["uv", "--version"],
+        ["pip", "--version"],
+        ["pip", "list"],
+        ["conda", "--version"],
+        ["conda", "info"],
+        ["poetry", "--version"],
+        ["bundle", "--version"],
+        ["pio", "--version"],
+        ["ls", "-la"],
+    ],
+    ids=lambda argv: " ".join(argv),
+)
+def test_version_and_help_only_invocations_stay_no_risk(argv: list[str]) -> None:
+    verdict = classify(argv)
+    assert verdict.denied is False and verdict.risks == ()

@@ -13,7 +13,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Final
 
-from solus_api.agent.command_names import normalise
+from solus_api.agent.command_names import INTERPRETERS, normalise
 
 
 class Risk(enum.StrEnum):
@@ -65,7 +65,6 @@ _PROGRAM_RISKS: Final[Mapping[str, frozenset[Risk]]] = {
         ),
         frozenset({_H}),
     ),
-    **dict.fromkeys(("make", "gmake", "ninja", "catkin_make", "gradle"), frozenset({_P})),
     **dict.fromkeys(("awk", "gawk", "mawk", "nawk"), frozenset({_S})),
 }
 
@@ -96,6 +95,30 @@ _SUBCOMMAND_RISKS: Final[Mapping[tuple[str, str], frozenset[Risk]]] = {
     ("arduino-cli", "burn-bootloader"): frozenset({_H}),
 }
 
+#: Security review 2026-10-19 (§10.1): system programs that run PROJECT code
+#: (tests, build scripts, package scripts, workspace-pinned toolchains) whatever
+#: their arguments — `--version`/`--help` included.
+_PROJECT_RUNNERS: Final = frozenset(
+    {"pytest", "py.test", "tox", "nox", "npm", "npx", "pnpm", "yarn", "bun", "deno"}
+    | {"cargo", "go", "make", "gmake", "ninja", "colcon", "catkin", "catkin_make"}
+    | {"gradle", "gradlew", "mvn", "rake", "ctest", "meson", "scons", "bazel", "bazelisk"}
+    | {"cmake", "hatch"}
+    | {"pdm", "rye", "pixi", "rosrun", "roslaunch", "just", "task", "invoke", "pre-commit"}
+)
+#: Runners that run project code only through one subcommand.
+_RUN_SUBCOMMANDS: Final[Mapping[str, frozenset[str]]] = {
+    "ros2": frozenset({"run", "launch"}),
+    "bundle": frozenset({"exec"}),
+    "pipenv": frozenset({"run"}),
+    **dict.fromkeys(("pip", "pip3"), frozenset({"install", "download", "wheel"})),
+    "uv": frozenset({"sync", "pip", "run", "build", "tool"}),
+    "poetry": frozenset({"install", "build", "run"}),
+    **dict.fromkeys(("conda", "mamba", "micromamba"), frozenset({"run", "install", "env"})),
+    **dict.fromkeys(("pio", "platformio"), frozenset({"run", "test"})),
+}
+_INFO_ONLY: Final = frozenset({"--version", "-V", "-v", "version", "--help", "-h", "help"})
+_INTERPRETER_NAMES: Final = frozenset(INTERPRETERS.values())
+
 _DEVICE: Final = re.compile(r"(?:^|[=:])/dev/(?:tty|cu\.|ttyUSB|ttyACM|serial)")
 _REMOTE_TARGET: Final = re.compile(r"^[A-Za-z0-9._-]+@?[A-Za-z0-9._-]*:")
 
@@ -125,6 +148,24 @@ def _sed_runs_shell(args: Sequence[str]) -> bool:
     return any(_SED_EXEC.search(script) for script in scripts)
 
 
+def _info_only(args: Sequence[str]) -> bool:
+    return bool(args) and all(arg in _INFO_ONLY for arg in args)
+
+
+def _runs_project_code(name: str, args: Sequence[str]) -> bool:
+    """An interpreter given a script/module/file, a project runner (even for
+    `--version`/`--help`: plugins and toolchains load from workspace files), or
+    a subcommand-gated tool's running subcommand."""
+    if name in _PROJECT_RUNNERS:
+        return True
+    if name in _INTERPRETER_NAMES:
+        return not _info_only(args) and (
+            "-m" in args or any(not arg.startswith("-") for arg in args)
+        )
+    sub = _first_positional(args)
+    return sub is not None and sub in _RUN_SUBCOMMANDS.get(name, frozenset())
+
+
 def _runs_shell(name: str, args: Sequence[str]) -> bool:
     if name == "find":
         return any(arg in _FIND_EXEC for arg in args)
@@ -137,7 +178,7 @@ def _argument_risks(name: str, args: Sequence[str]) -> set[Risk]:
         risks.add(_H)
     if name in ("scp", "rsync") and any(_REMOTE_TARGET.match(arg) for arg in args):
         risks.add(_R)
-    if name == "cmake" and "--build" in args:
+    if _runs_project_code(name, args):
         risks.add(_P)
     if name in ("pio", "platformio") and "upload" in args:
         risks.add(_H)

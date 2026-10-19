@@ -112,13 +112,15 @@ class AgentEvent(BaseModel):
         )
 
     @classmethod
-    def tool_result(cls, result: ToolResult) -> Self:
+    def tool_result(cls, result: ToolResult, *, command: dict[str, Any] | None = None) -> Self:
+        """`command` (SOLUSDEV-317 §10.1) is an auto-run `code.exec`'s desktop
+        row — `{tool, auto, program, status, stdout_tail, stderr_tail}` — merged
+        at the top level beside the unchanged `{call_id, ok, value, error}`."""
         # redact_value (SYS-04 SEC M5): tool values carry connector-ingested
         # content — a synced attrs key literally named `api_key` must not stream
         # to the client in the clear. Same gate the persisted turn already gets.
-        return cls(
-            type=AgentEventType.TOOL_RESULT, data=redact_value(result.model_dump(mode="json"))
-        )
+        data = result.model_dump(mode="json")
+        return cls(type=AgentEventType.TOOL_RESULT, data=redact_value({**(command or {}), **data}))
 
     @classmethod
     def artifact(cls, ref: dict[str, Any]) -> Self:

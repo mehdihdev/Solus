@@ -405,6 +405,7 @@ def test_git_metadata_change_is_a_warning_in_the_outcome() -> None:
                         "duration_ms": 120,
                         "sandbox": "landlock-abi3",
                         "git_metadata_changed": True,
+                        "auto": False,
                     },
                 )
             ],
@@ -428,6 +429,7 @@ def test_git_metadata_change_is_a_warning_in_the_outcome() -> None:
                         "duration_ms": None,
                         "sandbox": None,
                         "git_metadata_changed": False,
+                        "auto": False,
                     },
                 ),
                 ("code.profile.captured", {"variable_count": 2, "dropped_count": 1}),
@@ -574,6 +576,16 @@ async def test_an_ordinary_command_is_not_refused_as_hidden(
 
 
 # ------------------------------------------------ event program values (§9 item 9)
+
+
+def test_completion_events_say_whether_the_command_auto_ran() -> None:
+    from solus_api.agent.command_gate import completion_events
+
+    value = {"ok": True, "exit_code": 0, "argv": ["/bin/ls"]}
+    assert completion_events("code.exec", {}, value)[0][1]["auto"] is False
+    assert completion_events("code.exec", {}, value, auto=True)[0][1]["auto"] is True
+    stopped = completion_events("code.process_stop", {}, {"ok": True, "state": "stopped"})
+    assert "auto" not in stopped[0][1]
 
 
 @pytest.mark.parametrize(

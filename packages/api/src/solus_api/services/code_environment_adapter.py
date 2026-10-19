@@ -6,6 +6,7 @@ import json
 import logging
 import uuid
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final, Protocol
 
@@ -37,6 +38,9 @@ logger = logging.getLogger(__name__)
 PLANNED_TOOLS: Final = PLAN_PREVIEW_TOOLS
 
 
+ScopeReader = Callable[[dict[str, Any]], str | None]
+
+
 class PlannedTool(InProcessTool):
     """A `code.plan`-previewed tool; `requires_complete_preview` is read by the
     confirmation gate (duck-typed, like `preview`)."""
@@ -48,9 +52,16 @@ class PlannedTool(InProcessTool):
         preview: ToolPreview,
         *,
         requires_complete_preview: bool,
+        scope: ScopeReader,
     ) -> None:
         super().__init__(descriptor, handler, preview=preview)
         self.requires_complete_preview = requires_complete_preview
+        self._scope = scope
+
+    def program_scope(self, args: dict[str, Any]) -> str | None:
+        """The `program_scope` of the plan the latest preview of `args` showed
+        (§10.1); None when there is no such snapshot or the plan named none."""
+        return self._scope(args)
 
 
 class EnvironmentFetch(Protocol):
@@ -123,6 +134,12 @@ def observed_environments(value: Any, *, now: datetime | None = None) -> dict[st
     }
 
 
+def _snapshot(rows: list[dict[str, Any]]) -> tuple[str, str | None]:
+    """The rows a card showed plus the plan's `program_scope` (§10.1)."""
+    scope = getattr(rows, "program_scope", None)
+    return json.dumps(rows, sort_keys=True), scope if isinstance(scope, str) else None
+
+
 def with_environment_recording(
     tool: Tool,
     fetch: EnvironmentFetch | None,
@@ -139,7 +156,8 @@ def with_environment_recording(
     if tool.descriptor.name not in PLANNED_TOOLS:
         return tool
 
-    previews: OrderedDict[str, str] = OrderedDict()
+    #: args → (the rows the card showed, the plan's program_scope).
+    previews: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
 
     def key(args: dict[str, Any]) -> str:
         return json.dumps(args, sort_keys=True, separators=(",", ":"))
@@ -158,14 +176,18 @@ def with_environment_recording(
         identity = key(args)
         previews.pop(identity, None)
         rows = await plan(args)
-        previews[identity] = json.dumps(rows, sort_keys=True)
+        previews[identity] = _snapshot(rows)
         while len(previews) > 64:
             previews.popitem(last=False)
         return rows
 
+    def scope(args: dict[str, Any]) -> str | None:
+        shown = previews.get(key(args))
+        return None if shown is None else shown[1]
+
     async def invoke(args: dict[str, Any]) -> dict[str, Any]:
         shown = previews.pop(key(args), None)
-        if shown is None or json.dumps(await plan(args), sort_keys=True) != shown:
+        if shown is None or _snapshot(await plan(args)) != shown:
             raise ToolException(
                 "The command plan changed or was not previewed; request approval again.",
                 code=ToolErrorCode.UNAUTHORIZED,
@@ -182,6 +204,7 @@ def with_environment_recording(
         invoke,
         preview,
         requires_complete_preview=tool.descriptor.name in COMPLETE_PREVIEW_TOOLS,
+        scope=scope,
     )
 
 
