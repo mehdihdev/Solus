@@ -396,3 +396,20 @@ async def test_concurrent_resumes_at_chain_five_respect_the_cap(
             await racing
     assert caught.value.status_code == 409
     assert caught.value.code == "resume_limit"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"content": "carry on"},
+        {"screenshot": {"media_type": "image/png", "data": "iVBORw0KGgo="}},
+    ],
+)
+def test_a_resume_cannot_carry_content_or_a_screenshot(extra: dict[str, Any]) -> None:
+    """§9 item 12: the resume validator — a resume carries no words or pixels."""
+    from pydantic import ValidationError
+    from solus_api.routers.sol import MessageCreate
+
+    MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4())})
+    with pytest.raises(ValidationError, match="a resume carries no content or screenshot"):
+        MessageCreate.model_validate({"resume_confirmation_id": str(uuid.uuid4()), **extra})

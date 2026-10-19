@@ -13,8 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.command_gate import COMPLETE_PREVIEW_TOOLS, PLAN_PREVIEW_TOOLS
-from solus_api.agent.tools.shapes import ToolErrorCode
-from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
+from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
+from solus_api.agent.tools.tool import (
+    InProcessTool,
+    Tool,
+    ToolException,
+    ToolHandler,
+    ToolPreview,
+)
 from solus_api.services.code_env import (
     CodeEnvironment,
     EnvironmentProvenance,
@@ -29,6 +35,22 @@ logger = logging.getLogger(__name__)
 #: Code tools whose card is the server's own `code.plan`, guarded by the one-use
 #: plan snapshot below (SOLUSDEV-250; SOLUSDEV-317 adds the executing tools).
 PLANNED_TOOLS: Final = PLAN_PREVIEW_TOOLS
+
+
+class PlannedTool(InProcessTool):
+    """A `code.plan`-previewed tool; `requires_complete_preview` is read by the
+    confirmation gate (duck-typed, like `preview`)."""
+
+    def __init__(
+        self,
+        descriptor: ToolDescriptor,
+        handler: ToolHandler,
+        preview: ToolPreview,
+        *,
+        requires_complete_preview: bool,
+    ) -> None:
+        super().__init__(descriptor, handler, preview=preview)
+        self.requires_complete_preview = requires_complete_preview
 
 
 class EnvironmentFetch(Protocol):
@@ -153,12 +175,14 @@ def with_environment_recording(
             tool.descriptor.name, args, result, fetch, sessions, project_id, user_id
         )
 
-    wrapped = InProcessTool(tool.descriptor, invoke, preview=preview)
-    if tool.descriptor.name in COMPLETE_PREVIEW_TOOLS:
-        # SOLUSDEV-317 §5.1: a failed or unrenderable plan REFUSES the call; the
-        # gate must never fall back to argument rows for an arbitrary argv.
-        wrapped.requires_complete_preview = True  # type: ignore[attr-defined]
-    return wrapped
+    # SOLUSDEV-317 §5.1: a failed or unrenderable plan REFUSES the call; the
+    # gate must never fall back to argument rows for an arbitrary argv.
+    return PlannedTool(
+        tool.descriptor,
+        invoke,
+        preview,
+        requires_complete_preview=tool.descriptor.name in COMPLETE_PREVIEW_TOOLS,
+    )
 
 
 async def _record_environment(
