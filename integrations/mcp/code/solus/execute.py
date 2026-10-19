@@ -57,10 +57,6 @@ PASSTHROUGH_NAMES: tuple[str, ...] = ("HOME", "LANG", "TMPDIR")
 MAX_TAIL_BYTES = 16 * 1024
 #: How often a running command's descendant tree is snapshotted.
 TREE_SNAPSHOT_SECONDS = OBSERVE_SECONDS
-#: Never passed to any child, whatever a profile says (loader / iconv injection).
-LOADER_INJECTION: frozenset[str] = frozenset(
-    {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"}
-)
 _VENV_BIN_DIRS = ("bin", "Scripts")
 
 Which = Callable[[str], str | None]
@@ -258,7 +254,7 @@ def child_env(root: Path, plan: Plan) -> dict[str, str]:
     if plan.profile is not None:
         venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
         env = profiles.apply(env, plan.profile.variables, venv_bin)
-    return {name: value for name, value in env.items() if name not in LOADER_INJECTION}
+    return {name: value for name, value in env.items() if name not in profiles.LOADER_NAMES}
 
 
 @dataclass(frozen=True)

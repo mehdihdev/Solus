@@ -54,15 +54,24 @@ SECRET_PREFIXES: tuple[str, ...] = (
     "ANTHROPIC_",
 )
 SECRET_NAMES: frozenset[str] = frozenset({"SSH_AUTH_SOCK"})
+#: THE loader / option-injection list (§2.4, §9.8): never stored in a profile and never
+#: passed to any child, whatever a profile says. Search paths (PYTHONPATH,
+#: LD_LIBRARY_PATH) are kept: a ROS profile needs them.
 LOADER_NAMES: frozenset[str] = frozenset(
     {
         "LD_PRELOAD",
         "LD_AUDIT",
         "DYLD_INSERT_LIBRARIES",
+        "GCONV_PATH",
         "BASH_ENV",
         "ENV",
         "PROMPT_COMMAND",
         "PYTHONSTARTUP",
+        "NODE_OPTIONS",
+        "PERL5OPT",
+        "RUBYOPT",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
     }
 )
 #: Never taken from a profile: Solus sets these for every child.
