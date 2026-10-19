@@ -570,6 +570,16 @@ def test_build_mode_teaches_argv_commands_profiles_and_processes() -> None:
         assert phrase in text, phrase
 
 
+def test_build_mode_says_to_use_bare_program_names() -> None:
+    # Live QA 2026-10-19: SOL guessed /usr/bin/ls on macOS, where ls is /bin/ls, and the
+    # server rightly refused the non-existent path. Bare names resolve per machine.
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    assert "bare program name" in text
+    assert "never guess an absolute path" in text
+
+
 def test_guide_mode_never_proposes_execution() -> None:
     from solus_api.agent.modes import ActionMode
 
