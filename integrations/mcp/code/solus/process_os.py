@@ -5,6 +5,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import IO, Protocol
@@ -12,6 +13,10 @@ from typing import IO, Protocol
 from .sandbox import PASS_FDS
 
 PS = "/bin/ps"
+PROC = Path("/proc")
+BOOT_ID = Path("sys/kernel/random/boot_id")
+#: Process-table snapshot interval: `ps -A` is costly on macOS, `/proc` is cheap.
+OBSERVE_SECONDS = 1.0 if sys.platform == "darwin" else 0.5
 
 
 class Child(Protocol):
@@ -46,13 +51,16 @@ def default_killpg(pgid: int, sig: int) -> None:
         pass  # gone, or (macOS) only zombies left in the group
 
 
-def start_token(pid: int) -> str | None:
-    """When `pid` started, as the OS reports it (None when it is not running)."""
-    proc = Path(f"/proc/{pid}/stat")
+def start_token(pid: int, *, proc_root: Path = PROC) -> str | None:
+    """When `pid` started, as the OS reports it (None when it is not running or
+    unknowable). On Linux the start time (clock ticks since boot) is qualified by the
+    boot id, so a token recorded before a reboot never matches afterwards."""
+    proc = proc_root / str(int(pid)) / "stat"
     if proc.exists():
         try:
             fields = proc.read_text().rpartition(")")[2].split()
-            return fields[19]
+            boot = (proc_root / BOOT_ID).read_text().strip()
+            return f"{boot}:{fields[19]}" if boot else None
         except (OSError, IndexError):
             return None
     try:
@@ -133,9 +141,10 @@ def _signal(pid: int, sig: int) -> None:
 
 class TreeTracker:
     """Descendants of one leader, accumulated from process-table snapshots, so the
-    ones that left its process group (setsid) can still be killed. A pid seen earlier
-    is only signalled while its parent is still the tree, init or this server
-    (recycled pids are left alone)."""
+    ones that left its process group (setsid) can still be killed. Each pid's start
+    token is recorded when first seen; vanished pids are pruned on every snapshot,
+    and a pid is only signalled while its parent is still the tree, init or this
+    server AND its start token still matches (recycled pids are left alone)."""
 
     def __init__(
         self,
@@ -143,22 +152,48 @@ class TreeTracker:
         *,
         table: Callable[[], Mapping[int, int]] = process_table,
         kill: Callable[[int, int], None] = _signal,
+        token: Callable[[int], str | None] = start_token,
+        clock: Callable[[], float] = time.monotonic,
+        interval: float = OBSERVE_SECONDS,
     ) -> None:
         self.leader = leader
         self._table = table
         self._kill = kill
-        self.seen: set[int] = set()
+        self._token = token
+        self._clock = clock
+        self._interval = interval
+        self._next = float("-inf")
+        self.tokens: dict[int, str | None] = {}
+
+    @property
+    def seen(self) -> set[int]:
+        return set(self.tokens)
+
+    def _update(self, table: Mapping[int, int]) -> None:
+        self.tokens = {pid: token for pid, token in self.tokens.items() if pid in table}
+        for pid in descendants(self.leader, table):
+            if pid not in self.tokens:
+                self.tokens[pid] = self._token(pid)
 
     def observe(self) -> None:
-        self.seen.update(descendants(self.leader, self._table()))
+        """Snapshot the table (at most once per `interval`)."""
+        now = self._clock()
+        if now < self._next:
+            return
+        self._next = now + self._interval
+        self._update(self._table())
 
     def kill(self, sig: int) -> None:
-        if not self.seen:
+        """Signal every tracked descendant still ours, judged on a fresh table."""
+        if not self.tokens:
             return
         table = self._table()
-        owners = {self.leader, 1, os.getpid(), *self.seen}
-        for pid in sorted(self.seen):
-            if pid in table and table[pid] in owners:
+        self._update(table)
+        owners = {self.leader, 1, os.getpid(), *self.tokens}
+        for pid, token in sorted(self.tokens.items()):
+            if token is None or table.get(pid) not in owners:
+                continue
+            if self._token(pid) == token:
                 self._kill(pid, sig)
 
 

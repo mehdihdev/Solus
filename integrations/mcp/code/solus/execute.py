@@ -27,7 +27,7 @@ from typing import IO, Any
 
 from . import profiles, sandbox
 from .plan import Plan
-from .process_os import TreeTracker
+from .process_os import OBSERVE_SECONDS, TreeTracker
 from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, LineOutput
 from .workspace import resolve_inside
 
@@ -56,7 +56,7 @@ CHILD_PATH = "/usr/bin:/bin"
 PASSTHROUGH_NAMES: tuple[str, ...] = ("HOME", "LANG", "TMPDIR")
 MAX_TAIL_BYTES = 16 * 1024
 #: How often a running command's descendant tree is snapshotted.
-TREE_SNAPSHOT_SECONDS = 0.5
+TREE_SNAPSHOT_SECONDS = OBSERVE_SECONDS
 #: Never passed to any child, whatever a profile says (loader / iconv injection).
 LOADER_INJECTION: frozenset[str] = frozenset(
     {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"}
