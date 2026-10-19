@@ -394,3 +394,44 @@ resume after an approved command, and the Running processes strip with Stop.
 Tool refusals are tool results, never HTTP errors. Route errors: `404 not_found` (non-member,
 unknown process), `409 bridge_offline` (stop only), `409 already_resumed`, `409 resume_limit`,
 `422` validation.
+
+## 9. Phase 4 security amendments (2026-10-19)
+
+These supersede earlier sections where they conflict.
+
+1. **The probe never executes workspace code.** `code.probe_environment` reads a workspace
+   venv's packages from `site-packages/*.dist-info/METADATA` (name, version) and its Python
+   version from `pyvenv.cfg`. It never starts `<venv>/bin/python`, `pip` or `uv pip list`
+   against it. System interpreters on the pinned roots may still be asked for `--version`.
+   The post-install CODE recording uses the same read-only probe.
+2. **No hidden argv.** For `code.exec`, `code.process_start` and `code.profile_capture`, if
+   redaction would change any of the `program`, `command*`, `cwd`, `environment`, `profile` or
+   `setup file` rows, the call is refused and nothing is parked: "the command contains
+   secret-shaped values that cannot be shown on the approval card".
+3. **Processes are tamper-checked too.** `process_start` takes the git-metadata digest at
+   start and compares it when the process exits, is stopped or timed out, and at shutdown.
+   `process_status` entries, the stop result and the outcome text carry `git_metadata_changed`.
+4. **HOME is never the workspace.** Every executing action is refused when the workspace
+   realpath equals or contains `HOME` or `~/.solus`. The Linux helper also refuses any `--rw`
+   path that contains them.
+5. **Caches are data only.** The declared writable caches are narrowed to `.cache`,
+   `Library/Caches`, `.ros`, `.npm/_cacache`, `.pnpm-store`, `.cargo/registry/cache`,
+   `.gradle/caches`, `.platformio/.cache`, `.arduino15/staging`, `.colcon`.
+   `.local/share/uv`, `.local/share/pnpm`, `.cargo/git`, and the roots of `.gradle`,
+   `.platformio` and `.arduino15` are removed, because they hold code that later runs outside
+   the sandbox. Program resolution refuses any executable whose realpath is inside the
+   writable set but outside the workspace.
+6. **Capture card.** `code.profile_capture` rows add `profile` (`<name>`, plus `replaces
+   existing` when one exists) and `risk` (`project_scripts` for a workspace setup file). The
+   fingerprint covers the profile name.
+7. **Outcome on success.** For `code.exec`, `code.run` and `code.test` the output tail (≤ 3000)
+   is included on exit 0 too.
+8. **Profiles drop option-injection variables.** `NODE_OPTIONS`, `PERL5OPT`, `RUBYOPT`,
+   `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `GCONV_PATH` are dropped at capture (in addition to §2.4).
+   `PYTHONPATH` and `LD_LIBRARY_PATH` are kept.
+9. Event `program` values must match `^[A-Za-z0-9._+-]{1,64}$`, otherwise `"other"`. The resume
+   chain check locks the conversation row. Linux process start tokens include the boot id.
+10. Residual, documented: the server re-plans at execute time and does not receive the approved
+   fingerprint (a sub-second window between the cloud's re-plan and the server's). On macOS a
+   copied `launchctl`/`osascript` binary escapes the `process-exec` literal denials (the
+   AppleEvents/LaunchServices mach denials still apply).

@@ -181,6 +181,13 @@ Governing spec: `docs/api/code-command-execution.md`. Applies identically to the
     consumed and never submits the composer. With none pending, Cmd/Ctrl+Enter behaves as before.
   - The Approve button shows `⌘↵` / `Ctrl↵` (hidden from screen readers; `aria-keyshortcuts`
     set). Non-command cards still need a click.
+- **Command preview is open.** Command cards render their verbatim preview expanded (bounded,
+  scrollable) rather than collapsed, so the resolved program, full argv, cwd, profile, sandbox and
+  risk rows are on screen before Approve. The Cmd/Ctrl+Enter arming clock starts only once the
+  preview region has been in view (IntersectionObserver) for 700 ms.
+- **Composer drafts win.** Cmd/Ctrl+Enter pressed in the composer while it holds a non-empty draft
+  never approves a card: the key is consumed and nothing happens (the user is typing, possibly "no,
+  don't run that"). With an empty composer the shortcut approves as above.
 - **Output stays.** The output region is shown while an approved command runs, and the final
   output stays under the resulting "Approval recorded" message with the exit status
   (`exited 0`, `exited 2`, `timed out`, `refused: …`) until the conversation is closed.
