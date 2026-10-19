@@ -435,3 +435,38 @@ def test_runner_functions_stay_small() -> None:
 
     for function in (execute.default_runner, execute._supervise, execute._spawn):
         assert len(inspect.getsource(function).splitlines()) < 50, function.__name__
+
+
+# --- §10.2: a workspace shell script through the real macOS sandbox ------------------
+
+
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS sandbox-exec write confinement")
+def test_real_workspace_shell_scripts_run_sandboxed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path.resolve()
+    ws, home, tmp = base / "ws", base / "home", base / "tmp"
+    for directory in (ws / "scripts", home, tmp):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TMPDIR", str(tmp))
+    # Only this test's own temp dir is writable, so a sibling of the workspace is not.
+    monkeypatch.setattr(sandbox, "default_tmpdir", lambda: tmp)
+    outside = base / "outside.txt"
+    (ws / "scripts" / "hello.sh").write_text('echo "hello $1"\necho made > made.txt\n')
+    (ws / "scripts" / "escape.sh").write_text(f"echo x > {outside} 2>/dev/null || echo denied\n")
+
+    def run(script: str, *args: str) -> Any:
+        planned = plan.plan_action(
+            ws, "exec", {"argv": ["bash", script, *args]}, which=lambda _n: None
+        )
+        assert planned.ok, planned.reason
+        return execute.execute_plan(ws, planned)
+
+    hello = run("scripts/hello.sh", "bench")
+    assert hello["ok"] is True and hello["stdout_tail"] == "hello bench\n", hello
+    assert (ws / "made.txt").read_text() == "made\n"
+    escape = run("scripts/escape.sh")
+    assert escape["stdout_tail"] == "denied\n", escape
+    assert not outside.exists()

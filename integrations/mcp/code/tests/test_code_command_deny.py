@@ -68,7 +68,7 @@ def test_tables_are_plain_frozen_literals_matching_the_spec() -> None:
     "argv",
     [
         ["bash", "-lc", "ls"],
-        ["/bin/sh", "x.sh"],
+        ["/bin/sh", "-e", "x.sh"],
         ["ZSH"],
         ["pwsh"],
         ["env", "FOO=1", "make"],
@@ -518,3 +518,69 @@ def test_review_round_allowed(argv: list[str]) -> None:
 def test_a_path_that_climbs_out_is_not_workspace_relative(argv: list[str]) -> None:
     assert not deny.workspace_relative(argv[0])
     assert deny.classify_denial(argv) is not None
+
+
+# --- §10.2: bash/sh run a workspace .sh/.bash script, nothing else -----------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["bash", "scripts/build.sh", "a", "b"],
+        ["sh", "./x.sh"],
+        ["bash", "x.bash"],
+        ["/bin/bash", "scripts/build.sh", "-c", "anything"],  # args after the script are its own
+        ["/bin/sh", "x.sh"],
+        ["BASH", "x.sh"],
+    ],
+)
+def test_bash_and_sh_may_run_a_workspace_script(argv: list[str]) -> None:
+    assert deny.denied_reason(argv) is None
+    assert deny.classify_denial(argv) is None
+    assert deny.shell_script(argv)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["bash", "-c", "x"],
+        ["bash", "-x", "s.sh"],
+        ["bash", "--rcfile", "r", "s.sh"],
+        ["bash", "../x.sh"],
+        ["bash", "scripts/../../x.sh"],
+        ["bash", "/tmp/x.sh"],
+        ["bash", "~/x.sh"],
+        ["bash", "s.py"],
+        ["bash", "s.sh.txt"],
+        ["zsh", "s.sh"],
+        ["dash", "s.sh"],
+        ["bash"],
+        ["sh", "-s"],
+        ["bash", "--", "s.sh"],
+        ["bash", "-", "s.sh"],
+        ["bash", "+o", "s.sh"],
+        ["bash", "+x.sh"],
+        ["bash", "-i.sh"],
+        ["bash-5.2", "x.sh"],
+        ["/usr/local/bin/bash-5.2", "x.sh"],
+        ["sh5", "x.sh"],
+        ["rbash", "x.sh"],
+        ["./bash", "x.sh"],
+        ["tools/sh", "x.sh"],
+        ["env", "bash", "x.sh"],
+    ],
+)
+def test_every_other_shell_form_stays_denied(argv: list[str]) -> None:
+    assert deny.denied_reason(argv) is not None
+    assert deny.classify_denial(argv) is not None
+    assert not deny.shell_script(argv)
+
+
+def test_a_script_shell_must_resolve_to_bash_or_sh() -> None:
+    script = ["bash", "x.sh"]
+    assert deny.denied_reason(script, resolved=("/bin/bash", "/bin/bash")) is None
+    assert deny.denied_reason(["sh", "x.sh"], resolved=("/usr/bin/sh", "/usr/bin/dash")) is None
+    assert deny.denied_reason(script, resolved=("/bin/bash", "/bin/zsh")) is not None
+    assert deny.denied_reason(script, resolved=("/bin/bash", "/opt/bash-5.2")) is not None
+    # A renamed shell is never a script shell: argv[0] itself must say bash or sh.
+    assert deny.denied_reason(["innocent", "x.sh"], resolved=("/b/innocent", "/bin/bash"))

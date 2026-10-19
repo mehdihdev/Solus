@@ -76,7 +76,16 @@ def test_every_old_action_answers_the_new_fields(ws: Path) -> None:
     fake_venv(ws)
     (ws / "a.py").write_text("")
     answer = _plan(ws, "run", {"script": "a.py"}).answer()
-    assert set(answer) == {"argv", "cwd", "ok", "reason", "sandbox", "profile", "environment"}
+    assert set(answer) == {
+        "argv",
+        "cwd",
+        "ok",
+        "reason",
+        "sandbox",
+        "profile",
+        "environment",
+        "program_scope",
+    }
     assert answer["sandbox"]["kind"] == FAKE_KIND and answer["environment"] == ".venv"
     refused = _plan(ws, "run", {"script": "../x"}).answer()
     assert refused["sandbox"] is None and refused["ok"] is False
@@ -276,3 +285,116 @@ def test_within_compares_by_inode(ws: Path, tmp_path: Path) -> None:
     (ws / "sub").mkdir(exist_ok=True)
     assert command_plan._within(ws, str(ws / "sub"))
     assert not command_plan._within(ws, str(tmp_path))
+
+
+# --- §10.1 item 2: program_scope -----------------------------------------------------
+
+
+def _scope(root: Path, action: str, args: Any, which: Any = lambda _name: None) -> Any:
+    answer = plan.plan_action(root, action, args, which=which).answer()
+    assert answer["ok"], answer["reason"]
+    return answer["program_scope"]
+
+
+def test_a_bare_system_program_is_system_scope(ws: Path, tmp_path: Path) -> None:
+    assert _scope(ws, "exec", {"argv": ["make"]}) == "system"
+    absolute = str(tmp_path / "roots" / "bin" / "colcon")
+    assert _scope(ws, "process_start", {"argv": [absolute]}) == "system"
+
+
+def test_a_workspace_script_is_workspace_scope(ws: Path) -> None:
+    _executable(ws / "scripts" / "build.sh")
+    assert _scope(ws, "exec", {"argv": ["./scripts/build.sh"]}) == "workspace"
+    assert _scope(ws, "process_start", {"argv": ["scripts/build.sh"]}) == "workspace"
+
+
+def test_venv_binaries_and_interpreters_are_workspace_scope(ws: Path) -> None:
+    fake_venv(ws)  # bin/python links to an interpreter OUTSIDE the workspace
+    _executable(ws / ".venv" / "bin" / "pytest")
+    for program in ("pytest", "python"):
+        scope = _scope(ws, "exec", {"argv": [program], "environment": ".venv"})
+        assert scope == "workspace", program
+
+
+def test_a_profile_path_entry_under_the_workspace_is_workspace_scope(ws: Path) -> None:
+    tool = _executable(ws / "install" / "bin" / "talker")
+    profiles.save(ws, "ws", "/x/setup.bash", None, {"PATH": str(tool.parent)})
+    assert _scope(ws, "exec", {"argv": ["talker"], "profile": "ws"}) == "workspace"
+
+
+def test_a_workspace_link_to_an_outside_program_is_system_scope(ws: Path, tmp_path: Path) -> None:
+    bin_dir = ws / "install" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "colcon").symlink_to(tmp_path / "roots" / "bin" / "colcon")
+    profiles.save(ws, "ws", "/x/setup.bash", None, {"PATH": str(bin_dir)})
+    assert _scope(ws, "exec", {"argv": ["colcon"], "profile": "ws"}) == "system"
+    # ...and its target's name is still checked fail-closed.
+    outside = _executable(tmp_path / "outside-bin" / "bash-5.2")
+    (bin_dir / "helper").symlink_to(outside)
+    assert not _plan(ws, "exec", {"argv": ["helper", "x.sh"], "profile": "ws"}).ok
+
+
+def test_old_actions_answer_program_scope(ws: Path) -> None:
+    fake_venv(ws)
+    (ws / "a.py").write_text("")
+    (ws / "tests").mkdir()
+    (ws / "install").mkdir()
+    (ws / "install" / "setup.bash").write_text("export A=1\n")
+    uv = lambda name: "/usr/bin/uv" if name == "uv" else None  # noqa: E731
+    assert _scope(ws, "run", {"script": "a.py"}) == "workspace"
+    assert _scope(ws, "test", {}) == "workspace"
+    assert _scope(ws, "install", {"packages": ["numpy"]}) == "workspace"  # venv pip
+    assert _scope(ws, "install", {"packages": ["numpy"]}, uv) == "system"
+    assert _scope(ws, "create_environment", {"path": "env2"}, uv) == "system"
+    capture = {"name": "ws", "setup_file": "install/setup.bash"}
+    assert _scope(ws, "profile_capture", capture) == "system"
+
+
+def test_refusals_answer_a_null_program_scope(ws: Path) -> None:
+    for action, args in (("exec", {"argv": ["nope"]}), ("run", {"script": "../x"}), ("x", {})):
+        answer = _plan(ws, action, args).answer()
+        assert answer["ok"] is False and answer["program_scope"] is None
+
+
+# --- §10.2: bash/sh workspace scripts ------------------------------------------------
+
+
+def test_bash_runs_an_existing_workspace_script(ws: Path, tmp_path: Path) -> None:
+    (ws / "scripts").mkdir()
+    (ws / "scripts" / "build.sh").write_text("echo hi\n")  # need not be executable
+    result = _plan(ws, "exec", {"argv": ["bash", "scripts/build.sh", "a", "b"]})
+    assert result.ok, result.reason
+    assert result.argv == [str(tmp_path / "roots" / "bin" / "bash"), "scripts/build.sh", "a", "b"]
+    assert result.answer()["program_scope"] == "system"
+
+
+def test_sh_resolves_the_script_from_the_cwd(ws: Path, tmp_path: Path) -> None:
+    _executable(tmp_path / "roots" / "bin" / "sh")
+    (ws / "sub").mkdir()
+    (ws / "sub" / "x.sh").write_text("echo hi\n")
+    assert _plan(ws, "exec", {"argv": ["sh", "./x.sh"], "cwd": "sub"}).ok
+    assert not _plan(ws, "exec", {"argv": ["sh", "./x.sh"]}).ok  # not at the root
+    assert _plan(ws, "process_start", {"argv": ["sh", "sub/x.sh"]}).ok
+
+
+def test_the_script_must_be_a_regular_file_inside_the_workspace(ws: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside.sh"
+    outside.write_text("echo out\n")
+    (ws / "link.sh").symlink_to(outside)
+    (ws / "dir.sh").mkdir()
+    for script in ("missing.sh", "link.sh", "dir.sh"):
+        result = _plan(ws, "exec", {"argv": ["bash", script]})
+        assert not result.ok, script
+        assert result.reason == (
+            "script must be an existing .sh/.bash file inside the linked folder"
+        )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["bash", "-c", "x"], ["bash", "-x", "s.sh"], ["bash", "s.py"], ["bash"], ["sh", "-s"]],
+)
+def test_other_shell_forms_are_refused_by_the_planner(ws: Path, argv: list[str]) -> None:
+    (ws / "s.sh").write_text("")
+    (ws / "s.py").write_text("")
+    assert not _plan(ws, "exec", {"argv": argv}).ok
