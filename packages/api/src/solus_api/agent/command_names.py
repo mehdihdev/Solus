@@ -21,10 +21,10 @@ _DEBUG_SUFFIX: Final = re.compile(r"-dbg$")
 _VERSION_SUFFIX: Final = re.compile(r"[-_.]?[0-9][0-9.]*[a-z]*$")
 
 
-#: §9 item 11 (final rule): what may follow a denied name for a program that is
-#: NOT workspace-relative — a version, then `-`/`.` tokens (`zsh-5.9`, `php-cgi8.2`,
-#: `sudo-rs`, `sudo.ws`, `python3.12-intel64`, `env-x`). Fail closed.
-_SUFFIX_SHAPED: Final = r"(?:[0-9][0-9.]*)?(?:[-.][a-z0-9.]+)*"
+#: §9 item 11 (final rule): for a program that is NOT workspace-relative, a known
+#: name followed by the end or by ANY non-letter is that name (`zsh-5.9`, `bash+x`,
+#: `php-cgi8.2`, `sudo.ws`, `perl5.36.0-x86_64-linux`, `env-x`). Fail closed.
+_SUFFIX_SHAPED: Final = r"(?:[^a-z].*)?"
 
 
 def is_workspace_relative(program: str) -> bool:
@@ -36,7 +36,7 @@ def prefix_match(base: str, names: Iterable[str]) -> str | None:
     """The denied name `base` is: the name itself plus a suffix-shaped tail."""
     lowered = posixpath.basename(base).lower()
     for name in sorted(names, key=len, reverse=True):
-        if re.fullmatch(re.escape(name.lower()) + _SUFFIX_SHAPED, lowered):
+        if re.fullmatch(re.escape(name.lower()) + _SUFFIX_SHAPED, lowered, re.DOTALL):
             return name
     return None
 

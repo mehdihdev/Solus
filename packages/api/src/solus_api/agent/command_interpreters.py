@@ -115,7 +115,7 @@ RUBY_LIBRARY_PATTERN: Final = r"^[A-Za-z0-9_./-]+$"
 _PERL_MODULE: Final = re.compile(PERL_MODULE_PATTERN)
 _RUBY_NAME: Final = re.compile(RUBY_LIBRARY_PATTERN)
 _PHP_DENIED_INI: Final = frozenset({"allow_url_include", "auto_prepend_file", "auto_append_file"})
-_LOCAL_HOSTS: Final = frozenset({"127.0.0.1", "localhost", "::1"})
+_INSPECT_VALUE: Final = re.compile(r"^((127\.0\.0\.1|localhost|\[::1\]):)?[0-9]{1,5}$")
 _JS: Final = frozenset({"node", "bun", "deno"})
 
 
@@ -134,12 +134,9 @@ def _remote(value: str) -> bool:
 
 
 def _off_host(value: str) -> bool:
-    """`--inspect=<[host:]port>` bound anywhere but loopback."""
-    if not value or value.isdigit():
-        return False
-    host = value[1 : value.find("]")] if value.startswith("[") else value.rpartition(":")[0]
-    host = host or value
-    return host.lower() not in _LOCAL_HOSTS
+    """`--inspect=<[host:]port>` bound anywhere but loopback: the value is a port,
+    optionally after a loopback host, or absent."""
+    return bool(value) and _INSPECT_VALUE.fullmatch(value) is None
 
 
 def _bad_value(interpreter: str, option: str, value: str) -> str | None:
