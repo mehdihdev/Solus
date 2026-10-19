@@ -11,6 +11,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from solus_api.bridge.allowlist import requires_complete_preview, supports_dry_run
 
 from code_paths import ALLOWLIST_YAML, overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 server = overlay_module("server")
 

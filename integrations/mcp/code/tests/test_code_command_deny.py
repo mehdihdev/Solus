@@ -5,6 +5,7 @@ code and git (SOL uses the dedicated git tools) are refused; ordinary argv is no
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 deny = overlay_module("command_deny")
 

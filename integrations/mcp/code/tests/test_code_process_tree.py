@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 process_os = overlay_module("process_os")
 execute = overlay_module("execute")

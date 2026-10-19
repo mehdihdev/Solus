@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from code_paths import overlay_module
 
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
+
 execute = overlay_module("execute")
 
 

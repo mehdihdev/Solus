@@ -14,6 +14,7 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 server = overlay_module("server")
 execute = overlay_module("execute")

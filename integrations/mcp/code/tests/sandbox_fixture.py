@@ -1,5 +1,10 @@
 """Deterministic sandbox probe for the `code` server's unit tests (SOLUSDEV-317).
 
+Not a conftest.py: a second top-level `conftest` module would shadow
+packages/api/tests/conftest.py for mypy. Each test module that plans or executes
+imports the two autouse fixtures below (`from sandbox_fixture import *`-style,
+by name), which makes them apply to every test in that module.
+
 Planning refuses everything when no OS sandbox is available, so unit tests pin
 the probe to this platform's kind. Tests that really execute through the sandbox
 are marked `real_sandbox`: they see the real probe and skip when it fails.
@@ -16,16 +21,6 @@ from code_paths import overlay_module  # isort: skip
 
 sandbox = overlay_module("sandbox")
 FAKE_KIND = "sandbox-exec" if sys.platform == "darwin" else "landlock-abi3"
-
-
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers", "real_sandbox: executes through the real OS sandbox (skips without one)"
-    )
-    config.addinivalue_line("markers", "own_sandbox_probe: the test manages the probe itself")
-    config.addinivalue_line(
-        "markers", "real_writable_roots: the §9.5 program check sees the real temp roots"
-    )
 
 
 def real_sandbox_kind() -> str | None:

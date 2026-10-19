@@ -9,7 +9,8 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from code_paths import overlay_module  # isort: skip
-from conftest import FAKE_KIND  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
+from sandbox_fixture import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 server = overlay_module("server")
