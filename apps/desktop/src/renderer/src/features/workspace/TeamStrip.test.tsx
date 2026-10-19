@@ -130,4 +130,12 @@ describe('TeamStrip', () => {
     render(<TeamStrip {...props({ teamLimit: null })} />)
     expect(screen.queryByTestId('team-limit')).toBeNull()
   })
+
+  it('opens the team menu leftward from the ⋯ so it stays inside the sidebar', async () => {
+    render(<TeamStrip {...props()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+    const menu = screen.getByRole('menu')
+    expect(menu).toHaveStyle({ right: '0px' })
+    expect(menu.style.left).toBe('')
+  })
 })

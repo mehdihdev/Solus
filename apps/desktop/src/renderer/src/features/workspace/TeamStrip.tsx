@@ -74,8 +74,10 @@ function TeamMenu(props: TeamMenuProps): React.JSX.Element {
             role="menu"
             className="popover-in"
             style={{
+              // Anchored to the ⋯'s right edge: the ⋯ sits at the sidebar's
+              // edge, so opening rightward ran past it (clipped + side scroll).
               position: 'absolute',
-              left: 0,
+              right: 0,
               top: '100%',
               zIndex: 61,
               minWidth: 160,

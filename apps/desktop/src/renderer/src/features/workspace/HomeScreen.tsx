@@ -55,6 +55,8 @@ const SIDEBAR_STYLE: React.CSSProperties = {
   padding: '26px 20px 20px',
   borderRight: '1px solid var(--bd)',
   overflowY: 'auto',
+  // Never a sideways scrollbar: anything wider than the sidebar is a bug to fix.
+  overflowX: 'hidden',
   minHeight: 0
 }
 
