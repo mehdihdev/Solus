@@ -18,7 +18,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, StrictBool, field_validator, model_validator
+from pydantic import Field, StrictBool, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -273,7 +273,12 @@ class MessageCreate(StrictModel):
     @model_validator(mode="after")
     def _content_or_resume(self) -> "MessageCreate":
         if self.resume_confirmation_id is None and self.content is None:
-            raise ValueError("content is required unless resume_confirmation_id is set")
+            # Reported as the field's own `missing` error (the API.md shape a
+            # required `content` always had); the error handler redacts `input`.
+            raise ValidationError.from_exception_data(
+                type(self).__name__,
+                [{"type": "missing", "loc": ("content",), "input": {}}],
+            )
         if self.resume_confirmation_id is not None and (
             self.content is not None or self.screenshot is not None
         ):

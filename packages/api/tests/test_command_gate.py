@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from solus_api.agent.confirmations import (
@@ -30,6 +30,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 _DIGEST = "ab" * 32
+#: The wrapper never opens a session for these tools; a typed stand-in.
+_NO_SESSIONS = cast("async_sessionmaker[AsyncSession]", None)
 
 
 @pytest.fixture
@@ -248,15 +250,16 @@ def test_the_snapshot_wrapper_requires_complete_previews_for_the_new_tools() -> 
         tool = with_environment_recording(
             InProcessTool(_descriptor(name), run, preview=rows),
             None,
-            None,
+            _NO_SESSIONS,
             uuid.uuid4(),
-            uuid.uuid4(),  # type: ignore[arg-type]
+            uuid.uuid4(),
         )
         assert getattr(tool, "requires_complete_preview", False) is required, name
         assert callable(getattr(tool, "preview", None))
     for name in ("code.process_stop", "code.profile_delete", "code.process_status"):
         raw = InProcessTool(_descriptor(name), run)
-        assert with_environment_recording(raw, None, None, uuid.uuid4(), uuid.uuid4()) is raw  # type: ignore[arg-type]
+        unwrapped = with_environment_recording(raw, None, _NO_SESSIONS, uuid.uuid4(), uuid.uuid4())
+        assert unwrapped is raw
 
 
 async def test_exec_never_runs_without_the_previewed_plan(

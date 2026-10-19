@@ -267,7 +267,7 @@ async def test_schematic_preview_uses_exact_companion_diff(name: str) -> None:
         [{"label": "x", "before": None, "after": "x"}] * 41,
     ],
 )
-def test_malformed_companion_diff_cannot_be_rendered_as_consent(diff) -> None:
+def test_malformed_companion_diff_cannot_be_rendered_as_consent(diff: Any) -> None:
     from solus_api.bridge.tool import _plan_rows
 
     assert _plan_rows({"dry_run": True, "preview": diff}) == []

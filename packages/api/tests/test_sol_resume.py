@@ -377,17 +377,24 @@ async def test_concurrent_resumes_at_chain_five_respect_the_cap(
     await db.commit()
     first = await _seed(db, project_id=project, conversation_id=convo)
     second = await _seed(db, project_id=project, conversation_id=convo)
-    scope = {
-        "conversation_id": owner.id,
-        "project_id": uuid.UUID(project),
-        "team_id": owner.team_id,
-        "user_id": owner.created_by,
-    }
+    assert owner.team_id is not None and owner.created_by is not None
+    project_id, team_id, user_id = uuid.UUID(project), owner.team_id, owner.created_by
+
+    def check(session: AsyncSession, confirmation: uuid.UUID) -> Any:
+        return check_resume(
+            session,
+            confirmation_id=confirmation,
+            conversation_id=owner.id,
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+        )
+
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as a, maker() as b:
-        ticket = await check_resume(a, confirmation_id=first, **scope)
+        ticket = await check(a, first)
         assert ticket.chain == 6
-        racing = asyncio.create_task(check_resume(b, confirmation_id=second, **scope))
+        racing = asyncio.create_task(check(b, second))
         await asyncio.sleep(0.3)
         assert not racing.done()  # blocked on the conversation row lock
         await claim_resume(a, ticket, conversation_id=owner.id, project_id=uuid.UUID(project))
