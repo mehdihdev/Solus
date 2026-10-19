@@ -438,3 +438,37 @@ Residual risks added for the reviewers:
   `--inspect`, `--inspect-brk`, `--inspect-wait` are bare flags or a loopback port only
   (`0.0.0.0`, `[::]` and other hosts are refused). Loader values of short options inside
   clusters (`-rX`, `-vr X`) get the same remote-scheme check as the long forms.
+
+### 2026-10-19 addendum (3) — Build auto-run scope and bash/sh workspace scripts (append-only)
+
+Authority: DECISIONS.md ADR-031 amendment of 2026-10-19; `docs/api/code-command-execution.md` §10.
+Both items change what the planner lets through, so both are re-review triggers.
+
+- [x] **`program_scope` on every `code.plan` answer** (`"workspace"` | `"system"`, null when
+  refused). `"workspace"` when the resolved program's realpath is inside the workspace
+  (inode-ancestry containment, the same `_within` the deny rules use) or it sits in the
+  selected workspace venv's `bin` dir (a venv interpreter links outside but runs project
+  code); bare names (pinned system roots) and links that leave the workspace are `"system"`.
+  The cloud auto-runs a no-risk `code.exec` only on `"system"`, so a wrong `"system"` would
+  skip the approval card for project code. The field never relaxes the deny table: a
+  workspace link to an outside `bash-5.2` is still matched fail-closed by its target's name.
+  Re-review relevance: any change to program resolution, `_within`, or the venv rule.
+- [x] **bash/sh run workspace scripts.** `command_deny.shell_script` allows exactly
+  `[bash|sh, <script>, *args]`: argv[0]'s basename is exactly `bash` or `sh` (a bare name or
+  an absolute path, never a workspace file, never a versioned/prefixed variant such as
+  `bash-5.2`); `<script>` ends `.sh`/`.bash`, starts with none of `-`, `+`, `/`, `~`, and has
+  no `..` segment; no option precedes it. The resolved program and its realpath must also be
+  named `bash`/`sh` (or `dash`, Debian's `/bin/sh` target); a renamed shell is still denied.
+  Every other shell form (`-c`, `-s`, `-x`, `--rcfile`, `--`, `+o`, …) and every other shell
+  stays denied, and `classify_denial` (the cloud parity entry point) gives the same answer.
+  The planner additionally resolves the script against `cwd` inside the workspace as a regular
+  file ("script must be an existing .sh/.bash file inside the linked folder"). stdin is closed;
+  the script runs under the same sandbox as any exec (real macOS test: a workspace script
+  echoes and writes inside, and its write outside the workspace is denied). The script is
+  project code with full shell power inside the sandbox — equivalent to an executable
+  workspace script, which was already allowed behind the card. Re-review relevance: the
+  shell-script shape, the accepted realpath names, and the cloud's `runs_shell` +
+  `project_scripts` risks that keep it behind the card (`program_scope` is `"system"` for
+  `/bin/bash`, so the card for these commands depends on those cloud risks).
+- Residual: the script file is checked at plan time; it can change between approval and
+  execution like any workspace program (same window as the re-plan residual above).

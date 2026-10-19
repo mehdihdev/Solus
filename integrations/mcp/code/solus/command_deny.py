@@ -17,6 +17,10 @@ Name matching depends on where the program comes from (derived from argv[0] alon
 * a workspace-relative program (`./env_setup.sh`, `tools/x`) is denied only on the
   EXACT normalised name of argv[0] and of its resolved realpath (`./bash`).
 Every interpreter in INLINE_CODE FAILS CLOSED on leading options it does not know.
+
+§10.2: `bash`/`sh` (exact names only) are allowed in one shape, `[bash|sh, <script>,
+*args]` with no option before a workspace-relative `.sh`/`.bash` script
+(`shell_script`); every other shell form, and every other shell, stays denied.
 """
 
 import os
@@ -250,6 +254,11 @@ _PREFIX_NAMES = sorted(
     key=len,
     reverse=True,
 )
+#: §10.2: the only shells that may run a script, the names their realpath may carry
+#: (Debian's `/bin/sh` is dash), and the script suffixes.
+SCRIPT_SHELLS: frozenset[str] = frozenset({"bash", "sh"})
+SCRIPT_SHELL_TARGETS: frozenset[str] = SCRIPT_SHELLS | {"dash"}
+SCRIPT_SUFFIXES: tuple[str, ...] = (".sh", ".bash")
 _UNSAFE_CHARS = frozenset(chr(code) for code in range(32)) | {chr(127)}
 _DENY = "deny"
 _ALLOW = "allow"
@@ -493,6 +502,26 @@ def _check(name: str, args: Sequence[str]) -> str | None:
     return None
 
 
+def script_path(value: str) -> bool:
+    """A workspace-relative `.sh`/`.bash` path that no shell reads as an option."""
+    return (
+        value.endswith(SCRIPT_SUFFIXES)
+        and not value.startswith(("-", "+", "/", "~"))
+        and ".." not in value.split("/")
+    )
+
+
+def shell_script(argv: Sequence[str]) -> bool:
+    """§10.2: exactly `[bash|sh, <script>, *args]` — argv[0] named `bash` or `sh` (a
+    bare name or an absolute path, never a workspace file) and nothing before the script."""
+    return (
+        len(argv) >= 2
+        and not workspace_relative(argv[0])
+        and os.path.basename(argv[0]).casefold() in SCRIPT_SHELLS
+        and script_path(argv[1])
+    )
+
+
 def denied_reason(
     argv: Sequence[str],
     *,
@@ -504,12 +533,16 @@ def denied_reason(
     to names the workspace chose: a workspace-relative argv[0], and a resolved path
     that `inside` confirms is still in the workspace. Every other name (bare names,
     absolute paths, a workspace link whose target leaves the workspace) is matched
-    fail-closed by prefix."""
+    fail-closed by prefix. A §10.2 `shell_script` argv passes for names that are
+    exactly bash/sh (or dash, for a realpath); any other name is checked as usual."""
     if not argv:
         return f"an empty argv is refused; {HINT}"
     exact = workspace_relative(argv[0])
     names = [(argv[0], exact), *((path, exact and inside(path)) for path in resolved)]
+    script = shell_script(argv)
     for path, path_exact in names:
+        if script and os.path.basename(path).casefold() in SCRIPT_SHELL_TARGETS:
+            continue
         reason = _check(program_name(path, exact=path_exact), argv[1:])
         if reason is not None:
             return reason

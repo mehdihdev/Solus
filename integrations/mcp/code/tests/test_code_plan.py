@@ -62,6 +62,7 @@ def test_create_prefers_uv(ws: Path) -> None:
         },
         "profile": None,
         "environment": "env2",
+        "program_scope": "system",
     }
     assert not (ws / "env2").exists(), "plan must be pure"
 

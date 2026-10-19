@@ -33,6 +33,9 @@ EXEC_KEYS = frozenset({"argv", "cwd", "environment", "profile", "timeout_seconds
 PROCESS_KEYS = frozenset({"argv", "cwd", "environment", "profile", "name", "max_runtime_seconds"})
 CAPTURE_KEYS = frozenset({"name", "setup_file", "extends"})
 _FORBIDDEN = ("\x00", "\n", "\r")
+SCRIPT_REFUSAL = "script must be an existing .sh/.bash file inside the linked folder"
+WORKSPACE_SCOPE = "workspace"
+SYSTEM_SCOPE = "system"
 
 
 def _bounded_int(args: Args, key: str, default: int, low: int, high: int) -> int | None:
@@ -150,6 +153,8 @@ def _command(root: Path, args: Args, action: str, keys: frozenset[str]) -> Plan 
     )
     if denied is not None:
         return denied
+    if command_deny.shell_script(argv) and not _script_file(root, cwd, argv[1]):
+        return SCRIPT_REFUSAL
     return Plan(
         action=action,
         ok=True,
@@ -158,6 +163,27 @@ def _command(root: Path, args: Args, action: str, keys: frozenset[str]) -> Plan 
         environment=environment[0],
         profile=profile,
     )
+
+
+def _script_file(root: Path, cwd: str, script: str) -> bool:
+    """§10.2: the shell's script (relative to `cwd`) is a regular file in the workspace."""
+    resolved = resolve_inside(os.path.normpath(os.path.join(cwd, script)), root)
+    return resolved is not None and resolved.is_file()
+
+
+def program_scope(root: Path, planned: Plan) -> str:
+    """§10.1: "workspace" when the program's realpath is inside the workspace or it
+    is a binary of the selected workspace venv (whose interpreter links outside),
+    else "system". A bare name resolves from the pinned system roots."""
+    program = planned.argv[0]
+    if "/" not in program:
+        return SYSTEM_SCOPE
+    path = os.path.normpath(os.path.join(root, program))
+    if planned.environment is not None:
+        venv_bin = os.path.normpath(execute.venv_bin_dir(root, planned.environment))
+        if os.path.dirname(path) == venv_bin:
+            return WORKSPACE_SCOPE
+    return WORKSPACE_SCOPE if _within(root, path) else SYSTEM_SCOPE
 
 
 def _finish(action: str, planned: Plan | str, **fields: Any) -> Plan:

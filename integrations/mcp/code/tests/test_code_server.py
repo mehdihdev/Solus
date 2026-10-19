@@ -118,6 +118,7 @@ async def test_plan_over_the_wire(ws: Path) -> None:
         },
         "profile": None,
         "environment": ".venv",
+        "program_scope": "workspace",
     }
     _content, refused = await built.call_tool("plan", {"action": "run", "args": {"script": "../x"}})
     assert refused["ok"] is False and refused["argv"] == [] and refused["reason"]
