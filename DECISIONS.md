@@ -518,6 +518,19 @@ Landlock (refused on kernels without it); sandboxed commands keep network access
 network-class commands flagged on the card; the sandbox applies to every `code` execution tool
 (`create_environment`, `install`, `run`, `test`, `exec`, `process_*`), not only the new ones.
 
+**Amendment (2026-10-19, SOLUSDEV-317 follow-up — approved in-session by Mehdi per ADR-032 tier
+2):** Narrows clause (2) of the 2026-10-18 amendment. In Build mode, a `code.exec` call that
+CommandPolicy does not deny and classifies with NO risk (none of network, install, destructive,
+hardware, remote, runs_shell, project_scripts) executes without an approval card. It is still
+OS-sandboxed, re-planned against a complete preview, single-use, and audited
+(`sol.command.completed` with `auto: true`). Its output reaches SOL like any approved command.
+Guide mode never executes. Every other command keeps the card: risk-flagged exec,
+process_start/stop, profile_capture/delete, create_environment, install, run and test. "Confirm
+every change" (force_confirmation) restores the card for all of them. Clause (1) is relaxed only
+for `bash` and `sh` running a workspace script file: `bash|sh <workspace-relative .sh/.bash file>
+[args]`, with no options (-c, -s, -i, --rcfile, etc.) and no stdin, always behind a card with a
+`runs_shell` badge. Inline shell strings remain refused.
+
 ---
 
 ## ADR-032: Agent-editable governance docs (two-tier)
