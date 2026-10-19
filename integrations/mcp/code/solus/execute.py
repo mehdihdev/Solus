@@ -82,8 +82,9 @@ def search_path() -> str:
 
 
 def pinned_which(name: str) -> str | None:
-    """`shutil.which` over SEARCH_ROOTS only."""
-    return shutil.which(name, path=search_path())
+    """`shutil.which` over SEARCH_ROOTS only; never a program in the writable set (§9.5)."""
+    found = shutil.which(name, path=search_path())
+    return None if found is None or sandbox.foreign_writable(found, None) else found
 
 
 def venv_bin_dir(root: Path, environment: str) -> Path:
@@ -216,7 +217,14 @@ def resolve_executable(root: Path, argv0: str, which: Which = pinned_which) -> s
     """An absolute program (already resolved by the planner) must still be an
     executable file; a workspace-relative interpreter must sit inside the
     workspace (its directory is confined; the file itself may be the symlink
-    every venv has); a bare name resolves against SEARCH_ROOTS."""
+    every venv has); a bare name resolves against SEARCH_ROOTS. Whatever it
+    resolves to, its realpath may not lie in the writable set outside the
+    workspace (§9.5)."""
+    found = _locate(root, argv0, which)
+    return None if found is None or sandbox.foreign_writable(found, root) else found
+
+
+def _locate(root: Path, argv0: str, which: Which) -> str | None:
     if os.path.isabs(argv0):
         return argv0 if os.path.isfile(argv0) and os.access(argv0, os.X_OK) else None
     if "/" not in argv0:

@@ -17,19 +17,17 @@ from code_paths import SOLUS_DIR, overlay_module  # isort: skip
 sandbox = overlay_module("sandbox")
 git_guard = overlay_module("git_guard")
 
+#: §9.5: caches are data only — nothing that later runs outside the sandbox.
 CACHES = (
     ".cache",
     "Library/Caches",
     ".ros",
-    ".npm",
+    ".npm/_cacache",
     ".pnpm-store",
-    ".local/share/pnpm",
-    ".local/share/uv",
-    ".cargo/registry",
-    ".cargo/git",
-    ".platformio",
-    ".arduino15",
-    ".gradle",
+    ".cargo/registry/cache",
+    ".gradle/caches",
+    ".platformio/.cache",
+    ".arduino15/staging",
     ".colcon",
 )
 
@@ -578,3 +576,37 @@ def test_user_cache_dir_is_the_darwin_sibling_of_the_temp_dir(tmp_path: Path) ->
     other = tmp_path / "plain"
     other.mkdir()
     assert sandbox.user_cache_dir(other, folders="/nonexistent") == str(other.resolve())
+
+
+# --- §9.5: programs never resolve into the writable set outside the workspace ---------
+
+
+def _exe(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+@pytest.mark.real_writable_roots
+def test_foreign_writable_covers_tmp_and_caches_but_not_the_workspace(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    tmpdir = tmp_path / "tmp"
+    workspace = tmpdir / "ws"  # a workspace inside TMP stays executable
+    inside = _exe(workspace / "bin" / "tool")
+    in_tmp = _exe(tmpdir / "planted")
+    in_cache = _exe(home / ".cache" / "x" / "tool")
+    in_cargo_cache = _exe(home / ".cargo" / "registry" / "cache" / "tool")
+    uv_python = _exe(home / ".local" / "share" / "uv" / "python" / "python3")
+    link = workspace / "link"
+    link.symlink_to(in_tmp)
+
+    def foreign(path: Path, ws: Path | None = workspace) -> bool:
+        return bool(sandbox.foreign_writable(str(path), ws, home=home, tmpdir=tmpdir))
+
+    assert not foreign(inside)
+    assert foreign(in_tmp) and foreign(in_cache) and foreign(in_cargo_cache)
+    assert foreign(link), "a workspace symlink into TMP is judged by its realpath"
+    assert not foreign(uv_python), "~/.local/share/uv is no longer writable"
+    assert foreign(inside, None), "without a workspace every writable root counts"
+    assert foreign(Path("/private/tmp/x") if sys.platform == "darwin" else Path("/tmp/x"))

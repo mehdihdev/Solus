@@ -392,3 +392,37 @@ def test_default_runner_kills_the_group_after_the_leader_exits(tmp_path: Path) -
         time.sleep(0.1)
     else:
         pytest.fail("a descendant outlived the command's process group")
+
+
+def test_pinned_which_refuses_a_program_in_a_writable_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """§9.5: a tool planted in a writable cache by an earlier command never resolves."""
+    home = tmp_path / "home"
+    planted = home / ".cache" / "bin" / "uv"
+    planted.parent.mkdir(parents=True)
+    planted.write_text("#!/bin/sh\n")
+    planted.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(execute, "SEARCH_ROOTS", ("~/.cache/bin",))
+    assert execute.pinned_which("uv") is None
+
+
+@pytest.mark.real_writable_roots
+def test_resolve_executable_refuses_a_venv_interpreter_linked_into_tmp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ws = tmp_path / "ws"
+    planted = tmp_path / "planted-python"
+    planted.write_text("#!/bin/sh\n")
+    planted.chmod(0o755)
+    (ws / ".venv" / "bin").mkdir(parents=True)
+    (ws / ".venv" / "bin" / "python").symlink_to(planted)
+    assert execute.resolve_executable(ws, ".venv/bin/python") is None
+    assert execute.resolve_executable(ws, str(planted)) is None
+    inside = ws / "bin" / "tool.sh"
+    inside.parent.mkdir()
+    inside.write_text("#!/bin/sh\n")
+    inside.chmod(0o755)
+    assert execute.resolve_executable(ws, "bin/tool.sh") == str(inside)

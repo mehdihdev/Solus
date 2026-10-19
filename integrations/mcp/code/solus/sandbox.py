@@ -30,20 +30,19 @@ KIND_MACOS = "sandbox-exec"
 KIND_LINUX = "landlock"  # reported as `landlock-abi<N>`
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 LANDLOCK_HELPER = Path(__file__).resolve().with_name("landlock_exec.py")
-#: Declared tool caches under HOME. Adding one is a SECURITY_REVIEW re-review trigger.
+#: Declared tool caches under HOME — data only (§9.5): nothing here may hold code that
+#: later runs outside the sandbox (so no `.local/share/uv`, `.cargo/git`, or the roots of
+#: `.gradle`/`.platformio`/`.arduino15`). Adding one is a SECURITY_REVIEW re-review trigger.
 HOME_CACHES: tuple[str, ...] = (
     ".cache",
     "Library/Caches",
     ".ros",
-    ".npm",
+    ".npm/_cacache",
     ".pnpm-store",
-    ".local/share/pnpm",
-    ".local/share/uv",
-    ".cargo/registry",
-    ".cargo/git",
-    ".platformio",
-    ".arduino15",
-    ".gradle",
+    ".cargo/registry/cache",
+    ".gradle/caches",
+    ".platformio/.cache",
+    ".arduino15/staging",
     ".colcon",
 )
 #: What the plan answer shows (no absolute machine paths).
@@ -237,6 +236,31 @@ def user_cache_dir(tmpdir: Path, *, folders: str = DARWIN_FOLDERS) -> str:
     if real.is_relative_to(Path(folders).resolve()) and real.name == "T":
         return str(real.parent / "C")
     return str(real)
+
+
+#: Temp roots a sandboxed command can write on either platform.
+SHARED_TMP: tuple[str, ...] = ("/private/tmp", *LINUX_TMP)
+
+
+def writable_roots(home: Path | None = None, tmpdir: Path | None = None) -> list[str]:
+    """Every directory a sandboxed command may write besides the workspace (realpaths)."""
+    home = home if home is not None else default_home()
+    tmpdir = tmpdir if tmpdir is not None else default_tmpdir()
+    roots = [_real(tmpdir), user_cache_dir(tmpdir), *(_real(path) for path in SHARED_TMP)]
+    roots.extend(_real(home / cache) for cache in HOME_CACHES)
+    return list(dict.fromkeys(roots))
+
+
+def foreign_writable(
+    path: str, workspace: Path | None, *, home: Path | None = None, tmpdir: Path | None = None
+) -> bool:
+    """True when `path`'s realpath lies in the sandbox's writable set but outside the
+    workspace (§9.5): an earlier sandboxed command could have planted it there, so it
+    is never resolved as a program. With no workspace every writable root counts."""
+    real = Path(_real(path))
+    if workspace is not None and real.is_relative_to(_real(workspace)):
+        return False
+    return any(real.is_relative_to(root) for root in writable_roots(home, tmpdir))
 
 
 def wrap(
