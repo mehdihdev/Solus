@@ -323,6 +323,7 @@ def limitations(kind: str | None) -> list[str]:
             *gaps,
             "launchd job submission not blocked",
             "a descendant that double-forks between process-table snapshots can survive a stop",
+            "a copied launchctl/osascript binary is not covered by the exec denial",
         ]
     abi = int(kind.rsplit("abi", 1)[-1]) if kind.rsplit("abi", 1)[-1].isdigit() else 0
     gaps.append("file metadata (chmod/chown/utimes) not confined")

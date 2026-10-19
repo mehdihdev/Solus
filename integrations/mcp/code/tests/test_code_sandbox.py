@@ -184,6 +184,7 @@ def test_limitations_are_reported_per_kind() -> None:
         "git operations inside sandboxed commands cannot write the repository",
         "launchd job submission not blocked",
         "a descendant that double-forks between process-table snapshots can survive a stop",
+        "a copied launchctl/osascript binary is not covered by the exec denial",
     ]
     old = sandbox.limitations("landlock-abi1")
     assert "git operations inside sandboxed commands cannot write the repository" in old

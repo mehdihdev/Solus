@@ -46,6 +46,7 @@ NEVER_REPLAYED_CODE_TOOLS: frozenset[str] = frozenset(
         "process_start",
         "process_stop",
         "profile_capture",
+        "profile_delete",
         "install",
         "create_environment",
     }

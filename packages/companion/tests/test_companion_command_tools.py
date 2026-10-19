@@ -23,6 +23,7 @@ NEVER_REPLAYED = {
     "process_start",
     "process_stop",
     "profile_capture",
+    "profile_delete",
     "install",
     "create_environment",
 }
