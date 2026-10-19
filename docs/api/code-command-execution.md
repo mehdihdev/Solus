@@ -435,3 +435,20 @@ These supersede earlier sections where they conflict.
    fingerprint (a sub-second window between the cloud's re-plan and the server's). On macOS a
    copied `launchctl`/`osascript` binary escapes the `process-exec` literal denials (the
    AppleEvents/LaunchServices mach denials still apply).
+11. **Prefix matching is version-shaped only.** A basename maps to a denied shell or interpreter
+    only when it is that name optionally followed by a version (`[0-9][0-9.]*`) and/or dash tokens
+    (`-[a-z0-9]+`), for example `python3.12-intel64`, `perl5.34-thread-multi`, `php-cgi`. Wrappers
+    and elevation tools match on the exact normalised name, plus the GNU `g` prefix. So
+    `./env_setup.sh`, `./time_sync.py`, `./sh_build.sh` and `./nu_test` are not denied by name.
+    Both cloud and server fail closed on unknown leading options for every interpreter in
+    `INLINE_CODE` (not only python). A behavioural parity test runs both classifiers over a shared
+    corpus.
+12. **Resume body.** `resume_confirmation_id` cannot be combined with `content` or `screenshot`
+    (422).
+13. **Shutdown.** On stdin EOF or a signal, the server ignores further SIGTERM/SIGINT while it
+    stops processes, and escalates to SIGKILL within 1.5 s, so the SDK's 2 s termination window
+    cannot cut cleanup short. Process-tree tracking prunes vanished pids and compares per-pid start
+    tokens before signalling.
+14. **Stop route.** A stop whose result does not arrive within the dispatch bound answers
+    `504 stop_unconfirmed` (it may have landed); `404` is only for a process the server reports
+    unknown.
