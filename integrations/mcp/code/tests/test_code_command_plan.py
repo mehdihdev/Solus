@@ -297,9 +297,9 @@ def _scope(root: Path, action: str, args: Any, which: Any = lambda _name: None) 
 
 
 def test_a_bare_system_program_is_system_scope(ws: Path, tmp_path: Path) -> None:
-    assert _scope(ws, "exec", {"argv": ["make"]}) == "system"
-    absolute = str(tmp_path / "roots" / "bin" / "colcon")
-    assert _scope(ws, "process_start", {"argv": [absolute]}) == "system"
+    absolute = _executable(tmp_path / "roots" / "bin" / "ls")
+    assert _scope(ws, "exec", {"argv": ["ls", "-la"]}) == "system"
+    assert _scope(ws, "process_start", {"argv": [str(absolute)]}) == "system"
 
 
 def test_a_workspace_script_is_workspace_scope(ws: Path) -> None:
@@ -322,12 +322,15 @@ def test_a_profile_path_entry_under_the_workspace_is_workspace_scope(ws: Path) -
     assert _scope(ws, "exec", {"argv": ["talker"], "profile": "ws"}) == "workspace"
 
 
-def test_a_workspace_link_to_an_outside_program_is_system_scope(ws: Path, tmp_path: Path) -> None:
+def test_a_workspace_link_to_an_outside_program_is_workspace_scope(
+    ws: Path, tmp_path: Path
+) -> None:
+    # Judged by the resolved path BEFORE following the link: the workspace chose it.
     bin_dir = ws / "install" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "colcon").symlink_to(tmp_path / "roots" / "bin" / "colcon")
+    (bin_dir / "lister").symlink_to(_executable(tmp_path / "roots" / "bin" / "ls"))
     profiles.save(ws, "ws", "/x/setup.bash", None, {"PATH": str(bin_dir)})
-    assert _scope(ws, "exec", {"argv": ["colcon"], "profile": "ws"}) == "system"
+    assert _scope(ws, "exec", {"argv": ["lister"], "profile": "ws"}) == "workspace"
     # ...and its target's name is still checked fail-closed.
     outside = _executable(tmp_path / "outside-bin" / "bash-5.2")
     (bin_dir / "helper").symlink_to(outside)
@@ -344,10 +347,13 @@ def test_old_actions_answer_program_scope(ws: Path) -> None:
     assert _scope(ws, "run", {"script": "a.py"}) == "workspace"
     assert _scope(ws, "test", {}) == "workspace"
     assert _scope(ws, "install", {"packages": ["numpy"]}) == "workspace"  # venv pip
-    assert _scope(ws, "install", {"packages": ["numpy"]}, uv) == "system"
+    assert _scope(ws, "install", {"packages": ["numpy"]}, uv) == "workspace"  # uses .venv
     assert _scope(ws, "create_environment", {"path": "env2"}, uv) == "system"
+    python = lambda name: "/usr/bin/python3.12" if name == "python3.12" else None  # noqa: E731
+    # `python3.12 -m venv` runs an interpreter with a module: counted as project code.
+    assert _scope(ws, "create_environment", {"path": "env3"}, python) == "workspace"
     capture = {"name": "ws", "setup_file": "install/setup.bash"}
-    assert _scope(ws, "profile_capture", capture) == "system"
+    assert _scope(ws, "profile_capture", capture) == "workspace"  # sources a workspace file
 
 
 def test_refusals_answer_a_null_program_scope(ws: Path) -> None:
@@ -365,7 +371,7 @@ def test_bash_runs_an_existing_workspace_script(ws: Path, tmp_path: Path) -> Non
     result = _plan(ws, "exec", {"argv": ["bash", "scripts/build.sh", "a", "b"]})
     assert result.ok, result.reason
     assert result.argv == [str(tmp_path / "roots" / "bin" / "bash"), "scripts/build.sh", "a", "b"]
-    assert result.answer()["program_scope"] == "system"
+    assert result.answer()["program_scope"] == "workspace"  # it runs a workspace script
 
 
 def test_sh_resolves_the_script_from_the_cwd(ws: Path, tmp_path: Path) -> None:
@@ -398,3 +404,185 @@ def test_other_shell_forms_are_refused_by_the_planner(ws: Path, argv: list[str])
     (ws / "s.sh").write_text("")
     (ws / "s.py").write_text("")
     assert not _plan(ws, "exec", {"argv": argv}).ok
+
+
+# --- program_scope reflects what actually runs ----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["python3.12", "x.py"],
+        ["python3.12", "-m", "pytest"],
+        ["python3.12", "-u", "-mpkg"],
+        ["make"],
+        ["colcon", "build"],
+        ["pytest", "-q"],
+        ["npm", "install"],
+        ["cargo", "build"],
+        ["cmake", "--build", "build"],
+        ["uv", "run", "x.py"],
+        ["ros2", "launch", "pkg", "a.launch.py"],
+        ["ros2", "run", "pkg", "node"],
+        ["bundle", "exec", "rake"],
+        ["pio", "run"],
+    ],
+)
+def test_interpreters_and_project_runners_are_workspace_scope(
+    ws: Path, tmp_path: Path, argv: list[str]
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / argv[0])
+    assert _scope(ws, "exec", {"argv": argv}) == "workspace"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["python3.12", "--version"], ["python3.12"], ["uv", "--version"], ["ros2", "topic", "list"]],
+)
+def test_interpreter_info_and_other_subcommands_stay_system_scope(
+    ws: Path, tmp_path: Path, argv: list[str]
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / argv[0])
+    assert _scope(ws, "exec", {"argv": argv}) == "system"
+
+
+def test_a_renamed_runner_is_judged_by_its_realpath_too(ws: Path, tmp_path: Path) -> None:
+    roots = tmp_path / "roots" / "bin"
+    os.symlink(roots / "make", roots / "builder")
+    assert _scope(ws, "exec", {"argv": ["builder"]}) == "workspace"
+
+
+def test_any_workspace_venv_bin_is_workspace_scope_without_environment(ws: Path) -> None:
+    python = fake_venv(ws, ".venv-ros")
+    profiles.save(ws, "v", "/x/setup.bash", None, {"PATH": str(python.parent)})
+    assert _scope(ws, "exec", {"argv": ["python", "--version"], "profile": "v"}) == "workspace"
+
+
+def test_the_plan_records_the_program_realpath(ws: Path, tmp_path: Path) -> None:
+    roots = tmp_path / "roots" / "bin"
+    os.symlink(roots / "make", roots / "builder")
+    planned = _plan(ws, "exec", {"argv": ["builder"]})
+    assert planned.program_realpath == os.path.realpath(roots / "make")
+    assert "program_realpath" not in planned.answer()
+
+
+# --- a more complete runner denylist; profiles and environments -------------------------
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pip", "install", "-r", "requirements.txt"],
+        ["pip3", "download", "x"],
+        ["pip3.12", "wheel", "."],
+        ["uv", "sync"],
+        ["uv", "pip", "install", "x"],
+        ["uv", "build"],
+        ["uv", "tool", "run", "ruff"],
+        ["poetry", "install"],
+        ["poetry", "build"],
+        ["pdm", "list"],
+        ["rye", "sync"],
+        ["pixi", "run", "x"],
+        ["conda", "run", "-n", "x", "y"],
+        ["mamba", "install", "x"],
+        ["micromamba", "env", "create"],
+        ["rosrun", "pkg", "node"],
+        ["roslaunch", "pkg", "x.launch"],
+        ["ctest"],
+        ["meson", "compile"],
+        ["scons"],
+        ["bazel", "build", "//..."],
+        ["bazelisk", "test", "//..."],
+        ["just"],
+        ["task", "build"],
+        ["invoke", "build"],
+        ["nox"],
+        ["hatch", "build"],
+        ["pre-commit", "run", "--all-files"],
+        ["make", "-v"],
+    ],
+)
+def test_more_project_runners_are_workspace_scope(
+    ws: Path, tmp_path: Path, argv: list[str]
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / argv[0])
+    assert _scope(ws, "exec", {"argv": argv}) == "workspace"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["pip", "--version"],
+        ["pip3", "list"],
+        ["uv", "--help"],
+        ["poetry", "--version"],
+        ["conda", "info"],
+        ["bazel", "--version"],
+        ["make", "--version"],
+        ["cargo", "-V"],
+        ["pre-commit", "--help"],
+        ["ctest", "-h"],
+    ],
+)
+def test_runner_version_and_help_stay_system_scope(
+    ws: Path, tmp_path: Path, argv: list[str]
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / argv[0])
+    assert _scope(ws, "exec", {"argv": argv}) == "system"
+
+
+@pytest.mark.parametrize(
+    "variable",
+    [
+        "PATH",
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "DYLD_LIBRARY_PATH",
+        "AMENT_PREFIX_PATH",
+        "COLCON_PREFIX_PATH",
+        "CMAKE_PREFIX_PATH",
+        "ROS_PACKAGE_PATH",
+        "NODE_PATH",
+        "GEM_PATH",
+        "PERL5LIB",
+        "RUBYLIB",
+        "CLASSPATH",
+    ],
+)
+def test_a_profile_search_path_into_the_workspace_is_workspace_scope(
+    ws: Path, tmp_path: Path, variable: str
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / "ls")
+    entry = ws / "install" / "lib"  # need not exist yet (an unbuilt overlay)
+    profiles.save(ws, "overlay", "/x/setup.bash", None, {variable: f"/opt/ros/lib:{entry}"})
+    profiles.save(ws, "system", "/x/setup.bash", None, {variable: "/opt/ros/lib"})
+    assert _scope(ws, "exec", {"argv": ["ls"], "profile": "overlay"}) == "workspace"
+    assert _scope(ws, "exec", {"argv": ["ls"], "profile": "system"}) == "system"
+
+
+def test_a_ros_overlay_makes_ros2_topic_list_workspace_scope(ws: Path, tmp_path: Path) -> None:
+    _executable(tmp_path / "roots" / "bin" / "ros2")
+    (ws / "install").mkdir()
+    overlay = {"AMENT_PREFIX_PATH": f"{ws / 'install' / 'pkg'}:/opt/ros/jazzy"}
+    profiles.save(ws, "ws", str(ws / "install" / "setup.bash"), None, overlay)
+    profiles.save(ws, "ros", "/opt/ros/jazzy/setup.bash", None, {"AMENT_PREFIX_PATH": "/opt"})
+    assert _scope(ws, "exec", {"argv": ["ros2", "topic", "list"], "profile": "ws"}) == "workspace"
+    assert _scope(ws, "exec", {"argv": ["ros2", "topic", "list"], "profile": "ros"}) == "system"
+
+
+def test_relative_or_empty_search_path_entries_are_workspace_scope(
+    ws: Path, tmp_path: Path
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / "ls")
+    profiles.save(ws, "rel", "/x/setup.bash", None, {"PYTHONPATH": "src"})
+    profiles.save(ws, "empty", "/x/setup.bash", None, {"LD_LIBRARY_PATH": "/opt/lib:"})
+    for name in ("rel", "empty"):
+        assert _scope(ws, "exec", {"argv": ["ls"], "profile": name}) == "workspace", name
+
+
+def test_an_explicit_workspace_environment_is_workspace_scope(ws: Path, tmp_path: Path) -> None:
+    fake_venv(ws)
+    _executable(tmp_path / "roots" / "bin" / "ls")
+    assert _scope(ws, "exec", {"argv": ["ls"], "environment": ".venv"}) == "workspace"
+    assert _scope(ws, "exec", {"argv": ["ls"]}) == "system"

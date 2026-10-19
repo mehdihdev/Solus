@@ -329,6 +329,22 @@ class Ran:
     env: dict[str, str]
 
 
+PROGRAM_CHANGED = "the program changed after it was planned"
+
+
+def _program_changed(root: Path, plan: Plan, executable: str) -> bool:
+    """True when the program about to run is not the one the plan described: its
+    realpath or its scope differs. The planned path itself still runs (a venv
+    interpreter must be started through its link). Plans not made by `plan_action`
+    carry no scope and are not compared."""
+    if plan.program_scope is None:
+        return False
+    from .command_plan import program_scope
+
+    scope = program_scope(root, plan, executable)
+    return os.path.realpath(executable) != plan.program_realpath or scope != plan.program_scope
+
+
 def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | str:
     """Resolve argv[0], wrap in the sandbox, or say why nothing may run."""
     if not plan.ok:
@@ -338,6 +354,8 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
     executable = resolve_executable(root, plan.argv[0], which)
     if executable is None:
         return f"executable not found: {plan.argv[0][:64]}"
+    if _program_changed(root, plan, executable):
+        return PROGRAM_CHANGED
     cwd = root if plan.cwd == "." else resolve_inside(plan.cwd, root)
     if cwd is None:
         return "cwd is no longer inside the linked folder"

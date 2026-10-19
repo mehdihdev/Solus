@@ -112,9 +112,12 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
 
 def test_bare_tool_names_resolve_against_the_pinned_roots_only(ws: Path) -> None:
     recorder = Recorder()
-    planned = plan.plan_action(ws, "install", {"packages": ["numpy"]}, which=lambda n: "/opt/x/uv")
-    execute.execute_plan(ws, planned, runner=recorder, which=lambda n: "/opt/roots/uv")
+    roots = lambda n: "/opt/roots/uv"  # noqa: E731
+    planned = plan.plan_action(ws, "install", {"packages": ["numpy"]}, which=roots)
+    execute.execute_plan(ws, planned, runner=recorder, which=roots)
     assert recorder.calls[0][0][-7:-5] == ["/opt/roots/uv", "pip"]
+    moved = execute.execute_plan(ws, planned, runner=Recorder(), which=lambda n: "/opt/x/uv")
+    assert moved["reason"] == "the program changed after it was planned"
     missing = execute.execute_plan(ws, planned, runner=Recorder(), which=lambda n: None)
     assert missing["ok"] is False and missing["reason"] == "executable not found: uv"
 
@@ -470,3 +473,69 @@ def test_real_workspace_shell_scripts_run_sandboxed(
     escape = run("scripts/escape.sh")
     assert escape["stdout_tail"] == "denied\n", escape
     assert not outside.exists()
+
+
+# --- TOCTOU: the program must be the one that was planned ------------------------------
+
+
+def _planned_tool(ws: Path) -> Any:
+    tools = ws / "tools"
+    tools.mkdir()
+    for name in ("a.sh", "b.sh"):
+        (tools / name).write_text("#!/bin/sh\n")
+        (tools / name).chmod(0o755)
+    planned = plan.plan_action(ws, "exec", {"argv": ["./tools/a.sh"]}, which=lambda _n: None)
+    assert planned.ok and planned.program_scope == "workspace", planned.reason
+    return planned
+
+
+def test_an_unchanged_planned_program_runs(ws: Path) -> None:
+    recorder = Recorder()
+    result = execute.execute_plan(ws, _planned_tool(ws), runner=recorder)
+    assert len(recorder.calls) == 1 and result["ok"] is True
+
+
+def test_a_program_whose_realpath_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = _planned_tool(ws)
+    swapped = ws / "tools" / "a.sh"  # the planned path now leads to another file
+    swapped.unlink()
+    swapped.symlink_to(ws / "tools" / "b.sh")
+    recorder = Recorder()
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and result["reason"] == "the program changed after it was planned"
+
+
+def test_a_program_whose_scope_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = dataclasses.replace(_planned_tool(ws), program_scope="system")
+    recorder = Recorder()
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and result["reason"] == "the program changed after it was planned"
+
+
+def test_a_venv_interpreter_still_runs_through_its_link(ws: Path, scrub: None) -> None:
+    recorder = Recorder()
+    planned = _run_plan(ws)
+    assert planned.program_scope == "workspace"
+    execute.execute_plan(ws, planned, runner=recorder)
+    ((argv, _cwd, _env, _timeout),) = recorder.calls
+    assert str(ws / ".venv" / "bin" / "python") in argv  # never the realpath
+
+
+def test_a_profile_whose_scope_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = _planned_tool(ws)
+    profile = profiles.Profile(
+        name="p",
+        setup_file="/x.sh",
+        extends=None,
+        captured_at="t",
+        variables=(("PYTHONPATH", "/opt/lib"),),
+        digest="d",
+    )
+    system = dataclasses.replace(planned, program_scope="system", profile=profile)
+    assert execute.execute_plan(ws, system, runner=Recorder())["reason"] == (
+        "the program changed after it was planned"
+    )
+    overlay = dataclasses.replace(profile, variables=(("PYTHONPATH", str(ws / "lib")),))
+    kept = dataclasses.replace(planned, profile=overlay)
+    recorder = Recorder()
+    assert execute.execute_plan(ws, kept, runner=recorder)["ok"] is True
