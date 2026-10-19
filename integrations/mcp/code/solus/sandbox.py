@@ -24,7 +24,7 @@ from typing import Any
 
 from .git_guard import git_metadata_digest as git_metadata_digest
 from .git_guard import protected_git_dirs as protected_git_dirs
-from .landlock_exec import MAX_ENV_BYTES, Landlock, holds_home
+from .landlock_exec import MAX_ENV_BYTES, Landlock, contains, holds_home
 
 KIND_MACOS = "sandbox-exec"
 KIND_LINUX = "landlock"  # reported as `landlock-abi<N>`
@@ -256,11 +256,11 @@ def foreign_writable(
 ) -> bool:
     """True when `path`'s realpath lies in the sandbox's writable set but outside the
     workspace (§9.5): an earlier sandboxed command could have planted it there, so it
-    is never resolved as a program. With no workspace every writable root counts."""
-    real = Path(_real(path))
-    if workspace is not None and real.is_relative_to(_real(workspace)):
+    is never resolved as a program. With no workspace every writable root counts.
+    Containment is judged by inode as well as spelling (case-insensitive APFS)."""
+    if workspace is not None and contains(str(workspace), path):
         return False
-    return any(real.is_relative_to(root) for root in writable_roots(home, tmpdir))
+    return any(contains(root, path) for root in writable_roots(home, tmpdir))
 
 
 def wrap(

@@ -610,3 +610,36 @@ def test_foreign_writable_covers_tmp_and_caches_but_not_the_workspace(tmp_path: 
     assert not foreign(uv_python), "~/.local/share/uv is no longer writable"
     assert foreign(inside, None), "without a workspace every writable root counts"
     assert foreign(Path("/private/tmp/x") if sys.platform == "darwin" else Path("/tmp/x"))
+
+
+@pytest.mark.real_writable_roots
+def test_foreign_writable_is_judged_by_inode_not_spelling(tmp_path: Path) -> None:
+    """APFS is usually case-insensitive: `~/.Cache/…` is `~/.cache/…`."""
+    probe = tmp_path / "CaseProbe"
+    probe.mkdir()
+    insensitive = (tmp_path / "caseprobe").exists()
+    probe.rmdir()
+    if not insensitive:
+        pytest.skip("case-sensitive file system")
+    home = tmp_path / "home"
+    planted = _exe(home / ".cache" / "x" / "tool")
+    variant = home / ".Cache" / "x" / "tool"
+    workspace = tmp_path / "ws"
+    inside = _exe(workspace / "bin" / "tool")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+
+    def foreign(path: Path) -> bool:
+        return bool(sandbox.foreign_writable(str(path), workspace, home=home, tmpdir=other))
+
+    assert planted.exists() and foreign(variant)
+    assert not foreign(tmp_path / "WS" / "bin" / "tool") and inside.exists()
+
+
+def test_home_conflict_catches_a_symlinked_dot_solus_and_case_variants(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "ws"
+    (workspace / "data").mkdir(parents=True)
+    (home / ".solus").symlink_to(workspace / "data", target_is_directory=True)
+    assert sandbox.home_conflict(workspace, home) is not None
