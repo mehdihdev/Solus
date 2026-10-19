@@ -15,14 +15,15 @@ import { Mono } from '../../components/ui/Mono'
 import { Switch } from '../../components/ui/Switch'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
-import { ConfirmationCard } from './ConfirmationCard'
+import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
-import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
+import { COMPOSER_ATTR, CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { SolMarkdown } from './Markdown'
 import { ModeBadge } from './ModeBadge'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { Entity } from '../../lib/api/resources'
+import type { PendingConfirmation } from '../../lib/api/solStream'
 import { useClassifyPreview } from './useClassifyPreview'
 import { useMentionPicker, type MentionPicker } from './useMentionPicker'
 import type { SolActionMode, SolScreenshot } from './solApi'
@@ -126,6 +127,50 @@ function CitationsView({ citations }: { citations: readonly string[] }): React.J
   )
 }
 
+/** A message the person sent. */
+function UserRow({ item, rowClass }: { item: ChatItem; rowClass: string }): React.JSX.Element {
+  return (
+    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
+      <div
+        style={{
+          background: 'var(--sur2)',
+          border: '1px solid var(--bd)',
+          borderRadius: 6,
+          padding: '8px 10px',
+          fontSize: 12.5,
+          whiteSpace: 'pre-wrap'
+        }}
+      >
+        {item.content}
+      </div>
+      {/* SOLUSDEV-252 S3: a flag, never the pixels (sol-window.md §8). */}
+      {item.hasScreenshot && (
+        <div style={{ ...MUTED, fontSize: 10, textAlign: 'right', marginTop: 3 }}>
+          screen attached
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One parked action's card, with a decide callback that is stable for as long
+ *  as the card and the surface's decide are, so the card's keyboard approver is
+ *  not re-registered on every transcript render (SOLUSDEV-317). */
+function ParkedConfirmation({
+  pending,
+  onDecide
+}: {
+  pending: PendingConfirmation
+  onDecide: SolChat['decide']
+}): React.JSX.Element {
+  const { confirmationId } = pending
+  const decide = useCallback(
+    (decision: ConfirmationDecision) => onDecide(confirmationId, decision),
+    [onDecide, confirmationId]
+  )
+  return <ConfirmationCard pending={pending} onDecide={decide} />
+}
+
 // memo (S2): a token patch replaces ONE ChatItem immutably, so every other row
 // keeps its `item` identity and skips the render. `onDecide` is stable from
 // useSolChat. `settled` rows (not the last, not streaming) also opt into CSS
@@ -146,30 +191,7 @@ const MessageRow = memo(function MessageRow({
   settled: boolean
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
-  if (item.role === 'user') {
-    return (
-      <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
-        <div
-          style={{
-            background: 'var(--sur2)',
-            border: '1px solid var(--bd)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            fontSize: 12.5,
-            whiteSpace: 'pre-wrap'
-          }}
-        >
-          {item.content}
-        </div>
-        {/* SOLUSDEV-252 S3: a flag, never the pixels (sol-window.md §8). */}
-        {item.hasScreenshot && (
-          <div style={{ ...MUTED, fontSize: 10, textAlign: 'right', marginTop: 3 }}>
-            screen attached
-          </div>
-        )}
-      </div>
-    )
-  }
+  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} />
   if (item.role === 'tool') {
     return (
       <div
@@ -197,10 +219,10 @@ const MessageRow = memo(function MessageRow({
           and each is approved on its own — approving a batch would suspend the
           staleness re-check that makes "what you saw is what runs" true. */}
       {confirmations.map((confirmation) => (
-        <ConfirmationCard
+        <ParkedConfirmation
           key={confirmation.confirmationId}
           pending={confirmation}
-          onDecide={(decision) => onDecide(confirmation.confirmationId, decision)}
+          onDecide={onDecide}
         />
       ))}
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
@@ -411,6 +433,7 @@ function MessageInput({
         aria-activedescendant={mention.active ? `sol-mention-${mention.active.id}` : undefined}
         placeholder={placeholder}
         aria-label="Message SOL"
+        {...{ [COMPOSER_ATTR]: '' }}
         style={{
           flex: 1,
           minWidth: 0,

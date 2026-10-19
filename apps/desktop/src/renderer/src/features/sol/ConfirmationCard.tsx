@@ -21,12 +21,13 @@
 // badges, sandboxed — read from the verbatim rows) and accept Cmd/Ctrl+Enter
 // from the surrounding SOL surface. A running command's output is rendered by
 // the host from the store (CommandOutput), so it outlives this card.
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import type { ConfirmationRow, PendingConfirmation } from '../../lib/api/solStream'
 import './ConfirmationCard.css'
 import { commandHeader, type CommandHeader } from './commandCard'
 import { approveShortcut, useRegisterCommandApproval } from './commandHotkey'
+import { usePreviewInView } from './previewInView'
 
 /** Mono uppercases by default; a value being approved must render exactly as it
  *  will execute. */
@@ -76,20 +77,31 @@ function DiffRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
   )
 }
 
-function CompletePreview({ rows }: { rows: readonly ConfirmationRow[] }): React.JSX.Element {
+function CompletePreview({
+  rows,
+  expanded,
+  regionRef
+}: {
+  rows: readonly ConfirmationRow[]
+  /** Command cards always open their (bounded, scrollable) preview. */
+  expanded: boolean
+  regionRef: (element: HTMLElement | null) => void
+}): React.JSX.Element {
   const brief =
-    rows.length <= 2 &&
-    rows.every((row) =>
-      [row.label, row.before, row.after].every(
-        (value) => value === null || (value.length <= 160 && !value.includes('\n'))
-      )
-    )
+    expanded ||
+    (rows.length <= 2 &&
+      rows.every((row) =>
+        [row.label, row.before, row.after].every(
+          (value) => value === null || (value.length <= 160 && !value.includes('\n'))
+        )
+      ))
   return (
     <details className="confirmation-card__preview" open={brief}>
       <summary>
         {rows.length === 1 ? 'Review 1 change' : `Review all ${rows.length} changes`}
       </summary>
       <div
+        ref={regionRef}
         className="confirmation-card__scroll"
         role="region"
         aria-label="Complete proposed changes"
@@ -102,6 +114,15 @@ function CompletePreview({ rows }: { rows: readonly ConfirmationRow[] }): React.
         </ul>
       </div>
     </details>
+  )
+}
+
+function CardPreview(props: Parameters<typeof CompletePreview>[0]): React.JSX.Element {
+  if (props.rows.length > 0) return <CompletePreview {...props} />
+  return (
+    <Mono style={{ color: 'var(--mut)' }}>
+      This tool could not describe its change — review the action above before approving.
+    </Mono>
   )
 }
 
@@ -177,6 +198,8 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
     [isCommand, spent, decide]
   )
   useRegisterCommandApproval(pending.confirmationId, keyboardApprove)
+  // SOLUSDEV-317 M1: the arming clock starts once the open preview is on screen.
+  const previewRef = usePreviewInView(pending.confirmationId, isCommand)
 
   return (
     <section aria-label="Action needs your approval" className="confirmation-card">
@@ -211,13 +234,7 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
         </button>
       </div>
 
-      {pending.preview.length > 0 ? (
-        <CompletePreview rows={pending.preview} />
-      ) : (
-        <Mono style={{ color: 'var(--mut)' }}>
-          This tool could not describe its change — review the action above before approving.
-        </Mono>
-      )}
+      <CardPreview rows={pending.preview} expanded={isCommand} regionRef={previewRef} />
 
       <ConfirmationDetails pending={pending} />
 
@@ -248,11 +265,24 @@ function ConfirmationDetails({ pending }: { pending: PendingConfirmation }): Rea
   )
 }
 
-function useConfirmationDecision(onDecide: ConfirmationCardProps['onDecide']): {
+/** The host's latest onDecide behind a stable identity, so a host that passes
+ *  a fresh closure each render does not re-register the keyboard approver. */
+function useLatestDecide(
+  onDecide: ConfirmationCardProps['onDecide']
+): ConfirmationCardProps['onDecide'] {
+  const latest = useRef(onDecide)
+  useEffect(() => {
+    latest.current = onDecide
+  }, [onDecide])
+  return useCallback((decision: ConfirmationDecision) => latest.current(decision), [])
+}
+
+function useConfirmationDecision(hostDecide: ConfirmationCardProps['onDecide']): {
   busy: ConfirmationDecision | null
   failed: { message: string; terminal: boolean } | null
   decide: (decision: ConfirmationDecision) => Promise<void>
 } {
+  const onDecide = useLatestDecide(hostDecide)
   const [busy, setBusy] = useState<ConfirmationDecision | null>(null)
   const [failed, setFailed] = useState<{ message: string; terminal: boolean } | null>(null)
   // A second gesture before React re-renders (a double click, a held
