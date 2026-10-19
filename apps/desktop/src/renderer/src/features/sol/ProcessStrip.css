@@ -1,0 +1,89 @@
+/* SOLUSDEV-317: Running processes strip above the SOL composer. Tokens only. */
+.process-strip {
+  border-top: 1px solid var(--bd);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--tx);
+}
+
+.process-strip ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.process-strip__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.process-strip__name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.process-strip__state,
+.process-strip__elapsed {
+  color: var(--mut);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.process-strip__state[data-state='running'] {
+  color: var(--acc);
+}
+
+.process-strip__line button {
+  padding: 2px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur2);
+  color: var(--tx);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.process-strip__line button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.process-strip__line button:focus-visible,
+.process-strip__output pre:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.process-strip__error {
+  margin: 2px 0 0;
+  color: var(--err);
+  font-size: 11px;
+}
+
+.process-strip__output pre {
+  max-height: 180px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.process-strip__output p {
+  margin: 2px 0 0;
+  color: var(--mut);
+  font-size: 11px;
+}

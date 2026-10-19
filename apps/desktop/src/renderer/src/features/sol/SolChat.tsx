@@ -17,6 +17,7 @@ import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard } from './ConfirmationCard'
 import { CommandOutput } from './CommandOutput'
+import { ProcessStrip } from './ProcessStrip'
 import { CommandApprovalContext, approveOnShortcut, createApprovalRegistry } from './commandHotkey'
 import { SolMarkdown } from './Markdown'
 import { ModeBadge } from './ModeBadge'
@@ -624,6 +625,7 @@ export function SolChat({
         {region && (
           <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
         )}
+        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} />
         <Composer
           streaming={chat.streaming}
           page={page}
