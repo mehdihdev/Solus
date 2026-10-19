@@ -84,6 +84,7 @@ def test_probe_other_platforms_refuse() -> None:
     assert kind is None and "win32" in why
 
 
+@pytest.mark.own_sandbox_probe
 def test_available_is_cached_for_the_server_lifetime(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[int] = []
 

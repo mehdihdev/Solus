@@ -24,6 +24,7 @@ from pathlib import Path, PurePosixPath
 from threading import Event
 from typing import IO, Any
 
+from . import profiles, sandbox
 from .plan import Plan
 from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, LineOutput
 from .workspace import resolve_inside
@@ -95,9 +96,9 @@ def scrubbed_env(root: Path, environment: str | None) -> dict[str, str]:
     return {**env, "PATH": path}
 
 
-def _tail(handle: IO[bytes]) -> bytes:
+def _tail(handle: IO[bytes], tail_bytes: int = MAX_TAIL_BYTES) -> bytes:
     handle.seek(0, os.SEEK_END)
-    handle.seek(max(0, handle.tell() - MAX_TAIL_BYTES))
+    handle.seek(max(0, handle.tell() - tail_bytes))
     return handle.read()
 
 
@@ -133,9 +134,15 @@ def _drain_output(
 
 
 def default_runner(
-    argv: list[str], cwd: Path, env: dict[str, str], timeout_seconds: int
+    argv: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout_seconds: int,
+    *,
+    tail_bytes: int = MAX_TAIL_BYTES,
 ) -> Outcome:
-    """argv list, no shell, own session, closed stdin, spooled output."""
+    """argv list, no shell, own session, closed stdin, spooled output (last
+    `tail_bytes` of each stream kept)."""
     # Private spools and independent read descriptors are established before launch.
     # Reading never seeks the child's shared write offset.
     with tempfile.TemporaryDirectory(prefix="solus-command-") as directory:
@@ -179,14 +186,20 @@ def default_runner(
                     _kill_group(proc)
                     proc.wait()
             return Outcome(
-                None if timed_out else proc.returncode, _tail(out), _tail(err), timed_out
+                None if timed_out else proc.returncode,
+                _tail(out, tail_bytes),
+                _tail(err, tail_bytes),
+                timed_out,
             )
 
 
 def resolve_executable(root: Path, argv0: str, which: Which = pinned_which) -> str | None:
-    """A workspace-relative interpreter must sit inside the workspace (its
-    directory is confined; the file itself may be the symlink every venv
-    has); a bare name resolves against SEARCH_ROOTS."""
+    """An absolute program (already resolved by the planner) must still be an
+    executable file; a workspace-relative interpreter must sit inside the
+    workspace (its directory is confined; the file itself may be the symlink
+    every venv has); a bare name resolves against SEARCH_ROOTS."""
+    if os.path.isabs(argv0):
+        return argv0 if os.path.isfile(argv0) and os.access(argv0, os.X_OK) else None
     if "/" not in argv0:
         return which(argv0)
     parent = resolve_inside(str(PurePosixPath(argv0).parent), root)
@@ -207,39 +220,96 @@ def refusal(reason: str) -> dict[str, Any]:
         "duration_ms": 0,
         "timed_out": False,
         "reason": reason,
+        "sandbox": None,
+        "git_metadata_changed": False,
     }
+
+
+def child_env(root: Path, plan: Plan) -> dict[str, str]:
+    """The scrubbed environment, overlaid with the plan's profile when it has one."""
+    base = scrubbed_env(root, plan.environment)
+    if plan.profile is None:
+        return base
+    venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
+    return profiles.apply(base, plan.profile.variables, venv_bin)
+
+
+@dataclass(frozen=True)
+class Prepared:
+    """The sandboxed argv, working directory and environment of an ok plan."""
+
+    argv: list[str]
+    cwd: Path
+    env: dict[str, str]
+
+
+@dataclass(frozen=True)
+class Ran:
+    outcome: Outcome
+    duration_ms: int
+    git_metadata_changed: bool
+    env: dict[str, str]
+
+
+def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | str:
+    """Resolve argv[0], wrap in the sandbox, or say why nothing may run."""
+    if not plan.ok:
+        return plan.reason or "refused"
+    if plan.sandbox is None:
+        return "sandbox unavailable: the plan carries no sandbox"
+    executable = resolve_executable(root, plan.argv[0], which)
+    if executable is None:
+        return f"executable not found: {plan.argv[0][:64]}"
+    cwd = root if plan.cwd == "." else resolve_inside(plan.cwd, root)
+    if cwd is None:
+        return "cwd is no longer inside the linked folder"
+    try:
+        wrapped = sandbox.wrap(plan.sandbox, [executable, *plan.argv[1:]], workspace=root)
+    except ValueError as exc:
+        return str(exc)
+    return Prepared(wrapped, cwd, child_env(root, plan))
+
+
+def run_sandboxed(
+    root: Path, plan: Plan, *, runner: Runner = default_runner, which: Which = pinned_which
+) -> Ran | str:
+    """Run the prepared plan; detect git metadata changes around it."""
+    prepared = prepare(root, plan, which)
+    if isinstance(prepared, str):
+        return prepared
+    before = sandbox.git_metadata_digest(root)
+    started = time.monotonic()
+    try:
+        outcome = runner(prepared.argv, prepared.cwd, prepared.env, plan.timeout_seconds)
+    except (OSError, ValueError) as exc:
+        logger.warning("%s could not start: %s", plan.action, type(exc).__name__)
+        return f"could not start: {type(exc).__name__}"
+    duration_ms = int((time.monotonic() - started) * 1000)
+    changed = sandbox.git_metadata_digest(root) != before
+    if changed:
+        logger.warning("%s changed .git/hooks or .git/config", plan.action)
+    return Ran(outcome, duration_ms, changed, prepared.env)
 
 
 def execute_plan(
     root: Path, plan: Plan, *, runner: Runner = default_runner, which: Which = pinned_which
 ) -> dict[str, Any]:
-    """Run EXACTLY `plan.argv` (argv[0] resolved as documented) and answer the
-    §4 result shape. Never raises."""
-    if not plan.ok:
-        return refusal(plan.reason or "refused")
-    executable = resolve_executable(root, plan.argv[0], which)
-    if executable is None:
-        return refusal(f"executable not found: {plan.argv[0][:64]}")
-    started = time.monotonic()
-    try:
-        outcome = runner(
-            [executable, *plan.argv[1:]],
-            root,
-            scrubbed_env(root, plan.environment),
-            plan.timeout_seconds,
-        )
-    except (OSError, ValueError) as exc:
-        logger.warning("%s could not start: %s", plan.action, type(exc).__name__)
-        return refusal(f"could not start: {type(exc).__name__}")
-    duration_ms = int((time.monotonic() - started) * 1000)
+    """Run EXACTLY `plan.argv` (argv[0] resolved as documented) inside the
+    sandbox and answer the §4 result shape. Never raises."""
+    ran = run_sandboxed(root, plan, runner=runner, which=which)
+    if isinstance(ran, str):
+        return refusal(ran)
+    outcome = ran.outcome
     return {
         "ok": outcome.exit_code == 0 and not outcome.timed_out,
         "argv": list(plan.argv),
-        "cwd": ".",
+        "cwd": plan.cwd,
         "exit_code": outcome.exit_code,
         "stdout_tail": tail_text(outcome.stdout),
         "stderr_tail": tail_text(outcome.stderr),
-        "duration_ms": duration_ms,
+        "duration_ms": ran.duration_ms,
         "timed_out": outcome.timed_out,
         "reason": f"timed out after {plan.timeout_seconds} s" if outcome.timed_out else None,
+        "sandbox": plan.sandbox,
+        "git_metadata_changed": ran.git_metadata_changed,
     }

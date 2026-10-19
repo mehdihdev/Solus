@@ -10,9 +10,11 @@ from typing import Any
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from conftest import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 plan = overlay_module("plan")
+sandbox = overlay_module("sandbox")
 
 UV_ONLY = {"uv": "/opt/homebrew/bin/uv"}
 PY311_ONLY = {"python3.11": "/usr/local/bin/python3.11"}
@@ -47,7 +49,19 @@ def test_create_prefers_uv(ws: Path) -> None:
     result = _plan(ws, "create_environment", {"path": "env2", "python": "3.11"}, UV_ONLY)
     assert result.ok and result.argv == ["uv", "venv", "--python", "3.11", "env2"]
     assert result.path == "env2" and result.environment == "env2"
-    assert result.answer() == {"argv": result.argv, "cwd": ".", "ok": True, "reason": None}
+    assert result.answer() == {
+        "argv": result.argv,
+        "cwd": ".",
+        "ok": True,
+        "reason": None,
+        "sandbox": {
+            "kind": FAKE_KIND,
+            "writable": list(sandbox.WRITABLE_LABELS),
+            "limitations": sandbox.limitations(FAKE_KIND),
+        },
+        "profile": None,
+        "environment": "env2",
+    }
     assert not (ws / "env2").exists(), "plan must be pure"
 
 

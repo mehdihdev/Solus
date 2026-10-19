@@ -3,6 +3,7 @@ resolved inside the workspace or against the pinned roots), scrubbed child
 env (only PATH/HOME/LANG/TMPDIR/VIRTUAL_ENV — never a secret), 16 KiB tails,
 timeout → process-group kill, never raises; plus the real runner."""
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -13,10 +14,13 @@ from typing import Any
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from conftest import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 execute = overlay_module("execute")
 plan = overlay_module("plan")
+sandbox = overlay_module("sandbox")
+profiles = overlay_module("profiles")
 
 
 class Recorder:
@@ -81,7 +85,9 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
     planned = _run_plan(ws)
     result = execute.execute_plan(ws, planned, runner=recorder)
     ((argv, cwd, env, timeout),) = recorder.calls
-    assert argv == [str(ws / ".venv" / "bin" / "python"), "a.py"]
+    assert argv == sandbox.wrap(
+        FAKE_KIND, [str(ws / ".venv" / "bin" / "python"), "a.py"], workspace=ws
+    )
     assert cwd == ws and timeout == 7
     assert env["VIRTUAL_ENV"] == str(ws / ".venv") and "GITHUB_TOKEN" not in env
     assert result == {
@@ -94,6 +100,8 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
         "duration_ms": result["duration_ms"],
         "timed_out": False,
         "reason": None,
+        "sandbox": FAKE_KIND,
+        "git_metadata_changed": False,
     }
     assert isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0
 
@@ -102,7 +110,7 @@ def test_bare_tool_names_resolve_against_the_pinned_roots_only(ws: Path) -> None
     recorder = Recorder()
     planned = plan.plan_action(ws, "install", {"packages": ["numpy"]}, which=lambda n: "/opt/x/uv")
     execute.execute_plan(ws, planned, runner=recorder, which=lambda n: "/opt/roots/uv")
-    assert recorder.calls[0][0][0] == "/opt/roots/uv"
+    assert recorder.calls[0][0][-7:-5] == ["/opt/roots/uv", "pip"]
     missing = execute.execute_plan(ws, planned, runner=Recorder(), which=lambda n: None)
     assert missing["ok"] is False and missing["reason"] == "executable not found: uv"
 
@@ -172,6 +180,8 @@ def test_refused_plans_and_spawn_failures_answer_the_refusal_shape(ws: Path) -> 
         "duration_ms",
         "timed_out",
         "reason",
+        "sandbox",
+        "git_metadata_changed",
     }
 
 
@@ -229,3 +239,79 @@ def test_default_runner_stdin_is_closed(tmp_path: Path) -> None:
     code = "import sys; print(repr(sys.stdin.read()))"
     outcome = execute.default_runner([sys.executable, "-c", code], tmp_path, _env(), 30)
     assert outcome.stdout.strip() == b"''"
+
+
+# --- SOLUSDEV-317: sandbox, profiles, cwd, git metadata ------------------------------
+
+
+def _exec_plan(ws: Path, **fields: Any) -> Any:
+    tool = ws / "tools" / "t.sh"
+    tool.parent.mkdir(exist_ok=True)
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    base = plan.Plan(
+        action="exec", ok=True, argv=[str(tool), "x"], sandbox=FAKE_KIND, timeout_seconds=5
+    )
+    return dataclasses.replace(base, **fields)
+
+
+def test_a_plan_without_sandbox_never_runs(ws: Path) -> None:
+    recorder = Recorder()
+    result = execute.execute_plan(ws, _exec_plan(ws, sandbox=None), runner=recorder)
+    assert recorder.calls == [] and result["reason"].startswith("sandbox unavailable")
+
+
+def test_absolute_program_cwd_and_profile_environment(ws: Path, scrub: None) -> None:
+    (ws / "sub").mkdir()
+    profile = profiles.Profile(
+        name="ros",
+        setup_file="/opt/ros/x.bash",
+        extends=None,
+        captured_at="t",
+        variables=(("PATH", "/opt/ros/bin:/usr/bin:/bin"), ("ROS_DISTRO", "jazzy"), ("HOME", "/x")),
+        digest="d",
+    )
+    recorder = Recorder()
+    planned = _exec_plan(ws, cwd="sub", profile=profile, environment=".venv")
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    ((argv, cwd, env, timeout),) = recorder.calls
+    assert argv[-2:] == [str(ws / "tools" / "t.sh"), "x"] and cwd == ws / "sub"
+    assert env["ROS_DISTRO"] == "jazzy" and env["HOME"] == "/home/u"
+    assert env["PATH"] == f"{ws / '.venv' / 'bin'}:/opt/ros/bin:/usr/bin:/bin"
+    assert result["cwd"] == "sub" and result["sandbox"] == FAKE_KIND and timeout == 5
+
+
+def test_git_metadata_change_is_reported(ws: Path) -> None:
+    (ws / ".git" / "hooks").mkdir(parents=True)
+
+    def tamper(*_args: object) -> Any:
+        (ws / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
+        return execute.Outcome(0, b"", b"", False)
+
+    assert execute.execute_plan(ws, _exec_plan(ws), runner=tamper)["git_metadata_changed"] is True
+    quiet = execute.execute_plan(ws, _exec_plan(ws), runner=Recorder())
+    assert quiet["git_metadata_changed"] is False
+
+
+def test_moved_cwd_and_missing_program_refuse(ws: Path) -> None:
+    assert (
+        "cwd" in execute.execute_plan(ws, _exec_plan(ws, cwd="gone"), runner=Recorder())["reason"]
+    )
+    missing = _exec_plan(ws, argv=[str(ws / "nope"), "x"])
+    assert "executable not found" in execute.execute_plan(ws, missing, runner=Recorder())["reason"]
+
+
+@pytest.mark.real_sandbox
+def test_real_exec_runs_sandboxed(tmp_path: Path) -> None:
+    ws = tmp_path.resolve()
+    tool = ws / "w.sh"
+    tool.write_text("#!/bin/sh\necho hi > inside.txt && echo done\necho x > .git/config || true\n")
+    tool.chmod(0o755)
+    (ws / ".git").mkdir()
+    (ws / ".git" / "config").write_text("[core]\n")
+    kind = sandbox.probe()[0]
+    planned = plan.Plan(action="exec", ok=True, argv=[str(tool)], sandbox=kind, timeout_seconds=30)
+    result = execute.execute_plan(ws, planned)
+    assert result["ok"] is True and result["stdout_tail"] == "done\n", result
+    assert (ws / "inside.txt").read_text() == "hi\n"
+    assert result["git_metadata_changed"] is (kind != "sandbox-exec")
