@@ -15,6 +15,7 @@ import os
 import stat
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
 WRITE_FILE = 1 << 1
@@ -54,6 +55,7 @@ PR_SET_NO_NEW_PRIVS = 38
 EXIT_USAGE = 2
 EXIT_REFUSED = 126
 EXIT_NOT_EXECUTED = 127
+MAX_ENV_BYTES = 1024 * 1024
 O_PATH = getattr(os, "O_PATH", 0)
 
 
@@ -173,38 +175,93 @@ class Landlock:
         self._syscalls.restrict_self(ruleset)
 
 
-def _parse(argv: Sequence[str]) -> tuple[list[str], list[str]] | None:
+@dataclass(frozen=True)
+class Invocation:
+    paths: list[str]
+    command: list[str]
+    env_fd: int | None
+
+
+def _parse(argv: Sequence[str]) -> Invocation | None:
     paths: list[str] = []
+    env_fd: int | None = None
     index = 0
-    while index < len(argv) and argv[index] == "--rw" and index + 1 < len(argv):
-        paths.append(argv[index + 1])
+    while index + 1 < len(argv) and argv[index] in ("--rw", "--env-fd"):
+        value = argv[index + 1]
+        if argv[index] == "--rw":
+            paths.append(value)
+        elif value.isdigit():
+            env_fd = int(value)
+        else:
+            return None
         index += 2
     if index >= len(argv) or argv[index] != "--":
         return None
     command = list(argv[index + 1 :])
     if not command or not os.path.isabs(command[0]):
         return None
-    return paths, command
+    return Invocation(paths, command, env_fd)
+
+
+def read_env(fd: int) -> dict[str, str] | None:
+    """NUL-separated `K=V` from `fd` (closed afterwards); None when oversized or malformed."""
+    data = b""
+    try:
+        while len(data) <= MAX_ENV_BYTES:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        os.close(fd)
+    if len(data) > MAX_ENV_BYTES:
+        return None
+    env: dict[str, str] = {}
+    for entry in data.split(b"\0"):
+        if not entry:
+            continue
+        name, separator, value = entry.partition(b"=")
+        if not separator or not name:
+            return None
+        env[name.decode("utf-8", errors="surrogateescape")] = value.decode(
+            "utf-8", errors="surrogateescape"
+        )
+    return env
+
+
+Execve = Callable[[str, list[str], dict[str, str]], object]
 
 
 def main(
     argv: Sequence[str],
     *,
     landlock: Landlock | None = None,
-    execv: Callable[[str, list[str]], object] = os.execv,
+    execve: Execve = os.execve,
 ) -> int:
+    """The helper runs with a minimal fixed environment; the child's environment
+    arrives over `--env-fd` and is applied only by the final `execve`."""
     parsed = _parse(argv)
     if parsed is None:
-        sys.stderr.write("solus landlock: usage: --rw PATH ... -- /abs/program [args]\n")
+        sys.stderr.write(
+            "solus landlock: usage: [--env-fd N] --rw PATH ... -- /abs/program [args]\n"
+        )
         return EXIT_USAGE
-    paths, command = parsed
+    env: dict[str, str] | None = dict(os.environ)
+    if parsed.env_fd is not None:
+        try:
+            env = read_env(parsed.env_fd)
+        except OSError:
+            env = None
+    if env is None:
+        sys.stderr.write("solus landlock: refused: unreadable or oversized environment\n")
+        return EXIT_REFUSED
     try:
-        (landlock or Landlock()).restrict(paths)
+        (landlock or Landlock()).restrict(parsed.paths)
     except OSError as exc:
         sys.stderr.write(f"solus landlock: sandbox unavailable: {exc}\n")
         return EXIT_REFUSED
     try:
-        execv(command[0], command)
+        execve(parsed.command[0], parsed.command, env)
     except OSError as exc:
         sys.stderr.write(f"solus landlock: could not exec: {exc.strerror}\n")
         return EXIT_NOT_EXECUTED

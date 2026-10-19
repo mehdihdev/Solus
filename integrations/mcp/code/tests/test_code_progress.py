@@ -231,7 +231,9 @@ def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         execute.subprocess,
         "Popen",
-        lambda *args, **kwargs: SimpleNamespace(poll=lambda: 0, wait=lambda: 0, returncode=0),
+        lambda *args, **kwargs: SimpleNamespace(
+            poll=lambda: 0, wait=lambda: 0, returncode=0, pid=2**22 + 4321, kill=lambda: None
+        ),
     )
     chunks = []
     token = execute.OUTPUT_CALLBACK.set(lambda stream, text: chunks.append((stream, text)))

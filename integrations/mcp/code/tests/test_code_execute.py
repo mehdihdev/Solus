@@ -315,3 +315,74 @@ def test_real_exec_runs_sandboxed(tmp_path: Path) -> None:
     assert result["ok"] is True and result["stdout_tail"] == "done\n", result
     assert (ws / "inside.txt").read_text() == "hi\n"
     assert result["git_metadata_changed"] is (kind != "sandbox-exec")
+
+
+def _profile_with(variables: tuple[tuple[str, str], ...]) -> Any:
+    return profiles.Profile(
+        name="p", setup_file="/x.sh", extends=None, captured_at="t", variables=variables, digest="d"
+    )
+
+
+def test_loader_injection_variables_never_reach_a_child(ws: Path, scrub: None) -> None:
+    hostile = _profile_with(
+        (
+            ("LD_PRELOAD", "/evil.so"),
+            ("LD_AUDIT", "x"),
+            ("DYLD_INSERT_LIBRARIES", "x"),
+            ("GCONV_PATH", "/evil"),
+            ("LD_LIBRARY_PATH", "/opt/ros/lib"),
+        )
+    )
+    env = execute.child_env(ws, _exec_plan(ws, profile=hostile))
+    assert not {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"} & set(env)
+    assert env["LD_LIBRARY_PATH"] == "/opt/ros/lib"
+
+
+def test_linux_helper_gets_a_fixed_env_and_the_child_env_over_a_descriptor(
+    ws: Path, scrub: None
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def runner(argv: list[str], cwd: Path, env: dict[str, str], timeout: int) -> Any:
+        fd = int(argv[argv.index("--env-fd") + 1])
+        seen["payload"] = os.pread(fd, 1 << 20, 0)
+        seen["fds"] = execute.sandbox.PASS_FDS.get()
+        seen["fd"], seen["env"] = fd, env
+        return execute.Outcome(0, b"", b"", False)
+
+    profile = _profile_with((("ROS_DISTRO", "jazzy"), ("LD_LIBRARY_PATH", "/opt/ros/lib")))
+    planned = _exec_plan(ws, sandbox="landlock-abi3", profile=profile)
+    result = execute.execute_plan(ws, planned, runner=runner)
+    assert result["ok"] is True, result
+    assert seen["env"] == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    assert seen["fds"] == (seen["fd"],)
+    entries = dict(e.split(b"=", 1) for e in seen["payload"].split(b"\0") if e)
+    assert entries[b"ROS_DISTRO"] == b"jazzy" and entries[b"LD_LIBRARY_PATH"] == b"/opt/ros/lib"
+    assert entries[b"HOME"] == b"/home/u" and b"AWS_SECRET_ACCESS_KEY" not in entries
+    with pytest.raises(OSError):
+        os.fstat(seen["fd"])  # closed once the command finished
+
+
+def test_oversized_child_environment_is_refused(ws: Path, scrub: None) -> None:
+    huge = _profile_with(tuple((f"V{i}", "x" * 8000) for i in range(200)))
+    recorder = Recorder()
+    planned = _exec_plan(ws, sandbox="landlock-abi3", profile=huge)
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and "environment too large" in result["reason"]
+
+
+def test_default_runner_kills_the_group_after_the_leader_exits(tmp_path: Path) -> None:
+    code = (
+        "import subprocess, sys\n"
+        f"child = subprocess.Popen([{sys.executable!r}, '-c', 'import time; time.sleep(60)'])\n"
+        "print(child.pid, flush=True)\n"
+    )
+    outcome = execute.default_runner([sys.executable, "-c", code], tmp_path, _env(), 30)
+    assert outcome.exit_code == 0
+    leftover = int(outcome.stdout.split()[0])
+    for _ in range(50):
+        if _process_state(leftover) in ("", "Z"):
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("a descendant outlived the command's process group")

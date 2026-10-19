@@ -235,6 +235,18 @@ def test_linux_wrap_runs_the_isolated_helper_over_existing_writable_paths(tmp_pa
     assert "/dev/null" in paths and granted
 
 
+def test_linux_wrap_passes_the_environment_descriptor(tmp_path: Path) -> None:
+    argv = sandbox.wrap(
+        "landlock-abi1", ["/bin/true"], workspace=tmp_path, home=tmp_path, tmpdir=tmp_path, env_fd=9
+    )
+    assert argv[3:5] == ["--env-fd", "9"] and argv[-2:] == ["--", "/bin/true"]
+    assert set(sandbox.helper_env({"PATH": "/evil", "LANG": "C.UTF-8", "LD_PRELOAD": "x"})) == {
+        "PATH",
+        "LANG",
+    }
+    assert sandbox.helper_env({})["PATH"] == "/usr/bin:/bin"
+
+
 def test_unknown_kind_is_refused() -> None:
     with pytest.raises(ValueError):
         sandbox.wrap(None, ["/bin/true"], workspace=Path("/"), home=Path("/"), tmpdir=Path("/"))

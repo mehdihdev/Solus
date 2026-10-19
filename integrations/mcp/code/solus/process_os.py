@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import IO, Protocol
 
+from .sandbox import PASS_FDS
+
 PS = "/bin/ps"
 
 
@@ -31,6 +33,7 @@ def default_spawn(argv: list[str], cwd: Path, env: dict[str, str]) -> Child:
         stderr=subprocess.PIPE,
         start_new_session=True,
         close_fds=True,
+        pass_fds=PASS_FDS.get(),
     )
 
 

@@ -11,6 +11,7 @@ workspace; a bare tool name (`uv`, `python3.12`) is resolved against the
 PINNED search roots below — never the inherited PATH. Never raises.
 """
 
+import contextlib
 import logging
 import os
 import shutil
@@ -18,7 +19,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import Event
@@ -53,6 +54,10 @@ CHILD_PATH = "/usr/bin:/bin"
 #: Names copied from the server's own (already scrubbed) environment.
 PASSTHROUGH_NAMES: tuple[str, ...] = ("HOME", "LANG", "TMPDIR")
 MAX_TAIL_BYTES = 16 * 1024
+#: Never passed to any child, whatever a profile says (loader / iconv injection).
+LOADER_INJECTION: frozenset[str] = frozenset(
+    {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"}
+)
 _VENV_BIN_DIRS = ("bin", "Scripts")
 
 Which = Callable[[str], str | None]
@@ -164,6 +169,7 @@ def default_runner(
                 stderr=err,
                 start_new_session=True,
                 close_fds=True,
+                pass_fds=sandbox.PASS_FDS.get(),
             )
             observer = LineOutput(OUTPUT_CALLBACK.get())
             deadline = time.monotonic() + timeout_seconds
@@ -178,6 +184,9 @@ def default_runner(
                         break
                     time.sleep(0.025)
                 proc.wait()
+                # Whatever the leader left running in its group dies with it, so the
+                # git metadata check afterwards sees the command's final effect.
+                _kill_group(proc)
                 for stream, reader in (("stdout", out_reader), ("stderr", err_reader)):
                     _drain_output(observer, stream, reader, deadline, cancelled)
                 observer.finish()
@@ -227,20 +236,40 @@ def refusal(reason: str) -> dict[str, Any]:
 
 def child_env(root: Path, plan: Plan) -> dict[str, str]:
     """The scrubbed environment, overlaid with the plan's profile when it has one."""
-    base = scrubbed_env(root, plan.environment)
-    if plan.profile is None:
-        return base
-    venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
-    return profiles.apply(base, plan.profile.variables, venv_bin)
+    env = scrubbed_env(root, plan.environment)
+    if plan.profile is not None:
+        venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
+        env = profiles.apply(env, plan.profile.variables, venv_bin)
+    return {name: value for name, value in env.items() if name not in LOADER_INJECTION}
 
 
 @dataclass(frozen=True)
 class Prepared:
-    """The sandboxed argv, working directory and environment of an ok plan."""
+    """The sandboxed argv, working directory and environments of an ok plan. `env`
+    is what the spawned program gets (the Linux helper's fixed environment);
+    `child_env` is what the command itself runs with; `pass_fds` must be inherited
+    by the spawned program and closed by the caller afterwards (`close`)."""
 
     argv: list[str]
     cwd: Path
     env: dict[str, str]
+    child_env: dict[str, str]
+    pass_fds: tuple[int, ...] = ()
+
+    def close(self) -> None:
+        for descriptor in self.pass_fds:
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
+
+    @contextlib.contextmanager
+    def handing_over(self) -> Iterator[None]:
+        """Within this block the spawners pass `pass_fds`; afterwards they are closed."""
+        token = sandbox.PASS_FDS.set(self.pass_fds)
+        try:
+            yield
+        finally:
+            sandbox.PASS_FDS.reset(token)
+            self.close()
 
 
 @dataclass(frozen=True)
@@ -263,11 +292,19 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
     cwd = root if plan.cwd == "." else resolve_inside(plan.cwd, root)
     if cwd is None:
         return "cwd is no longer inside the linked folder"
+    env = child_env(root, plan)
+    program = [executable, *plan.argv[1:]]
+    if not plan.sandbox.startswith(sandbox.KIND_LINUX):
+        try:
+            return Prepared(sandbox.wrap(plan.sandbox, program, workspace=root), cwd, env, env)
+        except ValueError as exc:
+            return str(exc)
     try:
-        wrapped = sandbox.wrap(plan.sandbox, [executable, *plan.argv[1:]], workspace=root)
-    except ValueError as exc:
+        descriptor = sandbox.env_descriptor(env)
+    except (ValueError, OSError) as exc:
         return str(exc)
-    return Prepared(wrapped, cwd, child_env(root, plan))
+    wrapped = sandbox.wrap(plan.sandbox, program, workspace=root, env_fd=descriptor)
+    return Prepared(wrapped, cwd, sandbox.helper_env(env), env, (descriptor,))
 
 
 def run_sandboxed(
@@ -280,7 +317,8 @@ def run_sandboxed(
     before = sandbox.git_metadata_digest(root)
     started = time.monotonic()
     try:
-        outcome = runner(prepared.argv, prepared.cwd, prepared.env, plan.timeout_seconds)
+        with prepared.handing_over():
+            outcome = runner(prepared.argv, prepared.cwd, prepared.env, plan.timeout_seconds)
     except (OSError, ValueError) as exc:
         logger.warning("%s could not start: %s", plan.action, type(exc).__name__)
         return f"could not start: {type(exc).__name__}"
@@ -288,7 +326,7 @@ def run_sandboxed(
     changed = sandbox.git_metadata_digest(root) != before
     if changed:
         logger.warning("%s changed .git/hooks or .git/config", plan.action)
-    return Ran(outcome, duration_ms, changed, prepared.env)
+    return Ran(outcome, duration_ms, changed, prepared.child_env)
 
 
 def execute_plan(

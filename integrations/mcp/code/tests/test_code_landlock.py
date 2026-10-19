@@ -5,6 +5,7 @@ NO_NEW_PRIVS precedes restriction, and any failure refuses to exec (fail closed)
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -93,23 +94,69 @@ def test_restrict_refuses_without_landlock() -> None:
 
 def test_main_execs_the_program_only_after_restriction(tmp_path: Path) -> None:
     fake = FakeSyscalls()
-    execs: list[tuple[str, list[str]]] = []
+    execs: list[tuple[str, list[str], dict[str, str]]] = []
+    read, write = os.pipe()
+    os.write(write, b"PATH=/opt/ros/bin:/usr/bin\0ROS_DISTRO=jazzy\0EMPTY=\0")
+    os.close(write)
     code = landlock.main(
-        ["--rw", str(tmp_path), "--", "/bin/echo", "hi"],
+        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/echo", "hi"],
         landlock=landlock.Landlock(fake),
-        execv=lambda program, argv: execs.append((program, list(argv))),
+        execve=lambda program, argv, env: execs.append((program, list(argv), dict(env))),
     )
-    assert execs == [("/bin/echo", ["/bin/echo", "hi"])] and code == 0
+    assert code == 0
+    assert execs == [
+        (
+            "/bin/echo",
+            ["/bin/echo", "hi"],
+            {"PATH": "/opt/ros/bin:/usr/bin", "ROS_DISTRO": "jazzy", "EMPTY": ""},
+        )
+    ]
+    with pytest.raises(OSError):
+        os.fstat(read)  # the helper closed the env descriptor
     assert ("restrict", 77) in fake.calls
+
+
+def _feed(write: int, payload: bytes) -> None:
+    try:
+        os.write(write, payload)
+    except OSError:
+        pass  # the helper stopped reading at its cap
+    finally:
+        os.close(write)
+
+
+@pytest.mark.parametrize("payload", [b"A=" + b"x" * (1024 * 1024 + 1), b"no-equals-sign\0"])
+def test_main_refuses_an_oversized_or_malformed_environment(tmp_path: Path, payload: bytes) -> None:
+    assert landlock.MAX_ENV_BYTES == 1024 * 1024
+    read, write = os.pipe()
+    writer = threading.Thread(target=_feed, args=(write, payload))
+    writer.start()
+    execs: list[object] = []
+    code = landlock.main(
+        ["--env-fd", str(read), "--rw", str(tmp_path), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: execs.append(args),
+    )
+    writer.join()
+    assert code == 126 and execs == []
 
 
 @pytest.mark.parametrize(
     "argv",
-    [[], ["--rw", "/tmp"], ["--rw", "/tmp", "--"], ["--", "relative"], ["--bogus", "--", "/x"]],
+    [
+        [],
+        ["--rw", "/tmp"],
+        ["--rw", "/tmp", "--"],
+        ["--", "relative"],
+        ["--bogus", "--", "/x"],
+        ["--env-fd", "x", "--", "/x"],
+    ],
 )
 def test_main_refuses_malformed_arguments(argv: list[str]) -> None:
     execs: list[object] = []
-    code = landlock.main(argv, landlock=landlock.Landlock(FakeSyscalls()), execv=execs.append)
+    code = landlock.main(
+        argv, landlock=landlock.Landlock(FakeSyscalls()), execve=lambda *a: execs.append(a)
+    )
     assert code == 2 and execs == []
 
 
@@ -118,7 +165,7 @@ def test_main_fails_closed_when_restriction_fails(tmp_path: Path) -> None:
     code = landlock.main(
         ["--rw", str(tmp_path), "--", "/bin/true"],
         landlock=landlock.Landlock(FakeSyscalls(fail="create")),
-        execv=lambda *args: execs.append(args),
+        execve=lambda *args: execs.append(args),
     )
     assert code == 126 and execs == []
 
@@ -139,12 +186,17 @@ def test_real_landlock_confines_writes(tmp_path: Path) -> None:
     workspace.mkdir()
     other.mkdir()
     script = f"echo ok > {workspace}/inside; echo no > {other}/outside; exit 0"
+    read, write = os.pipe()
+    os.write(write, b"PATH=/usr/bin:/bin\0")
+    os.close(write)
     subprocess.run(
-        [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py"), "--rw", str(workspace)]
-        + ["--", "/bin/sh", "-c", script],
+        [sys.executable, "-I", str(SOLUS_DIR / "landlock_exec.py"), "--env-fd", str(read)]
+        + ["--rw", str(workspace), "--", "/bin/sh", "-c", script],
         check=True,
         env={"PATH": "/usr/bin:/bin"},
+        pass_fds=(read,),
     )
+    os.close(read)
     assert (workspace / "inside").read_text() == "ok\n"
     assert not (other / "outside").exists()
     assert os.access(other, os.R_OK)

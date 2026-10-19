@@ -17,13 +17,14 @@ import stat
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from .git_guard import git_metadata_digest as git_metadata_digest
 from .git_guard import protected_git_dirs as protected_git_dirs
-from .landlock_exec import Landlock
+from .landlock_exec import MAX_ENV_BYTES, Landlock
 
 KIND_MACOS = "sandbox-exec"
 KIND_LINUX = "landlock"  # reported as `landlock-abi<N>`
@@ -111,6 +112,41 @@ _REGEX_SPECIAL = frozenset(".[]{}()\\*+?^$|")
 SMOKE_TIMEOUT_SECONDS = 10
 
 Probe = tuple[str | None, str]
+#: Descriptors the spawner must hand to the child (the Linux helper's `--env-fd`).
+PASS_FDS: ContextVar[tuple[int, ...]] = ContextVar("code_pass_fds", default=())
+HELPER_PATH = "/usr/bin:/bin"
+
+
+def helper_env(env: Mapping[str, str]) -> dict[str, str]:
+    """The Landlock helper's own FIXED environment: nothing a profile or workspace
+    could use to load code into it before it restricts itself."""
+    fixed = {"PATH": HELPER_PATH}
+    if env.get("LANG"):
+        fixed["LANG"] = env["LANG"]
+    return fixed
+
+
+def env_descriptor(env: Mapping[str, str]) -> int:
+    """An anonymous file holding `env` as NUL-separated `K=V`, rewound, for `--env-fd`."""
+    payload = b"".join(
+        f"{name}={value}".encode("utf-8", errors="surrogateescape") + b"\0"
+        for name, value in env.items()
+    )
+    if len(payload) > MAX_ENV_BYTES:
+        raise ValueError("environment too large for the sandbox helper")
+    memfd = getattr(os, "memfd_create", None)
+    if memfd is not None:
+        descriptor = int(memfd("solus-env"))
+    else:
+        descriptor, path = tempfile.mkstemp(prefix="solus-env-")
+        os.unlink(path)
+    try:
+        os.write(descriptor, payload)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+    except OSError:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def _macos_smoke() -> bool:
@@ -207,6 +243,7 @@ def wrap(
     workspace: Path,
     home: Path | None = None,
     tmpdir: Path | None = None,
+    env_fd: int | None = None,
 ) -> list[str]:
     """The final argv that runs `argv` (absolute program first) inside the sandbox."""
     home = home if home is not None else default_home()
@@ -237,7 +274,7 @@ def wrap(
             *argv,
         ]
     if kind is not None and kind.startswith(KIND_LINUX):
-        grants: list[str] = []
+        grants: list[str] = ["--env-fd", str(env_fd)] if env_fd is not None else []
         for path in linux_writable(workspace, home, tmpdir):
             grants.extend(("--rw", path))
         return [sys.executable, "-I", str(LANDLOCK_HELPER), *grants, "--", *argv]
