@@ -498,6 +498,26 @@ with the exact argv shown on the approval card, is confined to the linked worksp
 venv/conda environment, and is bounded (timeout, output caps). These act on the user's
 environment, never on Solus's.
 
+**Amendment (2026-10-18, SOLUSDEV-317 — approved in-session by Mehdi per ADR-032 tier 2):** The
+Solus-authored `code` server MAY execute a model-proposed argument list in the user's linked
+workspace (`code.exec`, and companion-owned long-running `code.process_*`), superseding the "no
+generic command executor" statements in local-machine-actions.md and code-environment.md, only
+when: (1) argv only, never a shell string; shells, inline-code interpreter flags (-c/-e) and
+privilege elevation are refused by a cloud-side CommandPolicy AND again by the server; (2) every
+invocation is human-confirmed on the central approval card showing resolved absolute program
+path, full argv, cwd, profile, sandbox state and risk class — no Build-mode auto-execution; a
+keyboard shortcut is an approval, not a bypass; (3) execution is OS-sandboxed with writes
+confined to the workspace, its environment, temp and declared tool caches; if the sandbox is
+unavailable the command is refused; (4) environment profiles are captured only by a gated,
+Solus-authored fixed script sourcing a user-named setup file, filtered of secret-shaped
+variables, stored machine-private (ADR-034); (5) long-running processes are bounded in
+count/output, killed on companion exit or project unlink, never auto-restarted; (6) output is
+untrusted, redacted at ingress and fed to the model as framed data. Pattern 2 (telemetry) is
+unchanged. Mechanism choices approved in the same session: macOS uses `sandbox-exec`, Linux uses
+Landlock (refused on kernels without it); sandboxed commands keep network access, with
+network-class commands flagged on the card; the sandbox applies to every `code` execution tool
+(`create_environment`, `install`, `run`, `test`, `exec`, `process_*`), not only the new ones.
+
 ---
 
 ## ADR-032: Agent-editable governance docs (two-tier)
@@ -970,7 +990,6 @@ human reviewer at the MR — the model is never the reviewer.
 2. Changing a decision: set the old entry's Status to **Superseded by ADR-XXX**, add the new entry referencing what it replaces and why. Never delete history.
 3. Humans own decisions; agents may edit this file only under ADR-032 tier-2 (concrete change approved in-chat first, dedicated commit). An agent that believes a decision needs revisiting raises it in its design-review critique or completion report.
 
-
 ---
 
 ## ADR-019 / ADR-035 amendment: Onshape transport and reconciliation
@@ -1114,6 +1133,7 @@ verification), annual allowance 2,500, quiet period 90 s.
 **Status:** Accepted (2026-10-17, SOLUSDEV-315 design; approved in-chat against the concrete text below). Implementation: SOLUSDEV-216.
 
 **Context:**
+
 - GitHub access today is a user-owned OAuth App grant (ADR-035 amendment 2026-09-12), so a team has no GitHub identity of its own.
 - Each member must authorize separately, and only the grant owner can bind it.
 - Sources break when that member leaves.
@@ -1147,6 +1167,7 @@ verification), annual allowance 2,500, quiet period 90 s.
 10. **Configurable endpoints.** API and web base URLs are stored per installation, so GitHub Enterprise Server is not foreclosed (ADR-015).
 
 **Consequences:**
+
 - A second GitHub credential type to operate: an app private key, a webhook secret, and app registration per environment.
 - Team sources survive member churn.
 - ADR-030 GitHub webhooks become real.
