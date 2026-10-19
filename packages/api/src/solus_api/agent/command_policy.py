@@ -118,7 +118,7 @@ def _denial(program: str, args: Sequence[str], *, exact: bool) -> str | None:
     if name_match(base, DENIED_PROGRAMS, exact=exact) is not None:
         return _GIT_MESSAGE
     interpreter = _interpreter(base, exact=exact)
-    if interpreter in GRAMMARS:
+    if interpreter is not None and interpreter in GRAMMARS:
         reason = interpreter_denial(interpreter, args)
         return None if reason is None else f"{base}: {reason}"
     return None
