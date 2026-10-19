@@ -233,7 +233,6 @@ SUBCOMMAND_RUNNERS: dict[str, frozenset[str]] = {
 #: The only interpreter arguments that run no script or module.
 INFO_FLAGS: frozenset[str] = frozenset({"--version", "-V", "-VV", "--help", "-h", "-v"})
 #: Runner invocations made only of these print a version or help (`-v` is verbose for many).
-RUNNER_INFO_FLAGS: frozenset[str] = frozenset({"--version", "-V", "--help", "-h"})
 #: Profile variables whose entries decide what code a program loads (§10.1).
 SEARCH_PATH_VARIABLES: frozenset[str] = frozenset(
     {
@@ -269,8 +268,10 @@ def _runs_project_code(path: str, args: Sequence[str]) -> bool:
         return not all(arg in INFO_FLAGS for arg in args)
     # Runners match their normalised name (`cmake3`, `pip3.12`) or exact basename (`ros2`).
     candidates = (name, os.path.basename(path).casefold())
+    # Always project code, even for --version/--help: `pytest --help` loads conftest
+    # plugins, and cargo/bazelisk fetch toolchains named by workspace files.
     if any(candidate in PROJECT_RUNNERS for candidate in candidates):
-        return not (args and all(arg in RUNNER_INFO_FLAGS for arg in args))
+        return True
     return any(arg in SUBCOMMAND_RUNNERS.get(c, ()) for c in candidates for arg in args)
 
 

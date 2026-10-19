@@ -518,18 +518,34 @@ def test_more_project_runners_are_workspace_scope(
         ["uv", "--help"],
         ["poetry", "--version"],
         ["conda", "info"],
+    ],
+)
+def test_subcommand_runner_info_stays_system_scope(
+    ws: Path, tmp_path: Path, argv: list[str]
+) -> None:
+    _executable(tmp_path / "roots" / "bin" / argv[0])
+    assert _scope(ws, "exec", {"argv": argv}) == "system"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
         ["bazel", "--version"],
         ["make", "--version"],
         ["cargo", "-V"],
         ["pre-commit", "--help"],
         ["ctest", "-h"],
+        ["pytest", "--help"],
+        ["tox", "--version"],
     ],
 )
-def test_runner_version_and_help_stay_system_scope(
+def test_project_runners_are_workspace_even_for_version_or_help(
     ws: Path, tmp_path: Path, argv: list[str]
 ) -> None:
+    # `pytest --help` loads conftest plugins; cargo/bazelisk fetch toolchains named by
+    # workspace files. Info flags do not make a project runner safe to auto-run.
     _executable(tmp_path / "roots" / "bin" / argv[0])
-    assert _scope(ws, "exec", {"argv": argv}) == "system"
+    assert _scope(ws, "exec", {"argv": argv}) == "workspace"
 
 
 @pytest.mark.parametrize(
