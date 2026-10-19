@@ -18,6 +18,7 @@ import asyncio
 import functools
 import inspect
 import logging
+import os
 import signal
 import sys
 import threading
@@ -111,6 +112,9 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
 logger = logging.getLogger("solus.code.server")
 
 SERVER_NAME = "Solus Code"
+#: SIGTERM→SIGKILL grace on shutdown: the SDK kills the server 2 s after its own
+#: SIGTERM, so every started process is SIGKILLed within 1.5 s (§9.13).
+SHUTDOWN_GRACE_SECONDS = 1.0
 
 
 def _guarded(
@@ -579,8 +583,19 @@ def _configure_logging() -> None:
 
 
 def _exit_on_signal(signum: int, _frame: FrameType | None) -> None:
-    """SIGTERM/SIGINT unwind through main()'s cleanup like stdin EOF does."""
-    raise SystemExit(128 + signum)
+    """SIGTERM/SIGINT: stop every started process HERE, then exit. Unwinding through
+    main() is not enough: the stdio transport waits on a stdin read that never ends
+    while the client keeps stdin open, so the cleanup in main()'s finally never ran."""
+    _ignore_shutdown_signals()
+    try:
+        _stop_processes()
+    finally:
+        _hard_exit(128 + signum)
+
+
+def _hard_exit(code: int) -> None:
+    logging.shutdown()
+    os._exit(code)
 
 
 def _install_signal_handlers() -> None:
@@ -595,9 +610,15 @@ def _reap_orphans() -> None:
         logger.warning("orphan reaping skipped: %s", type(exc).__name__)
 
 
+def _ignore_shutdown_signals() -> None:
+    """A second SIGTERM/SIGINT must not interrupt the cleanup already under way."""
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
 def _stop_processes() -> None:
     if _REGISTRY is not None:
-        _REGISTRY.stop_all()
+        _REGISTRY.stop_all(grace_seconds=SHUTDOWN_GRACE_SECONDS)
 
 
 def main() -> None:
@@ -610,6 +631,7 @@ def main() -> None:
         build_server().run(transport="stdio")
     finally:
         # stdin EOF, SIGTERM or SIGINT: every started process is stopped.
+        _ignore_shutdown_signals()
         _stop_processes()
 
 

@@ -245,8 +245,8 @@ def test_main_reaps_orphans_first_and_stops_processes_on_exit(
         def reap_orphans(self) -> None:
             events.append("reap")
 
-        def stop_all(self) -> None:
-            events.append("stop_all")
+        def stop_all(self, *, grace_seconds: float = 5.0) -> None:
+            events.append(f"stop_all:{grace_seconds}")
 
     class FakeServer:
         def run(self, transport: str) -> None:
@@ -256,14 +256,23 @@ def test_main_reaps_orphans_first_and_stops_processes_on_exit(
     monkeypatch.setattr(server, "_REGISTRY", FakeRegistry())
     monkeypatch.setattr(server, "build_server", lambda: FakeServer())
     monkeypatch.setattr(server, "_install_signal_handlers", lambda: events.append("signals"))
+    monkeypatch.setattr(server, "_ignore_shutdown_signals", lambda: events.append("ignore"))
     with pytest.raises(KeyboardInterrupt):
         server.main()
-    assert events == ["signals", "reap", "run:stdio", "stop_all"]
+    grace = server.SHUTDOWN_GRACE_SECONDS
+    assert events == ["signals", "reap", "run:stdio", "ignore", f"stop_all:{grace}"]
+    assert grace <= 1.0, "SIGKILL lands within 1.5 s of shutdown (§9.13)"
 
 
-def test_sigterm_handler_exits_through_cleanup() -> None:
-    with pytest.raises(SystemExit):
-        server._exit_on_signal(15, None)
+def test_sigterm_handler_ignores_signals_stops_processes_then_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(server, "_ignore_shutdown_signals", lambda: events.append("ignore"))
+    monkeypatch.setattr(server, "_stop_processes", lambda: events.append("stop"))
+    monkeypatch.setattr(server, "_hard_exit", lambda code: events.append(f"exit:{code}"))
+    server._exit_on_signal(15, None)
+    assert events == ["ignore", "stop", "exit:143"]
 
 
 @pytest.mark.real_sandbox
@@ -334,3 +343,87 @@ def test_server_uses_only_public_refusal_helpers() -> None:
     assert "._start_refusal" not in source and "._capture_refusal" not in source
     assert server.Registry.start_refusal("x")["reason"] == "x"
     assert server.profiles.capture_refusal("ros", "x")["reason"] == "x"
+
+
+@pytest.mark.real_sandbox
+def test_real_server_sigterm_kills_a_term_ignoring_process_within_the_sdk_window(
+    tmp_path: Path,
+) -> None:
+    """§9.13: SIGTERM to the server during stop_all is ignored, and a started process
+    that ignores SIGTERM is SIGKILLed well inside the SDK's 2 s termination window."""
+    import json
+    import os
+    import signal
+    import subprocess
+
+    from code_paths import FORK_DIR
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (tmp_path / "home").mkdir()
+    (workspace / "s.sh").write_text("#!/bin/sh\ntrap '' TERM\nwhile :; do /bin/sleep 0.1; done\n")
+    (workspace / "s.sh").chmod(0o755)
+    env = {
+        "SOLUS_MCP_WORKSPACE": str(workspace),
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(tmp_path / "home"),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, str(FORK_DIR / "solus" / "server.py")],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        env=env,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    messages = [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "0"},
+            },
+        },
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "process_start", "arguments": {"argv": ["./s.sh"]}},
+        },
+    ]
+    for message in messages:
+        proc.stdin.write((json.dumps(message) + "\n").encode())
+        proc.stdin.flush()
+    pid = None
+    for _ in range(2):
+        reply = json.loads(proc.stdout.readline())
+        if reply.get("id") == 2:
+            pid = reply["result"]["structuredContent"]["pid"]
+    assert isinstance(pid, int)
+    time.sleep(0.3)  # the script has installed its TERM trap
+    started = time.monotonic()
+    proc.send_signal(signal.SIGTERM)
+    time.sleep(0.2)
+    if proc.poll() is None:
+        proc.send_signal(signal.SIGTERM)  # a second SIGTERM must not cut cleanup short
+    dead_at = None
+    try:
+        while time.monotonic() - started < 10:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                dead_at = time.monotonic() - started
+                break
+            time.sleep(0.02)
+        assert proc.wait(timeout=10) == 128 + signal.SIGTERM
+    finally:
+        if dead_at is None:
+            os.killpg(pid, signal.SIGKILL)
+        if proc.poll() is None:
+            proc.kill()
+    assert dead_at is not None, "the TERM-ignoring process survived the server"
+    assert dead_at < 2.0, f"SIGKILL took {dead_at:.2f} s"

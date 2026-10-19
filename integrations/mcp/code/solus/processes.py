@@ -321,8 +321,8 @@ class Registry:
             self._tokens.pop(entry.process_id, None)
             self._persist()
 
-    def _signal_and_wait(self, entries: list[Entry]) -> None:
-        """SIGTERM every group, wait up to 5 s, SIGKILL what is left."""
+    def _signal_and_wait(self, entries: list[Entry], grace_seconds: float) -> None:
+        """SIGTERM every group, wait up to `grace_seconds`, SIGKILL what is left."""
         for entry in entries:
             if entry.tree is not None:
                 entry.tree.observe()
@@ -330,7 +330,7 @@ class Registry:
                 self._killpg(entry.pid, signal.SIGTERM)
             if entry.tree is not None:
                 entry.tree.kill(signal.SIGTERM)
-        deadline = self._clock() + STOP_GRACE_SECONDS
+        deadline = self._clock() + grace_seconds
         while self._clock() < deadline and any(self._alive(e) for e in entries):
             self._sleep(POLL_SECONDS)
         for entry in entries:
@@ -352,12 +352,14 @@ class Registry:
     def _alive(entry: Entry) -> bool:
         return entry.child is not None and entry.child.poll() is None
 
-    def _halt(self, entries: list[Entry], state: str) -> None:
+    def _halt(
+        self, entries: list[Entry], state: str, grace_seconds: float = STOP_GRACE_SECONDS
+    ) -> None:
         with self._lock:
             for entry in entries:
                 if entry.state == RUNNING:
                     entry.state = state
-        self._signal_and_wait(entries)
+        self._signal_and_wait(entries, grace_seconds)
         for entry in entries:
             self._finish(entry, state)
 
@@ -386,11 +388,12 @@ class Registry:
             "git_metadata_changed": entry.git_metadata_changed,
         }
 
-    def stop_all(self) -> None:
+    def stop_all(self, *, grace_seconds: float = STOP_GRACE_SECONDS) -> None:
+        """Stop everything; server shutdown passes a short grace (§9.13)."""
         with self._lock:
             running = [e for e in self._entries.values() if e.state == RUNNING]
         if running:
-            self._halt(running, "stopped")
+            self._halt(running, "stopped", grace_seconds)
         self.state_file().unlink(missing_ok=True)
 
     def sweep(self) -> None:

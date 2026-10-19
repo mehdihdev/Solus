@@ -526,3 +526,13 @@ def test_real_sandboxed_process_cannot_write_git_hooks(
         assert entry["git_metadata_changed"] is False
     finally:
         registry.stop_all()
+
+
+def test_stop_all_with_a_short_grace_escalates_quickly(ws: Path, home: Path, world: World) -> None:
+    registry = _registry(ws, world)
+    world.ignore_term = True
+    _start(registry)
+    started = world.now
+    registry.stop_all(grace_seconds=1.0)
+    assert world.signals == [(501, signal.SIGTERM), (501, signal.SIGKILL)]
+    assert 1.0 <= world.now - started < 1.5
