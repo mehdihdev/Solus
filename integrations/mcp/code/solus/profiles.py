@@ -67,6 +67,8 @@ LOADER_NAMES: frozenset[str] = frozenset(
         "ENV",
         "PROMPT_COMMAND",
         "PYTHONSTARTUP",
+        "PYTHONINSPECT",  # drops any python into a REPL after its script
+        "PERL5DB",  # replaces the perl debugger with arbitrary code
         "NODE_OPTIONS",
         "PERL5OPT",
         "RUBYOPT",
