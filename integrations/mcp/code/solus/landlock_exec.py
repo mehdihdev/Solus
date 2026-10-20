@@ -268,6 +268,10 @@ class Invocation:
     home: str
 
 
+#: fds 0-2 are the program's own streams (an interactive PTY): never the env fd.
+STDERR_FD = 2
+
+
 def _parse(argv: Sequence[str]) -> Invocation | None:
     paths: list[str] = []
     env_fd: int | None = None
@@ -279,7 +283,7 @@ def _parse(argv: Sequence[str]) -> Invocation | None:
             paths.append(value)
         elif option == "--home" and home is None and os.path.isabs(value):
             home = value
-        elif option == "--env-fd" and value.isdigit():
+        elif option == "--env-fd" and value.isdigit() and int(value) > STDERR_FD:
             env_fd = int(value)
         else:
             return None
