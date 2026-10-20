@@ -22,7 +22,7 @@ import {
   type WizardStep
 } from './connectSteps'
 import type { CatalogEntry } from './integrationCatalog'
-import { integrationLogo } from './integrationLogos'
+import { integrationLogo, logoClass } from './integrationLogos'
 import { allowsMultipleFiles, exportFileAccept, exportFilePrompt } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
 import { ACCOUNT_ENTRY_ID, SIGN_IN_ENTRY_ID } from './teamRepoSection'
@@ -156,7 +156,12 @@ export function LinkHeader({
       </span>
       <EndpointMark label={entry.name} busy={status === 'busy'}>
         {logo ? (
-          <img src={logo} alt="" style={{ width: 34, height: 34, objectFit: 'contain' }} />
+          <img
+            src={logo}
+            alt=""
+            className={logoClass(entry.id)}
+            style={{ width: 34, height: 34, objectFit: 'contain' }}
+          />
         ) : (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 500 }}>
             {entry.mark}

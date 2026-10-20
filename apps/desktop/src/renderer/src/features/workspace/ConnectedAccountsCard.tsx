@@ -23,7 +23,7 @@ import type { WorkspaceProject } from '../../store/workspaceStore'
 import { ConnectWizardModal } from '../onboarding/ConnectWizardModal'
 import type { WizardScope } from '../onboarding/connectSteps'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
-import { integrationLogo } from '../onboarding/integrationLogos'
+import { integrationLogo, logoClass } from '../onboarding/integrationLogos'
 import { useOnboardingStore } from '../onboarding/onboardingStore'
 import type { useConnectWizard } from '../onboarding/useConnectWizard'
 import { useIntegrationCatalog } from '../onboarding/useIntegrationCatalog'
@@ -71,7 +71,12 @@ export function ProviderMark({
       }}
     >
       {logo ? (
-        <img src={logo} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />
+        <img
+          src={logo}
+          alt=""
+          className={logoClass(entry.id)}
+          style={{ width: 18, height: 18, objectFit: 'contain' }}
+        />
       ) : (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{entry.mark}</span>
       )}

@@ -42,3 +42,13 @@ describe('themed scrollbars', () => {
     expect(css).not.toMatch(/scrollbar-color\s*:/)
   })
 })
+
+// SOLUSDEV-317: monochrome brand marks follow the theme — dark on the light
+// theme, inverted to white on every dark one (GitHub's own guidance: white or
+// black for the highest contrast).
+describe('monochrome logos', () => {
+  it('invert on every theme but light', () => {
+    const rule = block(":root:not([data-theme='light']) .logo-mono")
+    expect(rule).toMatch(/filter:\s*invert\(1\)/)
+  })
+})

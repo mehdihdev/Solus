@@ -43,6 +43,16 @@
   transition: background-color 0.3s ease;
 }
 
+/* The pane header's repo link: plain text colour until hovered. */
+.repo-link {
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.repo-link:hover {
+  color: var(--acc) !important;
+  text-decoration: underline;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .home-pane-in,
   .home-row-in {

@@ -122,7 +122,6 @@ describe('HomeProjectPane', () => {
     expect(screen.getByTestId('sources')).toHaveAttribute('data-limit', 'all')
     expect(screen.queryByTestId('solus-card')).toBeNull()
   })
-
 })
 
 describe('HomeProjectPane (continued)', () => {
@@ -206,5 +205,13 @@ describe('HomeProjectPane (continued)', () => {
   it('staggers the recent rail in', () => {
     setup()
     expect(screen.getByText(/created the project/).closest('.home-row-in')).not.toBeNull()
+  })
+
+  it('links the header repo to GitHub', () => {
+    setup()
+    expect(screen.getByRole('link', { name: /mehdihdev\/elegoo_robot/ })).toHaveAttribute(
+      'href',
+      'https://github.com/mehdihdev/elegoo_robot'
+    )
   })
 })

@@ -183,7 +183,7 @@ function PaneHeader({
           {project.name}
         </h2>
         <div style={{ marginTop: 4 }}>
-          <RepoLine repos={repos} size="md" />
+          <RepoLine repos={repos} size="md" linked />
         </div>
         {description && (
           <div style={{ marginTop: 2, fontSize: 12.5, color: 'var(--mut)' }}>{description}</div>

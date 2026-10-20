@@ -104,6 +104,16 @@ body {
 }
 
 /*
+ * Monochrome brand marks (SOLUSDEV-317): a single-colour dark logo (GitHub's
+ * Invertocat) disappears on a dark surface. Dark on the light theme, inverted
+ * to white on every other theme — GitHub's own guidance is white or black for
+ * the highest contrast. Only logos `logoClass()` marks get the class.
+ */
+:root:not([data-theme='light']) .logo-mono {
+  filter: invert(1);
+}
+
+/*
  * Clickable affordance (SOLUSDEV-164). A single opt-in class that makes any
  * element read as interactive — pointer cursor, a hover/active tint, and a
  * keyboard focus ring — WITHOUT fighting the app's pervasive inline styles.

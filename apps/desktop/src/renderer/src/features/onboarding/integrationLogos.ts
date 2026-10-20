@@ -35,6 +35,16 @@ const LOGOS = logoMapFrom(bundled)
  *  MCAP recording source is the bench kind `mcap-replay`, its logo is MCAP's. */
 export const LOGO_ALIASES: Readonly<Record<string, string>> = { 'mcap-replay': 'mcap' }
 
+/** Brand marks drawn in a single dark colour (GitHub's Invertocat): the
+ *  stylesheet inverts them on dark themes so they stay legible
+ *  (main.css `.logo-mono`). Coloured marks keep their brand colours. */
+const MONO_LOGOS: ReadonlySet<string> = new Set(['github'])
+
+/** `logo-mono` for a monochrome mark, else nothing — put it on the logo's <img>. */
+export function logoClass(id: string): 'logo-mono' | undefined {
+  return MONO_LOGOS.has(id.toLowerCase()) ? 'logo-mono' : undefined
+}
+
 /** The bundled logo url for a provider id, or null for the letter-mark fallback. */
 export function integrationLogo(id: string): string | null {
   const key = id.toLowerCase()

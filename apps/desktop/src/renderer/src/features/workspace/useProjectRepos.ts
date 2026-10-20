@@ -16,6 +16,26 @@ export interface LinkedRepo {
 
 export type ReposByProject = Readonly<Record<string, readonly LinkedRepo[]>>
 
+/** The code hosts a repo can link to, and their web origins. */
+const REPO_HOSTS: Readonly<Record<string, string>> = {
+  github: 'https://github.com',
+  gitlab: 'https://gitlab.com'
+}
+
+/** `owner/name`, or `group/sub/name` on GitLab: plain path segments only. */
+const REPO_PATH = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)+$/
+
+/** The repo's web page, or null when the host is unknown or the name is not
+ *  plainly path-shaped (the name is user-controlled; never build a URL from
+ *  anything else). Segments are encoded and `..` is refused. */
+export function repoUrl(repo: LinkedRepo): string | null {
+  const origin = REPO_HOSTS[repo.provider.toLowerCase()]
+  if (!origin || !REPO_PATH.test(repo.repo)) return null
+  const parts = repo.repo.split('/')
+  if (parts.some((p) => p === '.' || p === '..')) return null
+  return `${origin}/${parts.map(encodeURIComponent).join('/')}`
+}
+
 /** A source names a repo when its config carries a non-empty `repo`. */
 export function linkedRepos(sources: readonly Source[]): LinkedRepo[] {
   return sources.flatMap((s) => {

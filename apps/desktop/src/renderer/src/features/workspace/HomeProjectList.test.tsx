@@ -87,7 +87,6 @@ describe('HomeProjectList', () => {
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
     expect(props.onSelect).not.toHaveBeenCalled()
   })
-
 })
 
 describe('HomeProjectList (continued)', () => {
@@ -146,5 +145,10 @@ describe('HomeProjectList (continued)', () => {
     expect(rows[0].style.animationDelay).toBe('0ms')
     expect(rows[1].style.animationDelay).not.toBe('0ms')
     expect(screen.getByRole('button', { name: 'Select Rover MK2' })).toHaveClass('home-card')
+  })
+
+  it('keeps the card repo as text — the whole card selects the project', () => {
+    setup()
+    expect(within(screen.getByTestId('project-row-p1')).queryByRole('link')).toBeNull()
   })
 })
