@@ -8,7 +8,7 @@
 // unreachable API) shows an honest sign-in state — never a demo project
 // (SOLUSDEV-152); a team that is gone says so — never "restart the backend".
 import './home.css'
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -16,7 +16,8 @@ import { Icons } from '../../components/ui/icons.constants'
 import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceStore'
 import type { Project } from '../../lib/api/resources'
 import { personalTeam } from '../../lib/api/resources'
-import { MANAGER_ROLES, LiveMembers } from '../team/MembersPanel'
+import { MANAGER_ROLES } from '../team/MembersPanel'
+import { TeamInvitesView } from '../teamInvites/TeamInvitesView'
 import { displayName, useMe } from './useMe'
 import { useHomeData, type HomeData } from './useHomeData'
 import { useHomeTeam, type HomeTeam } from './useHomeTeam'
@@ -25,8 +26,6 @@ import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { TeamGithubPanel } from './TeamGithubPanel'
-import { useGithubAssignFocusStore } from './githubAssignFocusStore'
 import { GitHubInviteTokenHost } from './githubInviteTokenStore'
 import { HomeAccountNav, type AccountsPosition, type HomePaneView } from './HomeAccountNav'
 import { useAccountConnections } from './useAccountConnections'
@@ -35,7 +34,6 @@ import { useProjectSources } from '../project/useProjectSources'
 import { HomeProjectList } from './HomeProjectList'
 import { HomeProjectPane } from './HomeProjectPane'
 import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
-import { TeamActivityPanel } from './TeamActivityPanel'
 import { TeamStrip } from './TeamStrip'
 
 export interface HomeScreenProps {
@@ -321,14 +319,11 @@ function ProjectView({
   )
 }
 
-function MembersView({ home, team, onNavigate, openModal }: LiveProps): React.JSX.Element {
+/** SOLUSDEV-317 (design A): one roster — the team, its invites and (for admins
+ *  with an Organization link) the GitHub org, beside the team activity rail.
+ *  Keyed by team, so a switch starts clean. */
+function MembersView({ home, team, onUpgrade, openModal }: LiveProps): React.JSX.Element {
   const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
-  // SOLUSDEV-317: "Assign GitHub…" on a member row exists only while GITHUB ORG
-  // MEMBERS is on screen; it hands that teammate to the section's picker.
-  const [orgMembersShown, setOrgMembersShown] = useState(false)
-  const onSectionChange = useCallback((shown: boolean) => setOrgMembersShown(shown), [])
-  const requestAssign = useGithubAssignFocusStore((s) => s.requestAssign)
-  const teamId = home.team?.team_id ?? null
   if (home.team === null || team.status !== 'ready')
     return (
       <Card pad={20}>
@@ -336,61 +331,13 @@ function MembersView({ home, team, onNavigate, openModal }: LiveProps): React.JS
       </Card>
     )
   return (
-    <div style={{ display: 'grid', gap: 16 }}>
-      <LiveMembers
-        members={team.members}
-        invites={team.invites}
-        myRole={team.myRole}
-        canManage={canManage}
-        onChangeRole={team.actions.changeRole}
-        onRemove={team.actions.remove}
-        onRevoke={team.actions.revoke}
-        onInvite={() => openModal('invite')}
-        onAssignGithub={
-          orgMembersShown && teamId ? (m) => requestAssign(teamId, m.user_id) : undefined
-        }
-      />
-      <GitHubSlot
-        home={home}
-        team={team}
-        canManage={canManage}
-        onNavigate={onNavigate}
-        onSectionChange={onSectionChange}
-      />
-      <TeamActivityPanel
-        activity={team.activity}
-        members={team.members}
-        total={team.activityTotal}
-        hasMore={team.activityHasMore}
-        onLoadMore={team.actions.loadMoreActivity}
-      />
-    </div>
-  )
-}
-
-/** ADR-039: a GitHub organization belongs to a COLLABORATIVE team only. The
- *  card and (for managers) GITHUB ORG MEMBERS, keyed by team (SOLUSDEV-317). */
-function GitHubSlot({
-  home,
-  team,
-  canManage,
-  onNavigate,
-  onSectionChange
-}: Pick<LiveProps, 'home' | 'team' | 'onNavigate'> & {
-  canManage: boolean
-  onSectionChange: (shown: boolean) => void
-}): React.JSX.Element | null {
-  const active = home.team
-  if (!active || active.is_personal || team.status !== 'ready') return null
-  return (
-    <TeamGithubPanel
-      key={active.team_id}
-      teamId={active.team_id}
-      teamName={active.name}
+    <TeamInvitesView
+      key={home.team.team_id}
+      team={home.team}
+      homeTeam={team}
       canManage={canManage}
-      members={team.members}
-      onUpgrade={onNavigate ? () => onNavigate('billing') : undefined}
-      onSectionChange={onSectionChange}
+      onInvite={() => openModal('invite')}
+      onUpgrade={onUpgrade}
     />
   )
 }

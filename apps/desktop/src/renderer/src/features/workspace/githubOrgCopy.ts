@@ -117,6 +117,11 @@ const COPY = {
       "Share this one-time join token with them — it's shown only now. When they accept, Solus checks that their GitHub identity matches.",
     Expert: 'One-time token, shown once. GitHub identity is checked on accept.'
   },
+  invite_shown_email: {
+    Guide:
+      "Share this one-time join token with them — it's shown only now. They paste it under Join team.",
+    Expert: 'One-time token, shown once.'
+  },
   not_an_org_member: {
     Guide:
       'That person is no longer a member of the GitHub organization, so they cannot be invited.',

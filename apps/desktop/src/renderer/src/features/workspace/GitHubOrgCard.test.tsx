@@ -384,3 +384,32 @@ describe('GitHubOrgCard', () => {
     })
   })
 })
+
+describe('GitHubOrgCard — design A variants', () => {
+  it('strip: a linked org reads as one row with its status badge', () => {
+    mockGithub({ installation: INSTALLATION })
+    renderCard()
+    const card = screen.getByTestId('github-org-card')
+    expect(card).toHaveAttribute('data-variant', 'strip')
+    expect(within(card).getByText('● ACTIVE')).toBeInTheDocument()
+  })
+
+  it('strip: a suspended link says SUSPENDED and keeps the warn row', () => {
+    mockGithub({ installation: { ...INSTALLATION, status: 'suspended' } })
+    renderCard()
+    expect(screen.getByText('● SUSPENDED')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/suspended on github/i)
+  })
+
+  it('step: a numbered heading names the team, with Link organization under it', async () => {
+    const github = mockGithub()
+    render(<GitHubOrgCard github={current} teamName="Strider" canManage variant="step" />)
+    const card = screen.getByTestId('github-org-card')
+    expect(card).toHaveAttribute('data-variant', 'step')
+    expect(
+      within(card).getByRole('heading', { name: /link a github organization to strider/i })
+    ).toBeInTheDocument()
+    await userEvent.click(within(card).getByRole('button', { name: /link organization/i }))
+    expect(github.actions.link).toHaveBeenCalled()
+  })
+})

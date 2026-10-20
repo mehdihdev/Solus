@@ -5,12 +5,11 @@
 // suspended. Collaborative teams only — Home does not mount it on the personal
 // team. Strings come from githubOrgCopy (Guide/Expert); anything the server or
 // GitHub supplies (logins, URLs) is rendered as text, and URLs only when https.
-// SOLUSDEV-317: the roster moved inline (GitHubOrgMembersSection); the card
-// takes its state from TeamGithubPanel, which shares it with that section.
+// SOLUSDEV-317 (design A): a compact STRIP above the People table (`strip`),
+// or setup step 2 on a solo team (`step`). State comes from TeamInvitesView,
+// which shares one useTeamGithub with the roster.
 import { useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
-import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
@@ -29,6 +28,16 @@ export interface GitHubOrgCardProps {
   /** Owner or admin: may link and unlink. */
   canManage: boolean
   onUpgrade?: () => void
+  /** `strip` (default): one row above the People table. `step`: the solo team's
+   *  "2 · Link a GitHub organization" card. */
+  variant?: 'strip' | 'step'
+}
+
+const BOX: React.CSSProperties = {
+  minWidth: 0,
+  border: '1px solid var(--bd)',
+  borderRadius: 4,
+  background: 'var(--sur)'
 }
 
 const NOTE_STYLE: React.CSSProperties = { fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }
@@ -37,32 +46,76 @@ export function GitHubOrgCard({
   github,
   teamName,
   canManage,
-  onUpgrade
+  onUpgrade,
+  variant = 'strip'
 }: GitHubOrgCardProps): React.JSX.Element {
   const mode = useSettingsStore((s) => s.solMode)
   // The unlink dialog lives HERE, not in the linked view: a successful unlink
   // refetches the card to "unlinked", which must not tear the dialog down before
   // it offers "Uninstall on GitHub".
   const [unlinking, setUnlinking] = useState(false)
+  const step = variant === 'step'
   return (
-    <div style={{ minWidth: 0 }} data-testid="github-org-card">
-      <div style={{ margin: '0 0 10px' }}>
-        <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
-          GITHUB ORGANIZATION
-        </Mono>
-      </div>
-      <Card pad={16}>
-        <CardBody
-          github={github}
-          teamName={teamName}
-          mode={mode}
-          canManage={canManage}
-          onUpgrade={onUpgrade}
-          onUnlink={() => setUnlinking(true)}
-        />
-      </Card>
+    <section
+      aria-label="GitHub organization"
+      data-testid="github-org-card"
+      data-variant={variant}
+      style={{ ...BOX, padding: step ? 16 : '12px 16px' }}
+    >
+      {step && <StepHeading teamName={teamName} mode={mode} />}
+      <CardBody
+        github={github}
+        teamName={teamName}
+        mode={mode}
+        canManage={canManage}
+        onUpgrade={onUpgrade}
+        onUnlink={() => setUnlinking(true)}
+        step={step}
+      />
       {unlinking && <UnlinkModal github={github} mode={mode} onClose={() => setUnlinking(false)} />}
+    </section>
+  )
+}
+
+/** Setup step 2's heading: a numbered badge and the link target. */
+function StepHeading({ teamName, mode }: { teamName: string; mode: SolMode }): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+      <StepBadge n={2} />
+      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
+        <LinkTarget teamName={teamName} mode={mode} />
+      </h3>
     </div>
+  )
+}
+
+export function StepBadge({
+  n,
+  active = false
+}: {
+  n: number
+  active?: boolean
+}): React.JSX.Element {
+  const color = active ? 'var(--acc)' : 'var(--mut)'
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 22,
+        height: 22,
+        flexShrink: 0,
+        borderRadius: 99,
+        border: `1px solid ${active ? 'var(--acc)' : 'var(--bd)'}`,
+        color,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 11
+      }}
+    >
+      {n}
+    </span>
   )
 }
 
@@ -73,6 +126,7 @@ interface BodyProps {
   canManage: boolean
   onUpgrade?: () => void
   onUnlink: () => void
+  step?: boolean
 }
 
 function CardBody({
@@ -81,7 +135,8 @@ function CardBody({
   mode,
   canManage,
   onUpgrade,
-  onUnlink
+  onUnlink,
+  step = false
 }: BodyProps): React.JSX.Element | null {
   if (github.status === 'idle') return null
   if (github.status === 'loading') return <Spinner size={14} />
@@ -106,6 +161,7 @@ function CardBody({
       canManage={canManage}
       onUpgrade={onUpgrade}
       onUnlink={onUnlink}
+      step={step}
     />
   )
 }
@@ -123,39 +179,60 @@ function OfflineNote({ github, mode }: { github: TeamGithub; mode: SolMode }): R
   )
 }
 
+function unlinkedNote(github: TeamGithub, canManage: boolean): GithubCopyKey {
+  if (github.linking) return 'linking'
+  if (github.notice?.kind === 'requested') return 'requested'
+  return canManage ? 'unlinked_admin' : 'unlinked_member'
+}
+
+/** Strip: mark · target + note · Link, in one wrapping row. Step: the note and
+ *  Link under the step heading (which already names the target). */
 function UnlinkedView({
   github,
   teamName,
   mode,
   canManage,
-  onUpgrade
+  onUpgrade,
+  step
 }: BodyProps): React.JSX.Element {
   const { linking, notice } = github
-  const requested = notice?.kind === 'requested'
   return (
     <div>
-      {canManage && <LinkTarget teamName={teamName} mode={mode} />}
-      <div style={NOTE_STYLE}>
-        {linking
-          ? githubText('linking', mode)
-          : requested
-            ? githubText('requested', mode)
-            : githubText(canManage ? 'unlinked_admin' : 'unlinked_member', mode)}
-      </div>
-      {canManage && (
-        <div style={{ marginTop: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        {!step && <GithubMark />}
+        <div style={{ flex: '1 1 280px', minWidth: 0 }}>
+          {canManage && !step && <LinkTarget teamName={teamName} mode={mode} />}
+          <div style={NOTE_STYLE}>{githubText(unlinkedNote(github, canManage), mode)}</div>
+        </div>
+        {canManage && (
           <Button
-            kind="primary"
+            kind={step ? 'soft' : 'primary'}
             size="sm"
             disabled={linking}
             onClick={() => void github.actions.link()}
           >
             {linking ? 'Waiting for GitHub…' : 'Link organization'}
           </Button>
-        </div>
-      )}
+        )}
+      </div>
       {notice && <NoticeLine notice={notice} mode={mode} onUpgrade={onUpgrade} />}
     </div>
+  )
+}
+
+/** GitHub's mark, in the text colour (follows the theme). */
+export function GithubMark({ size = 18 }: { size?: number }): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      style={{ flexShrink: 0 }}
+    >
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+    </svg>
   )
 }
 
@@ -165,11 +242,11 @@ function LinkTarget({ teamName, mode }: { teamName: string; mode: SolMode }): Re
   const slot = '\u0000'
   const [before, after = ''] = githubText('link_target', mode, { team: slot }).split(slot)
   return (
-    <div style={{ fontSize: 13, marginBottom: 6 }}>
+    <span style={{ display: 'block', fontSize: 13, marginBottom: 2 }}>
       {before}
       <strong style={{ wordBreak: 'break-all' }}>{teamName}</strong>
       {after}
-    </div>
+    </span>
   )
 }
 
@@ -289,11 +366,12 @@ function LinkedView({
     installation.repository_selection === 'all' ? 'scope_all' : 'scope_selected',
     mode
   )
+  const suspended = installation.status === 'suspended'
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <Avatar url={installation.account_avatar_url} />
-        <div style={{ minWidth: 0, fontSize: 12.5 }}>
+        <div style={{ flex: '1 1 280px', minWidth: 0, fontSize: 12.5 }}>
           <span style={{ fontWeight: 600, wordBreak: 'break-all' }}>
             {installation.account_login}
           </span>
@@ -302,16 +380,28 @@ function LinkedView({
             {installation.account_type}
             {count ? ` · ${count}` : ''}
           </span>
+          <div style={{ ...NOTE_STYLE, fontSize: 11.5 }}>
+            {githubText('linked_by', mode, {
+              by: linkedBy,
+              when: relativeTime(installation.linked_at),
+              scope
+            })}
+          </div>
         </div>
+        <span
+          style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10,
+            letterSpacing: '0.06em',
+            color: suspended ? 'var(--warn)' : 'var(--ok)'
+          }}
+        >
+          ● {suspended ? 'SUSPENDED' : 'ACTIVE'}
+        </span>
+        <ExternalLink href={safeHttpsUrl(installation.manage_url)} label="Manage on GitHub" />
+        {canManage && <OverflowMenu onUnlink={onUnlink} />}
       </div>
-      <div style={{ ...NOTE_STYLE, marginTop: 8, fontSize: 11.5 }}>
-        {githubText('linked_by', mode, {
-          by: linkedBy,
-          when: relativeTime(installation.linked_at),
-          scope
-        })}
-      </div>
-      {installation.status === 'suspended' && (
+      {suspended && (
         <div
           role="status"
           style={{ marginTop: 8, fontSize: 11.5, color: 'var(--warn)', lineHeight: 1.5 }}
@@ -319,12 +409,6 @@ function LinkedView({
           {githubText('suspended', mode)}
         </div>
       )}
-      <div
-        style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}
-      >
-        <ExternalLink href={safeHttpsUrl(installation.manage_url)} label="Manage on GitHub" />
-        {canManage && <OverflowMenu onUnlink={onUnlink} />}
-      </div>
     </div>
   )
 }

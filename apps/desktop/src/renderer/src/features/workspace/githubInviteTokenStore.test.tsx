@@ -15,7 +15,9 @@ describe('GitHubInviteTokenHost', () => {
   it('shows nothing until a token is revealed, then only Done clears it', async () => {
     render(<GitHubInviteTokenHost />)
     expect(screen.queryByRole('dialog')).toBeNull()
-    act(() => useGithubInviteTokenStore.getState().show({ login: 'octo', token: 'tok' }))
+    act(() =>
+      useGithubInviteTokenStore.getState().show({ invitee: '@octo', token: 'tok', kind: 'github' })
+    )
     expect(screen.getByTestId('invite-token')).toHaveTextContent('tok')
     await userEvent.click(screen.getByRole('button', { name: /^done$/i }))
     await userEvent.click(screen.getByRole('button', { name: /^done$/i }))

@@ -3,11 +3,13 @@
 // demotion or a suspension refetched live); the token must survive that — only
 // Done discards it. Home renders the host once. Never persisted, never logged.
 import { create } from 'zustand'
-import { GitHubInviteTokenModal } from './GitHubInviteTokenModal'
+import { GitHubInviteTokenModal, type InviteTokenKind } from './GitHubInviteTokenModal'
 
 export interface InviteReveal {
-  login: string
+  /** An @login or an email. */
+  invitee: string
   token: string | null
+  kind: InviteTokenKind
 }
 
 interface GithubInviteTokenState {
@@ -26,5 +28,12 @@ export function GitHubInviteTokenHost(): React.JSX.Element | null {
   const reveal = useGithubInviteTokenStore((s) => s.reveal)
   const dismiss = useGithubInviteTokenStore((s) => s.dismiss)
   if (!reveal) return null
-  return <GitHubInviteTokenModal login={reveal.login} token={reveal.token} onDone={dismiss} />
+  return (
+    <GitHubInviteTokenModal
+      invitee={reveal.invitee}
+      token={reveal.token}
+      kind={reveal.kind}
+      onDone={dismiss}
+    />
+  )
 }

@@ -8,9 +8,14 @@ import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 import { githubText } from './githubOrgCopy'
 import { ModalShell } from './modals'
 
+/** `github`: a GitHub-id invite (identity checked on accept); `email`: an email invite. */
+export type InviteTokenKind = 'github' | 'email'
+
 export interface GitHubInviteTokenModalProps {
-  login: string
+  /** Who it is for: an @login or an email (text, never HTML). */
+  invitee: string
   token: string | null
+  kind?: InviteTokenKind
   onDone: () => void
 }
 
@@ -37,8 +42,9 @@ async function copyToClipboard(text: string): Promise<boolean> {
 const noop = (): void => undefined
 
 export function GitHubInviteTokenModal({
-  login,
+  invitee,
   token,
+  kind = 'github',
   onDone
 }: GitHubInviteTokenModalProps): React.JSX.Element {
   const mode = useSettingsStore((s) => s.solMode)
@@ -46,19 +52,21 @@ export function GitHubInviteTokenModal({
   return (
     <ModalShell onClose={noop} width={420} labelledBy={titleId} closeOnEscape>
       <div id={titleId} style={{ fontSize: 16, fontWeight: 600, wordBreak: 'break-all' }}>
-        Invite @{login}
+        Invite {invitee}
       </div>
-      <TokenView token={token} mode={mode} onDone={onDone} />
+      <TokenView token={token} kind={kind} mode={mode} onDone={onDone} />
     </ModalShell>
   )
 }
 
 function TokenView({
   token,
+  kind,
   mode,
   onDone
 }: {
   token: string | null
+  kind: InviteTokenKind
   mode: SolMode
   onDone: () => void
 }): React.JSX.Element {
@@ -82,7 +90,7 @@ function TokenView({
     <div style={{ marginTop: 12 }}>
       <div ref={revealRef} role="status" tabIndex={-1} style={{ outline: 'none' }}>
         <div style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-          {githubText('invite_shown', mode)}
+          {githubText(kind === 'email' ? 'invite_shown_email' : 'invite_shown', mode)}
         </div>
         <div data-testid="invite-token" style={TOKEN_STYLE}>
           {token ?? githubText('roster_token_missing', mode)}

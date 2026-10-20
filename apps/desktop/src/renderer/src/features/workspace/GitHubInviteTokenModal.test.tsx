@@ -9,7 +9,7 @@ import { githubText } from './githubOrgCopy'
 import { GitHubInviteTokenModal } from './GitHubInviteTokenModal'
 
 const show = (token: string | null, onDone = vi.fn()): typeof onDone => {
-  render(<GitHubInviteTokenModal login="octo" token={token} onDone={onDone} />)
+  render(<GitHubInviteTokenModal invitee="@octo" token={token} onDone={onDone} />)
   return onDone
 }
 
@@ -80,8 +80,16 @@ describe('GitHubInviteTokenModal', () => {
 
   it('renders a hostile login as text', () => {
     const { container } = render(
-      <GitHubInviteTokenModal login="<img src=x onerror=alert(1)>" token="t" onDone={vi.fn()} />
+      <GitHubInviteTokenModal invitee="<img src=x onerror=alert(1)>" token="t" onDone={vi.fn()} />
     )
     expect(container.querySelector('img[onerror]')).toBeNull()
+  })
+
+  it('an email invite says how to join, not that GitHub is checked', () => {
+    render(
+      <GitHubInviteTokenModal invitee="dev@team.dev" token="t" kind="email" onDone={vi.fn()} />
+    )
+    expect(screen.getByRole('dialog', { name: 'Invite dev@team.dev' })).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(githubText('invite_shown_email', 'Guide'))
   })
 })
