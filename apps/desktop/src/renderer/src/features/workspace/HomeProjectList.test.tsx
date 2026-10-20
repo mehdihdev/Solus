@@ -88,6 +88,9 @@ describe('HomeProjectList', () => {
     expect(props.onSelect).not.toHaveBeenCalled()
   })
 
+})
+
+describe('HomeProjectList (continued)', () => {
   it('offers New project to members and up', async () => {
     const props = setup({ team: { ...TEAM, role: 'member' } })
     await userEvent.click(screen.getByRole('button', { name: 'New project' }))

@@ -166,6 +166,9 @@ describe('ProjectSourcesSummary', () => {
     expect(within(ki).getByRole('button', { name: 'Choose file for KiCad' })).toBeInTheDocument()
   })
 
+})
+
+describe('ProjectSourcesSummary (rows)', () => {
   it('leaves out tools with no linked account and nothing in the project', () => {
     setup({ connections: [connection('github')] })
     expect(screen.queryByTestId('source-tool-onshape')).toBeNull()
@@ -191,6 +194,9 @@ describe('ProjectSourcesSummary', () => {
     useProjectFolderStore.setState({ folders: {} })
   })
 
+})
+
+describe('ProjectSourcesSummary (continued)', () => {
   it("shows a source's own error message, as text", () => {
     setup({
       connections: [connection('github')],
@@ -228,6 +234,9 @@ describe('ProjectSourcesSummary', () => {
     expect(screen.getByText(/loading sources/i)).toBeInTheDocument()
   })
 
+})
+
+describe('ProjectSourcesSummary (pairing and states)', () => {
   it('marks a local folder that is a clone of the linked GitHub repo, and keeps the pair together', () => {
     setup({
       connections: [connection('github'), connection('onshape')],

@@ -75,6 +75,9 @@ describe('TeamStrip', () => {
     expect(screen.queryByRole('menuitem', { name: 'Delete team' })).toBeNull()
   })
 
+})
+
+describe('TeamStrip (continued)', () => {
   it('gates the menu by role: owner deletes, admin renames, member only leaves', async () => {
     const owner = props()
     const first = render(<TeamStrip {...owner} />)

@@ -123,6 +123,9 @@ describe('HomeProjectPane', () => {
     expect(screen.queryByTestId('solus-card')).toBeNull()
   })
 
+})
+
+describe('HomeProjectPane (continued)', () => {
   it('.solus: the card on its own', async () => {
     setup()
     await userEvent.click(tab('.solus'))
