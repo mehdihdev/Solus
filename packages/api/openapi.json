@@ -4112,6 +4112,86 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/code/processes/{process_id}/input": {
+      "post": {
+        "summary": "Send Process Input",
+        "description": "The person's own input box or Enter button (\u00a711.2): a user action, no card.",
+        "operationId": "send_process_input_api_v1_projects__project_id__code_processes__process_id__input_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Process Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Process Input Api V1 Projects  Project Id  Code Processes  Process Id  Input Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}": {
       "get": {
         "summary": "Hosted Status",
@@ -8783,7 +8863,7 @@
     "/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}": {
       "post": {
         "summary": "Decide Tool Confirmation",
-        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).\n\nThe turn that proposed it has long since ended \u2014 a one-shot SSE stream cannot\nblock for a click \u2014 so the tool runs HERE, with the registry rebuilt under\nthe deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.\nThe request body carries a decision and nothing else, so what the user\napproved is what executes (CLAUDE.md \u00a77).",
+        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).",
         "operationId": "decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post",
         "security": [
           {
@@ -16652,6 +16732,16 @@
             ],
             "title": "Resume Confirmation Id"
           },
+          "process_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "action_mode": {
             "$ref": "#/components/schemas/ActionMode",
             "default": "guide"
@@ -17551,6 +17641,49 @@
           "channel"
         ],
         "title": "PreparePresence"
+      },
+      "ProcessInput": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Text",
+            "default": ""
+          },
+          "enter": {
+            "type": "boolean",
+            "title": "Enter",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProcessInput",
+        "description": "`{text, enter}` (\u00a711.1 bounds): printable text, a newline only via `enter`."
+      },
+      "ProcessPrompt": {
+        "properties": {
+          "process_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Process Id"
+          },
+          "prompt_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Prompt Seq"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "process_id",
+          "prompt_seq"
+        ],
+        "title": "ProcessPrompt",
+        "description": "Which waiting prompt woke the desktop: the process and its prompt number."
       },
       "ProjectCreate": {
         "properties": {
