@@ -114,6 +114,9 @@ REPL_MODULES: frozenset[str] = frozenset(
         "rpdb",
         "remote_pdb",
         "ipykernel",
+        "_pyrepl",
+        "pyrepl",
+        "pydoc",
     }
 )
 #: Paths that are stdin, a terminal or another device (realpaths and normalised spellings).
@@ -180,15 +183,26 @@ class Workspace:
     script_file: ScriptFile = lambda _script: False
     module_file: ScriptFile = lambda _module: False
     cwd: str = "/"
+    #: The applied environment leaves python's module search to the cwd (no
+    #: PYTHONSAFEPATH, no PYTHONPATH entry outside the workspace).
+    module_path_ok: bool = False
 
 
 def _device(path: str) -> bool:
     return DEVICE_PATH.match(path) is not None and SERIAL_PORT.match(path) is None
 
 
+def _values(arg: str) -> list[str]:
+    """The argument, its `=value`, and a short option's attached value (`-f/dev/x`)."""
+    values = [arg, arg.partition("=")[2]]
+    if arg.startswith("-") and not arg.startswith("--") and len(arg) > 2 and arg[1].isalpha():
+        values.append(arg[2:])
+    return values
+
+
 def unsafe_argument(arg: str, cwd: str = "/") -> bool:
     """`-`, a `file:` URL, or a path-like value naming stdin, a terminal or a device."""
-    for value in (arg, arg.partition("=")[2]):
+    for value in _values(arg):
         if value == "-" or FILE_URL.match(value):
             return True
         if "/" not in value:
@@ -199,15 +213,30 @@ def unsafe_argument(arg: str, cwd: str = "/") -> bool:
     return False
 
 
-def _python_cluster(letters: str, following: str | None) -> Scan | None:
-    """A decided verdict for the cluster, or None to keep scanning."""
+#: python flags that change where `-m` finds modules (isolation, safe path, no env).
+PATH_CHANGING_FLAGS = frozenset("IPE")
+
+
+@dataclass(frozen=True)
+class Cluster:
+    """One short-option cluster: a decided verdict, or arguments consumed."""
+
+    verdict: Scan | None
+    consumed: int = 1
+    path_changing: bool = False
+
+
+def _python_cluster(letters: str, following: str | None, path_changed: bool) -> Cluster:
     for position, char in enumerate(letters):
         if char == "i" or (char not in deny.PYTHON_FLAGS and char not in "mWX"):
-            return False
+            return Cluster(False)
+        path_changed = path_changed or char in PATH_CHANGING_FLAGS
         if char == "m":
             module = letters[position + 1 :] or following or ""
-            return Module(module) if module else False
-    return None
+            return Cluster(Module(module) if module and not path_changed else False)
+        if char in deny.PYTHON_VALUE_FLAGS:  # the rest, or the next argument, is its value
+            return Cluster(None, 2 if position == len(letters) - 1 else 1, path_changed)
+    return Cluster(None, 1, path_changed)
 
 
 def _after_dashes(args: Sequence[str], index: int) -> Scan:
@@ -215,7 +244,7 @@ def _after_dashes(args: Sequence[str], index: int) -> Scan:
 
 
 def _python(args: Sequence[str]) -> Scan:
-    index = 0
+    index, path_changed = 0, False
     while index < len(args):
         arg = args[index]
         if arg == "--":
@@ -232,10 +261,11 @@ def _python(args: Sequence[str]) -> Scan:
             index += 1
             continue
         following = args[index + 1] if index + 1 < len(args) else None
-        verdict = _python_cluster(arg[1:], following)
-        if verdict is not None:
-            return verdict
-        index += 2 if arg[-1] in deny.PYTHON_VALUE_FLAGS else 1
+        cluster = _python_cluster(arg[1:], following, path_changed)
+        if cluster.verdict is not None:
+            return cluster.verdict
+        path_changed = cluster.path_changing
+        index += cluster.consumed
     return False
 
 
@@ -318,7 +348,11 @@ def _accepted(verdict: Scan, workspace: Workspace) -> bool:
         return verdict
     if isinstance(verdict, Module):
         top = verdict.name.split(".", 1)[0]
-        return top not in REPL_MODULES and workspace.module_file(verdict.name)
+        return (
+            top not in REPL_MODULES
+            and workspace.module_path_ok
+            and workspace.module_file(verdict.name)
+        )
     return workspace.script_file(verdict)
 
 

@@ -27,6 +27,7 @@ roster = overlay_module("roster")
 terminal = overlay_module("terminal")
 repl_guard = overlay_module("repl_guard")
 command_plan = overlay_module("command_plan")
+profiles = overlay_module("profiles")
 
 REPL_REASON = "interactive mode needs a script or program, not a REPL or bare shell"
 
@@ -476,6 +477,9 @@ STDIN_MODULES = (
     "remote_pdb",
     "IPython",
     "ipykernel",
+    "_pyrepl",
+    "pyrepl",
+    "pydoc",
 )
 
 
@@ -579,6 +583,14 @@ def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
         ["python3.12", "ask.py", "/dev/ttys001"],
         ["make", "--file=./in"],
         ["make", "-f", "sub/../in"],
+        ["make", "-f-"],
+        ["make", "-f/dev/stdin"],
+        ["make", "-f./in"],
+        ["python3.12", "-I", "-m", "mypkg"],
+        ["python3.12", "-Im", "mypkg"],
+        ["python3.12", "-uP", "-m", "mypkg"],
+        ["python3.12", "-E", "-m", "mypkg"],
+        ["python3.12", "-m", "inner"],
     ],
 )
 def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
@@ -596,6 +608,11 @@ def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
         ["python3.12", "-u", "ask.py"],
         ["python3.12", "-m", "mytool.miniterm", "/dev/cu.usbmodem1"],
         ["python3.12", "-um", "tool"],
+        ["python3.12", "-u", "-m", "mypkg"],
+        ["python3.12", "-I", "ask.py"],
+        ["python3.12", "-Wignore", "ask.py"],
+        ["python3.12", "-W", "ignore", "-m", "mypkg"],
+        ["make", "-fMakefile"],
         ["python3", "-m", "mypkg"],
         ["python3", "-mmypkg.sub"],
         ["pypy3", "-m", "mypkg"],
@@ -884,3 +901,42 @@ def test_repl_guard_allows_scripts(argv: list[str]) -> None:
 @pytest.mark.parametrize("argv", [["bash", "go.sh"], ["deno", "run", "x.ts"], ["python3", "a.py"]])
 def test_repl_guard_without_a_script_check_fails_closed(argv: list[str]) -> None:
     assert repl_guard.repl_reason(argv) == REPL_REASON
+
+
+def test_python_modules_resolve_only_from_the_planned_cwd(plan_ws: Path) -> None:
+    assert command_plan.repl_check(plan_ws, "nested", ["python3.12", "-m", "inner"]) is None
+    refused = command_plan.repl_check(plan_ws, "nested", ["python3.12", "-m", "mypkg"])
+    assert refused == REPL_REASON
+    args = {"argv": ["python3.12", "-m", "mypkg"], "cwd": "sub", "interactive": True}
+    planned = plan.plan_action(plan_ws, "process_start", args, which=lambda _name: None)
+    assert planned.ok is False and planned.reason == REPL_REASON
+
+
+def _profile(variables: tuple[tuple[str, str], ...]) -> Any:
+    return profiles.Profile(
+        name="p", setup_file="s", extends=None, captured_at="t", variables=variables, digest="d"
+    )
+
+
+@pytest.mark.parametrize(
+    ("variables", "ok"),
+    [
+        ((), True),
+        ((("ROS_DISTRO", "jazzy"),), True),
+        ((("PYTHONPATH", "{ws}/lib"),), True),
+        ((("PYTHONPATH", "lib"),), True),
+        ((("PYTHONPATH", "/opt/ros/lib/python3/site-packages"),), False),
+        ((("PYTHONPATH", "{ws}/lib:/usr/lib/python3"),), False),
+        ((("PYTHONSAFEPATH", "1"),), False),
+        ((("PYTHONSAFEPATH", ""),), False),
+    ],
+)
+def test_python_modules_refuse_profiles_that_move_module_resolution(
+    plan_ws: Path, variables: tuple[tuple[str, str], ...], ok: bool
+) -> None:
+    profile = _profile(tuple((name, value.format(ws=plan_ws)) for name, value in variables))
+    argv = ["python3.12", "-m", "mypkg"]
+    reason = command_plan.repl_check(plan_ws, ".", argv, profile=profile)
+    assert (reason is None) is ok
+    # scripts are not affected by the profile rule
+    assert command_plan.repl_check(plan_ws, ".", ["python3.12", "ask.py"], profile=profile) is None

@@ -169,25 +169,41 @@ def _command(root: Path, args: Args, action: str, keys: frozenset[str]) -> Plan 
 
 def _module_file(root: Path, cwd: str, module: str) -> bool:
     """§11.1: a python `-m` module's top-level package is a workspace package (a dir
-    with `__init__.py`) or `.py` file, found relative to `cwd` or the workspace root."""
+    with `__init__.py`) or `.py` file in the planned `cwd` (python's sys.path[0])."""
     top = module.split(".", 1)[0]
     if not top.isidentifier():
         return False
-    for base in dict.fromkeys((cwd, ".")):
-        for candidate in (os.path.join(base, top, "__init__.py"), os.path.join(base, f"{top}.py")):
-            if _script_file(root, ".", candidate):
-                return True
-    return False
+    candidates = (os.path.join(top, "__init__.py"), f"{top}.py")
+    return any(_script_file(root, cwd, candidate) for candidate in candidates)
+
+
+def _module_path_ok(root: Path, profile: profiles.Profile | None) -> bool:
+    """No PYTHONSAFEPATH, and every PYTHONPATH entry of the profile is in the workspace
+    (an empty or relative entry is the working directory, which is)."""
+    for name, value in profile.variables if profile is not None else ():
+        if name == "PYTHONSAFEPATH":
+            return False
+        if name == "PYTHONPATH":
+            entries = value.split(os.pathsep)
+            if any(os.path.isabs(entry) and not _within(root, entry) for entry in entries):
+                return False
+    return True
 
 
 def repl_check(
-    root: Path, cwd: str, argv: Sequence[str], resolved: Sequence[str] = ()
+    root: Path,
+    cwd: str,
+    argv: Sequence[str],
+    resolved: Sequence[str] = (),
+    *,
+    profile: profiles.Profile | None = None,
 ) -> str | None:
     """The §11.1 interactive-mode refusal for `argv` run from workspace-relative `cwd`."""
     workspace = repl_guard.Workspace(
         script_file=lambda script: _script_file(root, cwd, script),
         module_file=lambda module: _module_file(root, cwd, module),
         cwd=os.path.join(root, cwd),
+        module_path_ok=_module_path_ok(root, profile),
     )
     return repl_guard.repl_reason(
         argv, resolved=resolved, inside=lambda path: _within(root, path), workspace=workspace
@@ -391,7 +407,7 @@ def plan_process_start(root: Path, args: Args, _which: Which) -> Plan:
     if interactive and not isinstance(planned, str):
         resolved = (planned.argv[0], os.path.realpath(planned.argv[0]))
         argv = [args["argv"][0], *planned.argv[1:]]
-        repl = repl_check(root, planned.cwd, argv, resolved)
+        repl = repl_check(root, planned.cwd, argv, resolved, profile=planned.profile)
         if repl is not None:
             return replace(_refuse(action, repl), interactive=True)
     return replace(_finish(action, planned, **fields), interactive=interactive)
