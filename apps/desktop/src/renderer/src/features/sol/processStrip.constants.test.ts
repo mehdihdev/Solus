@@ -13,6 +13,10 @@ const proc = (over: Partial<CodeProcess>): CodeProcess => ({
   started_at: '2026-10-18T10:00:00Z',
   ended_at: null,
   sandbox: null,
+  interactive: false,
+  awaiting_input: false,
+  prompt_seq: 0,
+  prompt_tail: '',
   ...over
 })
 
