@@ -570,6 +570,21 @@ def test_build_mode_teaches_argv_commands_profiles_and_processes() -> None:
         assert phrase in text, phrase
 
 
+def test_build_mode_explains_interactive_processes() -> None:
+    """SOLUSDEV-317 §11.2 prompt guidance."""
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    for phrase in (
+        "interactive: true",
+        "Press Enter",
+        "code.process_input",
+        "relay what it asks in plain words",
+        "Never invent an answer the person has to give",
+    ):
+        assert phrase in text, phrase
+
+
 def test_build_mode_says_to_use_bare_program_names() -> None:
     # Live QA 2026-10-19: SOL guessed /usr/bin/ls on macOS, where ls is /bin/ls, and the
     # server rightly refused the non-existent path. Bare names resolve per machine.

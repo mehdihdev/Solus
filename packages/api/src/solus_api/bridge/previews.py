@@ -23,6 +23,7 @@ from solus_api.bridge.command_previews import (
     legacy_rows,
     parse_plan,
 )
+from solus_api.bridge.process_input_preview import INPUT_TOOL, STATUS_TOOL, input_rows
 
 logger = logging.getLogger("solus.bridge.previews")
 
@@ -146,8 +147,24 @@ def code_plan_rows(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
     return legacy_rows(plan)
 
 
+def _process_input(read: BridgeReader) -> PreviewBuilder:
+    """§11.2: the card reads the process's live status (prompt and sequence)."""
+
+    async def build(args: dict[str, Any]) -> list[dict[str, Any]]:
+        process_id = args.get("process_id")
+        status = (
+            await _read(read, STATUS_TOOL, {"process_id": process_id})
+            if isinstance(process_id, str)
+            else None
+        )
+        return input_rows(status, args)
+
+    return build
+
+
 PREVIEWABLE_TOOLS: Final[dict[str, Callable[[BridgeReader], PreviewBuilder]]] = {
     "kicad.set_symbol_property": _kicad_symbol_property,
+    INPUT_TOOL: _process_input,
     **{f"code.{action}": _code_action(action) for action in CODE_ACTIONS + COMMAND_ACTIONS},
 }
 

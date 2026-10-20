@@ -115,15 +115,28 @@ async def test_process_start_adds_max_runtime_before_the_fingerprint() -> None:
         "sandbox",
         "risk",
         "max runtime",
+        "interactive",
         "plan fingerprint",
     ]
     by_label = {row["label"]: row["after"] for row in rows}
+    assert by_label["interactive"] == "no"
     assert by_label["environment"] == "none"
     assert by_label["profile"] == "none"
     assert by_label["sandbox"].startswith("landlock — ")
     assert by_label["max runtime"] == "600 s"
     default = await _rows("code.process_start", _plan(), {"argv": ["ros2", "launch", "x"]})
     assert {r["label"]: r["after"] for r in default}["max runtime"] == "3600 s"
+
+
+async def test_process_start_shows_whether_it_is_interactive() -> None:
+    """§11.2: the process_start card has an `interactive` row (yes/no)."""
+    args = {"argv": ["tools/calibrate.sh"], "interactive": True}
+    rows = await _rows("code.process_start", _plan(), args)
+    assert {r["label"]: r["after"] for r in rows}["interactive"] == "yes"
+    exec_rows = await _rows("code.exec", _plan(), {"argv": ["ls"]})
+    assert "interactive" not in [r["label"] for r in exec_rows]
+    with pytest.raises(PreviewRefusal, match="arguments are invalid"):
+        await _rows("code.process_start", _plan(), {"argv": ["x"], "interactive": "yes"})
 
 
 async def test_risk_row_lists_every_risk_or_none_flagged() -> None:

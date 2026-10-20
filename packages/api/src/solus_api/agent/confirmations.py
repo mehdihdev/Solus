@@ -249,7 +249,11 @@ def _cleaned_rows(
 
 #: SOLUSDEV-317 §9 item 2: on a `code.plan` card every row must render exactly as
 #: it runs, except these, which Solus composes from fixed text and validated kinds.
-_COMPOSED_ROWS: Final = frozenset({"sandbox", "risk", "plan fingerprint", "max runtime"})
+#: §11.2: `process` and `prompt` on an input card are machine output that Solus
+#: redacts itself (the person sees the redacted tail); `input` stays verbatim.
+_COMPOSED_ROWS: Final = frozenset(
+    {"sandbox", "risk", "plan fingerprint", "max runtime", "interactive", "process", "prompt"}
+)
 PLAN_UNAVAILABLE_MESSAGE: Final = (
     "The command plan is unavailable, so its approval card cannot be shown. "
     "Nothing was parked or run."

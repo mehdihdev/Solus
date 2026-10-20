@@ -8,6 +8,10 @@ processes are never visible or stoppable across members. Stop is the person's
 own click — it dispatches `code.process_stop` directly (a user action, not a
 model proposal) and is logged as `code.process.stopped {via: "ui"}`.
 Process text arrives already redacted at bridge ingress (`ingest_result`).
+
+Input (§11.2) is the person's own typing into an interactive process that is
+waiting: it dispatches `code.process_input` directly (no card) after a live
+status check, and is logged as `code.process.input {via: "ui"}` — never the text.
 """
 
 from __future__ import annotations
@@ -17,9 +21,17 @@ import logging
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Path, Query, Request
+from pydantic import Field, StrictBool, StrictStr, model_validator
 
-from solus_api.agent.command_gate import stopped_payload
+from solus_api.agent.command_gate import input_payload, stopped_payload
 from solus_api.agent.tools.tool import ToolException
+from solus_api.bridge.process_input_preview import (
+    INPUT_TOOL,
+    MAX_INPUT_CHARS,
+    find_process,
+    input_problem,
+    waiting_process,
+)
 from solus_api.bridge.registry import BridgeSession
 from solus_api.bridge.service import dispatch
 from solus_api.core.errors import APIError
@@ -28,6 +40,7 @@ from solus_api.deps import BridgeSessionsDep, ProjectCtx, SessionDep, SettingsDe
 from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.models import Role
 from solus_api.routers.local_folder import _live_session
+from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
 
 logger = logging.getLogger("solus.routers.code_processes")
@@ -39,6 +52,8 @@ STOP_TOOL: Final = "code.process_stop"
 #: The desktop polls the strip and one process's output; stops are clicks.
 READ_LIMIT: Final = 120
 STOP_LIMIT: Final = 20
+#: §11.2: the person's typing, per user and project.
+INPUT_LIMIT: Final = 60
 _WINDOW_SECONDS: Final = 60
 _TIMEOUT_SECONDS: Final = 15.0
 _MAX_PROCESSES: Final = 16
@@ -88,11 +103,19 @@ def _processes(value: dict[str, Any] | None) -> list[dict[str, Any]]:
     rows = value.get("processes") if value is not None else None
     if not isinstance(rows, list):
         return []
-    return [
-        {key: row.get(key) for key in _PROCESS_KEYS}
-        for row in rows[:_MAX_PROCESSES]
-        if isinstance(row, dict)
-    ]
+    return [_process_row(row) for row in rows[:_MAX_PROCESSES] if isinstance(row, dict)]
+
+
+def _process_row(row: dict[str, Any]) -> dict[str, Any]:
+    """The strip's row; the §11.1 interactive fields default to "not waiting"."""
+    seq, tail = row.get("prompt_seq"), row.get("prompt_tail")
+    return {
+        **{key: row.get(key) for key in _PROCESS_KEYS},
+        "interactive": row.get("interactive") is True,
+        "awaiting_input": row.get("awaiting_input") is True,
+        "prompt_seq": seq if type(seq) is int and seq >= 0 else 0,
+        "prompt_tail": tail if isinstance(tail, str) else "",
+    }
 
 
 @router.get("")
@@ -183,3 +206,72 @@ async def stop_process(
     )
     await session.commit()
     return envelope({key: value.get(key) for key in ("ok", "process_id", "state", "exit_code")})
+
+
+class ProcessInput(StrictModel):
+    """`{text, enter}` (§11.1 bounds): printable text, a newline only via `enter`."""
+
+    text: StrictStr = Field(default="", max_length=MAX_INPUT_CHARS)
+    enter: StrictBool = True
+
+    @model_validator(mode="after")
+    def _bounded(self) -> ProcessInput:
+        problem = input_problem(self.text, self.enter)
+        if problem is not None:
+            raise ValueError(problem)
+        return self
+
+
+def _not_waiting() -> APIError:
+    return APIError(409, "not_waiting", "This process is not waiting for input.")
+
+
+@router.post("/{process_id}/input")
+async def send_process_input(
+    request: Request,
+    body: ProcessInput,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    sessions: BridgeSessionsDep,
+    settings: SettingsDep,
+    process_id: ProcessId,
+    machine_id: MachineId,
+) -> Any:
+    """The person's own input box or Enter button (§11.2): a user action, no card."""
+    require_role(ctx, Role.MEMBER)
+    if _limited(request, ctx, "input", INPUT_LIMIT):
+        return rate_limited_response("Too much input; wait a minute", _WINDOW_SECONDS)
+    live = _live_session(sessions, ctx, machine_id)
+    if live is None or not (_offers(live, INPUT_TOOL) and _offers(live, STATUS_TOOL)):
+        raise APIError(409, "bridge_offline", "This machine is not connected.")
+    cap = settings.bridge_tool_call_max_bytes
+    status = await _call(live, STATUS_TOOL, {"process_id": process_id}, cap)
+    if status is None:
+        raise APIError(409, "bridge_offline", "This machine did not answer.")
+    if find_process(status, process_id) is None:
+        raise APIError(404, "not_found", "No such process.")
+    if waiting_process(status, process_id) is None:
+        raise _not_waiting()
+    args = {"process_id": process_id, "text": body.text, "enter": body.enter}
+    value = await _call(live, INPUT_TOOL, args, cap)
+    if value is None:
+        raise APIError(
+            504, "input_unconfirmed", "The input was sent but not confirmed; check the process."
+        )
+    if value.get("ok") is not True:
+        if value.get("reason") == _UNKNOWN:
+            raise APIError(404, "not_found", "No such process.")
+        raise _not_waiting()
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="code.process.input",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload=input_payload("ui", value, auto=False),
+    )
+    await session.commit()
+    sent = value.get("sent_chars")
+    return envelope(
+        {"ok": True, "process_id": process_id, "sent_chars": sent if type(sent) is int else 0}
+    )

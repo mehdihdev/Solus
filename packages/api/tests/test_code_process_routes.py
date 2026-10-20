@@ -138,7 +138,12 @@ async def test_list_reads_the_callers_own_machine(
     _, project, companion = await _setup(client, app, alice_headers)
     resp = await client.get(_base(project), params={"machine_id": MACHINE}, headers=alice_headers)
     assert resp.status_code == 200, resp.text
-    assert resp.json()["data"] == {"bridge": {"connected": True}, "processes": [_PROCESS]}
+    # §11.1 fields default to "not waiting" for a server that does not send them.
+    defaults = {"interactive": False, "awaiting_input": False, "prompt_seq": 0, "prompt_tail": ""}
+    assert resp.json()["data"] == {
+        "bridge": {"connected": True},
+        "processes": [{**_PROCESS, **defaults}],
+    }
     assert companion.sent[0]["tool"] == "code.process_status"
     assert companion.sent[0]["args"] == {}
 

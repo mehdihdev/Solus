@@ -57,11 +57,13 @@ from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.agent.turn_limits import turn_limits
+from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     AgentRunnerDep,
+    BridgeSessionsDep,
     ProjectCtx,
     SecretStoreDep,
     SessionDep,
@@ -99,6 +101,14 @@ from solus_api.routers.sol_resume import (
     check_resume,
     claim_resume,
     resume_prompt,
+)
+from solus_api.routers.sol_wake import (
+    ProcessPrompt,
+    WakeTicket,
+    admit_wake,
+    check_wake,
+    continuation_attrs,
+    wake_prompt,
 )
 from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
@@ -235,6 +245,9 @@ class MessageCreate(StrictModel):
     #: exclusive with `content` and `screenshot` — a resume carries no words or
     #: pixels from the person, and no user turn is stored.
     resume_confirmation_id: uuid.UUID | None = None
+    #: SOLUSDEV-317 §11.2: wake SOL for a waiting interactive process. Mutually
+    #: exclusive with `content`, `screenshot` and `resume_confirmation_id`.
+    process_prompt: ProcessPrompt | None = None
     #: SOLX-01: how SOL may act on this message — guide (explain + point) or do
     #: (operate the tool). Guide is the safe default; per-action resolution
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
@@ -273,6 +286,14 @@ class MessageCreate(StrictModel):
 
     @model_validator(mode="after")
     def _content_or_resume(self) -> "MessageCreate":
+        if self.process_prompt is not None:
+            if (
+                self.content is not None
+                or self.screenshot is not None
+                or self.resume_confirmation_id is not None
+            ):
+                raise ValueError("a wake carries no content, screenshot or resume")
+            return self
         if self.resume_confirmation_id is None and self.content is None:
             # Reported as the field's own `missing` error (the API.md shape a
             # required `content` always had); the error handler redacts `input`.
@@ -828,6 +849,37 @@ async def _resume_ticket(
     )
 
 
+async def _turn_prompt(
+    session: AsyncSession,
+    ctx: ProjectCtx,
+    conversation_id: uuid.UUID,
+    body: MessageCreate,
+    bridge: BridgeSessionRegistry,
+    call_cap_bytes: int,
+) -> tuple[str, ResumeTicket | None, WakeTicket | None]:
+    """The turn's prompt: the person's words, or the Solus-authored instruction
+    of a resume (§5.5) or a wake (§11.2), each admitted by its own checks."""
+    continuing = body.resume_confirmation_id is not None or body.process_prompt is not None
+    content = "" if continuing else (body.content or "").strip()
+    if not continuing and not content:
+        raise APIError(422, "validation_error", "Message content must not be blank")
+    await _owned_or_404(ctx, session, conversation_id)
+    ticket = await _resume_ticket(session, ctx, conversation_id, body)
+    if ticket is not None:
+        return resume_prompt(ticket), ticket, None
+    if body.process_prompt is not None:
+        wake = await check_wake(
+            session,
+            bridge,
+            ctx,
+            conversation_id,
+            body.process_prompt,
+            call_cap_bytes=call_cap_bytes,
+        )
+        return wake_prompt(wake), None, wake
+    return content, None, None
+
+
 async def _admit_resume(
     session: AsyncSession, ctx: ProjectCtx, conversation_id: uuid.UUID, ticket: ResumeTicket
 ) -> None:
@@ -912,19 +964,15 @@ async def post_message(
     # SOLUSDEV-235 (extensions.md §9): `X-Solus-Extension` resolved as a
     # dependency, so an unauthorized header is 403 `scope_denied` BEFORE admission.
     attribution: ExtensionAttribution,
+    bridge: BridgeSessionsDep,
 ) -> StreamingResponse:
     """Append the user's message and stream SOL's reply as Server-Sent Events. The user
     turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
     turns are persisted as the stream completes."""
     require_role(ctx, Role.MEMBER)
-    resuming = body.resume_confirmation_id is not None
-    content = "" if resuming else (body.content or "").strip()
-    if not resuming and not content:
-        raise APIError(422, "validation_error", "Message content must not be blank")
-    await _owned_or_404(ctx, session, conversation_id)
-    ticket = await _resume_ticket(session, ctx, conversation_id, body)
-    if ticket is not None:
-        content = resume_prompt(ticket)
+    content, ticket, wake = await _turn_prompt(
+        session, ctx, conversation_id, body, bridge, settings.bridge_tool_call_max_bytes
+    )
     # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
     screenshot = body.screenshot.decode() if body.screenshot is not None else None
 
@@ -955,6 +1003,9 @@ async def post_message(
         )
     except FrequencyCapExceededError as exc:
         raise APIError(429, "frequency_cap", "Too many SOL turns right now; slow down.") from exc
+    if wake is not None:
+        # §11.2: BEFORE the history read, so the tail is this turn's fenced evidence.
+        await admit_wake(session, ctx, conversation_id, wake)
     prior = await SERVICE.history(
         session, conversation_id=conversation_id, project_id=ctx.project.id
     )
@@ -964,7 +1015,7 @@ async def post_message(
     )
     if ticket is not None:
         await _admit_resume(session, ctx, conversation_id, ticket)
-    else:
+    elif wake is None:
         await _record_user_message(
             session, ctx, conversation_id, content, body, attribution, screenshot
         )
@@ -1097,9 +1148,7 @@ async def post_message(
         user_id=ctx.user.id,
         sol_mode=ctx.user.sol_mode.value,
         action_mode=body.action_mode.value,
-        assistant_attrs=(
-            {"resume_of": str(ticket.confirmation_id)} if ticket is not None else None
-        ),
+        assistant_attrs=continuation_attrs(ticket, wake),
     )
     from solus_api.graph.read_scope import current_scope, scoped_stream
 

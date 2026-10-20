@@ -24,6 +24,10 @@ from solus_api.agent.tools.shapes import ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import redact_text
 
 AUTO_COMMAND_TOOL: Final = "code.exec"
+#: §11.2: a bare Enter to a waiting interactive process may skip its card.
+AUTO_INPUT_TOOL: Final = "code.process_input"
+#: The code-owned tools Build may run without a card, each re-judged per call.
+AUTO_TOOLS: Final = frozenset({AUTO_COMMAND_TOOL, AUTO_INPUT_TOOL})
 #: The only `code.plan` `program_scope` that may skip the card (§10.1).
 SYSTEM_SCOPE: Final = "system"
 #: Each stream tail is capped at the server's own tail size.
@@ -33,6 +37,7 @@ _OUTCOME_PREFIX: Final = "ran automatically in Build"
 _NOT_FOR_MODEL: Final = frozenset({"stdout_tail", "stderr_tail", "auto", "outcome"})
 _ARGS: Final = frozenset({"argv", "cwd", "environment", "profile", "timeout_seconds"})
 _MAX_TIMEOUT: Final = 600
+_INPUT_ARGS: Final = frozenset({"process_id", "text", "enter"})
 
 
 def _relative_dir(value: object) -> bool:
@@ -63,6 +68,22 @@ def auto_eligible(args: Mapping[str, Any]) -> bool:
         return False
     verdict = classify(args["argv"])
     return not verdict.denied and not verdict.risks
+
+
+def enter_only_eligible(args: Mapping[str, Any]) -> bool:
+    """Whether a `code.process_input` call MAY skip its card (§11.2): exactly a
+    process id and a bare Enter — `text` empty or absent, `enter` true or absent.
+    Whether the process is interactive and waiting is the preview's to decide."""
+    if not set(args) <= _INPUT_ARGS or not isinstance(args.get("process_id"), str):
+        return False
+    return args.get("text", "") == "" and args.get("enter", True) is True
+
+
+def auto_judge(tool: str, args: Mapping[str, Any]) -> bool:
+    """The per-call, argument-only eligibility for each Build auto tool."""
+    if tool == AUTO_COMMAND_TOOL:
+        return auto_eligible(args)
+    return tool == AUTO_INPUT_TOOL and enter_only_eligible(args)
 
 
 def _value(result: ToolResult) -> dict[str, Any]:

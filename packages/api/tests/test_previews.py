@@ -50,6 +50,7 @@ def test_only_the_kicad_write_is_previewable_today() -> None:
         "code.exec",
         "code.process_start",
         "code.profile_capture",
+        "code.process_input",
     }
     assert preview_builder("kicad.export_netlist", _Reader(None)) is None
     assert preview_builder("kicad.set_symbol_property", _Reader(None)) is not None

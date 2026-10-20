@@ -103,9 +103,10 @@ def _decision_turn(
 async def _chain_length(
     session: AsyncSession, conversation_id: uuid.UUID, project_id: uuid.UUID
 ) -> int:
-    """Resumes since the person's last message: answered ones (assistant turns
-    with `resume_of`) plus CLAIMED ones whose turn is still streaming (decision
-    turns marked `resumed`), counted once per confirmation."""
+    """Continuations since the person's last message: answered resumes
+    (assistant turns with `resume_of`) plus CLAIMED ones whose turn is still
+    streaming (decision turns marked `resumed`), counted once per confirmation,
+    plus wake turns (§11.2), counted by their waiting TOOL turn."""
     scope = (
         ConversationTurn.conversation_id == conversation_id,
         ConversationTurn.project_id == project_id,
@@ -132,7 +133,16 @@ async def _chain_length(
             ConversationTurn.attrs.has_key("resumed"),
         )
     )
-    return len(set(answered) | set(claimed))
+    # §11.2: each wake turn's persisted waiting TOOL turn is one continuation.
+    woken = await session.scalar(
+        select(func.count()).where(
+            *scope,
+            *since,
+            ConversationTurn.role == TurnRole.TOOL,
+            ConversationTurn.attrs.has_key("wake"),
+        )
+    )
+    return len(set(answered) | set(claimed)) + (woken or 0)
 
 
 async def check_resume(
