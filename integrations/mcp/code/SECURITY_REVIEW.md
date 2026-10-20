@@ -551,3 +551,26 @@ unchanged and still required.
   long multi-byte line — the write then times out and reports `ok: false`.
 - Re-review relevance: the escape stripper, the REPL table, the input validator and the
   master-fd lifecycle.
+
+### 2026-10-19 addendum (7) — REPL guard hardening (append-only; addendum 6 stands as written)
+
+- [x] The interactive-mode REPL check moved to `solus/repl_guard.py` and now fails closed:
+  an interpreter must reach its script through options its table knows; any unknown option
+  refuses. REPL-forcing flags are refused anywhere among leading options, including inside
+  short clusters: python `-i`, node/bun `-i`/`--interactive`, perl `-d`, lua `-i`, php `-a`.
+  Shells must start with their script (any leading `-`/`+` option refuses: `-i`, `-s`,
+  `--rcfile`, `--init-file`, `-o`, `+o`, …). `-` (stdin) and a bare `--` are no script.
+- [x] `-m <module>` counts only for python-family interpreters (python, pypy), and not for
+  the REPL/debugger modules code, pdb, idlelib, asyncio, IPython, ipdb, pudb, ptpython,
+  bpython (top-level package matched). perl -m/-M, ruby -r and node -r load a library and
+  then read code from the terminal, so without a script they are refused. REPL/debugger
+  subcommands are refused: node `inspect`/`debug`, bun `repl`, deno `repl`/`eval`; bare deno
+  is refused.
+- [x] REPL, debugger and database-shell programs are refused in interactive mode whatever
+  their arguments: ipython, ptpython, bpython, irb, pry, rails, sqlite3, psql, mysql, mongo,
+  mongosh, redis-cli, gdb, lldb, pdb, R, julia, ghci, erl, iex, node-inspect, tclsh, wish
+  (casefolded basename or normalised name, so versioned names like `tclsh8.6` match).
+  Non-interactive processes and `code.exec` are unaffected (stdin closed).
+- Residual: this is a denylist of known REPL programs. An unknown program that reads and
+  runs code from its terminal is not detected; every interactive start remains behind the
+  approval card.
