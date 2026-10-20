@@ -226,6 +226,7 @@ def st(monkeypatch: pytest.MonkeyPatch) -> _Stripe:
         "sub.modify": (stripe.Subscription, "modify_async", _sub(price="price_new")),
         "sub.cancel": (stripe.Subscription, "cancel_async", _sub(status="canceled")),
         "cus.modify": (stripe.Customer, "modify_async", {"id": "cus_1"}),
+        "customer.retrieve": (stripe.Customer, "retrieve_async", {"id": "cus_1"}),
         "coupon.create": (stripe.Coupon, "create_async", {"id": "x"}),
         "sched.create": (stripe.SubscriptionSchedule, "create_async", sched),
         "sched.modify": (stripe.SubscriptionSchedule, "modify_async", sched),
@@ -978,3 +979,52 @@ async def test_redact_customer_is_bounded_by_a_retryable_timeout(
     with pytest.raises(StripeOperationError) as err:
         await gw().redact_customer("cus_1", audit_action_id="a")
     assert err.value.retryable is True and err.value.code == "timeout"
+
+
+# ---- SOLUSDEV-236 T3: reconciliation read methods ---------------------------- #
+
+
+async def test_retrieve_subscription_raw_returns_a_plain_dict(st: _Stripe) -> None:
+    st.results["sub.retrieve"] = _sub()
+    raw = await gw().retrieve_subscription_raw("sub_1")
+    assert raw["status"] == "active" and raw["items"]["data"][0]["price"]["id"] == "price_old"
+    _, params = st.one("sub.retrieve")
+    assert params["api_key"] == KEY and "idempotency_key" not in params
+
+
+async def test_retrieve_subscription_raw_uses_to_dict_when_available(st: _Stripe) -> None:
+    class _Sdk:
+        def to_dict(self) -> dict[str, Any]:
+            return {"id": "sub_1", "status": "trialing"}
+
+    st.results["sub.retrieve"] = _Sdk()
+    assert await gw().retrieve_subscription_raw("sub_1") == {"id": "sub_1", "status": "trialing"}
+
+
+async def test_retrieve_subscription_raw_missing_and_bad_id(st: _Stripe) -> None:
+    st.errors["sub.retrieve"] = [_invalid("resource_missing")]
+    with pytest.raises(StripeResourceMissingError):
+        await gw().retrieve_subscription_raw("sub_1")
+    with pytest.raises(ValueError):
+        await gw().retrieve_subscription_raw("not-an-id")
+
+
+async def test_customer_exists_true_false_and_deleted_stub(st: _Stripe) -> None:
+    st.results["customer.retrieve"] = {"id": "cus_1"}
+    assert await gw().customer_exists("cus_1") is True
+    st.results["customer.retrieve"] = {"id": "cus_1", "deleted": True}
+    assert await gw().customer_exists("cus_1") is False
+    st.errors["customer.retrieve"] = [_invalid("resource_missing")]
+    assert await gw().customer_exists("cus_1") is False
+
+
+async def test_customer_exists_propagates_other_errors(st: _Stripe) -> None:
+    st.errors["customer.retrieve"] = [stripe.APIConnectionError("boom")]
+    with pytest.raises(StripeOperationError):
+        await gw().customer_exists("cus_1")
+
+
+async def test_ensure_configured_raises_without_a_key() -> None:
+    await StripeGateway(_FakeStore("sk_test_x")).ensure_configured()
+    with pytest.raises(BillingUnconfiguredError):
+        await StripeGateway(_FakeStore(None)).ensure_configured()

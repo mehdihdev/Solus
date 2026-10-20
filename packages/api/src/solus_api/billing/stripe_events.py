@@ -198,35 +198,51 @@ async def _apply_subscription(
     # Out-of-order guard: ignore an event older than the last one applied.
     if local.stripe_event_at is not None and created < local.stripe_event_at:
         return
-    old_plan, old_status = local.plan, local.status
     new_link = _is_new_link(local.stripe_subscription_id, sub_id)
     if sub_id:
         local.stripe_subscription_id = sub_id
     if customer:
         local.stripe_customer_id = customer
-    old_cancel_at = local.cancel_at
-    state = derive_subscription_state(
-        obj, plan_prices, deleted=etype == "customer.subscription.deleted"
+    apply_subscription_state(
+        session,
+        local,
+        obj,
+        plan_prices,
+        deleted=etype == "customer.subscription.deleted",
+        by_support=_is_admin_originated(obj, previous),
     )
-    if etype == "customer.subscription.deleted":
-        local.status = SubscriptionStatus.CANCELED
-    else:
-        _apply_live_state(local, obj, state)
     local.stripe_event_at = created
     if new_link and local.status is not SubscriptionStatus.CANCELED:
         _clear_comp(local)
+    await grant_plan_credits(session, local, plan_credit_grants)
+
+
+def apply_subscription_state(
+    session: AsyncSession,
+    local: Subscription,
+    obj: dict[str, Any],
+    plan_prices: dict[str, str],
+    *,
+    deleted: bool = False,
+    by_support: bool = False,
+) -> None:
+    """Converge `local` onto a Stripe subscription object and queue the user notifications
+    the transition warrants. Shared by the webhook and the SOLUSDEV-236 reconciler so both
+    paths derive entitlement identically. Does not touch link ids, `stripe_event_at`, comps
+    or plan credits: those belong to the caller (event ordering is the caller's concern)."""
+    old_plan, old_status, old_cancel_at = local.plan, local.status, local.cancel_at
+    state = derive_subscription_state(obj, plan_prices, deleted=deleted)
+    if deleted:
+        local.status = SubscriptionStatus.CANCELED
+    else:
+        _apply_live_state(local, obj, state)
     if local.status is SubscriptionStatus.CANCELED and old_status in LIVE_STATUSES:
         _apply_term_end(session, local)
     else:
         _notify_cancel_transition(session, local, old_cancel_at)
     _notify_if_entitlement_changed(
-        session,
-        local,
-        old_plan=old_plan,
-        old_status=old_status,
-        by_support=_is_admin_originated(obj, previous),
+        session, local, old_plan=old_plan, old_status=old_status, by_support=by_support
     )
-    await grant_plan_credits(session, local, plan_credit_grants)
 
 
 def _apply_live_state(

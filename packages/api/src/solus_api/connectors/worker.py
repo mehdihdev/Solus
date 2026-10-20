@@ -1151,6 +1151,15 @@ async def expire_comps(ctx: dict[str, Any]) -> int:
         return 0
 
 
+async def reconcile_stripe_subscriptions(ctx: dict[str, Any]) -> int:
+    """ARQ cron (hourly, SOLUSDEV-236): converge local subscription rows onto Stripe.
+
+    Returns how many rows changed; never raises to ARQ."""
+    from solus_api.billing import subscription_sync
+
+    return await subscription_sync.reconcile_stripe_subscriptions(ctx)
+
+
 async def prune_github_deliveries(ctx: dict[str, Any]) -> int:
     """ARQ cron (hourly): drop GitHub webhook delivery ids past the retention window.
 
@@ -1287,6 +1296,9 @@ def build_worker_settings(settings: Settings) -> type:
             # and materialising expired staff comps.
             cron(cancel_stripe_subscriptions, minute=None, run_at_startup=True),
             cron(expire_comps, minute={0, 15, 30, 45}, run_at_startup=False),
+            # SOLUSDEV-236: hourly Stripe subscription drift reconciliation (safety net
+            # under the webhook; circuit-breaker protected).
+            cron(reconcile_stripe_subscriptions, minute={5}, run_at_startup=False),
             # SOLUSDEV-216: GitHub App webhook delivery-id retention.
             cron(prune_github_deliveries, minute={0}, run_at_startup=False),
         ]

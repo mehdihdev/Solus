@@ -213,3 +213,19 @@ async def test_a_failing_stripe_drain_does_not_break_startup(
 
     monkeypatch.setattr(main, "run_startup_stripe_cancels", explode)
     await _start(app, monkeypatch)  # must not raise
+
+
+# ------------------------------------------------------- reconcile registration
+
+
+def test_reconcile_cron_is_registered_hourly_without_startup_run() -> None:
+    """SOLUSDEV-236: hourly at :05, never at startup (the webhook is the primary writer)."""
+    crons = {job.coroutine.__name__: job for job in _settings().cron_jobs}
+    job = crons["reconcile_stripe_subscriptions"]
+    assert job.minute == {5} and job.second == 0 and job.run_at_startup is False
+    assert job.coroutine is worker.reconcile_stripe_subscriptions
+
+
+async def test_reconcile_wrapper_never_raises() -> None:
+    ctx = {"sessionmaker": _broken, "stripe_gateway": FakeStripeGateway(), "settings": None}
+    assert await worker.reconcile_stripe_subscriptions(ctx) == 0

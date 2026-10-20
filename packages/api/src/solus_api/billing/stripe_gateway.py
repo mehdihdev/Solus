@@ -410,6 +410,31 @@ class StripeGateway:
         )
         return snapshot_from_stripe(sub)
 
+    async def ensure_configured(self) -> None:
+        """Raise `BillingUnconfiguredError` when no Stripe key is provisioned (no network)."""
+        await self._api_key()
+
+    async def retrieve_subscription_raw(self, sub_id: str) -> dict[str, Any]:
+        """Read a subscription as a plain dict (SOLUSDEV-236 reconciliation): the same shape
+        a signed webhook payload carries, so `derive_subscription_state` consumes it as-is."""
+        _check_id(sub_id, _SUB_ID_RE, "subscription id")
+        sub = await self._call("subscription.retrieve", stripe.Subscription.retrieve_async, sub_id)
+        raw = sub.to_dict() if hasattr(sub, "to_dict") else sub
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
+    async def customer_exists(self, customer_id: str) -> bool:
+        """False when Stripe reports the customer missing or deleted (`resource_missing`, or
+        a `deleted` stub); other failures propagate. Lets the reconciler tell a really
+        ended subscription from a key/mode mismatch."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        try:
+            customer = await self._call(
+                "customer.retrieve", stripe.Customer.retrieve_async, customer_id
+            )
+        except StripeResourceMissingError:
+            return False
+        return not _g(customer, "deleted", False)
+
     async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
         """Ids of every NON-terminal subscription of the customer (not canceled /
         incomplete_expired), oldest page first. Used by the account-deletion cancel runner,
