@@ -403,6 +403,13 @@ def plan_ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for script in ("go.sh", "ask.py", "app.js", "x.pl", "x.rb", "x.lua", "x.ts", "x.jl", "x.tcl"):
         (root / script).write_text("\n")
     (root / "sub").mkdir()
+    for package in ("mypkg", "mytool", "nested/inner"):
+        (root / package).mkdir(parents=True)
+        (root / package / "__init__.py").write_text("")
+    (root / "tool.py").write_text("")
+    (root / "notpkg").mkdir()
+    (root / "in").symlink_to("/dev/stdin")
+    (root / "port").symlink_to("/dev/null")
     return root
 
 
@@ -474,9 +481,7 @@ STDIN_MODULES = (
 
 def _guard(root: Path, argv: list[str]) -> str | None:
     """The REPL guard alone, with the workspace's script check."""
-    reason: str | None = repl_guard.repl_reason(
-        argv, script_file=lambda script: command_plan._script_file(root, ".", script)
-    )
+    reason: str | None = command_plan.repl_check(root, ".", argv)
     return reason
 
 
@@ -550,6 +555,30 @@ def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
         ["deno", "run", "/dev/tty"],
         ["deno", "run", "missing.ts"],
         ["deno", "run", "--allow-net", "missing.ts"],
+        ["python3.12", "-m", "http.server"],
+        ["python3.12", "-m", "json.tool"],
+        ["python3.12", "-m", "serial.tools.miniterm"],
+        ["python3.12", "-m", "notpkg"],
+        ["python3.12", "-m", "absent"],
+        ["python3.12", "-m", "../escape"],
+        ["python3.12", "-m", "inner"],
+        ["deno", "task", "build"],
+        ["deno", "test", "x.ts"],
+        ["deno", "eval", "1"],
+        ["deno", "run", "--inspect", "x.ts"],
+        ["deno", "run", "--inspect-brk=127.0.0.1:9229", "x.ts"],
+        ["deno", "run", "--frobnicate", "x.ts"],
+        ["deno", "run", "--config", "/dev/stdin", "x.ts"],
+        ["deno", "run", "file:///etc/x.ts"],
+        ["deno", "run", "x.ts", "file:x"],
+        ["python3.12", "ask.py", "./in"],
+        ["python3.12", "ask.py", "FILE:///tmp/x"],
+        ["python3.12", "ask.py", "--input=./in"],
+        ["python3.12", "ask.py", "./port"],
+        ["python3.12", "ask.py", "/dev/tty"],
+        ["python3.12", "ask.py", "/dev/ttys001"],
+        ["make", "--file=./in"],
+        ["make", "-f", "sub/../in"],
     ],
 )
 def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
@@ -565,14 +594,19 @@ def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
     [
         ["python3.12", "ask.py"],
         ["python3.12", "-u", "ask.py"],
-        ["python3.12", "-m", "serial.tools.miniterm"],
+        ["python3.12", "-m", "mytool.miniterm", "/dev/cu.usbmodem1"],
         ["python3.12", "-um", "tool"],
         ["python3", "-m", "mypkg"],
+        ["python3", "-mmypkg.sub"],
         ["pypy3", "-m", "mypkg"],
+        ["python3.12", "ask.py", "/dev/tty.usbserial-1"],
+        ["python3.12", "ask.py", "--port=/dev/ttyUSB0"],
+        ["make", "flash", "PORT=/dev/ttyACM0"],
+        ["deno", "run", "--allow-net=example.com", "-A", "x.ts", "arg"],
+        ["deno", "-q", "run", "--config", "deno.json", "x.ts"],
         ["perl", "x.pl"],
         ["perl", "-MFoo", "x.pl"],
         ["ruby", "-rfoo", "x.rb"],
-        ["python3.12", "-m", "http.server"],
         ["node", "--watch", "app.js"],
         ["lua", "x.lua"],
         ["deno", "run", "x.ts"],
@@ -821,6 +855,9 @@ async def test_real_stop_and_shutdown_close_the_terminal(wire_ws: Path) -> None:
             os.kill(pid, 0)
 
 
+ANY_SCRIPT = repl_guard.Workspace(script_file=lambda _script: True)
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -836,12 +873,12 @@ async def test_real_stop_and_shutdown_close_the_terminal(wire_ws: Path) -> None:
     ],
 )
 def test_repl_guard_refuses_shell_options_and_bare_deno(argv: list[str]) -> None:
-    assert repl_guard.repl_reason(argv, script_file=lambda _script: True) == REPL_REASON
+    assert repl_guard.repl_reason(argv, workspace=ANY_SCRIPT) == REPL_REASON
 
 
 @pytest.mark.parametrize("argv", [["bash", "go.sh", "-i"], ["deno", "run", "x.ts"], ["make"]])
 def test_repl_guard_allows_scripts(argv: list[str]) -> None:
-    assert repl_guard.repl_reason(argv, script_file=lambda _script: True) is None
+    assert repl_guard.repl_reason(argv, workspace=ANY_SCRIPT) is None
 
 
 @pytest.mark.parametrize("argv", [["bash", "go.sh"], ["deno", "run", "x.ts"], ["python3", "a.py"]])

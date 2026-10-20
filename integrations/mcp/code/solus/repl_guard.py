@@ -10,20 +10,26 @@ deny table) and fail-closed:
 - an interpreter must reach a non-option positional (its script) through options
   its table knows; an unknown option, a REPL-forcing flag (python `-i`, node `-i`,
   perl `-d`, lua `-i`, php `-a`), stdin (`-`) or no script at all is refused;
-- only python-family interpreters may run `-m <module>`, and not a REPL/debugger
-  module; other interpreters' module flags (perl -m/-M, ruby -r, node -r) load a
-  library and then read code from the terminal, so they are not a script;
+- only python-family interpreters may run `-m <module>`, and only a module whose
+  top-level package is a workspace package or `.py` file (never stdlib or
+  site-packages; the REPL/debugger module list is an extra refusal); other
+  interpreters' module flags (perl -m/-M, ruby -r, node -r) load a library and then
+  read code from the terminal, so they are not a script;
+- deno only as `deno run [known options] <workspace file> [args]`;
 - a shell must start with its script: any leading `-`/`+` option is refused;
 - the script an interpreter or shell runs (and `deno run`'s module) must be an
   existing regular file inside the workspace (the caller's `script_file` check;
   without one everything is refused);
-- no interactive program may name stdin or a device as an argument (`-`, `/dev/*`,
-  `/proc/*/fd/*`), so code is never read from the terminal through a path.
+- no interactive program may take `-` or a `file:` URL as an argument, nor a path-like
+  argument (or `=value`) whose realpath (against the planned cwd) is under /dev or a
+  /proc/<pid>/fd — except serial ports (`/dev/cu.*`, `/dev/tty.*`, `/dev/ttyUSB*`,
+  `/dev/ttyACM*`) — so code is never read from stdin or the terminal through a path.
 """
 
 import os
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 from . import command_deny as deny
 
@@ -110,8 +116,11 @@ REPL_MODULES: frozenset[str] = frozenset(
         "ipykernel",
     }
 )
-#: Arguments that name stdin or a device (normalised absolute paths).
-STDIN_PATH = re.compile(r"^(/dev/.*|/proc/[^/]+/fd(/.*)?)$")
+#: Paths that are stdin, a terminal or another device (realpaths and normalised spellings).
+DEVICE_PATH = re.compile(r"^(/dev(/.*)?|/proc/[^/]+/fd(/.*)?)$")
+#: Serial ports a robotics program may be handed as a plain argument.
+SERIAL_PORT = re.compile(r"^/dev/(cu\.[^/]+|tty\.[^/]+|ttyUSB[0-9]+|ttyACM[0-9]+)$")
+FILE_URL = re.compile(r"^file:", re.IGNORECASE)
 #: Leading flags that force an interactive interpreter even with a script.
 REPL_FLAGS: dict[str, frozenset[str]] = {
     "node": frozenset({"-i", "--interactive"}),
@@ -124,37 +133,80 @@ REPL_FLAGS: dict[str, frozenset[str]] = {
 REPL_SUBCOMMANDS: dict[str, frozenset[str]] = {
     "node": frozenset({"inspect", "debug"}),
     "bun": frozenset({"repl"}),
-    "deno": frozenset({"repl", "eval"}),
 }
+_DENO_PERMISSIONS = frozenset(
+    {
+        "--allow-net",
+        "--allow-read",
+        "--allow-write",
+        "--allow-env",
+        "--allow-sys",
+        "--allow-run",
+        "--allow-ffi",
+        "--allow-hrtime",
+    }
+)
+#: `deno run` options: flags, flags that also take `=value`, and options taking a value.
+DENO_RUN_FLAGS: frozenset[str] = frozenset(
+    {"-A", "--allow-all", "-q", "--quiet", "--no-check", "--unstable", "--no-prompt"}
+    | {"--cached-only", "--no-remote", "--no-npm", "--watch", "--check", "--reload", "-r"}
+    | _DENO_PERMISSIONS
+)
+DENO_RUN_EQUALS: frozenset[str] = frozenset(
+    {"--no-check", "--watch", "--check", "--reload", "--env-file"} | _DENO_PERMISSIONS
+)
+DENO_RUN_VALUES: frozenset[str] = frozenset(
+    {"--config", "-c", "--import-map", "--lock", "--location", "--seed", "--cert"}
+)
 
 
-#: A scan's verdict: the script to check, True (a python module), or False (refused).
-Scan = str | bool
-#: Whether a script argument is an existing regular file inside the workspace.
+@dataclass(frozen=True)
+class Module:
+    """A python `-m` target."""
+
+    name: str
+
+
+#: A scan's verdict: the script to check, a python module, or True/False (decided).
+Scan = str | Module | bool
+#: Whether a script / a module's top-level name is a workspace file / package.
 ScriptFile = Callable[[str], bool]
 
 
-def stdin_like(arg: str) -> bool:
-    """`-`, or a path (also an option's `=value`) naming stdin, a tty or a device."""
+@dataclass(frozen=True)
+class Workspace:
+    """The caller's workspace checks; the defaults refuse everything (fail closed)."""
+
+    script_file: ScriptFile = lambda _script: False
+    module_file: ScriptFile = lambda _module: False
+    cwd: str = "/"
+
+
+def _device(path: str) -> bool:
+    return DEVICE_PATH.match(path) is not None and SERIAL_PORT.match(path) is None
+
+
+def unsafe_argument(arg: str, cwd: str = "/") -> bool:
+    """`-`, a `file:` URL, or a path-like value naming stdin, a terminal or a device."""
     for value in (arg, arg.partition("=")[2]):
-        if value == "-":
+        if value == "-" or FILE_URL.match(value):
             return True
-        if value.startswith("/") and STDIN_PATH.match(os.path.normpath("/" + value.lstrip("/"))):
+        if "/" not in value:
+            continue
+        spelled = os.path.normpath(os.path.join(cwd, value))
+        if _device(spelled) or _device(os.path.realpath(spelled)):
             return True
     return False
 
 
-def _python_module(module: str) -> bool:
-    return bool(module) and module.split(".", 1)[0] not in REPL_MODULES
-
-
-def _python_cluster(letters: str, following: str | None) -> bool | None:
-    """True/False: the cluster decides (a `-m` module ok or not); None: keep scanning."""
+def _python_cluster(letters: str, following: str | None) -> Scan | None:
+    """A decided verdict for the cluster, or None to keep scanning."""
     for position, char in enumerate(letters):
         if char == "i" or (char not in deny.PYTHON_FLAGS and char not in "mWX"):
             return False
         if char == "m":
-            return _python_module(letters[position + 1 :] or following or "")
+            module = letters[position + 1 :] or following or ""
+            return Module(module) if module else False
     return None
 
 
@@ -219,22 +271,32 @@ def _interpreter(name: str, args: Sequence[str]) -> Scan:
     return False
 
 
+def _deno_run_option(arg: str) -> int | None:
+    """Arguments a known `deno run` option consumes; None refuses."""
+    head, equals, _ = arg.partition("=")
+    if equals:
+        return 1 if head in DENO_RUN_EQUALS or head in DENO_RUN_VALUES else None
+    if arg in DENO_RUN_FLAGS:
+        return 1
+    return 2 if arg in DENO_RUN_VALUES else None
+
+
 def _deno(args: Sequence[str]) -> Scan:
-    """Known global options, a non-REPL subcommand; `deno run` needs its module file."""
-    positionals = [index for index, arg in enumerate(args) if not arg.startswith("-")]
-    if not positionals:
-        return False
-    first = positionals[0]
-    for arg in args[:first]:
-        if arg not in deny.DENO_LEADING and not arg.startswith("--log-level="):
+    """Only `deno [known globals] run [known options] <module> [args]`."""
+    index = 0
+    while index < len(args) and args[index].startswith("-") and args[index] != "-":
+        if args[index] not in deny.DENO_LEADING:
             return False
-    subcommand = args[first]
-    if subcommand in REPL_SUBCOMMANDS["deno"]:
+        index += 1
+    if index >= len(args) or args[index] != "run":
         return False
-    if subcommand != "run":
-        return True
-    module = next((arg for arg in args[first + 1 :] if not arg.startswith("-") or arg == "-"), None)
-    return module if module is not None else False
+    index += 1
+    while index < len(args) and args[index].startswith("-") and args[index] != "-":
+        consumed = _deno_run_option(args[index])
+        if consumed is None:
+            return False
+        index += consumed
+    return args[index] if index < len(args) else False
 
 
 def _shell(args: Sequence[str]) -> Scan:
@@ -251,16 +313,22 @@ def _scan(name: str, args: Sequence[str]) -> Scan:
     return _interpreter(name, args)
 
 
-def _refused_name(path: str, exact: bool, args: Sequence[str], script_file: ScriptFile) -> bool:
+def _accepted(verdict: Scan, workspace: Workspace) -> bool:
+    if isinstance(verdict, bool):
+        return verdict
+    if isinstance(verdict, Module):
+        top = verdict.name.split(".", 1)[0]
+        return top not in REPL_MODULES and workspace.module_file(verdict.name)
+    return workspace.script_file(verdict)
+
+
+def _refused_name(path: str, exact: bool, args: Sequence[str], workspace: Workspace) -> bool:
     name = deny.program_name(path, exact=exact)
     if name in REPL_PROGRAMS or os.path.basename(path).casefold() in REPL_PROGRAMS:
         return True
     if name not in deny.INLINE_CODE and name not in deny.SHELLS:
         return False
-    verdict = _scan(name, args)
-    if isinstance(verdict, bool):
-        return not verdict
-    return stdin_like(verdict) or not script_file(verdict)
+    return not _accepted(_scan(name, args), workspace)
 
 
 def repl_reason(
@@ -268,15 +336,16 @@ def repl_reason(
     *,
     resolved: Sequence[str] = (),
     inside: Callable[[str], bool] = lambda _path: False,
-    script_file: ScriptFile = lambda _script: False,
+    workspace: Workspace | None = None,
 ) -> str | None:
-    """Why `argv` may not run interactively (a REPL, debugger, bare shell, a script that
-    is not a workspace file, or stdin/a device as an argument), or None."""
-    if not argv or any(stdin_like(arg) for arg in argv[1:]):
+    """Why `argv` may not run interactively (a REPL, debugger, bare shell, a script or
+    module outside the workspace, or stdin/a device as an argument), or None."""
+    checks = workspace if workspace is not None else Workspace()
+    if not argv or any(unsafe_argument(arg, checks.cwd) for arg in argv[1:]):
         return REPL_REFUSAL
     exact = deny.workspace_relative(argv[0])
     names = [(argv[0], exact), *((path, exact and inside(path)) for path in resolved)]
     for path, path_exact in names:
-        if _refused_name(path, path_exact, argv[1:], script_file):
+        if _refused_name(path, path_exact, argv[1:], checks):
             return REPL_REFUSAL
     return None

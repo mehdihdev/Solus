@@ -167,6 +167,33 @@ def _command(root: Path, args: Args, action: str, keys: frozenset[str]) -> Plan 
     )
 
 
+def _module_file(root: Path, cwd: str, module: str) -> bool:
+    """§11.1: a python `-m` module's top-level package is a workspace package (a dir
+    with `__init__.py`) or `.py` file, found relative to `cwd` or the workspace root."""
+    top = module.split(".", 1)[0]
+    if not top.isidentifier():
+        return False
+    for base in dict.fromkeys((cwd, ".")):
+        for candidate in (os.path.join(base, top, "__init__.py"), os.path.join(base, f"{top}.py")):
+            if _script_file(root, ".", candidate):
+                return True
+    return False
+
+
+def repl_check(
+    root: Path, cwd: str, argv: Sequence[str], resolved: Sequence[str] = ()
+) -> str | None:
+    """The §11.1 interactive-mode refusal for `argv` run from workspace-relative `cwd`."""
+    workspace = repl_guard.Workspace(
+        script_file=lambda script: _script_file(root, cwd, script),
+        module_file=lambda module: _module_file(root, cwd, module),
+        cwd=os.path.join(root, cwd),
+    )
+    return repl_guard.repl_reason(
+        argv, resolved=resolved, inside=lambda path: _within(root, path), workspace=workspace
+    )
+
+
 def _script_file(root: Path, cwd: str, script: str) -> bool:
     """§10.2: the shell's script (relative to `cwd`) is a regular file in the workspace."""
     resolved = resolve_inside(os.path.normpath(os.path.join(cwd, script)), root)
@@ -364,12 +391,7 @@ def plan_process_start(root: Path, args: Args, _which: Which) -> Plan:
     if interactive and not isinstance(planned, str):
         resolved = (planned.argv[0], os.path.realpath(planned.argv[0]))
         argv = [args["argv"][0], *planned.argv[1:]]
-        repl = repl_guard.repl_reason(
-            argv,
-            resolved=resolved,
-            inside=lambda path: _within(root, path),
-            script_file=lambda script: _script_file(root, planned.cwd, script),
-        )
+        repl = repl_check(root, planned.cwd, argv, resolved)
         if repl is not None:
             return replace(_refuse(action, repl), interactive=True)
     return replace(_finish(action, planned, **fields), interactive=interactive)
