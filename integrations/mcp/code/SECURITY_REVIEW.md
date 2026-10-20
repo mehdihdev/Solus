@@ -594,3 +594,33 @@ unchanged and still required.
   man, vi, vim, nvim, view, ex, ed, emacs, ftp, telnet, ssh, nc, ncat, socat, screen, tmux,
   script, expect (pagers and editors have shell escapes; the rest are remote or terminal
   shells).
+
+### 2026-10-19 addendum (9) — REPL guard: fail-closed structure instead of denylists (append-only)
+
+Supersedes, for interactive mode only, the corresponding points of addenda (7) and (8); those
+entries stand as written for the record.
+
+- [x] python `-m` is allowed only when the module's top-level package is a workspace package
+  (a directory with `__init__.py`) or a workspace `.py` file, looked up relative to the
+  planned cwd and to the workspace root with the §10.2 regular-file-inside-workspace check
+  (`command_plan._module_file`; the top-level name must be an identifier, so no path tricks).
+  No stdlib or site-packages module can run interactively (`-m http.server`, `-m json.tool`,
+  `-m serial.tools.miniterm` are refused). The REPL/debugger module list remains an extra
+  refusal on top.
+- [x] deno runs interactively only as `deno [known global options] run [known run options]
+  <workspace file> [args]`. Run options come from an explicit table: permission flags (bare or
+  `=list`), `-A`, `-q`, `--no-check`, `--check`, `--reload`/`-r`, `--watch`, `--unstable`,
+  `--no-prompt`, `--cached-only`, `--no-remote`, `--no-npm`, `--env-file=…`, and the value
+  options `--config`/`-c`, `--import-map`, `--lock`, `--location`, `--seed`, `--cert`. Every
+  other subcommand (task, test, eval, repl, …) and every unknown option (incl. `--inspect*`)
+  is refused.
+- [x] Path-like arguments: for every interactive program, an argument or `=value` that is
+  `-` or a `file:` URL (any case) is refused outright. One containing `/` is joined to the
+  planned cwd; it is refused when either its normalised spelling or its realpath is under
+  `/dev` or `/proc/<pid|self>/fd`. A workspace symlink to `/dev/stdin` or `/dev/null` is
+  therefore refused. Serial ports are allowed back as plain arguments: `/dev/cu.*`, `/dev/tty.*`
+  (macOS), `/dev/ttyUSB<n>`, `/dev/ttyACM<n>` (Linux). `/dev/tty` and `/dev/ttys*` stay
+  refused. Example now allowed: `python -m mytool.miniterm /dev/cu.usbmodem1` with a workspace
+  `mytool` package.
+- Residual: a bare argument without `/` is not resolved as a path (a program could open a
+  workspace symlink named in it itself); the script/module checks and the card still apply.
