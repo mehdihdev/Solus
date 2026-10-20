@@ -52,6 +52,7 @@ import { HardwareSources, authorizeHardwareScope, readHardwareSource } from './h
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { openCheckoutWindow, isCheckoutWindow } from './checkoutWindow'
 import { isFromWindow } from './senderGate'
+import { openContactSales } from './contactSales'
 import { externalOpenHandler } from './externalUrl'
 import {
   createSolBrowserWindow,
@@ -706,6 +707,14 @@ function registerBillingHandlers(): void {
   // Store to subscribe. Sender-gated like every other privileged channel.
   ipcMain.handle('hosted:open-store', (event, url: string) =>
     isMainRendererSender(event) ? openAppStoreUrl(url) : { ok: false }
+  )
+  // Enterprise "Contact sales" (SOLUSDEV-236): opens a fixed mailto; any
+  // renderer-supplied args are ignored (the handler declares none).
+  ipcMain.handle('billing:contact-sales', (event) =>
+    openContactSales({
+      open: (url) => shell.openExternal(url),
+      isTrustedSender: () => isMainRendererSender(event)
+    })
   )
   // Billing (SOLUSDEV-114): self-contained checkout — same Stripe URL, but in
   // a sandboxed in-app window that closes itself on the return redirect.

@@ -146,7 +146,9 @@ const api = {
     openCheckout: (
       url: string
     ): Promise<{ status: 'success' | 'cancel' | 'return' | 'closed' | 'blocked' | 'busy' }> =>
-      ipcRenderer.invoke('billing:open-checkout', url)
+      ipcRenderer.invoke('billing:open-checkout', url),
+    // Enterprise "Contact sales" (SOLUSDEV-236): main opens a fixed mailto.
+    contactSales: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('billing:contact-sales')
   },
   solChat: {
     // Machine-local SOL chat cache under ~/.solus (ADR-034 Layer 1 —

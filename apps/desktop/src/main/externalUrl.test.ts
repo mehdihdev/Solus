@@ -13,6 +13,7 @@ describe('isSafeExternalUrl', () => {
       'vscode://file/x',
       'smb://share/x',
       'ms-msdt:/id',
+      'mailto:team@solusforge.com',
       'not a url',
       ''
     ])
