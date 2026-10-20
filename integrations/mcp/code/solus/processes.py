@@ -12,11 +12,18 @@ the next server start, entries still alive with the SAME start token are killed
 digest is taken at start and compared whenever the process ends (exit, stop, timeout,
 shutdown); entries and the stop result carry `git_metadata_changed` (§9.3). Time,
 spawning, signals, tokens and the digest are injectable for tests.
+
+Interactive processes (§11.1) run on a Solus-owned pseudo-terminal: one reader
+cleans the master's output into the same ring (`terminal.TerminalText`), the entry
+reports `awaiting_input` after 1.5 s of quiet at a prompt (each new detection bumps
+`prompt_seq`), and `input` writes bounded printable text (+ Enter) to the master.
+The master is closed when the process ends, is stopped, or the server shuts down.
 """
 
 import json
 import logging
 import os
+import select
 import signal
 import tempfile
 import threading
@@ -32,14 +39,17 @@ from typing import IO, Any
 from .git_guard import git_metadata_digest
 from .process_os import (
     Child,
+    PtySpawn,
     Spawn,
     TreeTracker,
     default_killpg,
+    default_pty_spawn,
     default_spawn,
     start_token,
 )
 from .profiles import workspace_key
 from .progress import LineOutput
+from .terminal import QUIET_SECONDS, TerminalText, input_refusal, prompt_tail, write_input
 
 logger = logging.getLogger("solus.code.processes")
 
@@ -53,6 +63,9 @@ POLL_SECONDS = 0.05
 WATCH_SECONDS = 0.5
 MAX_STATE_BYTES = 64 * 1024
 RUNNING = "running"
+#: How often the terminal reader re-checks whether it must stop.
+READ_POLL_SECONDS = 0.1
+READER_JOIN_SECONDS = 1.0
 
 
 def _read_some(handle: IO[bytes]) -> bytes:
@@ -98,8 +111,20 @@ class Entry:
     tree: Any = None
     git_before: str | None = None
     git_metadata_changed: bool = False
+    interactive: bool = False
+    master_fd: int | None = None
+    terminal: TerminalText | None = None
+    recent: deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    last_output: float = 0.0
+    awaiting_input: bool = False
+    prompt_seq: int = 0
+    io_lock: threading.Lock = field(default_factory=threading.Lock)
+    closing: threading.Event = field(default_factory=threading.Event)
 
     def summary(self) -> dict[str, Any]:
+        tail = None
+        if self.terminal is not None:
+            tail = prompt_tail(self.recent, self.terminal.pending_line)
         return {
             "process_id": self.process_id,
             "name": self.name,
@@ -112,7 +137,21 @@ class Entry:
             "ended_at": self.ended_at,
             "sandbox": self.sandbox,
             "git_metadata_changed": self.git_metadata_changed,
+            "interactive": self.interactive,
+            "awaiting_input": self.awaiting_input,
+            "prompt_seq": self.prompt_seq,
+            "prompt_tail": tail,
         }
+
+
+def input_result(process_id: str, sent_chars: int, reason: str | None) -> dict[str, Any]:
+    """The `process_input` result shape."""
+    return {
+        "ok": reason is None,
+        "process_id": process_id,
+        "sent_chars": sent_chars,
+        "reason": reason,
+    }
 
 
 class Registry:
@@ -123,6 +162,7 @@ class Registry:
         root: Path,
         *,
         spawn: Spawn = default_spawn,
+        pty_spawn: PtySpawn = default_pty_spawn,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         killpg: Callable[[int, int], None] = default_killpg,
@@ -135,6 +175,7 @@ class Registry:
         self._git_digest = git_digest
         self._root = root
         self._spawn = spawn
+        self._pty_spawn = pty_spawn
         self._clock = clock
         self._sleep = sleep
         self._killpg = killpg
@@ -207,6 +248,7 @@ class Registry:
         name: str | None,
         max_runtime_seconds: int,
         sandbox: str | None,
+        interactive: bool = False,
     ) -> dict[str, Any]:
         self.sweep()
         with self._lock:
@@ -224,10 +266,15 @@ class Registry:
                 started=now,
                 deadline=now + max_runtime_seconds,
                 git_before=self._git_digest(self._root),
+                interactive=interactive,
+                last_output=now,
             )
             self._entries[entry.process_id] = entry
             try:
-                child = self._spawn(argv, cwd, env)
+                if interactive:
+                    child, entry.master_fd = self._pty_spawn(argv, cwd, env)
+                else:
+                    child = self._spawn(argv, cwd, env)
             except (OSError, ValueError) as exc:
                 entry.state, entry.ended_at, entry.ended = "failed_to_start", _iso(), now
                 return self.start_refusal(f"could not start: {type(exc).__name__}")
@@ -273,18 +320,25 @@ class Registry:
         while len(self._entries) >= MAX_ENTRIES and finished:
             self._entries.pop(finished.pop(0).process_id, None)
 
-    def _attach_output(self, entry: Entry, child: Child) -> None:
-        def append(stream: str, text: str) -> None:
-            with self._lock:
-                entry.seq += 1
-                entry.chunks.append({"seq": entry.seq, "stream": stream, "text": text})
-                entry.size += len(text.encode("utf-8"))
-                while entry.size > RING_BYTES and entry.chunks:
-                    dropped = entry.chunks.popleft()
-                    entry.size -= len(dropped["text"].encode("utf-8"))
-                    entry.dropped_through = dropped["seq"]
+    def _append(self, entry: Entry, stream: str, text: str) -> None:
+        with self._lock:
+            entry.seq += 1
+            entry.chunks.append({"seq": entry.seq, "stream": stream, "text": text})
+            entry.recent.append(text)
+            entry.size += len(text.encode("utf-8"))
+            while entry.size > RING_BYTES and entry.chunks:
+                dropped = entry.chunks.popleft()
+                entry.size -= len(dropped["text"].encode("utf-8"))
+                entry.dropped_through = dropped["seq"]
 
-        entry.output = _RingOutput(append)
+    def _attach_output(self, entry: Entry, child: Child) -> None:
+        if entry.master_fd is not None:
+            entry.terminal = TerminalText(lambda text: self._append(entry, "stdout", text))
+            reader = threading.Thread(target=self._pump_terminal, args=(entry,), daemon=True)
+            reader.start()
+            entry.readers.append(reader)
+            return
+        entry.output = _RingOutput(lambda stream, text: self._append(entry, stream, text))
         for stream, handle in (("stdout", child.stdout), ("stderr", child.stderr)):
             if handle is not None:
                 reader = threading.Thread(
@@ -303,9 +357,53 @@ class Registry:
         except (OSError, ValueError):
             return
 
-    def _finish(self, entry: Entry, state: str) -> None:
+    def _pump_terminal(self, entry: Entry) -> None:
+        """Read the PTY master until EOF/EIO (the last slave closed) or `closing`;
+        then close the master. Output clears `awaiting_input`."""
+        fd, terminal = entry.master_fd, entry.terminal
+        try:
+            while fd is not None and terminal is not None and not entry.closing.is_set():
+                ready, _, _ = select.select([fd], [], [], READ_POLL_SECONDS)
+                if not ready:
+                    continue
+                try:
+                    block = os.read(fd, 8192)
+                except BlockingIOError:
+                    continue
+                if not block:
+                    return
+                with self._lock:
+                    terminal.feed(block)
+                    entry.last_output = self._clock()
+                    entry.awaiting_input = False
+        except (OSError, ValueError):
+            return  # EIO once the terminal's last slave closed
+        finally:
+            self._close_master(entry)
+
+    @staticmethod
+    def _close_master(entry: Entry) -> None:
+        with entry.io_lock:
+            if entry.master_fd is not None:
+                try:
+                    os.close(entry.master_fd)
+                finally:
+                    entry.master_fd = None
+
+    def _join_readers(self, entry: Entry) -> None:
         for reader in entry.readers:
-            reader.join(timeout=1.0)
+            reader.join(timeout=READER_JOIN_SECONDS)
+        if not entry.interactive:
+            return
+        # A descendant may still hold the terminal: stop reading, then close.
+        entry.closing.set()
+        for reader in entry.readers:
+            reader.join(timeout=READER_JOIN_SECONDS)
+        if not any(reader.is_alive() for reader in entry.readers):
+            self._close_master(entry)
+
+    def _finish(self, entry: Entry, state: str) -> None:
+        self._join_readers(entry)
         changed = self._git_digest(self._root) != entry.git_before
         if changed:
             logger.warning("process %s changed .git/hooks or .git/config", entry.process_id)
@@ -313,6 +411,9 @@ class Registry:
             entry.git_metadata_changed = changed
             if entry.output is not None:
                 entry.output.finish()
+            if entry.terminal is not None:
+                entry.terminal.finish()
+            entry.awaiting_input = False
             child = entry.child
             entry.exit_code = child.poll() if child is not None else None
             if entry.state == RUNNING:
@@ -409,6 +510,8 @@ class Registry:
                 self._finish(entry, "exited")
             elif now >= entry.deadline:
                 self._halt([entry], "timed_out")
+            else:
+                self._refresh_prompt(entry, now)
         with self._lock:
             for entry in list(self._entries.values()):
                 expired = entry.ended is not None and now - entry.ended >= RETENTION_SECONDS
@@ -431,6 +534,60 @@ class Registry:
             with self._lock:
                 if not any(e.state == RUNNING for e in self._entries.values()):
                     return
+
+    def _refresh_prompt(self, entry: Entry, now: float) -> None:
+        """§11.1: quiet ≥ 1.5 s at a prompt → awaiting; each new detection bumps the seq."""
+        with self._lock:
+            terminal = entry.terminal
+            waiting = (
+                terminal is not None
+                and entry.state == RUNNING
+                and now - entry.last_output >= QUIET_SECONDS
+                and terminal.prompting()
+            )
+            if waiting and not entry.awaiting_input:
+                entry.prompt_seq += 1
+            entry.awaiting_input = waiting
+
+    # --- input ------------------------------------------------------------------------
+
+    @staticmethod
+    def _input_refusal(entry: Entry | None, text: str, enter: bool) -> str | None:
+        if entry is None:
+            return "unknown process"
+        if entry.state != RUNNING:
+            return "process is not running"
+        if not entry.interactive or entry.terminal is None:
+            return "process is not interactive"
+        refusal = input_refusal(text)
+        if refusal is not None:
+            return refusal
+        return None if text or enter else "nothing to send"
+
+    def input(self, process_id: str, text: str, *, enter: bool = True) -> dict[str, Any]:
+        """Write `text` (+ "\n" when `enter`) to an interactive process's terminal."""
+        self.sweep()
+        with self._lock:
+            entry = self._entries.get(process_id)
+            reason = self._input_refusal(entry, text, enter)
+            if reason is not None or entry is None or entry.terminal is None:
+                return input_result(process_id, 0, reason)
+            # Before writing: the terminal's echo must not read as a new prompt.
+            entry.terminal.mark_answered(len(text))
+            entry.awaiting_input = False
+            entry.last_output = self._clock()
+        data = (text + ("\n" if enter else "")).encode("utf-8")
+        with entry.io_lock:
+            if entry.master_fd is None:
+                return input_result(process_id, 0, "the process's terminal is closed")
+            try:
+                sent = write_input(entry.master_fd, data)
+            except OSError:
+                sent = 0
+        if sent < len(data):
+            partial = len(data[:sent].decode("utf-8", errors="ignore"))
+            return input_result(process_id, partial, "the process did not accept the input")
+        return input_result(process_id, len(text) + int(enter), None)
 
     # --- observation ------------------------------------------------------------------
 

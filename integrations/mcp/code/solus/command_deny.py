@@ -549,6 +549,70 @@ def denied_reason(
     return None
 
 
+REPL_REFUSAL = "interactive mode needs a script or program, not a REPL or bare shell"
+
+
+def _python_runs_something(args: Sequence[str]) -> bool:
+    """python's leading options end at a script (`-` is stdin, a REPL) or `-m mod`."""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            following = args[index + 1] if index + 1 < len(args) else "-"
+            return following != "-"
+        if arg == "-":
+            return False
+        if not arg.startswith("-"):
+            return True
+        if arg.startswith("--"):
+            index += 2 if arg in PYTHON_LONG_VALUE else 1
+            continue
+        letters = arg[1:]
+        if "m" in letters:
+            module = letters.split("m", 1)[1]
+            return bool(module) or index + 1 < len(args)
+        index += 2 if letters[-1:] in PYTHON_VALUE_FLAGS else 1
+    return False
+
+
+def _runs_something(name: str, args: Sequence[str]) -> bool:
+    """A non-option positional (a script, a subcommand) or `-m <module>` is given."""
+    if name == "python":
+        return _python_runs_something(args)
+    options = SAFE_OPTIONS.get(name, Options())
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--":
+            return index + 1 < len(args) and args[index + 1] != "-"
+        if arg == "-":
+            return False
+        if not arg.startswith("-"):
+            return True
+        if arg == "-m" and index + 1 < len(args):
+            return True
+        long_or_short = _long(arg, options) if arg.startswith("--") else _short(arg, options)
+        index += long_or_short or 1
+    return False
+
+
+def repl_reason(
+    argv: Sequence[str],
+    *,
+    resolved: Sequence[str] = (),
+    inside: Callable[[str], bool] = lambda _path: False,
+) -> str | None:
+    """§11.1: interactive mode refuses an interpreter or shell that is given no script
+    or module (a REPL or bare shell). Names are matched like `denied_reason`."""
+    exact = workspace_relative(argv[0]) if argv else False
+    names = [(argv[0], exact), *((path, exact and inside(path)) for path in resolved)]
+    for path, path_exact in names:
+        name = program_name(path, exact=path_exact)
+        if (name in INLINE_CODE or name in SHELLS) and not _runs_something(name, argv[1:]):
+            return REPL_REFUSAL
+    return None
+
+
 def classify_denial(argv: Sequence[str]) -> str | None:
     """The refusal reason for `argv` from argv alone (what the cloud sees), or None.
     Pure; imported by path by the cloud's behavioural parity test."""

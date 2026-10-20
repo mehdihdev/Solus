@@ -25,7 +25,9 @@ import threading
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import FrameType
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
+
+from pydantic import Field
 
 _FORK_DIR = Path(__file__).resolve().parents[1]
 
@@ -58,7 +60,7 @@ try:
     from .plan import DEFAULT_TIMEOUT_SECONDS as _DEFAULT_TIMEOUT
     from .probe import empty_probe, probe_environment
     from .process_os import become_subreaper
-    from .processes import Registry
+    from .processes import Registry, input_result
     from .progress import CANCEL_EVENT, OUTPUT_CALLBACK, AsyncOutput
     from .roster import TOOL_ROSTER
     from .workspace import workspace_root
@@ -98,6 +100,7 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
     )
     from solus.processes import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         Registry,
+        input_result,
     )
     from solus.progress import (
         CANCEL_EVENT,
@@ -247,15 +250,19 @@ def tool_process_start(
     profile: str | None = None,
     name: str | None = None,
     max_runtime_seconds: int = 3600,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """Start a long-running sandboxed process (at most 4) and return immediately.
     It is stopped after max_runtime_seconds and when the server exits; never restarted.
+    interactive attaches a terminal so the program can ask questions or say "Press
+    Enter" (answered with process_input); REPLs and bare shells are refused.
     Confirmation-gated."""
 
     def body() -> dict[str, Any]:
         root = workspace_root()
         args: dict[str, Any] = {"argv": argv, "cwd": cwd, "environment": environment}
         args |= {"profile": profile, "name": name, "max_runtime_seconds": max_runtime_seconds}
+        args |= {"interactive": interactive}
         plan = plan_action(root, "process_start", args, which=pinned_which)
         prepared = prepare(root, plan) if plan.ok else plan.reason or "refused"
         if isinstance(prepared, str):
@@ -270,6 +277,7 @@ def tool_process_start(
                 name=plan.label,
                 max_runtime_seconds=plan.max_runtime_seconds or 3600,
                 sandbox=plan.sandbox,
+                interactive=plan.interactive,
             )
 
     return _guarded("process_start", lambda: Registry.start_refusal("process_start failed"), body)
@@ -302,6 +310,25 @@ def tool_process_status(process_id: str | None = None, cursor: int = 0) -> dict[
         "process_status",
         lambda: {"processes": [], "output": None},
         lambda: _registry().status(process_id=key, cursor=cursor),
+    )
+
+
+MAX_INPUT_CHARS = 1024
+
+
+def tool_process_input(
+    process_id: str,
+    text: Annotated[str, Field(max_length=MAX_INPUT_CHARS)],
+    enter: bool = True,
+) -> dict[str, Any]:
+    """Send text to an interactive process that is waiting for input: at most 1024
+    printable characters, no control characters; enter adds a newline. text "" with
+    enter true presses Enter. Confirmation-gated."""
+    key = process_id[:MAX_PROCESS_ID_CHARS]
+    return _guarded(
+        "process_input",
+        lambda: input_result(key, 0, "process_input failed"),
+        lambda: _registry().input(key, text, enter=enter),
     )
 
 
@@ -498,6 +525,7 @@ _TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "process_start": tool_process_start,
     "process_stop": tool_process_stop,
     "process_status": tool_process_status,
+    "process_input": tool_process_input,
     "profile_capture": tool_profile_capture,
     "profile_list": tool_profile_list,
     "profile_delete": tool_profile_delete,

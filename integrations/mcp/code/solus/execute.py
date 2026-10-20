@@ -289,7 +289,9 @@ def child_env(root: Path, plan: Plan) -> dict[str, str]:
     if plan.profile is not None:
         venv_bin = str(venv_bin_dir(root, plan.environment)) if plan.environment else None
         env = profiles.apply(env, plan.profile.variables, venv_bin)
-    return {name: value for name, value in env.items() if name not in profiles.LOADER_NAMES}
+    env = {name: value for name, value in env.items() if name not in profiles.LOADER_NAMES}
+    # §11.1: a plain terminal, so programs emit as few escape sequences as possible.
+    return {**env, "TERM": "dumb"} if plan.interactive else env
 
 
 @dataclass(frozen=True)

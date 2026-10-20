@@ -177,6 +177,10 @@ def test_start_records_the_process_and_its_orphan_token(ws: Path, home: Path, wo
         "ended_at": None,
         "sandbox": "sandbox-exec",
         "git_metadata_changed": False,
+        "interactive": False,
+        "awaiting_input": False,
+        "prompt_seq": 0,
+        "prompt_tail": None,
     }
     assert "output" not in registry.status()
 

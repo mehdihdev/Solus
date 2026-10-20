@@ -4,6 +4,7 @@
 import ctypes
 import logging
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -31,6 +32,10 @@ class Child(Protocol):
 
 
 Spawn = Callable[[list[str], Path, dict[str, str]], Child]
+#: An interactive spawn answers the child and the (non-blocking) PTY master it owns.
+PtySpawn = Callable[[list[str], Path, dict[str, str]], tuple[Child, int]]
+WINDOW_ROWS = 24
+WINDOW_COLUMNS = 120
 
 
 def default_spawn(argv: list[str], cwd: Path, env: dict[str, str]) -> Child:
@@ -45,6 +50,39 @@ def default_spawn(argv: list[str], cwd: Path, env: dict[str, str]) -> Child:
         close_fds=True,
         pass_fds=PASS_FDS.get(),
     )
+
+
+def default_pty_spawn(argv: list[str], cwd: Path, env: dict[str, str]) -> tuple[Child, int]:
+    """§11.1: the child gets a fresh pseudo-terminal's slave as stdin, stdout and
+    stderr in a new session (24x120 window); the parent keeps only the master, which
+    is non-blocking and never inherited. Nothing leaks when the spawn fails."""
+    # POSIX-only modules, imported here so the server still imports without them.
+    import fcntl
+    import termios
+
+    master, slave = os.openpty()
+    try:
+        fcntl.ioctl(
+            slave, termios.TIOCSWINSZ, struct.pack("HHHH", WINDOW_ROWS, WINDOW_COLUMNS, 0, 0)
+        )
+        os.set_blocking(master, False)
+        child = subprocess.Popen(  # noqa: S603 - planned, sandboxed argv; no shell
+            argv,
+            cwd=cwd,
+            env=env,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            start_new_session=True,
+            close_fds=True,
+            pass_fds=PASS_FDS.get(),
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    return child, master
 
 
 def default_killpg(pgid: int, sig: int) -> None:

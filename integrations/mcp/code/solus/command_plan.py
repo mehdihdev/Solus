@@ -30,7 +30,9 @@ MAX_RUNTIME_SECONDS = 14400
 DEFAULT_RUNTIME_SECONDS = 3600
 MAX_LABEL_CHARS = 64
 EXEC_KEYS = frozenset({"argv", "cwd", "environment", "profile", "timeout_seconds"})
-PROCESS_KEYS = frozenset({"argv", "cwd", "environment", "profile", "name", "max_runtime_seconds"})
+PROCESS_KEYS = frozenset(
+    {"argv", "cwd", "environment", "profile", "name", "max_runtime_seconds", "interactive"}
+)
 CAPTURE_KEYS = frozenset({"name", "setup_file", "extends"})
 _FORBIDDEN = ("\x00", "\n", "\r")
 SCRIPT_REFUSAL = "script must be an existing .sh/.bash file inside the linked folder"
@@ -352,8 +354,20 @@ def plan_process_start(root: Path, args: Args, _which: Which) -> Plan:
     label = _label(args.get("name"))
     if label is False:
         return _refuse(action, "name must be 1 to 64 printable characters")
+    interactive = args.get("interactive")
+    if interactive is None:
+        interactive = False
+    if not isinstance(interactive, bool):
+        return _refuse(action, "interactive must be true or false")
     planned = _command(root, args, action, PROCESS_KEYS)
-    return _finish(action, planned, max_runtime_seconds=runtime, label=label or None)
+    fields: dict[str, Any] = {"max_runtime_seconds": runtime, "label": label or None}
+    if interactive and not isinstance(planned, str):
+        resolved = (planned.argv[0], os.path.realpath(planned.argv[0]))
+        argv = [args["argv"][0], *planned.argv[1:]]
+        repl = command_deny.repl_reason(argv, resolved=resolved, inside=lambda p: _within(root, p))
+        if repl is not None:
+            return replace(_refuse(action, repl), interactive=True)
+    return replace(_finish(action, planned, **fields), interactive=interactive)
 
 
 def plan_profile_capture(root: Path, args: Args, _which: Which) -> Plan:
