@@ -87,3 +87,61 @@
   color: var(--mut);
   font-size: 11px;
 }
+
+/* §11.3 waiting row: an interactive process is asking for input. */
+.process-strip__waiting {
+  display: grid;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.process-strip__badge {
+  justify-self: start;
+  padding: 1px 8px;
+  border: 1px solid var(--acc);
+  border-radius: 999px;
+  color: var(--acc);
+  font-size: 11px;
+}
+
+.process-strip__answer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.process-strip__answer input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur);
+  color: var(--tx);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.process-strip__answer button {
+  padding: 2px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--sur2);
+  color: var(--tx);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.process-strip__answer button:disabled,
+.process-strip__answer input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.process-strip__answer input:focus-visible,
+.process-strip__answer button:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}

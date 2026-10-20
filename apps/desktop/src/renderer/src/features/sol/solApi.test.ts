@@ -407,6 +407,23 @@ describe('SOLUSDEV-317 resume turns', () => {
     expect(body).not.toHaveProperty('resume_confirmation_id')
   })
 
+  it('sends a wake turn as process_prompt alone — no content, mentions or resume (§11.2)', async () => {
+    const fetchImpl = vi.fn(async () => sseResponse(''))
+    await streamSolMessage({
+      ...base,
+      content: '',
+      processPrompt: { processId: 'pr-1', promptSeq: 2 },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    const body = JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string
+    ) as Record<string, unknown>
+    expect(body).toEqual({
+      process_prompt: { process_id: 'pr-1', prompt_seq: 2 },
+      action_mode: 'do'
+    })
+  })
+
   it('keeps the envelope error code of a refused turn', async () => {
     const fetchImpl = vi.fn(
       async () =>

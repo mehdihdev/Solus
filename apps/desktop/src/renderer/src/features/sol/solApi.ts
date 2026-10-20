@@ -152,6 +152,12 @@ export interface StreamSolMessageInput {
    */
   resumeConfirmationId?: string
   /**
+   * SOLUSDEV-317 §11.2: wake SOL because an interactive process it started is
+   * waiting for input. Exclusive with content, screenshot and resume — the body
+   * carries only this and the turn settings.
+   */
+  processPrompt?: { readonly processId: string; readonly promptSeq: number }
+  /**
    * Graph entity ids the user pointed at with `@`. Sent alongside the text
    * rather than encoded in it, so the composer's `trim()` and any later edit to
    * the prose cannot invalidate an offset.
@@ -178,6 +184,7 @@ export interface StreamSolMessageInput {
  *  one body shape whether or not the user picked anything. A resume turn omits
  *  `content` when it is empty. */
 function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
+  if (input.processPrompt) return wakeBody(input, input.processPrompt)
   const resume = input.resumeConfirmationId
   return {
     ...(resume && input.content === '' ? {} : { content: input.content }),
@@ -188,6 +195,19 @@ function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
     ...(input.thinkHarder ? { think_harder: true } : {}),
     ...(input.preferences ? { preferences: input.preferences } : {}),
     ...(input.screenshot ? { screenshot: input.screenshot } : {})
+  }
+}
+
+/** A wake turn's body (§11.2): the prompt reference plus the turn settings. */
+function wakeBody(
+  input: StreamSolMessageInput,
+  prompt: NonNullable<StreamSolMessageInput['processPrompt']>
+): Record<string, unknown> {
+  return {
+    process_prompt: { process_id: prompt.processId, prompt_seq: prompt.promptSeq },
+    action_mode: input.actionMode,
+    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
+    ...(input.preferences ? { preferences: input.preferences } : {})
   }
 }
 

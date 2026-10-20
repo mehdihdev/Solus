@@ -1,4 +1,5 @@
 // SOLUSDEV-317: pure presentation helpers for the Running processes strip.
+import { ApiError } from '../../lib/api/envelope.types'
 import type { CodeProcess } from '../../lib/api/resources.commands'
 
 export const OUTPUT_POLL_MS = 1_000
@@ -6,6 +7,22 @@ export const OUTPUT_POLL_MS = 1_000
 export const MAX_PROCESS_OUTPUT_CHARS = 262_144
 export const MAX_CHUNK_CHARS = 2048
 export const STOP_ERROR = 'That process could not be stopped.'
+export const INPUT_ERROR = 'That input could not be sent.'
+export const NOT_WAITING = 'No longer waiting'
+export const INPUT_OFFLINE = 'This computer’s Solus connection is offline — reconnect to answer.'
+export const INPUT_GONE = 'That process is no longer running.'
+
+/** Why the person's input did not reach the process (§11.2 route errors).
+ *  Server text is never shown; a local validation message is. */
+export function inputErrorText(error: unknown): string {
+  if (!(error instanceof ApiError)) {
+    return error instanceof Error && error.message ? error.message : INPUT_ERROR
+  }
+  if (error.status === 404) return INPUT_GONE
+  if (error.status !== 409) return INPUT_ERROR
+  if (error.code === 'not_waiting') return NOT_WAITING
+  return error.code === 'bridge_offline' ? INPUT_OFFLINE : INPUT_ERROR
+}
 
 export function programName(process: CodeProcess): string {
   return process.name ?? process.argv[0]?.split('/').filter(Boolean).pop() ?? process.process_id
