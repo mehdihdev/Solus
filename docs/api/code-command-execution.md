@@ -526,3 +526,88 @@ judged as running project code:
 
 Live output (§5.4): the server packs complete lines into each progress frame, up to the
 2048-char frame limit, so normal bursts are not dropped. `truncated` means a real cap was hit.
+
+## 11. Interactive processes (ADR-031 amendment 2026-10-19, interactive)
+
+### 11.1 Code server
+
+- **Starting.** `code.process_start` gains `interactive: bool` (default false). When it is true,
+  the child is attached to a Solus-owned pseudo-terminal: `os.openpty()`, with the slave fd as
+  stdin, stdout and stderr, `start_new_session`, and the slave closed in the parent. It runs
+  through the same sandbox wrapper. The master is read by the registry. Non-interactive
+  processes keep stdin closed.
+- **REPLs are refused.** Interactive mode refuses an interpreter (any `INLINE_CODE` name) or a
+  shell that has no script or module argument (no non-option positional and no `-m`). Reason:
+  "interactive mode needs a script or program, not a REPL or bare shell".
+- **Output.** PTY output is decoded as UTF-8 with replacement. ANSI/CSI/OSC escape sequences
+  and C0 controls other than `\n` and `\t` are removed, `\r\n` becomes `\n`, and a lone `\r`
+  ends the line. The result goes into the existing bounded line ring. A trailing partial line (a
+  prompt without a newline) is held as `pending_line`, capped at 512 chars.
+- **`awaiting_input`.** True when the process is interactive and running, there has been no
+  output for at least 1.5 s, and either `pending_line` is non-empty or the last line matches a
+  prompt pattern (case-insensitive): `press (enter|return|any key)`, `\[y/n\]`, `\(y/n\)`,
+  `continue\?`, or a line ending in `:`, `?` or `>` after trimming. Each newly detected prompt
+  increments `prompt_seq`. Any output, or any input sent, clears `awaiting_input`.
+- **`code.process_status` entries** gain `interactive`, `awaiting_input`, `prompt_seq` (int)
+  and `prompt_tail`: the last at most 5 lines plus `pending_line`, at most 1024 chars, control
+  characters removed.
+- **`code.process_input`** (gated). Args: `{process_id, text: str ≤ 1024, enter: bool = true}`.
+  `text` must be printable, with no control characters at all; a newline comes only from
+  `enter`, which writes `\n`. It is refused when the process is unknown, not running, or not
+  interactive. Result: `{ok, process_id, sent_chars, reason}`.
+
+### 11.2 Cloud
+
+- **Card.** `code.process_input` is gated by the allowlist. Its preview reads `code.process_status
+  {process_id}` and shows these rows:
+  - `process` (name or program basename)
+  - `prompt` (the redacted `prompt_tail`)
+  - `input` (the exact text, or `⏎ Enter` when `text` is empty)
+  - `plan fingerprint` over `{process_id, prompt_seq, text, enter}`
+
+  The call is refused, not parked, when redaction would change the `input` row, or when the
+  process is not awaiting input.
+- **Enter-only exception** (code-owned, Build mode, not force_confirmation). `{text: "",
+  enter: true}` runs without a card when the process is interactive and `awaiting_input` is true.
+  It follows the same two-preview, single-use routine path as auto-run. Guide mode refuses.
+- **User input route.** `POST /api/v1/projects/{project_id}/code/processes/{process_id}/input?machine_id=…`
+  with body `{text, enter}` (same bounds) dispatches `code.process_input` over the caller's own
+  bridge session. It is a direct user action with no card. Rate limited to 60/min per user and
+  project. Errors are `404` (unknown process), `409 bridge_offline`, `409 not_waiting`, `422`.
+- **Wake turn.** `MessageCreate` gains `process_prompt: {process_id, prompt_seq}`. It is mutually
+  exclusive with `content`, `screenshot` and `resume_confirmation_id` (422 otherwise). It is
+  accepted only when all of these hold:
+  - a TOOL turn in this conversation recorded a successful `code.process_start` with that
+    `process_id`;
+  - a live `code.process_status` over the caller's own bridge shows `awaiting_input` with the
+    same `prompt_seq`;
+  - this `(process_id, prompt_seq)` has not woken a turn before (`409 already_woken`).
+
+  It counts toward the 6-in-a-row continuation cap (`409 resume_limit`) and passes the same
+  budget and frequency gates. Before the turn runs, the server persists a TOOL turn
+  `code.process_status → waiting for input` whose result value carries `{process_id,
+  prompt_seq, prompt_tail}`, so the tail reaches the model only as fenced history data. The
+  Solus-authored instruction names the process and program, and tells SOL three things:
+  - say what the program is asking;
+  - when it only needs Enter and nothing physical from the person, it may send Enter with
+    `code.process_input`;
+  - otherwise ask the person, and wait.
+- **Events.** `code.process.input {via: "ui"|"sol", auto: bool, chars: int}`, and
+  `sol.turn_woken {process_prompt: true, chain}`. No input text and no output appear in events.
+- **Prompt guidance.** Use `process_start` with `interactive: true` for programs that ask
+  questions or say "Press Enter". Relay what they ask in plain words. Never invent an answer the
+  person has to give.
+
+### 11.3 Desktop
+
+- **Waiting row.** The processes strip marks a waiting process with a "Waiting for input" badge,
+  its `prompt_tail` in a CodeBlock (Copy button included), a text input, a **Send** button
+  (sends text plus Enter), and an **Enter** button (bare Enter). These call the user input
+  route. Busy and error states are shown, and the input is cleared on success.
+- **Wake.** When polling sees a new `prompt_seq` for an interactive process that this
+  conversation started (the desktop records `process_id → conversation` from the
+  `code.process_start` outcome), the client starts a wake turn with
+  `process_prompt` and no user bubble. `409 already_woken` is ignored. `409 resume_limit` shows
+  "SOL paused — reply to continue". It wakes at most once per `(process_id, prompt_seq)`.
+- **Card.** A `code.process_input` card is a command card. It shows the prompt and input rows,
+  and Cmd/Ctrl+Enter approves it under the same arming rules as other command cards.

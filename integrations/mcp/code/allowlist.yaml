@@ -109,3 +109,8 @@ tools:
     requires_confirmation: true
     timeout_seconds: 15
     reason: deletes a stored environment profile from ~/.solus
+  # SOLUSDEV-317 interactive processes (ADR-031 amendment 2026-10-19; entry human-approved in-chat 2026-10-19).
+  - name: process_input
+    requires_confirmation: true
+    timeout_seconds: 15
+    reason: sends bounded text or Enter to an interactive process SOL started on this machine
