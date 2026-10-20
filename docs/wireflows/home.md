@@ -107,10 +107,11 @@ Home is a full-height sidebar beside one pane; each scrolls on its own.
       server-filtered `?project_id=`, its own `meta.total`, Load more).
     - No current project → "Select a project on the left to see its folder,
       sources and .solus."
-  - **Team & invites**, top to bottom: MEMBERS (`LiveMembers`, roster and
-    invites, with each teammate's GitHub link), GITHUB ORGANIZATION (the card;
-    collaborative teams only), GITHUB ORG MEMBERS (inline; owner/admin with a
-    live Organization link only — SOLUSDEV-317), and TEAM ACTIVITY.
+  - **Team & invites** (`TeamInvitesView`, SOLUSDEV-317 design A, "one
+    roster"): a header (team, counts, search, Invite teammate), the GitHub
+    organization as a one-row strip (collaborative teams only) — or, on a solo
+    team, two setup steps — then ONE People table (teammates, pending invites,
+    org members not on the team) beside the TEAM ACTIVITY rail.
   - **Connected accounts**: `ConnectedAccountsCard`, unchanged. Opened from a
     project's **Add additional sources**, it carries **← Back to <project>**
     above the card, returning to that project's pane; opened from the sidebar
@@ -325,24 +326,34 @@ invites** view (SOLUSDEV-317 layout: sidebar + one pane; the old two-column
 grid is gone):
 
 ```
-| SIDEBAR                       | PANE — Team & invites                                       |
-| Welcome back, Maya            | ┌ MEMBERS · 3 · 1 PENDING                       [+ Invite] ┐ |
-| Strider · 3 members [▾] ⋯     | │ Maya K  maya@…  ◐ @maya-k verified          ● OWNER      │ |
-| 2 of 2 collaborative teams…   | │ Noor A  noor@…  ◐ @noor-a assigned   [member ▾] ✕       │ |
-| ⚠ At your plan's limit…       | │ Sam     sam@…        [Assign GitHub…] [member ▾] ✕       │ |
-|                               | │ new@…   INVITE PENDING · MEMBER                      ✕   │ |
-| PROJECTS                      | └──────────────────────────────────────────────────────────┘ |
-| ▸ arm-firmware   CURRENT      | GITHUB ORGANIZATION                                          |
-| ▸ chassis                     | ┌ [avatar] fsae-ev · Organization · 6 repos ─────────────┐   |
-|                               | │ Linked by Maya K · 3d ago · all repos  [Manage ↗] ⋯    │   |
-| ACCOUNT                       | └────────────────────────────────────────────────────────┘   |
-|  Team & invites  3 · 1        | GITHUB ORG MEMBERS (admin+, Organization link)               |
-|  Connected accounts           | ┌ 12 org members · 4 on team  [search] [All|On team|…]      ┐|
-|                               | │ @noor-a  ASSIGNED  Noor A · Maya · 2d  [Change] [Unassign]│|
-|                               | │ @sam-v   VERIFIED  Sam                                    │|
-|                               | │ @octo    NOT ON SOLUS              [Assign] [Invite]      │|
-|                               | └───────────────────────────────────────────────────────────┘|
-|                               | TEAM ACTIVITY …                                              |
+| SIDEBAR                     | PANE — Team & invites                                                        |
+| Welcome back, Maya          | TEAM & INVITES                                                               |
+| Strider · 3 members [▾] ⋯   | Strider                                     [search people] [+ Invite teammate] |
+| 2 of 2 collaborative teams… | 3 members · 1 pending invite · 4 more people in strider-robotics            |
+|                             | ┌ (gh) strider-robotics · Organization · 14 repos  ● ACTIVE [Manage ↗] ⋯ ┐ |
+| PROJECTS                    | └ Linked by Maya K · 3d ago · all repos ──────────────────────────────────┘ |
+| ▸ arm-firmware   CURRENT    | ┌ PEOPLE · 8      [Everyone|Team|Invites|Not on Solus|No GitHub] ┐ ┌ TEAM   ┐ |
+| ▸ chassis                   | │ PERSON        ROLE       GITHUB                        ACTIONS │ │ ACTIV- │ |
+|                             | │ Maya K        Owner      @maya-k VERIFIED                      │ │ ITY    │ |
+| ACCOUNT                     | │ Noor A        [Admin ▾]  @noor-a ASSIGNED by Maya [Unlink] ✕   │ │ …      │ |
+|  Team & invites  3 · 1      | │ Sam Ortiz     [Member ▾] No GitHub linked [Link GitHub…]   ✕   │ │        │ |
+|  Connected accounts         | │ dev@team.dev  Member (pending)  —                      [Revoke]│ │        │ |
+|                             | │ IN STRIDER-ROBOTICS, NOT ON THIS TEAM · 4                      │ │        │ |
+|                             | │ @jlee-fw      —          NOT ON SOLUS [Link to teammate…][Invite]│ └────────┘ |
+|                             | └ A GitHub link is a label for attribution — never access. [Load more] ┘     |
+```
+
+Solo team (only its owner, no pending invite), the state a new team starts in:
+
+```
+| TEAM & INVITES · Team 2                                                             |
+| Just you so far. Two optional steps make this a working team.                       |
+| ┌ ① Invite a teammate ─────────────────┐ ┌ ② Link a GitHub organization to Team 2 ┐ |
+| │ [teammate@team.dev      ] [Send invite]│ │ …org owner approves… [Link organization]│ |
+| └──────────────────────────────────────┘ └──────────────────────────────────────────┘ |
+| ┌ PEOPLE · 1 ──────────────────────────────────────────┐ ┌ TEAM ACTIVITY ┐          |
+| │ mehdi@mehdi.us   Owner   No GitHub linked             │ │ …             │          |
+| └───────────────────────────────────────────────────────┘ └───────────────┘          |
 ```
 
 - **The team strip** always names the active team (`TeamStrip`): name, "personal
@@ -427,15 +438,7 @@ grid is gone):
 - **Later joiners** get the team's existing projects automatically (the
   ADR-025 auto-grant on accept, `invites.py`); the joined team becomes active
   and its project list shows those projects without any per-project sharing.
-- **GITHUB ORGANIZATION card** (SOLUSDEV-216 / ADR-039). It sits in the pane's Team & invites view under MEMBERS, and appears on COLLABORATIVE teams only. On the personal team it is absent. The card and GITHUB ORG MEMBERS share one `useTeamGithub` (`TeamGithubPanel`), keyed by team.
-
-  ```
-  ┌ GITHUB ORGANIZATION ─────────────────────────────┐
-  │ [avatar] fsae-ev · Organization · 6 repos        │
-  │ Linked by Maya K · 3d ago · all repositories     │
-  │ [Manage on GitHub ↗] ⋯                           │
-  └──────────────────────────────────────────────────┘
-  ```
+- **GitHub organization** (`GitHubOrgCard`, SOLUSDEV-216 / ADR-039). On COLLABORATIVE teams only (absent on the personal team), as a one-row **strip** above the People table: the org avatar, `login · Organization · N repos`, "Linked by … · scope", a ● ACTIVE / ● SUSPENDED badge, **Manage on GitHub ↗** and ⋯. On a solo team with nothing linked it is **setup step 2** instead (`variant="step"`). The strip and the People table share one `useTeamGithub` (`TeamInvitesView`), keyed by team.
 
   - **The link always belongs to the active team** (the one in the sidebar switcher). Admins see "Link a GitHub organization to **<team name>**"; to link another team, switch teams first.
   - **Unlinked, admin+:** "Link your GitHub organization so everyone on the team can add its repos — no personal sign-in" and a **Link organization** button.
@@ -451,25 +454,23 @@ grid is gone):
     - **Manage on GitHub ↗** opens `manage_url`.
     - The **⋯** menu (admin+) holds **Unlink** behind a confirm naming the count of project sources it disconnects. After the unlink, the dialog offers **Uninstall on GitHub ↗**.
   - **Suspended:** a warn row, "Suspended on GitHub — syncs paused until an org owner unsuspends Solus".
-  - The roster is no longer a modal: it is the inline **GITHUB ORG MEMBERS** section below (SOLUSDEV-317). After this admin links an org, focus moves to that section's heading.
+  - The roster is no longer a modal or a section of its own: org members are rows of the People table (SOLUSDEV-317, design A). After this admin links an org, focus moves to the People table's heading.
   - **A member left the org** (`github_org.member_removed_notice`): an in-app notification to admins and an activity row. Solus does not remove anyone.
   - Live: `team.updated` refetches the card.
 
-- **GITHUB ORG MEMBERS** (SOLUSDEV-317, ADR-039 amendment 2026-10-19; `GitHubOrgMembersSection`). Inline under the card, only when the team is collaborative, an org is linked, its `account_type` is `Organization`, its status is `active`, and the viewer is owner/admin. A suspended link hides it (the card's warn row explains). Nobody else ever calls `GET /github/members` (it is admin-only).
-  - **Assignment is a label, not a permission.** It records "GitHub user X is our teammate Y" so the roster and GitHub activity show the right person. It never grants access, never changes a role, and never satisfies invite acceptance. Guide shows a one-paragraph explainer at the top; Expert one line.
-  - **Header:** "N org members · M on this team" (N = `meta.total`, M = loaded rows with an assignment), a login search over the loaded rows, and a `Segmented` filter: **All / On team / Not on Solus / Unassigned teammates**. **Load more** pages by cursor (50 a page).
-  - **Rows** (`ul`/`li`, each named `@login`, staggered in): avatar (https only), `@login` (text), and a chip —
-    - **Verified** (`assignment.source = verified`): the teammate's name; read-only, no control. Guide adds "They linked this GitHub account themselves"; Expert keeps it to the chip tooltip.
-    - **Assigned** (`source = admin`): the teammate's name and "by <admin> · <relative time>". Controls: **Change** (the picker) and **Unassign** (confirmed inline on the row, no modal).
-    - **Invited** / **Not on Solus**: **Assign** (the picker). **Invite** only on Not on Solus; it posts the existing GitHub-id invite and shows the one-time token once in a small modal (`GitHubInviteTokenModal`: Escape and click-out never discard it; Done asks twice while uncopied). The reveal is held outside the section (`githubInviteTokenStore`), so a team switch or a live demotion never loses it. A plan-limit refusal shows **Upgrade** on the row.
-  - **The picker** (`AssignPicker`, one implementation for both sides): a popover listbox with roving focus (arrows / Home / End, Enter picks, Escape returns focus to the trigger), plus a search box past 8 options. On an org row it lists live teammates, leaves out anyone assigned to a different org member, and shows a teammate who verified a different GitHub account disabled with "@login · verified".
-  - **Unassigned teammates** lists Solus members with no GitHub link, each with **Pick GitHub account** (the same picker, offering loaded org members nobody is linked to), so an admin can work from the teammate side.
-  - **Per row:** a pending spinner, an optimistic update rolled back on error, the error on that row (`role=alert`), and a `role=status` announcement after a mutation. Other rows never block. Refusals: `not_a_team_member` (refetches members), `not_an_org_member` and `github_identity_verified` (refetch the roster), `member_has_verified_github` / `member_already_assigned` (name the other login; the latter offers **Find @login**), `assignment_missing` (refetch silently), `installation_missing` / `installation_suspended` (the card refetches).
-  - **States:** empty org → "GitHub reports no members for this organization"; a failed load → a one-line note with **Retry**.
-  - Live: `team.members_changed` and `team.updated` refetch the loaded rows quietly; `useHomeTeam` refetches `GET /members` on `team.members_changed`.
-- **Members list GitHub link** (SOLUSDEV-317, everyone): each member row shows the GitHub mark (theme-aware) and `@login` from `TeamMemberApi.github`, tagged **verified** or **assigned**. Admins get **Assign GitHub…** on members with no link, only while GITHUB ORG MEMBERS is on screen: it scrolls to that section, switches it to Unassigned teammates and opens that teammate's picker.
+- **People table** (SOLUSDEV-317 design A, ADR-039 amendment 2026-10-19; `RosterTable`). One table — PERSON · ROLE · GITHUB · ACTIONS — in this order: teammates, pending invites, then (only for an owner/admin whose team has an active `Organization` link) a group "IN <ORG>, NOT ON THIS TEAM · n". Nobody else ever calls `GET /github/members` (admin-only). A suspended or User link shows no org rows.
+  - **Header:** "N members · M pending invites · K more people in <org>", a search over names, emails and logins, and **+ Invite teammate** (managers; the email invite dialog). Filters (`Segmented`): **Everyone / Team / Invites / Not on Solus / No GitHub**; "Not on Solus" only with org rows.
+  - **Teammate rows:** name (email under it only when there is a name), role (a select for managers, never on the owner), the GITHUB cell, and ✕ remove (managers, confirmed with the person named). GITHUB: `@login` tagged **VERIFIED** (their own account; read-only) or **ASSIGNED** ("by <admin> · <time>"); managers with org rows get **Unlink** on an assigned label (confirmed inline) and **Link GitHub…** on a teammate with none (the picker lists org members nobody is linked to). Everyone sees the links; only managers change them.
+  - **Invite rows:** the email or `@login`, "Invite sent … · expires in Nd", "<role> (pending)", `@login INVITED` for a GitHub invite, **Revoke** (confirmed).
+  - **Org rows:** avatar (https only, else initials), `@login`, NOT ON SOLUS / INVITED, **Link to teammate…** (the picker: live teammates, minus anyone linked to a different org member; a teammate who verified a different account shown disabled with "@login · verified") and **Invite** (not on Solus only; the one-time token shows once in `GitHubInviteTokenModal`, held outside the table so a team switch or a live demotion never loses it; a plan limit shows **Upgrade** on the row). An org member a GitHub invite row already stands for is not listed twice.
+  - **Assignment is a label, not a permission.** It never grants access, never changes a role, and never satisfies invite acceptance; the table's footnote says so (Guide paragraph / Expert line).
+  - **Per row:** a pending spinner, an optimistic update rolled back on error, the error on that row (`role=alert`) and a `role=status` announcement after a change; other rows never block. Refusals: `not_a_team_member` (refetches members), `not_an_org_member` and `github_identity_verified` (refetch the roster), `member_has_verified_github` / `member_already_assigned` (name the other login, **Find @login** fills the search), `assignment_missing` (refetch silently), `installation_missing` / `installation_revoked` / `installation_suspended` (the strip refetches).
+  - **The picker** (`AssignPicker`): a listbox popover portalled to `document.body` (rows animate in and are their own stacking contexts), flipped above the trigger when there is no room below, closed by Escape, Tab, a click away, a page scroll or a resize; roving focus with arrows / Home / End; a search box past 8 options.
+  - **States:** the org part loading → a spinner row; failed → a note with **Retry**; **Load more** pages the org roster (50 a page); a filter or search with no match → "No organization members match this view."
+  - Live: `team.members_changed` and `team.updated` refetch the loaded org rows quietly; `useHomeTeam` refetches `GET /members` on `team.members_changed`.
+- **Solo team setup** (`TeamSetupSteps`): a collaborative team with only its owner and no pending invite replaces the search and Invite button with "Just you so far. Two optional steps make this a working team." and two cards: **① Invite a teammate** (an inline email form; the token shows once in the shared modal; bad email and plan limit named inline) and **② Link a GitHub organization to <team>** (the GitHub card's step variant, only while nothing is linked and the server supports it — once linked, the strip shows instead).
 
-- **TEAM ACTIVITY** (last in the Team & invites view; `TeamActivityPanel`): the
+- **TEAM ACTIVITY** (the rail beside the People table, stacking under it on a narrow window; `TeamActivityPanel`): the
   humanised team feed, six rows with actor attribution, `View all activity (N)
 →` opening the dialog with `Load more` (`activity-feed.md`). Per-project rows
   stay in the project pane.
