@@ -54,6 +54,8 @@ Checked read-only against the backend worktree's uncommitted routers on 2026-10-
 - `GET /members` items gain `github: null | {github_id, github_login, avatar_url, source}`.
 - Refusals `member_has_verified_github` / `member_already_assigned` carry `details: [{github_id, github_login}]`; the UI names that login.
 
+Backend session's final notes (2026-10-19) add, without changing §3.2: `409 installation_revoked` on PUT (now refreshes the card like `installation_missing`), `429 rate_limited` with `Retry-After: 60`, `details[].github_login` may be null (the UI then falls back to the teammate's own login or omits the Find button), and DELETE works on a suspended link. The card now names a `503 github_app_unconfigured` from `install/start` with the "not set up on this server" copy (82ae6d63).
+
 The hand-written types make `assignment` and `github` optional (`?:`) so older fixtures compile; once `make gen-openapi` runs after the merge, tighten them to required if the generated schema says so.
 
 ## Decisions under delegated judgment

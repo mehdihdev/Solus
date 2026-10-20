@@ -87,7 +87,7 @@ describe('useGithubOrgRoster — assign refusals roll back', () => {
     }
   )
 
-  it.each(['installation_missing', 'installation_suspended'])(
+  it.each(['installation_missing', 'installation_revoked', 'installation_suspended'])(
     'asks the card to refresh on %s',
     async (code) => {
       const d = deps()

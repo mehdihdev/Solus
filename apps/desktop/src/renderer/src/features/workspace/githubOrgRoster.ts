@@ -99,6 +99,7 @@ export function commonRefusal(error: unknown): Refusal {
     case 'installation_suspended':
       return { problem: text('suspended'), stale: 'link' }
     case 'installation_missing':
+    case 'installation_revoked':
       return { problem: text('assign_failed'), stale: 'link' }
     case 'assignment_missing':
       return { problem: null, stale: 'roster' }
