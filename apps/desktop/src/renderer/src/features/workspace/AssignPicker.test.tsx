@@ -1,8 +1,8 @@
 // SOLUSDEV-317: the one picker both sides of the assignment use.
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { AssignPicker } from './AssignPicker'
+import { AssignPicker, popoverPlacement } from './AssignPicker'
 import type { PickerOption } from './githubOrgMembersView'
 
 const opt = (id: string, disabled = false): PickerOption => ({
@@ -129,6 +129,8 @@ describe('AssignPicker — review regressions', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
     await userEvent.tab()
     expect(screen.queryByRole('listbox')).toBeNull()
+    // …onto its trigger, so the next Tab carries on in page order.
+    expect(screen.getByRole('button', { name: 'Assign' })).toHaveFocus()
   })
 
   it('with nothing pickable, Escape still closes and no option claims selection', async () => {
@@ -137,5 +139,59 @@ describe('AssignPicker — review regressions', () => {
     expect(screen.getByRole('option')).toHaveAttribute('aria-selected', 'false')
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('listbox')).toBeNull()
+  })
+})
+
+describe('AssignPicker — portal (rows are stacking contexts)', () => {
+  it('renders the list outside the row, on document.body, at a fixed position', async () => {
+    const { container } = setup([opt('a')])
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    const list = screen.getByRole('listbox')
+    expect(container.contains(list)).toBe(false)
+    const popover = list.parentElement as HTMLElement
+    expect(popover.parentElement).toBe(document.body)
+    expect(popover.style.position).toBe('fixed')
+  })
+
+  it('a click inside the portalled list still picks (click-away ignores it)', async () => {
+    const { onPick } = setup([opt('a')])
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    await userEvent.click(screen.getByRole('option', { name: /Name a/ }))
+    expect(onPick).toHaveBeenCalledWith('a')
+  })
+
+  it('closes when the page scrolls or resizes, but not when its own list scrolls', async () => {
+    setup([opt('a')])
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    act(() => void screen.getByRole('listbox').dispatchEvent(new Event('scroll')))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    act(() => void document.dispatchEvent(new Event('scroll')))
+    expect(screen.queryByRole('listbox')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Assign' }))
+    act(() => void window.dispatchEvent(new Event('resize')))
+    expect(screen.queryByRole('listbox')).toBeNull()
+  })
+})
+
+describe('popoverPlacement', () => {
+  const rect = (top: number, bottom: number, right: number) =>
+    ({ top, bottom, right, left: right - 60 }) as DOMRect
+
+  it('opens below, right-aligned to the trigger', () => {
+    expect(popoverPlacement(rect(100, 124, 900), { width: 1400, height: 900 })).toEqual({
+      left: 640,
+      top: 128
+    })
+  })
+
+  it('flips above when there is no room below', () => {
+    expect(popoverPlacement(rect(800, 824, 900), { width: 1400, height: 900 })).toEqual({
+      left: 640,
+      bottom: 104
+    })
+  })
+
+  it('never runs off the left edge', () => {
+    expect(popoverPlacement(rect(100, 124, 120), { width: 1400, height: 900 }).left).toBe(8)
   })
 })

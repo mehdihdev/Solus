@@ -3,7 +3,11 @@
 // with roving focus: arrows / Home / End move between enabled options, Enter or
 // Space picks, Escape (or a click away) closes and returns focus to the trigger.
 // Past 8 options it gains a search box. Labels are text, never HTML.
-import { useEffect, useId, useRef, useState } from 'react'
+// The popover is portalled to document.body at a fixed position: every roster
+// row animates in (`home-row-in`, a transform), so each row is its own stacking
+// context and an in-row popover would paint under the next row's buttons.
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Button } from '../../components/ui/Button'
 import type { PickerOption } from './githubOrgMembersView'
 
@@ -23,13 +27,16 @@ export interface AssignPickerProps {
   openRequest?: number
 }
 
+const POPOVER_WIDTH = 260
+const POPOVER_MAX_HEIGHT = 280
+const POPOVER_GAP = 4
+const VIEWPORT_MARGIN = 8
+
 const POPOVER: React.CSSProperties = {
-  position: 'absolute',
-  right: 0,
-  top: 'calc(100% + 4px)',
-  zIndex: 30,
-  width: 260,
-  maxHeight: 280,
+  position: 'fixed',
+  zIndex: 80,
+  width: POPOVER_WIDTH,
+  maxHeight: POPOVER_MAX_HEIGHT,
   overflowY: 'auto',
   background: 'var(--sur)',
   border: '1px solid var(--bd)',
@@ -52,6 +59,21 @@ const SEARCH: React.CSSProperties = {
   outline: 'none'
 }
 
+export type PopoverPlacement = { left: number } & ({ top: number } | { bottom: number })
+
+/** Where the fixed popover goes: right-aligned under the trigger, flipped above
+ *  it when the viewport has no room below, never off the left edge. */
+export function popoverPlacement(
+  rect: Pick<DOMRect, 'top' | 'bottom' | 'right'>,
+  viewport: { width: number; height: number }
+): PopoverPlacement {
+  const left = Math.max(VIEWPORT_MARGIN, rect.right - POPOVER_WIDTH)
+  const below = rect.bottom + POPOVER_GAP
+  const fitsBelow = below + POPOVER_MAX_HEIGHT <= viewport.height - VIEWPORT_MARGIN
+  if (fitsBelow || rect.top < viewport.height - rect.bottom) return { left, top: below }
+  return { left, bottom: viewport.height - rect.top + POPOVER_GAP }
+}
+
 const visible = (options: readonly PickerOption[], query: string): PickerOption[] => {
   const q = query.trim().toLowerCase()
   if (!q) return [...options]
@@ -70,11 +92,21 @@ export function AssignPicker(props: AssignPickerProps): React.JSX.Element {
   const { label, disabled = false, openRequest = 0 } = props
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLSpanElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+  const [place, setPlace] = useState<PopoverPlacement | null>(null)
   const listId = useId()
   useEffect(() => {
     if (openRequest) setOpen(true)
   }, [openRequest])
-  useClickAway(rootRef, open, () => setOpen(false))
+  useLayoutEffect(() => {
+    const trigger = rootRef.current?.querySelector('button[aria-haspopup]')
+    if (!open || !trigger) return setPlace(null)
+    const viewport = { width: window.innerWidth, height: window.innerHeight }
+    setPlace(popoverPlacement(trigger.getBoundingClientRect(), viewport))
+  }, [open])
+  useClickAway([rootRef, popRef], open, () => setOpen(false))
+  // A fixed popover would drift from its trigger: close on page scroll / resize.
+  useCloseOnMove(popRef, open, () => setOpen(false))
   const close = (): void => {
     setOpen(false)
     rootRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.focus()
@@ -92,33 +124,59 @@ export function AssignPicker(props: AssignPickerProps): React.JSX.Element {
       >
         {label}
       </Button>
-      {open && (
-        <PickerPopover
-          {...props}
-          listId={listId}
-          onClose={close}
-          onDismiss={() => setOpen(false)}
-        />
-      )}
+      {open &&
+        place &&
+        createPortal(
+          <PickerPopover
+            {...props}
+            listId={listId}
+            popRef={popRef}
+            place={place}
+            onClose={close}
+            onDismiss={() => setOpen(false)}
+          />,
+          document.body
+        )}
     </span>
   )
 }
 
-function useClickAway(
-  ref: React.RefObject<HTMLElement | null>,
-  active: boolean,
-  onAway: () => void
-): void {
-  const latest = useRef(onAway)
-  latest.current = onAway
+type ElementRef = React.RefObject<HTMLElement | null>
+
+const inside = (refs: readonly ElementRef[], target: EventTarget | null): boolean =>
+  target instanceof Node && refs.some((r) => r.current?.contains(target))
+
+/** A press outside the trigger AND the portalled popover closes it. */
+function useClickAway(refs: readonly ElementRef[], active: boolean, onAway: () => void): void {
+  const latest = useRef({ refs, onAway })
+  latest.current = { refs, onAway }
   useEffect(() => {
     if (!active) return
     const onDown = (event: MouseEvent): void => {
-      if (event.target instanceof Node && !ref.current?.contains(event.target)) latest.current()
+      if (!inside(latest.current.refs, event.target)) latest.current.onAway()
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [ref, active])
+  }, [active])
+}
+
+/** Page scroll (not the popover's own list) or a resize closes it. */
+function useCloseOnMove(popRef: ElementRef, active: boolean, onMove: () => void): void {
+  const latest = useRef(onMove)
+  latest.current = onMove
+  useEffect(() => {
+    if (!active) return
+    const onScroll = (event: Event): void => {
+      if (!inside([popRef], event.target)) latest.current()
+    }
+    const onResize = (): void => latest.current()
+    document.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', onResize)
+    }
+  }, [popRef, active])
 }
 
 function PickerPopover({
@@ -127,10 +185,14 @@ function PickerPopover({
   emptyText,
   onPick,
   listId,
+  popRef,
+  place,
   onClose,
   onDismiss
 }: AssignPickerProps & {
   listId: string
+  popRef: React.RefObject<HTMLDivElement | null>
+  place: PopoverPlacement
   onClose: () => void
   /** Tab moved focus away: close without pulling focus back. */
   onDismiss: () => void
@@ -166,8 +228,9 @@ function PickerPopover({
   })
   return (
     <div
+      ref={popRef}
       className="popover-in"
-      style={POPOVER}
+      style={{ ...POPOVER, ...place }}
       onKeyDown={onKeyDown}
       onBlur={(event) => leftPopover(event) && onDismiss()}
     >
@@ -182,21 +245,15 @@ function PickerPopover({
           }}
         />
       )}
-      <ul
-        ref={listRef}
-        id={listId}
-        role="listbox"
-        aria-label={listLabel}
-        tabIndex={-1}
-        style={{ listStyle: 'none', margin: 0, padding: 0 }}
-      >
-        {shown.map((o, i) => (
-          <PickerRow key={o.id} option={o} focusable={i === active} onPick={() => pick(o)} />
-        ))}
-      </ul>
-      {shown.length === 0 && (
-        <div style={{ padding: '8px 10px', fontSize: 11.5, color: 'var(--mut)' }}>{emptyText}</div>
-      )}
+      <PickerList
+        listRef={listRef}
+        listId={listId}
+        listLabel={listLabel}
+        shown={shown}
+        active={active}
+        emptyText={emptyText}
+        onPick={pick}
+      />
     </div>
   )
 }
@@ -210,6 +267,44 @@ function useOpenFocus(focus: () => void): void {
 /** Focus moved to something outside the popover (Tab away). */
 const leftPopover = (event: React.FocusEvent<HTMLElement>): boolean =>
   event.relatedTarget instanceof Node && !event.currentTarget.contains(event.relatedTarget)
+
+function PickerList({
+  listRef,
+  listId,
+  listLabel,
+  shown,
+  active,
+  emptyText,
+  onPick
+}: {
+  listRef: React.RefObject<HTMLUListElement | null>
+  listId: string
+  listLabel: string
+  shown: readonly PickerOption[]
+  active: number
+  emptyText: string
+  onPick: (option: PickerOption) => void
+}): React.JSX.Element {
+  return (
+    <>
+      <ul
+        ref={listRef}
+        id={listId}
+        role="listbox"
+        aria-label={listLabel}
+        tabIndex={-1}
+        style={{ listStyle: 'none', margin: 0, padding: 0 }}
+      >
+        {shown.map((o, i) => (
+          <PickerRow key={o.id} option={o} focusable={i === active} onPick={() => onPick(o)} />
+        ))}
+      </ul>
+      {shown.length === 0 && (
+        <div style={{ padding: '8px 10px', fontSize: 11.5, color: 'var(--mut)' }}>{emptyText}</div>
+      )}
+    </>
+  )
+}
 
 function PickerSearch({
   inputRef,
@@ -248,7 +343,9 @@ interface KeyContext {
 function keyHandler(ctx: KeyContext): (event: React.KeyboardEvent) => void {
   return (event) => {
     const move = keyMove(event.key, ctx.shown, ctx.active)
-    if (event.key === 'Escape') ctx.onClose()
+    // Tab, like Escape, closes back onto the trigger: the portal sits at the end
+    // of <body>, so letting Tab run on would leave the page's focus order.
+    if (event.key === 'Escape' || event.key === 'Tab') ctx.onClose()
     else if (move !== null) ctx.focusOption(move)
     else if ((event.key === 'Enter' || event.key === ' ') && !ctx.isSearch(event.target)) {
       ctx.pick(ctx.shown[ctx.active])
