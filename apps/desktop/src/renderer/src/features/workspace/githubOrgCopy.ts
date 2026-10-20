@@ -263,7 +263,10 @@ const REFUSAL_KEYS: ReadonlySet<string> = new Set([
   'install_state_invalid'
 ])
 
-/** The copy key naming an install refusal, or null for a code with no inline copy. */
+/** The copy key naming an install refusal, or null for a code with no inline copy.
+ *  `install/start` can answer 503 `github_app_unconfigured` even though
+ *  `GET /installation` read fine (an API started before the App keys were set). */
 export function refusalCopyKey(code: GithubOrgErrorCode): GithubCopyKey | null {
+  if (code === 'github_app_unconfigured') return 'unconfigured'
   return REFUSAL_KEYS.has(code) ? (code as GithubCopyKey) : null
 }

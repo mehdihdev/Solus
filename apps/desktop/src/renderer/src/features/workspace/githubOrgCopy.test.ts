@@ -79,6 +79,7 @@ describe('githubOrgCopy', () => {
       expect(refusalCopyKey(code)).toBe(code)
     }
     expect(refusalCopyKey('credential_conflict')).toBeNull()
+    expect(refusalCopyKey('github_app_unconfigured')).toBe('unconfigured')
   })
 })
 
