@@ -4,10 +4,23 @@ import { GITHUB_COPY_KEYS, githubText, refusalCopyKey } from './githubOrgCopy'
 
 describe('githubOrgCopy', () => {
   it.each(GITHUB_COPY_KEYS)('%s has non-empty Guide and Expert variants', (key) => {
-    const guide = githubText(key, 'Guide', { n: 2 })
-    const expert = githubText(key, 'Expert', { n: 2 })
+    const vars = {
+      n: 2,
+      m: 1,
+      team: 'T',
+      login: 'l',
+      name: 'N',
+      other: 'o',
+      by: 'B',
+      when: 'w',
+      scope: 's'
+    }
+    const guide = githubText(key, 'Guide', vars)
+    const expert = githubText(key, 'Expert', vars)
     expect(guide.length).toBeGreaterThan(0)
     expect(expert.length).toBeGreaterThan(0)
+    expect(guide).not.toMatch(/\{\w+\}/)
+    expect(expert).not.toMatch(/\{\w+\}/)
   })
 
   it('Guide explains more than Expert for the unlinked admin state', () => {
@@ -66,5 +79,20 @@ describe('githubOrgCopy', () => {
       expect(refusalCopyKey(code)).toBe(code)
     }
     expect(refusalCopyKey('credential_conflict')).toBeNull()
+  })
+})
+
+describe('githubOrgCopy — member assignment', () => {
+  it('names the other login on the assignment refusals', () => {
+    const vars = { name: 'Noor', other: 'noor-a' }
+    expect(githubText('member_has_verified_github', 'Expert', vars)).toBe(
+      'Noor already linked @noor-a.'
+    )
+    expect(githubText('member_already_assigned', 'Guide', vars)).toContain('@noor-a')
+  })
+
+  it('says an assignment grants no access, in both modes', () => {
+    expect(githubText('assign_intro', 'Guide')).toMatch(/never gives anyone Solus access/)
+    expect(githubText('assign_intro', 'Expert')).toMatch(/no access/)
   })
 })

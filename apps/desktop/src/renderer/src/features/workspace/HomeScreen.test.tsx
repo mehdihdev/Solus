@@ -14,6 +14,7 @@ import * as homeTeam from './useHomeTeam'
 import * as projectRepos from './useProjectRepos'
 import * as projectSources from '../project/useProjectSources'
 import { useShellStore } from './shellStore'
+import { useGithubAssignFocusStore } from './githubAssignFocusStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { ActivityApi, Project, TeamSummary } from '../../lib/api/resources'
 
@@ -62,16 +63,32 @@ vi.mock('./ConnectedAccountsCard', () => ({
   )
 }))
 
-// The GitHub organization card is its own feature (SOLUSDEV-216); Home only hosts it.
-vi.mock('./GitHubOrgCard', () => ({
-  GitHubOrgCard: (props: { teamId: string; canManage: boolean }) => (
-    <div
-      data-testid="github-org-card"
-      data-team={props.teamId}
-      data-manage={String(props.canManage)}
-    />
-  )
-}))
+// The GitHub card + org members section are their own feature (SOLUSDEV-216 /
+// SOLUSDEV-317); Home only hosts them. `orgSection.shown` stands in for "an
+// owner/admin with a live Organization link".
+const orgSection = vi.hoisted(() => ({ shown: false }))
+vi.mock('./TeamGithubPanel', async () => {
+  const { useEffect } = await import('react')
+  return {
+    TeamGithubPanel: (props: {
+      teamId: string
+      teamName: string
+      canManage: boolean
+      onSectionChange?: (shown: boolean) => void
+    }) => {
+      const { onSectionChange } = props
+      useEffect(() => onSectionChange?.(orgSection.shown), [onSectionChange])
+      return (
+        <div
+          data-testid="github-org-card"
+          data-team={props.teamId}
+          data-team-name={props.teamName}
+          data-manage={String(props.canManage)}
+        />
+      )
+    }
+  }
+})
 
 const READY_ME = { status: 'ready' as const, me: null, name: 'Maya', email: 'maya@example.dev' }
 
@@ -286,6 +303,36 @@ describe('HomeScreen — GitHub organization card', () => {
     mockTeam({ status: 'loading' })
     render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
     expect(screen.queryByTestId('github-org-card')).toBeNull()
+  })
+
+  it('orders Team & invites: members, GitHub, team activity', async () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    await showMembers()
+    const text = pane().textContent ?? ''
+    const card = screen.getByTestId('github-org-card')
+    expect(card).toHaveAttribute('data-team-name', 'Strider')
+    expect(text.indexOf('MEMBERS ·')).toBeLessThan(text.indexOf('TEAM ACTIVITY'))
+    const position = card.compareDocumentPosition(screen.getByText('TEAM ACTIVITY'))
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('offers "Assign GitHub…" only while the org members section is shown', async () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    await showMembers()
+    expect(screen.queryByRole('button', { name: /^assign github/i })).toBeNull()
+  })
+
+  it('"Assign GitHub…" asks the section to work from that teammate', async () => {
+    orgSection.shown = true
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} onNavigate={vi.fn()} />)
+    await showMembers()
+    const buttons = await screen.findAllByRole('button', { name: /^assign github/i })
+    await userEvent.click(buttons[0])
+    expect(useGithubAssignFocusStore.getState().request).toMatchObject({ teamId: 't1' })
+    orgSection.shown = false
   })
 })
 

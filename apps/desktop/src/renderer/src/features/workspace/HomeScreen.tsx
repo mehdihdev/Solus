@@ -8,7 +8,7 @@
 // unreachable API) shows an honest sign-in state — never a demo project
 // (SOLUSDEV-152); a team that is gone says so — never "restart the backend".
 import './home.css'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -25,7 +25,9 @@ import { useOfflineReason } from './workspaceOnline'
 import { useShellStore, type MainScreen } from './shellStore'
 import { NameModal } from './modals'
 import { ConnectedAccountsCard } from './ConnectedAccountsCard'
-import { GitHubOrgCard } from './GitHubOrgCard'
+import { TeamGithubPanel } from './TeamGithubPanel'
+import { useGithubAssignFocusStore } from './githubAssignFocusStore'
+import { GitHubInviteTokenHost } from './githubInviteTokenStore'
 import { HomeAccountNav, type AccountsPosition, type HomePaneView } from './HomeAccountNav'
 import { useAccountConnections } from './useAccountConnections'
 import { linkedRepos, useProjectRepos, type ReposByProject } from './useProjectRepos'
@@ -321,6 +323,12 @@ function ProjectView({
 
 function MembersView({ home, team, onNavigate, openModal }: LiveProps): React.JSX.Element {
   const canManage = team.myRole !== null && MANAGER_ROLES.includes(team.myRole)
+  // SOLUSDEV-317: "Assign GitHub…" on a member row exists only while GITHUB ORG
+  // MEMBERS is on screen; it hands that teammate to the section's picker.
+  const [orgMembersShown, setOrgMembersShown] = useState(false)
+  const onSectionChange = useCallback((shown: boolean) => setOrgMembersShown(shown), [])
+  const requestAssign = useGithubAssignFocusStore((s) => s.requestAssign)
+  const teamId = home.team?.team_id ?? null
   if (home.team === null || team.status !== 'ready')
     return (
       <Card pad={20}>
@@ -338,8 +346,17 @@ function MembersView({ home, team, onNavigate, openModal }: LiveProps): React.JS
         onRemove={team.actions.remove}
         onRevoke={team.actions.revoke}
         onInvite={() => openModal('invite')}
+        onAssignGithub={
+          orgMembersShown && teamId ? (m) => requestAssign(teamId, m.user_id) : undefined
+        }
       />
-      <GitHubSlot home={home} team={team} canManage={canManage} onNavigate={onNavigate} />
+      <GitHubSlot
+        home={home}
+        team={team}
+        canManage={canManage}
+        onNavigate={onNavigate}
+        onSectionChange={onSectionChange}
+      />
       <TeamActivityPanel
         activity={team.activity}
         members={team.members}
@@ -351,23 +368,29 @@ function MembersView({ home, team, onNavigate, openModal }: LiveProps): React.JS
   )
 }
 
-/** ADR-039: a GitHub organization belongs to a COLLABORATIVE team only. */
+/** ADR-039: a GitHub organization belongs to a COLLABORATIVE team only. The
+ *  card and (for managers) GITHUB ORG MEMBERS, keyed by team (SOLUSDEV-317). */
 function GitHubSlot({
   home,
   team,
   canManage,
-  onNavigate
+  onNavigate,
+  onSectionChange
 }: Pick<LiveProps, 'home' | 'team' | 'onNavigate'> & {
   canManage: boolean
+  onSectionChange: (shown: boolean) => void
 }): React.JSX.Element | null {
   const active = home.team
   if (!active || active.is_personal || team.status !== 'ready') return null
   return (
-    <GitHubOrgCard
+    <TeamGithubPanel
       key={active.team_id}
       teamId={active.team_id}
+      teamName={active.name}
       canManage={canManage}
+      members={team.members}
       onUpgrade={onNavigate ? () => onNavigate('billing') : undefined}
+      onSectionChange={onSectionChange}
     />
   )
 }
@@ -442,6 +465,8 @@ function LiveHome({
           }}
         />
       )}
+      {/* Outlives the org members section (team switch, demotion): only Done discards it. */}
+      <GitHubInviteTokenHost />
       <HomeTeamModals
         modal={modal}
         teamName={home.team?.name ?? null}

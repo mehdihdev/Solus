@@ -152,6 +152,87 @@ const COPY = {
   install_state_invalid: {
     Guide: 'That install attempt expired or was already used. Start the link again.',
     Expert: 'Install state expired — restart.'
+  },
+  // SOLUSDEV-317: assigning org members to teammates (ADR-039 amendment 2026-10-19).
+  // Placeholders: {team}, {n}, {m}, {login}, {name}, {other}, {by}, {when}.
+  link_target: {
+    Guide: 'Link a GitHub organization to {team}',
+    Expert: 'Link an org to {team}'
+  },
+  assign_intro: {
+    Guide:
+      'Match each GitHub organization member to the teammate they are, so the roster and GitHub activity show the right person. An assignment is only a label: it never gives anyone Solus access or changes a role, and people still join through an invite.',
+    Expert: 'Assignments are labels for attribution — no access, no role change.'
+  },
+  roster_count: {
+    Guide: '{n} organization members · {m} on this team',
+    Expert: '{n} org members · {m} on team'
+  },
+  verified_hint: {
+    Guide: 'They linked this GitHub account themselves, so it cannot be reassigned here.',
+    Expert: 'Self-linked — read-only.'
+  },
+  assigned_by: {
+    Guide: 'assigned by {by} {when}',
+    Expert: 'by {by} · {when}'
+  },
+  assign_done: {
+    Guide: '@{login} is now shown as {name}. Their access did not change.',
+    Expert: '@{login} → {name}'
+  },
+  unassign_done: {
+    Guide: '@{login} is no longer shown as a teammate. Nobody’s access changed.',
+    Expert: '@{login} unassigned.'
+  },
+  unassign_confirm: {
+    Guide: 'Remove the label linking @{login} to {name}? Their Solus access stays the same.',
+    Expert: 'Unassign @{login} from {name}?'
+  },
+  not_a_team_member: {
+    Guide: "That person isn't on this team anymore — the member list has been refreshed.",
+    Expert: 'Not on this team anymore — refreshed.'
+  },
+  assign_not_org_member: {
+    Guide: 'That account has left the GitHub organization — the list has been refreshed.',
+    Expert: 'No longer an org member — refreshed.'
+  },
+  github_identity_verified: {
+    Guide:
+      'A teammate linked @{login} themselves, so it cannot be assigned to anyone else. The list has been refreshed.',
+    Expert: '@{login} is verified to its owner — cannot reassign.'
+  },
+  member_has_verified_github: {
+    Guide:
+      '{name} already linked @{other} themselves, so they cannot be assigned a different GitHub account.',
+    Expert: '{name} already linked @{other}.'
+  },
+  member_already_assigned: {
+    Guide: '{name} is already assigned to @{other}. Unassign them there first, then try again.',
+    Expert: '{name} is already @{other} — unassign there first.'
+  },
+  assign_failed: {
+    Guide: "Couldn't save that assignment. Check your connection and try again.",
+    Expert: 'Assignment failed. Retry.'
+  },
+  filter_empty: {
+    Guide: 'No organization members match this view.',
+    Expert: 'No matches.'
+  },
+  teammates_all_linked: {
+    Guide: 'Every teammate already has a GitHub account linked.',
+    Expert: 'All teammates linked.'
+  },
+  no_teammates_left: {
+    Guide: 'Every teammate is already linked to a GitHub account.',
+    Expert: 'No unlinked teammates.'
+  },
+  no_org_members_left: {
+    Guide: 'Every organization member you have loaded is already linked to someone.',
+    Expert: 'No unlinked org members loaded.'
+  },
+  teammate_pick_hint: {
+    Guide: 'Pick the GitHub account that belongs to {name}.',
+    Expert: 'GitHub account for {name}:'
   }
 } satisfies Record<string, Variants>
 

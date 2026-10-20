@@ -11,6 +11,7 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
+import { integrationLogo, logoClass } from '../onboarding/integrationLogos'
 import { ConfirmModal, ModalShell } from '../workspace/modals'
 import { PlanLimitNotice } from '../workspace/PlanLimitNotice'
 import type { InviteOutcome, MemberOutcome } from '../workspace/useHomeTeam'
@@ -61,16 +62,48 @@ const iconButtonStyle: React.CSSProperties = {
   padding: 4
 }
 
+/** SOLUSDEV-317: the GitHub account a teammate is linked to — a display label
+ *  (ADR-039 amendment), never access. The login is text, never HTML. */
+function MemberGithub({ member }: { member: TeamMemberApi }): React.JSX.Element | null {
+  const link = member.github
+  if (!link) return null
+  const logo = integrationLogo('github')
+  return (
+    <span
+      data-testid={`member-github-${link.github_login}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 3 }}
+    >
+      {logo && (
+        <img
+          src={logo}
+          alt=""
+          className={logoClass('github')}
+          style={{ width: 11, height: 11, objectFit: 'contain' }}
+        />
+      )}
+      <span style={{ fontSize: 10.5, color: 'var(--tx)', wordBreak: 'break-all' }}>
+        @{link.github_login}
+      </span>
+      <Mono size={8.5} color={link.source === 'verified' ? 'var(--ok)' : 'var(--mut)'}>
+        {link.source === 'verified' ? 'verified' : 'assigned'}
+      </Mono>
+    </span>
+  )
+}
+
 function MemberRow({
   member,
   canManage,
   onChangeRole,
-  onRemove
+  onRemove,
+  onAssignGithub
 }: {
   member: TeamMemberApi
   canManage: boolean
   onChangeRole: (userId: string, role: TeamRole) => void
   onRemove: (member: TeamMemberApi) => void
+  /** Admin-only, unlinked members only (SOLUSDEV-317). */
+  onAssignGithub?: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -86,7 +119,18 @@ function MemberRow({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{member.name ?? member.email}</div>
         <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{member.email}</div>
+        <MemberGithub member={member} />
       </div>
+      {onAssignGithub && (
+        <Button
+          kind="bare"
+          size="sm"
+          aria-label={`Assign GitHub to ${member.email}`}
+          onClick={onAssignGithub}
+        >
+          Assign GitHub…
+        </Button>
+      )}
       {canManage ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <select
@@ -183,6 +227,9 @@ export interface LiveMembersProps {
   onRevoke: RevokeInviteFn
   /** Header action (Home's Invite teammate lives here for managers). */
   onInvite?: () => void
+  /** SOLUSDEV-317: set only while GITHUB ORG MEMBERS is on screen. Offered to
+   *  managers on members with no GitHub link; it opens that section's picker. */
+  onAssignGithub?: (member: TeamMemberApi) => void
 }
 
 /** The MEMBERS card: roster + pending invites. Removing a member and revoking
@@ -196,7 +243,8 @@ export function LiveMembers({
   onChangeRole,
   onRemove,
   onRevoke,
-  onInvite
+  onInvite,
+  onAssignGithub
 }: LiveMembersProps): React.JSX.Element {
   const [confirm, setConfirm] = useState<PendingConfirm>(null)
   const [error, setError] = useState<string | null>(null)
@@ -230,6 +278,9 @@ export function LiveMembers({
           canManage={canManage && m.role !== 'owner'}
           onChangeRole={changeRole}
           onRemove={(member) => setConfirm({ kind: 'remove', member })}
+          onAssignGithub={
+            canManage && onAssignGithub && !m.github ? () => onAssignGithub(m) : undefined
+          }
         />
       ))}
       {invites.map((inv) => (

@@ -206,7 +206,12 @@ describe('githubOrgErrorCode', () => {
         'not_an_org_member',
         'github_identity_mismatch',
         'repo_not_in_installation',
-        'credential_conflict'
+        'credential_conflict',
+        'not_a_team_member',
+        'github_identity_verified',
+        'member_has_verified_github',
+        'member_already_assigned',
+        'assignment_missing'
       ].sort()
     )
   })

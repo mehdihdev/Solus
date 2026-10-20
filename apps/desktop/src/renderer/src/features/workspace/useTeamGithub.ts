@@ -1,7 +1,8 @@
 // SOLUSDEV-216 / ADR-039: the active team's GitHub organization on Home —
-// the installation, its repo count, and the link / unlink / roster / invite
-// actions. Modelled on useHomeTeam: keyed on the team id, stale replies are
-// dropped, state is immutable, and `team.updated` (ADR-037) refetches quietly.
+// the installation, its repo count, and the link / unlink / invite actions
+// (SOLUSDEV-317: the roster itself lives in useGithubOrgRoster, admin-only).
+// Modelled on useHomeTeam: keyed on the team id, stale replies are dropped,
+// state is immutable, and `team.updated` (ADR-037) refetches quietly.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { planLimitFromError, type PlanLimitRefusal } from '../../lib/api/planLimit'
 import { createInvite } from '../../lib/api/resources'
@@ -9,7 +10,6 @@ import {
   completeGithubInstall,
   getTeamInstallation,
   githubOrgErrorCode,
-  listTeamGithubMembers,
   listTeamGithubRepos,
   startGithubInstall,
   unlinkTeamInstallation,
@@ -27,9 +27,6 @@ export type TeamGithubStatus = 'idle' | 'loading' | 'ready' | 'offline'
 export type LinkNotice = Exclude<InstallOutcome, { kind: 'linked' }>
 
 export type UnlinkOutcome = { ok: true; disabledSources: number; manageUrl: string } | { ok: false }
-export type RosterOutcome =
-  | { ok: true; items: GithubOrgMember[]; cursor: string | null }
-  | { ok: false }
 export type MemberInviteOutcome =
   | { ok: true; token: string | null }
   | { ok: false; reason: 'not_an_org_member' | 'failed' }
@@ -38,7 +35,6 @@ export type MemberInviteOutcome =
 export interface TeamGithubActions {
   link: () => Promise<void>
   unlink: () => Promise<UnlinkOutcome>
-  loadRoster: (cursor?: string) => Promise<RosterOutcome>
   inviteMember: (member: GithubOrgMember) => Promise<MemberInviteOutcome>
   refresh: () => Promise<void>
 }
@@ -210,15 +206,6 @@ function createActions({
         clearSnapshot()
         void load(true)
         return unlinked
-      } catch {
-        return { ok: false }
-      }
-    },
-    loadRoster: async (cursor) => {
-      if (!teamId) return { ok: false }
-      try {
-        const page = await listTeamGithubMembers(teamId, cursor ? { cursor } : {})
-        return { ok: true, items: page.items, cursor: page.cursor }
       } catch {
         return { ok: false }
       }

@@ -26,11 +26,30 @@ export interface TeamInstallation {
 
 export type SolusMemberStatus = 'member' | 'invited' | 'not_on_solus'
 
+/** SOLUSDEV-317 (ADR-039 amendment 2026-10-19): `verified` = the teammate linked
+ *  this GitHub account themselves (read-only); `admin` = a team admin assigned it.
+ *  Either way it is a display label only — never access, never invite proof. */
+export type GithubIdentitySource = 'verified' | 'admin'
+
+/** Who an org member is on the Solus team (docs/api/github-orgs.md, assignment). */
+export interface GithubAssignment {
+  user_id: string
+  name: string | null
+  email: string
+  source: GithubIdentitySource
+  /** Null when verified. */
+  assigned_by: { user_id: string; name: string | null } | null
+  assigned_at: string | null
+}
+
 export interface GithubOrgMember {
   github_id: number
   github_login: string
-  avatar_url: string
+  avatar_url: string | null
+  /** `member` exactly when `assignment` is set. */
   solus_status: SolusMemberStatus
+  /** Optional so pre-317 fixtures keep compiling; the API always sends it. */
+  assignment?: GithubAssignment | null
 }
 
 export interface GithubInstallStart {
@@ -94,7 +113,13 @@ export const GITHUB_ORG_ERROR_CODES = [
   'not_an_org_member',
   'github_identity_mismatch',
   'repo_not_in_installation',
-  'credential_conflict'
+  'credential_conflict',
+  // SOLUSDEV-317: member assignment.
+  'not_a_team_member',
+  'github_identity_verified',
+  'member_has_verified_github',
+  'member_already_assigned',
+  'assignment_missing'
 ] as const
 
 export type GithubOrgErrorCode = (typeof GITHUB_ORG_ERROR_CODES)[number]
@@ -105,6 +130,18 @@ const KNOWN_CODES: ReadonlySet<string> = new Set(GITHUB_ORG_ERROR_CODES)
 export function githubOrgErrorCode(error: unknown): GithubOrgErrorCode | null {
   if (!(error instanceof ApiError) || !KNOWN_CODES.has(error.code)) return null
   return error.code as GithubOrgErrorCode
+}
+
+/** The `github_login` a refusal's details name (the other assigned / verified
+ *  login), or null. Details are server data: read defensively, as text only. */
+export function githubErrorLogin(error: unknown): string | null {
+  if (!(error instanceof ApiError) || !error.details) return null
+  for (const detail of error.details) {
+    if (typeof detail !== 'object' || detail === null) continue
+    const login = (detail as { github_login?: unknown }).github_login
+    if (typeof login === 'string') return login
+  }
+  return null
 }
 
 const base = (teamId: string): string => `/teams/${encodeURIComponent(teamId)}/github`
@@ -187,4 +224,30 @@ export async function listTeamGithubMembers(
     `${base(teamId)}/members${listQuery(options)}`
   )
   return { items: page.data, total: page.meta.total ?? null, cursor: page.meta.next_cursor ?? null }
+}
+
+const assignmentPath = (teamId: string, githubId: number): string =>
+  `${base(teamId)}/members/${encodeURIComponent(String(githubId))}/assignment`
+
+/** Assign an org member to a live teammate (admin+). Upserts an ADMIN assignment. */
+export async function assignGithubMember(
+  teamId: string,
+  githubId: number,
+  userId: string,
+  client: ApiClient = api
+): Promise<GithubAssignment> {
+  const data = await client.request<{ assignment: GithubAssignment }>(
+    assignmentPath(teamId, githubId),
+    { method: 'PUT', body: { user_id: userId } }
+  )
+  return data.assignment
+}
+
+/** Remove an admin assignment (admin+); 204. `404 assignment_missing` if none. */
+export function unassignGithubMember(
+  teamId: string,
+  githubId: number,
+  client: ApiClient = api
+): Promise<void> {
+  return client.request<void>(assignmentPath(teamId, githubId), { method: 'DELETE' })
 }

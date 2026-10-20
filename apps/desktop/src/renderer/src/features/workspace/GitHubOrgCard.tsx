@@ -5,6 +5,8 @@
 // suspended. Collaborative teams only — Home does not mount it on the personal
 // team. Strings come from githubOrgCopy (Guide/Expert); anything the server or
 // GitHub supplies (logins, URLs) is rendered as text, and URLs only when https.
+// SOLUSDEV-317: the roster moved inline (GitHubOrgMembersSection); the card
+// takes its state from TeamGithubPanel, which shares it with that section.
 import { useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
@@ -16,14 +18,15 @@ import type { TeamInstallation } from '../../lib/api/resources.teamGithub'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 import { safeHttpsUrl } from './githubInstallFlow'
 import { githubText, refusalCopyKey, type GithubCopyKey } from './githubOrgCopy'
-import { GitHubRosterModal } from './GitHubRosterModal'
 import { ModalShell } from './modals'
 import { PlanLimitNotice } from './PlanLimitNotice'
-import { useTeamGithub, type LinkNotice, type TeamGithub } from './useTeamGithub'
+import type { LinkNotice, TeamGithub } from './useTeamGithub'
 
 export interface GitHubOrgCardProps {
-  teamId: string
-  /** Owner or admin: may link, unlink and open the roster. */
+  github: TeamGithub
+  /** The active team — the one a link always belongs to. */
+  teamName: string
+  /** Owner or admin: may link and unlink. */
   canManage: boolean
   onUpgrade?: () => void
 }
@@ -31,11 +34,11 @@ export interface GitHubOrgCardProps {
 const NOTE_STYLE: React.CSSProperties = { fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }
 
 export function GitHubOrgCard({
-  teamId,
+  github,
+  teamName,
   canManage,
   onUpgrade
 }: GitHubOrgCardProps): React.JSX.Element {
-  const github = useTeamGithub(teamId)
   const mode = useSettingsStore((s) => s.solMode)
   // The unlink dialog lives HERE, not in the linked view: a successful unlink
   // refetches the card to "unlinked", which must not tear the dialog down before
@@ -51,6 +54,7 @@ export function GitHubOrgCard({
       <Card pad={16}>
         <CardBody
           github={github}
+          teamName={teamName}
           mode={mode}
           canManage={canManage}
           onUpgrade={onUpgrade}
@@ -64,6 +68,7 @@ export function GitHubOrgCard({
 
 interface BodyProps {
   github: TeamGithub
+  teamName: string
   mode: SolMode
   canManage: boolean
   onUpgrade?: () => void
@@ -72,6 +77,7 @@ interface BodyProps {
 
 function CardBody({
   github,
+  teamName,
   mode,
   canManage,
   onUpgrade,
@@ -88,7 +94,6 @@ function CardBody({
         installation={github.installation}
         mode={mode}
         canManage={canManage}
-        onUpgrade={onUpgrade}
         onUnlink={onUnlink}
       />
     )
@@ -96,6 +101,7 @@ function CardBody({
   return (
     <UnlinkedView
       github={github}
+      teamName={teamName}
       mode={mode}
       canManage={canManage}
       onUpgrade={onUpgrade}
@@ -117,11 +123,18 @@ function OfflineNote({ github, mode }: { github: TeamGithub; mode: SolMode }): R
   )
 }
 
-function UnlinkedView({ github, mode, canManage, onUpgrade }: BodyProps): React.JSX.Element {
+function UnlinkedView({
+  github,
+  teamName,
+  mode,
+  canManage,
+  onUpgrade
+}: BodyProps): React.JSX.Element {
   const { linking, notice } = github
   const requested = notice?.kind === 'requested'
   return (
     <div>
+      {canManage && <LinkTarget teamName={teamName} mode={mode} />}
       <div style={NOTE_STYLE}>
         {linking
           ? githubText('linking', mode)
@@ -142,6 +155,20 @@ function UnlinkedView({ github, mode, canManage, onUpgrade }: BodyProps): React.
         </div>
       )}
       {notice && <NoticeLine notice={notice} mode={mode} onUpgrade={onUpgrade} />}
+    </div>
+  )
+}
+
+/** "Link a GitHub organization to <team>" — the link always belongs to the team
+ *  in the sidebar switcher. The team name is text, never HTML. */
+function LinkTarget({ teamName, mode }: { teamName: string; mode: SolMode }): React.JSX.Element {
+  const slot = '\u0000'
+  const [before, after = ''] = githubText('link_target', mode, { team: slot }).split(slot)
+  return (
+    <div style={{ fontSize: 13, marginBottom: 6 }}>
+      {before}
+      <strong style={{ wordBreak: 'break-all' }}>{teamName}</strong>
+      {after}
     </div>
   )
 }
@@ -248,24 +275,20 @@ function LinkedView({
   installation,
   mode,
   canManage,
-  onUpgrade,
   onUnlink
 }: {
   github: TeamGithub
   installation: TeamInstallation
   mode: SolMode
   canManage: boolean
-  onUpgrade?: () => void
   onUnlink: () => void
 }): React.JSX.Element {
-  const [roster, setRoster] = useState(false)
   const count = repoCountText(github.repoCount)
   const linkedBy = installation.linked_by?.name ?? githubText('former_member', mode)
   const scope = githubText(
     installation.repository_selection === 'all' ? 'scope_all' : 'scope_selected',
     mode
   )
-  const showRoster = canManage && installation.account_type === 'Organization'
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -299,22 +322,9 @@ function LinkedView({
       <div
         style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}
       >
-        {showRoster && (
-          <Button kind="soft" size="sm" onClick={() => setRoster(true)}>
-            Members on GitHub
-          </Button>
-        )}
         <ExternalLink href={safeHttpsUrl(installation.manage_url)} label="Manage on GitHub" />
         {canManage && <OverflowMenu onUnlink={onUnlink} />}
       </div>
-      {roster && (
-        <GitHubRosterModal
-          actions={github.actions}
-          login={installation.account_login}
-          onUpgrade={onUpgrade}
-          onClose={() => setRoster(false)}
-        />
-      )}
     </div>
   )
 }

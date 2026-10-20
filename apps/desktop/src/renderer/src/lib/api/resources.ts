@@ -956,12 +956,22 @@ export interface TeamDetail {
   role: TeamRole
 }
 
+/** The GitHub account a teammate is linked to (SOLUSDEV-317, display only). */
+export interface TeamMemberGithub {
+  github_id: number
+  github_login: string
+  avatar_url: string | null
+  source: 'verified' | 'admin'
+}
+
 export interface TeamMemberApi {
   user_id: string
   email: string
   name: string | null
   role: TeamRole
   joined_at: string
+  /** Optional so pre-317 fixtures keep compiling; the API always sends it. */
+  github?: TeamMemberGithub | null
 }
 
 export type InviteStatus = 'pending' | 'accepted' | 'revoked'

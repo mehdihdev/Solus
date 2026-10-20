@@ -6,17 +6,7 @@ import type { TeamInstallation } from '../../lib/api/resources.teamGithub'
 import { useSettingsStore } from '../../store/settingsStore'
 import { githubText } from './githubOrgCopy'
 import { GitHubOrgCard } from './GitHubOrgCard'
-import * as hook from './useTeamGithub'
-
-vi.mock('./useTeamGithub', () => ({ useTeamGithub: vi.fn() }))
-vi.mock('./GitHubRosterModal', () => ({
-  GitHubRosterModal: ({ onClose, onUpgrade }: { onClose: () => void; onUpgrade?: () => void }) => (
-    <div data-testid="roster-modal">
-      <button onClick={onClose}>close-roster</button>
-      <button onClick={onUpgrade}>roster-upgrade</button>
-    </div>
-  )
-}))
+import type * as hook from './useTeamGithub'
 
 const INSTALLATION: TeamInstallation = {
   id: 'i1',
@@ -47,18 +37,26 @@ function mockGithub(overrides: Partial<hook.TeamGithub> = {}): hook.TeamGithub {
         disabledSources: 3,
         manageUrl: 'https://github.com/organizations/fsae-ev/settings/installations/1'
       })),
-      loadRoster: vi.fn(),
       inviteMember: vi.fn(),
       refresh: vi.fn(async () => undefined)
     },
     ...overrides
   }
-  vi.mocked(hook.useTeamGithub).mockReturnValue(value)
+  current = value
   return value
 }
 
+let current: hook.TeamGithub
+
 const renderCard = (canManage = true, onUpgrade?: () => void): void => {
-  render(<GitHubOrgCard teamId="t1" canManage={canManage} onUpgrade={onUpgrade} />)
+  render(
+    <GitHubOrgCard
+      github={current}
+      teamName="Strider"
+      canManage={canManage}
+      onUpgrade={onUpgrade}
+    />
+  )
 }
 
 beforeEach(() => {
@@ -67,10 +65,17 @@ beforeEach(() => {
 })
 
 describe('GitHubOrgCard', () => {
-  it('requests the hook for the given team', () => {
+  it('names the active team as the link target, as text', () => {
     mockGithub()
-    renderCard()
-    expect(hook.useTeamGithub).toHaveBeenCalledWith('t1')
+    render(<GitHubOrgCard github={current} teamName="<b>Strider</b>" canManage />)
+    expect(screen.getByText('<b>Strider</b>').tagName).toBe('STRONG')
+    expect(screen.getByText(/Link a GitHub organization to/)).toBeInTheDocument()
+  })
+
+  it('only managers see the link target', () => {
+    mockGithub()
+    renderCard(false)
+    expect(screen.queryByText(/Link a GitHub organization to/)).toBeNull()
   })
 
   it('unlinked admin: explains and offers Link organization', async () => {
@@ -163,7 +168,7 @@ describe('GitHubOrgCard', () => {
     mockGithub({
       installation: { ...INSTALLATION, account_login: '<img src=x onerror=alert(1)>' }
     })
-    const { container } = render(<GitHubOrgCard teamId="t1" canManage />)
+    const { container } = render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
     expect(container.querySelector('img[onerror]')).toBeNull()
     expect(screen.getAllByText('<img src=x onerror=alert(1)>').length).toBeGreaterThan(0)
   })
@@ -174,19 +179,8 @@ describe('GitHubOrgCard', () => {
     expect(screen.getByText(/suspended on github/i)).toBeInTheDocument()
   })
 
-  it('members button: admin and Organization only', async () => {
+  it('has no roster button: the org members list is inline on Home now', () => {
     mockGithub({ installation: INSTALLATION })
-    const { unmount } = render(<GitHubOrgCard teamId="t1" canManage />)
-    await userEvent.click(screen.getByRole('button', { name: /members on github/i }))
-    expect(screen.getByTestId('roster-modal')).toBeInTheDocument()
-    unmount()
-
-    renderCard(false)
-    expect(screen.queryByRole('button', { name: /members on github/i })).toBeNull()
-  })
-
-  it('no members button for a User-type installation', () => {
-    mockGithub({ installation: { ...INSTALLATION, account_type: 'User' } })
     renderCard()
     expect(screen.queryByRole('button', { name: /members on github/i })).toBeNull()
   })
@@ -269,15 +263,15 @@ describe('GitHubOrgCard', () => {
 
     it('cancelled, failed and no-desktop notices', () => {
       mockGithub({ notice: { kind: 'cancelled' } })
-      const first = render(<GitHubOrgCard teamId="t1" canManage />)
+      const first = render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
       expect(screen.getByRole('alert')).toHaveTextContent(/cancelled/i)
       first.unmount()
       mockGithub({ notice: { kind: 'failed', reason: 'error', message: null } })
-      const second = render(<GitHubOrgCard teamId="t1" canManage />)
+      const second = render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
       expect(screen.getByRole('alert')).toHaveTextContent(/couldn't finish linking/i)
       second.unmount()
       mockGithub({ notice: { kind: 'failed', reason: 'no_bridge', message: null } })
-      render(<GitHubOrgCard teamId="t1" canManage />)
+      render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
       expect(screen.getByRole('alert')).toHaveTextContent(/desktop app/i)
     })
 
@@ -292,7 +286,7 @@ describe('GitHubOrgCard', () => {
 
   it('shows a spinner while loading', () => {
     mockGithub({ status: 'loading' })
-    render(<GitHubOrgCard teamId="t1" canManage />)
+    render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
     expect(screen.queryByRole('button', { name: /link organization/i })).toBeNull()
   })
 
@@ -301,7 +295,7 @@ describe('GitHubOrgCard', () => {
     async (mode) => {
       useSettingsStore.setState({ solMode: mode })
       const github = mockGithub({ status: 'offline' })
-      render(<GitHubOrgCard teamId="t1" canManage />)
+      render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
       expect(screen.getByRole('status')).toHaveTextContent(githubText('offline_note', mode))
       expect(screen.queryByRole('button', { name: /link organization/i })).toBeNull()
       await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
@@ -309,22 +303,13 @@ describe('GitHubOrgCard', () => {
     }
   )
 
-  it('threads onUpgrade from the card into the roster modal', async () => {
-    mockGithub({ installation: INSTALLATION })
-    const onUpgrade = vi.fn()
-    renderCard(true, onUpgrade)
-    await userEvent.click(screen.getByRole('button', { name: /members on github/i }))
-    await userEvent.click(screen.getByRole('button', { name: 'roster-upgrade' }))
-    expect(onUpgrade).toHaveBeenCalledTimes(1)
-  })
-
   it('the Linked by line follows the SOL mode', () => {
     mockGithub({ installation: INSTALLATION })
-    const { unmount } = render(<GitHubOrgCard teamId="t1" canManage />)
+    const { unmount } = render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
     expect(screen.getByText(/Solus can read all repositories/)).toBeInTheDocument()
     unmount()
     useSettingsStore.setState({ solMode: 'Expert' })
-    render(<GitHubOrgCard teamId="t1" canManage />)
+    render(<GitHubOrgCard github={current} teamName="Strider" canManage />)
     expect(screen.getByText(/^Linked by Maya K · 3d ago · all repos$/)).toBeInTheDocument()
   })
 
@@ -333,7 +318,7 @@ describe('GitHubOrgCard', () => {
       mockGithub({ installation: INSTALLATION })
       render(
         <>
-          <GitHubOrgCard teamId="t1" canManage />
+          <GitHubOrgCard github={current} teamName="Strider" canManage />
           <button>elsewhere</button>
         </>
       )

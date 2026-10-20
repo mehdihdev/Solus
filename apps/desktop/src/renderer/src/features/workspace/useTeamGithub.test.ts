@@ -191,27 +191,11 @@ describe('useTeamGithub', () => {
     expect(result.current.installation).toEqual(INSTALLATION)
   })
 
-  it('loadRoster() passes the cursor and returns the page', async () => {
-    mocked.members.mockResolvedValue({ items: [MEMBER], total: 1, cursor: 'c2' })
+  it('never lists the org roster itself (the admin-only section does)', async () => {
     const { result } = renderHook(() => useTeamGithub('t1'))
     await waitFor(() => expect(result.current.status).toBe('ready'))
-    let page: unknown
-    await act(async () => {
-      page = await result.current.actions.loadRoster('c1')
-    })
-    expect(mocked.members).toHaveBeenCalledWith('t1', { cursor: 'c1' })
-    expect(page).toEqual({ ok: true, items: [MEMBER], cursor: 'c2' })
-  })
-
-  it('loadRoster() reports a failure', async () => {
-    mocked.members.mockRejectedValue(new Error('x'))
-    const { result } = renderHook(() => useTeamGithub('t1'))
-    await waitFor(() => expect(result.current.status).toBe('ready'))
-    let page: unknown
-    await act(async () => {
-      page = await result.current.actions.loadRoster()
-    })
-    expect(page).toEqual({ ok: false })
+    expect(mocked.members).not.toHaveBeenCalled()
+    expect(result.current.actions).not.toHaveProperty('loadRoster')
   })
 
   it('inviteMember() posts the GitHub target as role member and returns the token', async () => {
