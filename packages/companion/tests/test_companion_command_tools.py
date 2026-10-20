@@ -22,6 +22,7 @@ NEVER_REPLAYED = {
     "exec",
     "process_start",
     "process_stop",
+    "process_input",
     "profile_capture",
     "profile_delete",
     "install",
