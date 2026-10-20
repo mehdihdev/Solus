@@ -67,9 +67,20 @@ export function teammateOptions(
       const detail = `@${m.github.github_login} · verified`
       return [{ id: m.user_id, label: teammateName(m), detail, disabled: true }]
     }
-    return [{ id: m.user_id, label: teammateName(m), detail: m.email, disabled: false }]
+    return [{ id: m.user_id, label: teammateName(m), detail: teammateDetail(m), disabled: false }]
   })
 }
+
+const ROLE_LABEL: Record<TeamMemberApi['role'], string> = {
+  owner: 'Owner',
+  admin: 'Admin',
+  member: 'Member',
+  viewer: 'Viewer'
+}
+
+/** The line under a teammate's name: their email — unless the email already IS
+ *  the label (no name), then their role, so nothing shows twice. */
+const teammateDetail = (m: TeamMemberApi): string => (m.name ? m.email : ROLE_LABEL[m.role])
 
 /** "Unassigned teammates": live members with no GitHub link on either side. */
 export function unassignedTeammates(

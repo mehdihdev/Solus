@@ -47,6 +47,13 @@ describe('teammateOptions (picker on an org row)', () => {
     ])
   })
 
+  it('never shows the email twice: a nameless teammate gets their role as the detail', () => {
+    const nameless = { ...ADA, name: null }
+    expect(teammateOptions([nameless], [], FREE)).toEqual([
+      { id: 'u1', label: 'ada@team.dev', detail: 'Owner', disabled: false }
+    ])
+  })
+
   it('keeps the current assignee on the row being changed', () => {
     const ids = teammateOptions(TEAM, ROSTER, ASSIGNED).map((o) => o.id)
     expect(ids).toContain('u2')
