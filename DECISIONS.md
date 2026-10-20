@@ -531,6 +531,20 @@ for `bash` and `sh` running a workspace script file: `bash|sh <workspace-relativ
 [args]`, with no options (-c, -s, -i, --rcfile, etc.) and no stdin, always behind a card with a
 `runs_shell` badge. Inline shell strings remain refused.
 
+**Amendment (2026-10-19, SOLUSDEV-317 interactive processes — approved in-session by Mehdi per
+ADR-032 tier 2):** `code.process_start` may start an interactive process (`interactive: true`)
+attached to a Solus-owned pseudo-terminal inside the same OS sandbox, approved on a card like every
+process start. REPLs and bare shells (an interpreter or shell with no script or module argument)
+are refused in interactive mode. The code server reports `awaiting_input` with a bounded, redacted
+output tail when an interactive process goes quiet at a prompt-like line. Input reaches the process
+only (a) from the person's own input box or Enter button (a direct user action, no card), or (b)
+through `code.process_input`, where a bare Enter needs no card and any other text needs a card that
+shows the prompt tail and the exact text. Input is bounded printable text plus newline; control
+sequences are refused. Terminal output is stripped of control sequences before it leaves the
+machine. When a process starts waiting, SOL may be woken for one turn per new prompt under the
+existing continuation cap and budget gates. This relaxes the 2026-10-19 "no stdin" rule only for
+interactive processes; one-shot `code.exec` and shell scripts keep stdin closed.
+
 ---
 
 ## ADR-032: Agent-editable governance docs (two-tier)
