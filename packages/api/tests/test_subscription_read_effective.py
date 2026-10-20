@@ -1,6 +1,7 @@
 """SubscriptionRead serves EFFECTIVE limits (SOLUSDEV-313, ADR-023 clarification)."""
 
 import uuid
+from datetime import UTC, datetime
 
 from conftest import me
 from httpx import AsyncClient
@@ -66,3 +67,19 @@ async def test_model_validate_keeps_existing_fields_and_does_not_mutate(
     assert read.user_id == sub.user_id
     assert read.stripe_subscription_id is None
     assert read.seat_count == sub.seat_count
+
+
+async def test_read_exposes_billing_interval_and_period_end(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    data = (await client.get("/api/v1/users/me/subscription", headers=alice_headers)).json()["data"]
+    assert data["billing_interval"] is None
+    assert data["current_period_end"] is None
+    sub = await _sub(db, alice["id"])
+    sub.billing_interval = "year"
+    sub.current_period_end = datetime(2030, 1, 2, tzinfo=UTC)
+    await db.commit()
+    data = (await client.get("/api/v1/users/me/subscription", headers=alice_headers)).json()["data"]
+    assert data["billing_interval"] == "year"
+    assert data["current_period_end"].startswith("2030-01-02")

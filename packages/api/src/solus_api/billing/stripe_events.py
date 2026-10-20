@@ -24,8 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits
 from solus_api.billing.plan_grants import LIVE_STATUSES, grant_plan_credits
-from solus_api.billing.plans import plan_for_price_id
 from solus_api.billing.stripe_gateway import ADMIN_ACTION_METADATA_KEY
+from solus_api.billing.stripe_state import (
+    STATUS_MAP,
+    StripeSubscriptionState,
+    as_dict,
+    derive_subscription_state,
+)
 from solus_api.models import (
     CreditTxnType,
     NotificationType,
@@ -49,27 +54,11 @@ _SUBSCRIPTION_EVENTS = frozenset(
     }
 )
 
-# Stripe subscription.status → our SubscriptionStatus. Unknown/unpaid states are
-# treated as past_due (dunning), which the app surfaces as "action needed".
-_STATUS_MAP: dict[str, SubscriptionStatus] = {
-    "active": SubscriptionStatus.ACTIVE,
-    "trialing": SubscriptionStatus.TRIALING,
-    "past_due": SubscriptionStatus.PAST_DUE,
-    "unpaid": SubscriptionStatus.PAST_DUE,
-    "incomplete": SubscriptionStatus.PAST_DUE,
-    "paused": SubscriptionStatus.PAST_DUE,
-    "canceled": SubscriptionStatus.CANCELED,
-    "incomplete_expired": SubscriptionStatus.CANCELED,
-}
-
-
 # Subscription statuses that mean "this subscription is over" — never worth cancelling.
 _TERMINAL_STRIPE_STATUSES = frozenset({"canceled", "incomplete_expired"})
 
 
-def _as_dict(value: object) -> dict[str, Any]:
-    """`value` if it is a dict, else {} — signed payloads are still schema-loose."""
-    return value if isinstance(value, dict) else {}
+_as_dict = as_dict
 
 
 def _as_id(value: object) -> str | None:
@@ -100,15 +89,6 @@ async def _sub_by(
         )
         return by_customer
     return None
-
-
-def _subscription_price_id(obj: dict[str, Any]) -> str | None:
-    """The first line item's Stripe Price id on a subscription object, or None."""
-    items = _as_dict(obj.get("items")).get("data")
-    if not isinstance(items, list) or not items:
-        return None
-    pid = _as_dict(_as_dict(items[0]).get("price")).get("id")
-    return str(pid) if pid else None
 
 
 def _is_admin_originated(obj: dict[str, Any], previous: dict[str, Any]) -> bool:
@@ -225,19 +205,13 @@ async def _apply_subscription(
     if customer:
         local.stripe_customer_id = customer
     old_cancel_at = local.cancel_at
+    state = derive_subscription_state(
+        obj, plan_prices, deleted=etype == "customer.subscription.deleted"
+    )
     if etype == "customer.subscription.deleted":
         local.status = SubscriptionStatus.CANCELED
     else:
-        local.status = _STATUS_MAP.get(str(obj.get("status")), local.status)
-        # Entitlement is derived from what was actually purchased (the Stripe
-        # Price on the subscription) — never from a client-supplied plan name.
-        price_id = _subscription_price_id(obj)
-        if price_id:
-            plan = plan_for_price_id(plan_prices, price_id)
-            if plan is not None:
-                local.plan = plan
-                local.limits = default_limits(plan)
-        local.cancel_at = _cancel_at_dt(obj)
+        _apply_live_state(local, obj, state)
     local.stripe_event_at = created
     if new_link and local.status is not SubscriptionStatus.CANCELED:
         _clear_comp(local)
@@ -255,6 +229,24 @@ async def _apply_subscription(
     await grant_plan_credits(session, local, plan_credit_grants)
 
 
+def _apply_live_state(
+    local: Subscription, obj: dict[str, Any], state: StripeSubscriptionState
+) -> None:
+    """Write a non-deleted event's derived state onto the row. Entitlement comes from what
+    was actually purchased (the Stripe Price), never a client-supplied plan name. Period
+    mirrors are only overwritten by a value Stripe actually sent (`expires_at`)."""
+    if str(obj.get("status")) in STATUS_MAP:  # unknown Stripe status keeps the local one
+        local.status = state.status
+    if state.plan is not None:
+        local.plan = state.plan
+        local.limits = default_limits(state.plan)
+    local.cancel_at = state.cancel_at
+    local.billing_interval = state.interval
+    local.current_period_end = state.current_period_end
+    if state.expires_at is not None:
+        local.expires_at = state.expires_at
+
+
 def _is_new_link(stored_sub_id: str | None, incoming_sub_id: str | None) -> bool:
     """True when an incoming subscription id differs from the one stored (or none is
     stored): a resubscribe after cancellation gets a NEW id, so it counts; replays of
@@ -267,17 +259,6 @@ def _clear_comp(local: Subscription) -> None:
     staff comp (plan/limits come from what was bought). `limits_override` is untouched."""
     local.comp_plan = None
     local.comp_expires_at = None
-
-
-def _cancel_at_dt(obj: dict[str, Any]) -> datetime | None:
-    """The subscription's scheduled cancellation time, parsed defensively."""
-    raw = obj.get("cancel_at")
-    if not raw:
-        return None
-    try:
-        return datetime.fromtimestamp(int(raw), tz=UTC)
-    except (TypeError, ValueError, OSError, OverflowError):
-        return None
 
 
 def _apply_term_end(session: AsyncSession, local: Subscription) -> None:

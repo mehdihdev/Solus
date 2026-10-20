@@ -832,6 +832,9 @@ class SubscriptionRead(_SoftDeletable):
     stripe_subscription_id: str | None
     seat_count: int | None
     custom_price_per_seat: int | None
+    # Cadence of the Stripe Price and the raw renewal date (SOLUSDEV-236); null when unlinked.
+    billing_interval: str | None
+    current_period_end: datetime | None
 
     @model_validator(mode="before")
     @classmethod

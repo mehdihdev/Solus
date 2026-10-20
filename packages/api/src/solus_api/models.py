@@ -545,7 +545,14 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
 
     __tablename__ = "subscriptions"
     # One live subscription per user.
-    __table_args__ = (_partial_unique("uq_subscription_user", "user_id"),)
+    __table_args__ = (
+        _partial_unique("uq_subscription_user", "user_id"),
+        # SOLUSDEV-236: a plain CHECK (not a PG enum) so a new cadence is a cheap migration.
+        CheckConstraint(
+            "billing_interval IS NULL OR billing_interval IN ('month', 'year')",
+            name="ck_subscriptions_billing_interval",
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
@@ -556,7 +563,9 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
     # Plan limits AS DATA (null/absent key = unlimited). Enforcement reads this, never plan names.
     limits: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    # Trial/period end — stored only; charge/downgrade-at-expiry is the future Stripe work.
+    # Trial/period end per docs/schemas/subscriptions.md §expires_at: local trial = signup +
+    # trial days; Stripe-linked trialing = Stripe trial_end; active/past_due = period end;
+    # canceled = last value kept. The trial-expiry gate reads it only when unlinked.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # When a scheduled cancellation takes effect (Stripe subscription.cancel_at).
     # Set while cancel-at-period-end is pending (drives the billing-page bar),
@@ -580,6 +589,13 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
         _enum_column(PlanType, name="subscription_comp_plan"), default=None
     )
     comp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # Billing cadence of the Stripe Price ('month'|'year'); NULL for a local trial or an
+    # unknown/unlinked row (SOLUSDEV-236).
+    billing_interval: Mapped[str | None] = mapped_column(String(8), default=None)
+    # Raw Stripe renewal date. Mirror only — never used for gating (SOLUSDEV-236).
+    current_period_end: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
 
 
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):

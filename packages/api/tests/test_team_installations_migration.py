@@ -57,7 +57,8 @@ def _invite(db: MigrationDatabase, team: uuid.UUID, email: str | None, gid: int 
 
 def test_single_head_descends_from_previous() -> None:
     script = ScriptDirectory(str(API_DIR / "migrations"))
-    assert script.get_heads() == [REVISION]
+    # One head overall; later migrations (e.g. SOLUSDEV-236) may sit on top of this one.
+    assert len(script.get_heads()) == 1
     head = script.get_revision(REVISION)
     assert head is not None and head.down_revision == PREVIOUS
 

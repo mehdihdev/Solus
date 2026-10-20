@@ -207,6 +207,9 @@ class SubscriptionSnapshot:
     #: EVERY attached discount coupon id. `coupon_id` is the Solus comp coupon when one is
     #: attached (a customer promo can sort ahead of it), else the first coupon.
     coupon_ids: tuple[str, ...] = ()
+    #: Stripe `trial_end` (epoch seconds) and the price's `recurring.interval` (SOLUSDEV-236).
+    trial_end: int | None = None
+    interval: str | None = None
 
     def stripe_refs(self) -> dict[str, str]:
         refs = {
@@ -277,6 +280,8 @@ def snapshot_from_stripe(sub: Any) -> SubscriptionSnapshot:
         latest_invoice_id=_id_of(_g(sub, "latest_invoice")),
         metadata=dict(_g(sub, "metadata") or {}),
         coupon_ids=tuple(coupons),
+        trial_end=_g(sub, "trial_end"),
+        interval=_g(_g(_g(item, "price"), "recurring"), "interval"),
     )
 
 

@@ -288,6 +288,22 @@ async def test_retrieve_subscription_projects_stable_fields(st: _Stripe) -> None
     assert "idempotency_key" not in params
 
 
+async def test_snapshot_exposes_trial_end_and_interval(st: _Stripe) -> None:
+    raw = _sub()
+    raw["trial_end"] = 1_700_000_000
+    raw["items"]["data"][0]["price"]["recurring"] = {"interval": "year"}
+    st.results["sub.retrieve"] = raw
+    snap = await gw().retrieve_subscription("sub_1")
+    assert snap.trial_end == 1_700_000_000
+    assert snap.interval == "year"
+
+
+async def test_snapshot_trial_end_and_interval_default_to_none(st: _Stripe) -> None:
+    snap = await gw().retrieve_subscription("sub_1")
+    assert snap.trial_end is None
+    assert snap.interval is None
+
+
 async def test_retrieve_handles_source_coupon_and_unexpanded_discount(st: _Stripe) -> None:
     st.results["sub.retrieve"] = _sub(discounts=[{"source": {"coupon": "solus-comp-once"}}])
     assert (await gw().retrieve_subscription("sub_1")).coupon_id == "solus-comp-once"
