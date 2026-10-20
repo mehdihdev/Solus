@@ -574,3 +574,23 @@ unchanged and still required.
 - Residual: this is a denylist of known REPL programs. An unknown program that reads and
   runs code from its terminal is not detected; every interactive start remains behind the
   approval card.
+
+### 2026-10-19 addendum (8) — REPL guard: workspace scripts, stdin paths, more programs (append-only)
+
+- [x] In interactive mode the script an interpreter or shell runs, and `deno run`'s module,
+  must be an existing regular file inside the workspace, resolved relative to the planned cwd
+  with the same check as §10.2 shell scripts (`command_plan._script_file`). Paths outside the
+  workspace, directories, missing files and `..` escapes are refused. With no script check
+  supplied, the guard refuses everything (fail closed).
+- [x] For every interactive program, an argument (or an option's `=value`) that is `-`, or
+  whose normalised absolute path is under `/dev/` or `/proc/<pid|self>/fd`, is refused, so
+  code is never read from stdin or the terminal through a path (e.g. `make -f /dev/stdin`,
+  `deno run /dev/tty`). Consequence: an interactive program cannot be given a serial device
+  path such as `/dev/cu.usbmodem*` as an argument; such programs run non-interactively.
+- [x] python `-m` additionally refuses cProfile, profile, trace, runpy, timeit, xonsh,
+  sqlite3, jupyter, jupyter_console, ptipython, bpdb, web_pdb, rpdb, remote_pdb and ipykernel
+  (they run or forward other code, or open a prompt).
+- [x] Also refused as interactive programs, whatever their arguments: less, more, most,
+  man, vi, vim, nvim, view, ex, ed, emacs, ftp, telnet, ssh, nc, ncat, socat, screen, tmux,
+  script, expect (pagers and editors have shell escapes; the rest are remote or terminal
+  shells).
