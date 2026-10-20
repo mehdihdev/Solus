@@ -1,9 +1,10 @@
 # Billing screen — Wireflow (SOLUSDEV-236)
 
-**Status: DRAFT — pending human review (SOLUSDEV-236).** Everything marked
-`PROPOSED` below is a design choice that is not yet confirmed by a human. Locked
-decisions (ADR-023, ADR-024 trial-expiry amendment, the SOLUSDEV-236 in-chat
-approvals) are stated without that marker.
+**Status: APPROVED — 2026-10-19, in-chat (SOLUSDEV-236).** The `PROPOSED`
+markers below were accepted as written, including the defaults in §Open
+questions; see §Decisions for the answers. Authority for the locked parts:
+ADR-023, the ADR-024 trial-expiry amendment, and the SOLUSDEV-236 in-chat
+approvals.
 
 Authority: ADR-023 (plans, prices), ADR-024 (credits, 14-day trial, trial expiry),
 ADR-032 (tier-1 doc). API contracts: `docs/api/API-implementation.md` §10 and
@@ -264,7 +265,25 @@ requires adding to the closed `event_type` set in `POST /api/v1/events`.
   above, not in a tooltip.
 - Reduced motion: no animation is added by this screen.
 
-## Open questions (for human decision)
+## Decisions (2026-10-19, in-chat)
+
+1. **Trial carries over to Checkout.** A subscription Checkout started during a
+   live local trial sets the Stripe `trial_end` to the local `expires_at`, so the
+   whole trial is one 14-day period. An expired local trial gets no Stripe trial.
+2. **Plan prices** come from Stripe Prices through one global cache (~10 min),
+   shared by all users. "A local trial makes no Stripe calls" means no
+   per-user calls.
+3. **Proration:** one portal configuration (see item 3 below).
+4. **Monthly ↔ yearly** for a Stripe-backed plan goes through the portal
+   (`flow: "update"`).
+5. **Dunning (`past_due`)** keeps today's behaviour: plan limits stay and
+   existing credits stay spendable, with the past-due banner. Stripe cancels
+   after its retries fail, and the webhook then clamps the plan to Basic.
+6. **Degraded prices** show "—", never the static numbers.
+7. **Sales address:** `team@solusforge.com`.
+8. **No Contact sales click event** this round.
+
+## Open questions (answered — kept for the record)
 
 1. **Trial length on Checkout (blocking for state 3).** `create_checkout_session`
    always applies `stripe_trial_days` (14) as `trial_period_days`, even when a
