@@ -71,17 +71,9 @@ function ProjectFolderCardContent({
 
   return (
     <FolderShell bare={bare}>
-      {heading && (
-        <div style={{ padding: '14px 16px 0' }}>
-          <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
-            {heading}
-          </Mono>
-        </div>
-      )}
+      <FolderHeading heading={heading} />
       {!bridge ? (
-        <div style={{ padding: inset, fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-          Linking a local folder is available in the Solus desktop app.
-        </div>
+        <NoBridgeNote inset={inset} />
       ) : link ? (
         <LinkedFolder
           link={link}
@@ -101,25 +93,12 @@ function ProjectFolderCardContent({
           }}
         />
       ) : (
-        <div style={{ padding: inset, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-            Choose a project folder, then confirm “Select this folder” in the picker to link and
-            scan it.
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button kind="ghost" size="sm" disabled={selecting} onClick={() => void selectFolder()}>
-              <Icons.box size={13} /> Select folder
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              disabled={selecting}
-              onClick={() => setCloning(projectId)}
-            >
-              <Icons.github size={13} /> Clone a repo
-            </Button>
-          </div>
-        </div>
+        <UnlinkedFolder
+          inset={inset}
+          selecting={selecting}
+          onSelect={() => void selectFolder()}
+          onClone={() => setCloning(projectId)}
+        />
       )}
       {selectionError && (
         <div role="alert" style={{ padding: '12px 16px', color: 'var(--err)', fontSize: 12 }}>
@@ -134,6 +113,56 @@ function ProjectFolderCardContent({
         />
       )}
     </FolderShell>
+  )
+}
+
+function FolderHeading({ heading }: { heading?: string }): React.JSX.Element | null {
+  if (!heading) return null
+  return (
+    <div style={{ padding: '14px 16px 0' }}>
+      <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+        {heading}
+      </Mono>
+    </div>
+  )
+}
+
+/** Outside the desktop app there is no bridge to link a folder through. */
+function NoBridgeNote({ inset }: { inset: string }): React.JSX.Element {
+  return (
+    <div style={{ padding: inset, fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+      Linking a local folder is available in the Solus desktop app.
+    </div>
+  )
+}
+
+/** No folder linked yet: pick one, or clone a repo into one. */
+function UnlinkedFolder({
+  inset,
+  selecting,
+  onSelect,
+  onClone
+}: {
+  inset: string
+  selecting: boolean
+  onSelect: () => void
+  onClone: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ padding: inset, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+        Choose a project folder, then confirm “Select this folder” in the picker to link and scan
+        it.
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onSelect}>
+          <Icons.box size={13} /> Select folder
+        </Button>
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onClone}>
+          <Icons.github size={13} /> Clone a repo
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -187,51 +216,20 @@ function LinkedFolder({
       }}
     >
       <LinkedFolderHeader link={link} view={view} status={status} />
-      <div
-        style={{ display: 'flex', gap: compact ? 2 : 8, flexWrap: 'wrap', alignItems: 'center' }}
-      >
-        <Button
-          kind="ghost"
-          size="sm"
-          data-testid="open-root-editor"
-          disabled={editorReason !== null}
-          title={editorReason ?? undefined}
-          onClick={() => rootEntityId && void folder.open(rootEntityId, 'vscode')}
-        >
-          {OPEN_LABEL.vscode}
-        </Button>
-        {!compact && (
-          <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
-            Change folder
-          </Button>
-        )}
-        <Button
-          kind={compact ? 'bare' : 'ghost'}
-          size="sm"
-          style={compact ? COMPACT_BARE : undefined}
-          onClick={onOpenFolder}
-        >
-          Show in file manager
-        </Button>
-        {compact ? (
-          <MoreFolderActions
-            selecting={selecting}
-            onChangeFolder={onChangeFolder}
-            onUnlink={onUnlink}
-          />
-        ) : (
-          <Button kind="ghost" size="sm" onClick={onUnlink}>
-            Unlink
-          </Button>
-        )}
-      </div>
-      {!folder.machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
-      {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
-      {/* A greyed "Open in editor" says why in words, not only in a hover
-          tooltip (SOLUSDEV-253) — the offline notes above already cover theirs. */}
-      {editorReason !== null && !bridgeOffline && folder.machineAvailable && (
-        <Note>{editorReason}</Note>
-      )}
+      <FolderActions
+        compact={compact}
+        selecting={selecting}
+        editorReason={editorReason}
+        onEditor={() => rootEntityId && void folder.open(rootEntityId, 'vscode')}
+        onChangeFolder={onChangeFolder}
+        onOpenFolder={onOpenFolder}
+        onUnlink={onUnlink}
+      />
+      <FolderNotes
+        machineAvailable={folder.machineAvailable}
+        bridgeOffline={bridgeOffline}
+        editorReason={editorReason}
+      />
       {!compact && (
         <DetectedProjectList
           projects={detectedProjects(view)}
@@ -241,6 +239,86 @@ function LinkedFolder({
         />
       )}
     </div>
+  )
+}
+
+/** Open in editor, then Change folder / Show in file manager / Unlink — the
+ *  last two behind More ▾ in compact mode. */
+function FolderActions({
+  compact,
+  selecting,
+  editorReason,
+  onEditor,
+  onChangeFolder,
+  onOpenFolder,
+  onUnlink
+}: {
+  compact: boolean
+  selecting: boolean
+  editorReason: string | null
+  onEditor: () => void
+  onChangeFolder: () => void
+  onOpenFolder: () => void
+  onUnlink: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', gap: compact ? 2 : 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <Button
+        kind="ghost"
+        size="sm"
+        data-testid="open-root-editor"
+        disabled={editorReason !== null}
+        title={editorReason ?? undefined}
+        onClick={onEditor}
+      >
+        {OPEN_LABEL.vscode}
+      </Button>
+      {!compact && (
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
+          Change folder
+        </Button>
+      )}
+      <Button
+        kind={compact ? 'bare' : 'ghost'}
+        size="sm"
+        style={compact ? COMPACT_BARE : undefined}
+        onClick={onOpenFolder}
+      >
+        Show in file manager
+      </Button>
+      {compact ? (
+        <MoreFolderActions
+          selecting={selecting}
+          onChangeFolder={onChangeFolder}
+          onUnlink={onUnlink}
+        />
+      ) : (
+        <Button kind="ghost" size="sm" onClick={onUnlink}>
+          Unlink
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** Why something above is unavailable, in words — never only a tooltip. */
+function FolderNotes({
+  machineAvailable,
+  bridgeOffline,
+  editorReason
+}: {
+  machineAvailable: boolean
+  bridgeOffline: boolean
+  editorReason: string | null
+}): React.JSX.Element {
+  return (
+    <>
+      {!machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
+      {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
+      {/* A greyed "Open in editor" says why in words, not only in a hover
+          tooltip (SOLUSDEV-253) — the offline notes above already cover theirs. */}
+      {editorReason !== null && !bridgeOffline && machineAvailable && <Note>{editorReason}</Note>}
+    </>
   )
 }
 

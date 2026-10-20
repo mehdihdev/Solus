@@ -187,6 +187,9 @@ describe('HomeProjectPane (continued)', () => {
     expect(screen.getByTestId('repo-logo-github')).toBeInTheDocument()
   })
 
+})
+
+describe('HomeProjectPane (header, motion)', () => {
   it('shows no repo line for a project without one', () => {
     setup({ repos: [] })
     expect(screen.queryByTestId(/^repo-logo-/)).toBeNull()
