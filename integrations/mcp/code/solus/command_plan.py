@@ -17,7 +17,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from . import command_deny, execute, profiles, sandbox
+from . import command_deny, execute, profiles, repl_guard, sandbox
 from .plan import Args, Plan, Which, _echo, _refuse, _relative, venv_python
 from .workspace import resolve_inside
 
@@ -364,7 +364,7 @@ def plan_process_start(root: Path, args: Args, _which: Which) -> Plan:
     if interactive and not isinstance(planned, str):
         resolved = (planned.argv[0], os.path.realpath(planned.argv[0]))
         argv = [args["argv"][0], *planned.argv[1:]]
-        repl = command_deny.repl_reason(argv, resolved=resolved, inside=lambda p: _within(root, p))
+        repl = repl_guard.repl_reason(argv, resolved=resolved, inside=lambda p: _within(root, p))
         if repl is not None:
             return replace(_refuse(action, repl), interactive=True)
     return replace(_finish(action, planned, **fields), interactive=interactive)

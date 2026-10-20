@@ -25,6 +25,7 @@ execute = overlay_module("execute")
 server = overlay_module("server")
 roster = overlay_module("roster")
 terminal = overlay_module("terminal")
+repl_guard = overlay_module("repl_guard")
 
 REPL_REASON = "interactive mode needs a script or program, not a REPL or bare shell"
 
@@ -394,12 +395,16 @@ def plan_ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home2"))
     bins = tmp_path / "roots" / "bin"
     bins.mkdir(parents=True)
-    for name in ("python3.12", "node", "make", "bash"):
+    for name in (*INTERPRETERS, *REPL_PROGRAMS, "make", "bash"):
         (bins / name).write_text("#!/bin/sh\n")
         (bins / name).chmod(0o755)
     monkeypatch.setattr(execute, "SEARCH_ROOTS", (str(bins),))
     (root / "go.sh").write_text("#!/bin/sh\n")
     return root
+
+
+INTERPRETERS = ("python3.12", "python3", "pypy3", "node", "perl", "ruby", "lua", "php", "bun")
+REPL_PROGRAMS = ("ipython", "ipython3", "sqlite3", "psql", "gdb", "R", "julia", "tclsh8.6", "irb")
 
 
 def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
@@ -417,11 +422,44 @@ def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
         ["python3.12", "--"],
         ["node"],
         ["node", "-r", "dotenv/config"],
+        ["node", "-r", "x"],
+        ["perl", "-mFoo"],
+        ["perl", "-MFoo"],
+        ["perl", "-m", "Foo"],
+        ["perl", "-m"],
+        ["ruby", "-rfoo"],
+        ["ruby", "-m"],
+        ["python3.12", "-i", "ask.py"],
+        ["python3.12", "-ui", "ask.py"],
+        ["python3.12", "-m", "code"],
+        ["python3.12", "-m", "pdb", "ask.py"],
+        ["python3.12", "-masyncio"],
+        ["python3.12", "-m", "IPython"],
+        ["python3.12", "-m", "idlelib.idle"],
+        ["python3.12", "--frobnicate", "ask.py"],
+        ["python3.12", "-Z", "ask.py"],
+        ["pypy3", "-m", "pdb"],
+        ["node", "-i"],
+        ["node", "--interactive", "app.js"],
+        ["node", "inspect", "app.js"],
+        ["node", "--frobnicate", "app.js"],
+        ["perl", "-d", "x.pl"],
+        ["lua", "-i", "x.lua"],
+        ["php", "-a"],
+        ["bun", "repl"],
+        *([name] for name in REPL_PROGRAMS),
+        ["ipython3", "ask.py"],
+        ["sqlite3", "db.sqlite"],
+        ["gdb", "./a.out"],
+        ["julia", "x.jl"],
+        ["tclsh8.6", "x.tcl"],
     ],
 )
 def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
     refused = _plan(plan_ws, argv)
-    assert refused.ok is False and refused.reason == REPL_REASON
+    # Some are already refused by the deny table (unknown leading option); the REPL
+    # guard refuses every one of them on its own as well.
+    assert refused.ok is False and repl_guard.repl_reason(argv) == REPL_REASON
     assert refused.answer()["interactive"] is True
 
 
@@ -432,6 +470,14 @@ def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
         ["python3.12", "-u", "ask.py"],
         ["python3.12", "-m", "serial.tools.miniterm"],
         ["python3.12", "-um", "tool"],
+        ["python3", "-m", "mypkg"],
+        ["pypy3", "-m", "mypkg"],
+        ["perl", "x.pl"],
+        ["perl", "-MFoo", "x.pl"],
+        ["ruby", "-rfoo", "x.rb"],
+        ["python3.12", "-m", "http.server"],
+        ["node", "--watch", "app.js"],
+        ["lua", "x.lua"],
         ["node", "app.js"],
         ["make", "flash"],
         ["make"],
@@ -673,3 +719,26 @@ async def test_real_stop_and_shutdown_close_the_terminal(wire_ws: Path) -> None:
     for pid in pids:
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["bash"],
+        ["bash", "-i", "go.sh"],
+        ["sh", "-s", "go.sh"],
+        ["bash", "--rcfile", "x", "go.sh"],
+        ["bash", "-o", "vi", "go.sh"],
+        ["bash", "+o", "posix", "go.sh"],
+        ["deno"],
+        ["deno", "repl"],
+        ["deno", "--frobnicate", "run", "x.ts"],
+    ],
+)
+def test_repl_guard_refuses_shell_options_and_bare_deno(argv: list[str]) -> None:
+    assert repl_guard.repl_reason(argv) == REPL_REASON
+
+
+@pytest.mark.parametrize("argv", [["bash", "go.sh", "-i"], ["deno", "run", "x.ts"], ["make"]])
+def test_repl_guard_allows_scripts(argv: list[str]) -> None:
+    assert repl_guard.repl_reason(argv) is None
