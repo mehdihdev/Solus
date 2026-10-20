@@ -624,3 +624,33 @@ entries stand as written for the record.
   `mytool` package.
 - Residual: a bare argument without `/` is not resolved as a path (a program could open a
   workspace symlink named in it itself); the script/module checks and the card still apply.
+
+### 2026-10-19 addendum (10) — attached option values, `-m` resolution; recorded residuals (append-only)
+
+- [x] The path check also inspects a short option's attached value: for an argument `-<letter>…`
+  the remainder after the first letter gets the same rules (`-f-`, `-f/dev/stdin`, `-f./in`
+  where `in` links to a device are refused; `-fMakefile` is fine).
+- [x] python `-m` in interactive mode is refused when any preceding short flag (in any
+  cluster before the `m`) is `I`, `P` or `E`, since isolation, safe-path and ignored
+  environment change where the module is found. A `-W`/`-X` value is no longer scanned as
+  flags (`-Wignore` is accepted).
+- [x] The module's top-level package is looked up ONLY in the planned cwd (python's
+  `sys.path[0]` for `-m`), not in the workspace root as well.
+- [x] `-m` is refused when the applied profile sets PYTHONSAFEPATH (any value) or a PYTHONPATH
+  entry outside the workspace (absolute entries judged by inode containment; empty or relative
+  entries mean the cwd, which is inside). Scripts are not affected by this rule.
+- [x] `_pyrepl`, `pyrepl` and `pydoc` were added to the refused modules.
+
+**Residuals (accepted, recorded for the reviewers):**
+
+1. Bare-name arguments a program opens itself are not resolved. Only path-like arguments
+   (containing `/`), `=value`s and attached short-option values are checked, so a program
+   given `in` that opens a workspace symlink `in → /dev/stdin` itself is not detected.
+2. REPL_PROGRAMS and REPL_MODULES are denylists. An unknown program, or a workspace
+   script/module, that reads and runs code from its terminal is not detected by the guard.
+   The structural rules (workspace script/module required, known options only, no
+   stdin/device paths) narrow this but cannot close it.
+3. The primary control is the approval card. Every interactive `process_start` and every
+   non-Enter `process_input` is human-approved, showing the exact argv or input text. The
+   REPL guard is defense in depth, not the boundary. The OS sandbox applies to anything that
+   runs, whatever is typed.
