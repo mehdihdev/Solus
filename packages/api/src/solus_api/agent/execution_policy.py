@@ -8,7 +8,7 @@ import logging
 from copy import deepcopy
 from typing import Any
 
-from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, SYSTEM_SCOPE, auto_eligible
+from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, AUTO_TOOLS, SYSTEM_SCOPE, auto_judge
 from solus_api.agent.confirmations import _build_preview, validate_tool_arguments
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.tools.registry import ToolRegistry
@@ -71,9 +71,10 @@ def register_owned_routine(tool: Tool, *, family: str) -> None:
         (family == "onshape" and type(tool) is ConfirmedOnshapeTool and name in _ONSHAPE)
         or (family == "isaac" and type(tool) is IsaacTool and name in _ISAAC)
         or (family == "machine" and type(tool) is MachineWriteTool and name == "machine.write_file")
-        # §10.1: the plan-snapshot `code.exec` ONLY, and never as a blanket
-        # routine — `prepare` re-judges every call (`auto_eligible`, program_scope).
-        or (family == "command" and type(tool) is PlannedTool and name == AUTO_COMMAND_TOOL)
+        # §10.1/§11.2: the plan-snapshot `code.exec` and `code.process_input`
+        # ONLY, never as a blanket routine — `prepare` re-judges every call
+        # (`auto_judge`; program_scope for exec, a waiting process for input).
+        or (family == "command" and type(tool) is PlannedTool and name in AUTO_TOOLS)
     )
     if family == "bridge" and type(tool) is BridgeTool and name in _BRIDGE_SCHEMAS:
         digest = hashlib.sha256(_canonical(tool.descriptor.params).encode()).hexdigest()
@@ -124,9 +125,9 @@ class BuildExecutionPolicy:
         if tool is None:
             return False
         command = call.tool == AUTO_COMMAND_TOOL
-        # §10.1: a command is judged per call BEFORE anything is planned; a
-        # risky, denied or oddly shaped one goes to the card (or its refusal).
-        if command and not auto_eligible(call.args):
+        # §10.1/§11.2: judged per call BEFORE anything is planned; a risky,
+        # denied, text-carrying or oddly shaped call goes to the card.
+        if call.tool in AUTO_TOOLS and not auto_judge(call.tool, call.args):
             return False
         claimed = self._claim(tool, call)
         if not isinstance(claimed, str):

@@ -23,9 +23,12 @@ from solus_api.services.events import emit_event
 
 #: Tools whose model-proposed argv the policy judges (§4).
 ARGV_TOOLS: Final = frozenset({"code.exec", "code.process_start"})
-#: Tools whose card is the server's complete `code.plan` (§5.1): a failed plan
-#: refuses, and a card row that redaction would alter refuses too (§9 item 2).
-COMPLETE_PREVIEW_TOOLS: Final = ARGV_TOOLS | frozenset({"code.profile_capture"})
+#: §11.2: input to an interactive process; its card reads `code.process_status`.
+INPUT_TOOL: Final = "code.process_input"
+#: Tools whose card is the server's complete `code.plan` (§5.1) — or, for input,
+#: its live process status (§11.2): a failed preview refuses, and a card row that
+#: redaction would alter refuses too (§9 item 2).
+COMPLETE_PREVIEW_TOOLS: Final = ARGV_TOOLS | frozenset({"code.profile_capture", INPUT_TOOL})
 #: Every tool whose card is read back from the server's `code.plan` (§9 item 2
 #: applies to all of them: no card row may be altered by redaction).
 PLAN_PREVIEW_TOOLS: Final = COMPLETE_PREVIEW_TOOLS | frozenset(
@@ -162,6 +165,8 @@ def completion_events(
         )
     if tool == "code.process_stop" and value.get("ok") is True:
         events.append(("code.process.stopped", stopped_payload("sol", value)))
+    if tool == INPUT_TOOL and value.get("ok") is True:
+        events.append(("code.process.input", input_payload("sol", value, auto=auto)))
     if tool == "code.profile_capture" and value.get("ok") is True:
         events.append(
             (
@@ -178,6 +183,12 @@ def completion_events(
 def stopped_payload(via: str, value: dict[str, Any]) -> dict[str, Any]:
     state = value.get("state")
     return {"via": via, "state": state if isinstance(state, str) else None}
+
+
+def input_payload(via: str, value: dict[str, Any], *, auto: bool) -> dict[str, Any]:
+    """`code.process.input` (§11.2): never the text, only how much was sent."""
+    chars = value.get("sent_chars")
+    return {"via": via, "auto": auto, "chars": chars if type(chars) is int else 0}
 
 
 def _count(value: object) -> int:

@@ -206,6 +206,14 @@ def _max_runtime(args: Mapping[str, Any]) -> str:
     return f"{value} s"
 
 
+def _interactive(args: Mapping[str, Any]) -> str:
+    """§11.2: whether the process gets a Solus pseudo-terminal (default no)."""
+    value = args.get("interactive", False)
+    if not isinstance(value, bool):
+        raise _refuse("The process arguments are invalid.")
+    return "yes" if value else "no"
+
+
 def command_rows(raw: object, args: Mapping[str, Any], *, process: bool = False) -> PlanRows:
     """Rows for `code.exec` (and `code.process_start` when `process`)."""
     plan = parse_plan(raw)
@@ -234,7 +242,11 @@ def command_rows(raw: object, args: Mapping[str, Any], *, process: bool = False)
         _row("profile", _profile_text(plan)),
         _sandbox_row(plan),
         _row("risk", risks),
-        *([_row("max runtime", _max_runtime(args))] if process else []),
+        *(
+            [_row("max runtime", _max_runtime(args)), _row("interactive", _interactive(args))]
+            if process
+            else []
+        ),
         _row("plan fingerprint", _fingerprint(plan)),
     ]
     return PlanRows(rows, program_scope=plan.program_scope)

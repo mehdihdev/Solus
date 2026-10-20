@@ -56,6 +56,16 @@ def _process_started(value: dict[str, Any]) -> str:
     return f"; the server refused to run it: {reason}"
 
 
+def _input_sent(value: dict[str, Any]) -> str:
+    """§11.2: what an approved `code.process_input` did — a count, never the text."""
+    process_id = value.get("process_id")
+    sent = value.get("sent_chars")
+    if value.get("ok") is True and isinstance(process_id, str) and type(sent) is int:
+        return f"; sent {sent} characters to process {_single(process_id, _ID_CAP)}"
+    reason = _single(value.get("reason") or "unknown reason", _REASON_CAP)
+    return f"; the server refused the input: {reason}"
+
+
 def command_outcome_text(value: dict[str, Any], *, tool: str | None = None) -> str | None:
     """A short clause naming what a confirmed COMMAND did, for the tool turn
     the next model reads (SOLUSDEV-250). `ToolResult.ok` is the transport; the
@@ -66,6 +76,8 @@ def command_outcome_text(value: dict[str, Any], *, tool: str | None = None) -> s
     alone is not command evidence (`local.open_in_tool` may return one)."""
     if tool == "code.process_start":
         return _process_started(value)
+    if tool == "code.process_input":
+        return _input_sent(value)
     long_tail = tool in LONG_TAIL_TOOLS
     clause = _command_clause(
         value, _LONG_TAIL_CAP if long_tail else _OUTCOME_TAIL_CAP, success_tail=long_tail
