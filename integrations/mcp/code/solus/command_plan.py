@@ -364,7 +364,12 @@ def plan_process_start(root: Path, args: Args, _which: Which) -> Plan:
     if interactive and not isinstance(planned, str):
         resolved = (planned.argv[0], os.path.realpath(planned.argv[0]))
         argv = [args["argv"][0], *planned.argv[1:]]
-        repl = repl_guard.repl_reason(argv, resolved=resolved, inside=lambda p: _within(root, p))
+        repl = repl_guard.repl_reason(
+            argv,
+            resolved=resolved,
+            inside=lambda path: _within(root, path),
+            script_file=lambda script: _script_file(root, planned.cwd, script),
+        )
         if repl is not None:
             return replace(_refuse(action, repl), interactive=True)
     return replace(_finish(action, planned, **fields), interactive=interactive)

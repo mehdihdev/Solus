@@ -13,10 +13,16 @@ deny table) and fail-closed:
 - only python-family interpreters may run `-m <module>`, and not a REPL/debugger
   module; other interpreters' module flags (perl -m/-M, ruby -r, node -r) load a
   library and then read code from the terminal, so they are not a script;
-- a shell must start with its script: any leading `-`/`+` option is refused.
+- a shell must start with its script: any leading `-`/`+` option is refused;
+- the script an interpreter or shell runs (and `deno run`'s module) must be an
+  existing regular file inside the workspace (the caller's `script_file` check;
+  without one everything is refused);
+- no interactive program may name stdin or a device as an argument (`-`, `/dev/*`,
+  `/proc/*/fd/*`), so code is never read from the terminal through a path.
 """
 
 import os
+import re
 from collections.abc import Callable, Sequence
 
 from . import command_deny as deny
@@ -50,12 +56,62 @@ REPL_PROGRAMS: frozenset[str] = frozenset(
         "node-inspect",
         "tclsh",
         "wish",
+        # pagers, editors and remote/terminal tools with shell escapes
+        "less",
+        "more",
+        "most",
+        "man",
+        "vi",
+        "vim",
+        "nvim",
+        "view",
+        "ex",
+        "ed",
+        "emacs",
+        "ftp",
+        "telnet",
+        "ssh",
+        "nc",
+        "ncat",
+        "socat",
+        "screen",
+        "tmux",
+        "script",
+        "expect",
     }
 )
-#: python `-m` modules that are REPLs or debuggers (matched on the top-level package).
+#: python `-m` modules that are REPLs, debuggers, or run/forward other code (matched on
+#: the top-level package).
 REPL_MODULES: frozenset[str] = frozenset(
-    {"code", "pdb", "idlelib", "asyncio", "IPython", "ipdb", "pudb", "ptpython", "bpython"}
+    {
+        "code",
+        "pdb",
+        "idlelib",
+        "asyncio",
+        "IPython",
+        "ipdb",
+        "pudb",
+        "ptpython",
+        "bpython",
+        "cProfile",
+        "profile",
+        "trace",
+        "runpy",
+        "timeit",
+        "xonsh",
+        "sqlite3",
+        "jupyter",
+        "jupyter_console",
+        "ptipython",
+        "bpdb",
+        "web_pdb",
+        "rpdb",
+        "remote_pdb",
+        "ipykernel",
+    }
 )
+#: Arguments that name stdin or a device (normalised absolute paths).
+STDIN_PATH = re.compile(r"^(/dev/.*|/proc/[^/]+/fd(/.*)?)$")
 #: Leading flags that force an interactive interpreter even with a script.
 REPL_FLAGS: dict[str, frozenset[str]] = {
     "node": frozenset({"-i", "--interactive"}),
@@ -72,6 +128,22 @@ REPL_SUBCOMMANDS: dict[str, frozenset[str]] = {
 }
 
 
+#: A scan's verdict: the script to check, True (a python module), or False (refused).
+Scan = str | bool
+#: Whether a script argument is an existing regular file inside the workspace.
+ScriptFile = Callable[[str], bool]
+
+
+def stdin_like(arg: str) -> bool:
+    """`-`, or a path (also an option's `=value`) naming stdin, a tty or a device."""
+    for value in (arg, arg.partition("=")[2]):
+        if value == "-":
+            return True
+        if value.startswith("/") and STDIN_PATH.match(os.path.normpath("/" + value.lstrip("/"))):
+            return True
+    return False
+
+
 def _python_module(module: str) -> bool:
     return bool(module) and module.split(".", 1)[0] not in REPL_MODULES
 
@@ -86,17 +158,18 @@ def _python_cluster(letters: str, following: str | None) -> bool | None:
     return None
 
 
-def _python(args: Sequence[str]) -> bool:
+def _after_dashes(args: Sequence[str], index: int) -> Scan:
+    return args[index + 1] if index + 1 < len(args) else False
+
+
+def _python(args: Sequence[str]) -> Scan:
     index = 0
     while index < len(args):
         arg = args[index]
-        following = args[index + 1] if index + 1 < len(args) else None
         if arg == "--":
-            return following is not None and following != "-"
-        if arg == "-":
-            return False
-        if not arg.startswith("-"):
-            return True
+            return _after_dashes(args, index)
+        if not arg.startswith("-") or arg == "-":
+            return arg
         if arg.startswith("--"):
             head = arg.split("=", 1)[0]
             if head in deny.PYTHON_LONG_VALUE:
@@ -106,6 +179,7 @@ def _python(args: Sequence[str]) -> bool:
                 return False
             index += 1
             continue
+        following = args[index + 1] if index + 1 < len(args) else None
         verdict = _python_cluster(arg[1:], following)
         if verdict is not None:
             return verdict
@@ -113,8 +187,8 @@ def _python(args: Sequence[str]) -> bool:
     return False
 
 
-def _positional(name: str, arg: str) -> bool:
-    return arg not in REPL_SUBCOMMANDS.get(name, frozenset())
+def _positional(name: str, arg: str) -> Scan:
+    return False if arg in REPL_SUBCOMMANDS.get(name, frozenset()) else arg
 
 
 def _option(name: str, arg: str, options: deny.Options) -> int | None:
@@ -127,7 +201,7 @@ def _option(name: str, arg: str, options: deny.Options) -> int | None:
     return deny._short(arg, options)
 
 
-def _interpreter(name: str, args: Sequence[str]) -> bool:
+def _interpreter(name: str, args: Sequence[str]) -> Scan:
     options = deny.SAFE_OPTIONS.get(name)
     if options is None:
         return False
@@ -135,11 +209,8 @@ def _interpreter(name: str, args: Sequence[str]) -> bool:
     while index < len(args):
         arg = args[index]
         if arg == "--":
-            following = args[index + 1] if index + 1 < len(args) else "-"
-            return following != "-"
-        if arg == "-":
-            return False
-        if not arg.startswith("-"):
+            return _after_dashes(args, index)
+        if not arg.startswith("-") or arg == "-":
             return _positional(name, arg)
         consumed = _option(name, arg, options)
         if consumed is None:
@@ -148,21 +219,29 @@ def _interpreter(name: str, args: Sequence[str]) -> bool:
     return False
 
 
-def _deno(args: Sequence[str]) -> bool:
-    for arg in args:
-        if arg.startswith("-"):
-            if arg not in deny.DENO_LEADING and not arg.startswith("--log-level="):
-                return False
-            continue
-        return _positional("deno", arg)
-    return False
+def _deno(args: Sequence[str]) -> Scan:
+    """Known global options, a non-REPL subcommand; `deno run` needs its module file."""
+    positionals = [index for index, arg in enumerate(args) if not arg.startswith("-")]
+    if not positionals:
+        return False
+    first = positionals[0]
+    for arg in args[:first]:
+        if arg not in deny.DENO_LEADING and not arg.startswith("--log-level="):
+            return False
+    subcommand = args[first]
+    if subcommand in REPL_SUBCOMMANDS["deno"]:
+        return False
+    if subcommand != "run":
+        return True
+    module = next((arg for arg in args[first + 1 :] if not arg.startswith("-") or arg == "-"), None)
+    return module if module is not None else False
 
 
-def _shell(args: Sequence[str]) -> bool:
-    return bool(args) and not args[0].startswith(("-", "+"))
+def _shell(args: Sequence[str]) -> Scan:
+    return args[0] if args and not args[0].startswith(("-", "+")) else False
 
 
-def _runs_given_code(name: str, args: Sequence[str]) -> bool:
+def _scan(name: str, args: Sequence[str]) -> Scan:
     if name in deny.SHELLS:
         return _shell(args)
     if name == "python":
@@ -172,22 +251,32 @@ def _runs_given_code(name: str, args: Sequence[str]) -> bool:
     return _interpreter(name, args)
 
 
+def _refused_name(path: str, exact: bool, args: Sequence[str], script_file: ScriptFile) -> bool:
+    name = deny.program_name(path, exact=exact)
+    if name in REPL_PROGRAMS or os.path.basename(path).casefold() in REPL_PROGRAMS:
+        return True
+    if name not in deny.INLINE_CODE and name not in deny.SHELLS:
+        return False
+    verdict = _scan(name, args)
+    if isinstance(verdict, bool):
+        return not verdict
+    return stdin_like(verdict) or not script_file(verdict)
+
+
 def repl_reason(
     argv: Sequence[str],
     *,
     resolved: Sequence[str] = (),
     inside: Callable[[str], bool] = lambda _path: False,
+    script_file: ScriptFile = lambda _script: False,
 ) -> str | None:
-    """Why `argv` may not run interactively (a REPL, debugger or bare shell), or None."""
-    if not argv:
+    """Why `argv` may not run interactively (a REPL, debugger, bare shell, a script that
+    is not a workspace file, or stdin/a device as an argument), or None."""
+    if not argv or any(stdin_like(arg) for arg in argv[1:]):
         return REPL_REFUSAL
     exact = deny.workspace_relative(argv[0])
     names = [(argv[0], exact), *((path, exact and inside(path)) for path in resolved)]
     for path, path_exact in names:
-        name = deny.program_name(path, exact=path_exact)
-        if name in REPL_PROGRAMS or os.path.basename(path).casefold() in REPL_PROGRAMS:
-            return REPL_REFUSAL
-        interpreter = name in deny.INLINE_CODE or name in deny.SHELLS
-        if interpreter and not _runs_given_code(name, argv[1:]):
+        if _refused_name(path, path_exact, argv[1:], script_file):
             return REPL_REFUSAL
     return None

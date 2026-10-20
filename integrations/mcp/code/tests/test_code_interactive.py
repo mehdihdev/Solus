@@ -26,6 +26,7 @@ server = overlay_module("server")
 roster = overlay_module("roster")
 terminal = overlay_module("terminal")
 repl_guard = overlay_module("repl_guard")
+command_plan = overlay_module("command_plan")
 
 REPL_REASON = "interactive mode needs a script or program, not a REPL or bare shell"
 
@@ -399,12 +400,84 @@ def plan_ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         (bins / name).write_text("#!/bin/sh\n")
         (bins / name).chmod(0o755)
     monkeypatch.setattr(execute, "SEARCH_ROOTS", (str(bins),))
-    (root / "go.sh").write_text("#!/bin/sh\n")
+    for script in ("go.sh", "ask.py", "app.js", "x.pl", "x.rb", "x.lua", "x.ts", "x.jl", "x.tcl"):
+        (root / script).write_text("\n")
+    (root / "sub").mkdir()
     return root
 
 
-INTERPRETERS = ("python3.12", "python3", "pypy3", "node", "perl", "ruby", "lua", "php", "bun")
-REPL_PROGRAMS = ("ipython", "ipython3", "sqlite3", "psql", "gdb", "R", "julia", "tclsh8.6", "irb")
+INTERPRETERS = (
+    "python3.12",
+    "python3",
+    "pypy3",
+    "node",
+    "perl",
+    "ruby",
+    "lua",
+    "php",
+    "bun",
+    "deno",
+)
+REPL_PROGRAMS = (
+    "ipython",
+    "ipython3",
+    "sqlite3",
+    "psql",
+    "gdb",
+    "R",
+    "julia",
+    "tclsh8.6",
+    "irb",
+    "less",
+    "more",
+    "most",
+    "man",
+    "vi",
+    "vim",
+    "nvim",
+    "view",
+    "ex",
+    "ed",
+    "emacs",
+    "ftp",
+    "telnet",
+    "ssh",
+    "nc",
+    "ncat",
+    "socat",
+    "screen",
+    "tmux",
+    "script",
+    "expect",
+)
+STDIN_MODULES = (
+    "cProfile",
+    "profile",
+    "trace",
+    "runpy",
+    "timeit",
+    "pdb",
+    "code",
+    "xonsh",
+    "sqlite3",
+    "jupyter",
+    "jupyter_console",
+    "ptipython",
+    "bpdb",
+    "web_pdb",
+    "rpdb",
+    "remote_pdb",
+    "IPython",
+    "ipykernel",
+)
+
+
+def _guard(root: Path, argv: list[str]) -> str | None:
+    """The REPL guard alone, with the workspace's script check."""
+    reason: str | None = repl_guard.repl_reason(
+        argv, script_file=lambda script: command_plan._script_file(root, ".", script)
+    )
+    return reason
 
 
 def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
@@ -453,13 +526,37 @@ def _plan(root: Path, argv: list[str], interactive: object = True) -> Any:
         ["gdb", "./a.out"],
         ["julia", "x.jl"],
         ["tclsh8.6", "x.tcl"],
+        ["less", "ask.py"],
+        ["vim", "ask.py"],
+        ["ssh", "host"],
+        ["python3.12", "missing.py"],
+        ["python3.12", "/etc/hosts"],
+        ["python3.12", "sub"],
+        ["python3.12", "/dev/stdin"],
+        ["python3.12", "--", "missing.py"],
+        ["node", "missing.js"],
+        ["perl", "../escape.pl"],
+        *(["python3.12", "-m", module, "ask.py"] for module in STDIN_MODULES),
+        ["python3.12", "-m", "cProfile.x"],
+        ["make", "-f", "-"],
+        ["make", "-f", "/dev/stdin"],
+        ["make", "--file=/dev/fd/0"],
+        ["make", "-f", "/proc/self/fd/0"],
+        ["make", "-f", "/proc/123/fd/0"],
+        ["make", "-f", "//dev/./stdin"],
+        ["deno", "run", "-"],
+        ["deno", "run", "/dev/stdin"],
+        ["deno", "run", "/dev/fd/0"],
+        ["deno", "run", "/dev/tty"],
+        ["deno", "run", "missing.ts"],
+        ["deno", "run", "--allow-net", "missing.ts"],
     ],
 )
 def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
     refused = _plan(plan_ws, argv)
     # Some are already refused by the deny table (unknown leading option); the REPL
     # guard refuses every one of them on its own as well.
-    assert refused.ok is False and repl_guard.repl_reason(argv) == REPL_REASON
+    assert refused.ok is False and _guard(plan_ws, argv) == REPL_REASON
     assert refused.answer()["interactive"] is True
 
 
@@ -478,6 +575,9 @@ def test_interactive_refuses_a_repl(plan_ws: Path, argv: list[str]) -> None:
         ["python3.12", "-m", "http.server"],
         ["node", "--watch", "app.js"],
         ["lua", "x.lua"],
+        ["deno", "run", "x.ts"],
+        ["deno", "run", "--allow-net", "x.ts"],
+        ["python3.12", "./ask.py"],
         ["node", "app.js"],
         ["make", "flash"],
         ["make"],
@@ -736,9 +836,14 @@ async def test_real_stop_and_shutdown_close_the_terminal(wire_ws: Path) -> None:
     ],
 )
 def test_repl_guard_refuses_shell_options_and_bare_deno(argv: list[str]) -> None:
-    assert repl_guard.repl_reason(argv) == REPL_REASON
+    assert repl_guard.repl_reason(argv, script_file=lambda _script: True) == REPL_REASON
 
 
 @pytest.mark.parametrize("argv", [["bash", "go.sh", "-i"], ["deno", "run", "x.ts"], ["make"]])
 def test_repl_guard_allows_scripts(argv: list[str]) -> None:
-    assert repl_guard.repl_reason(argv) is None
+    assert repl_guard.repl_reason(argv, script_file=lambda _script: True) is None
+
+
+@pytest.mark.parametrize("argv", [["bash", "go.sh"], ["deno", "run", "x.ts"], ["python3", "a.py"]])
+def test_repl_guard_without_a_script_check_fails_closed(argv: list[str]) -> None:
+    assert repl_guard.repl_reason(argv) == REPL_REASON
