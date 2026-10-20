@@ -651,7 +651,7 @@ export function SolChat({
         {region && (
           <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
         )}
-        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} />
+        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
         <Composer
           streaming={chat.streaming}
           page={page}

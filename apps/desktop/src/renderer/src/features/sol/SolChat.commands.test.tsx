@@ -30,7 +30,8 @@ vi.mock('../../lib/api/resources.commands', () => ({
   getConfirmationOutput: vi.fn(),
   listCodeProcesses: vi.fn(),
   getCodeProcessOutput: vi.fn(),
-  stopCodeProcess: vi.fn()
+  stopCodeProcess: vi.fn(),
+  sendCodeProcessInput: vi.fn()
 }))
 vi.mock('../preferences/preferencesStore', () => ({ preferencesForTurn: async () => null }))
 

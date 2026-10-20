@@ -19,6 +19,10 @@ const proc = (over: Partial<CodeProcess>): CodeProcess => ({
   started_at: STARTED,
   ended_at: null,
   sandbox: 'landlock',
+  interactive: false,
+  awaiting_input: false,
+  prompt_seq: 0,
+  prompt_tail: '',
   ...over
 })
 
@@ -33,6 +37,8 @@ function deps(over: Partial<ProcessStripDeps> = {}): ProcessStripDeps {
     listCodeProcesses: vi.fn().mockResolvedValue(list([proc({})])),
     getCodeProcessOutput: vi.fn().mockResolvedValue({ chunks: [], cursor: 0, truncated: false }),
     stopCodeProcess: vi.fn().mockResolvedValue({ ok: true }),
+    sendCodeProcessInput: vi.fn().mockResolvedValue({ ok: true, sentChars: 1, reason: null }),
+    wake: vi.fn(),
     ...over
   }
 }

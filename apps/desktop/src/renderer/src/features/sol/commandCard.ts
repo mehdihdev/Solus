@@ -14,7 +14,8 @@ export const COMMAND_TOOLS: ReadonlySet<string> = new Set([
   'code.test',
   'code.install',
   'code.create_environment',
-  'code.profile_capture'
+  'code.profile_capture',
+  'code.process_input'
 ])
 
 /** Tools whose approved call streams incremental output (§5.4). */
@@ -61,7 +62,8 @@ function firstArg(command: string): string | null {
 }
 
 function programOf(pending: PendingConfirmation): string | null {
-  const program = rowValue(pending, (label) => label === 'program')
+  // `process` names the target of a code.process_input card (§11.2).
+  const program = rowValue(pending, (label) => label === 'program' || label === 'process')
   if (program) return basename(program)
   const command = rowValue(pending, (label) => label === 'command' || label === 'command 1/1')
   const chunk = command ?? rowValue(pending, (label) => /^command 1\/\d+$/.test(label))

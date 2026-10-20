@@ -38,6 +38,8 @@ import { createTokenBatcher, type TokenBatcher } from './tokenBatcher'
 import { commandExitStatus, hasCommandOutput, isCommandTool } from './commandCard'
 import { finalOutputOf, type CommandRun } from './commandRuns'
 import { createRunTracker, refusalStatus } from './commandRunTracker'
+import { processIdOf, rememberProcessOwner, resetProcessOwners } from './processOwners'
+import type { WakeStart } from './processWake'
 import {
   MAX_TURN_CHARS,
   appendContent,
@@ -193,6 +195,7 @@ export function resetSolChatSessions(): void {
   for (const controller of controllers.values()) controller.abort()
   for (const batcher of batchers.values()) batcher.dispose()
   runs.stopAll()
+  resetProcessOwners()
   controllers.clear()
   batchers.clear()
   turnTokens.clear()
@@ -395,6 +398,32 @@ async function resumeTurn(
   })
 }
 
+/** SOLUSDEV-317 §11.3: an interactive process SOL started is asking for input.
+ *  Continue SOL in the conversation that started it — no user bubble, the same
+ *  streaming path as a resume. Never while a turn streams, never into another
+ *  conversation than the one open in this project's session. */
+export function wakeTurn(
+  projectId: string,
+  conversationId: string,
+  processPrompt: NonNullable<TurnInput['processPrompt']>,
+  actionMode: SolActionMode
+): WakeStart {
+  const session = selectSession(useSolChatStore.getState(), projectId)
+  if (session.conversationId !== conversationId) return 'elsewhere'
+  if (session.streaming || controllers.has(projectId)) return 'busy'
+  if (controllers.size >= MAX_CONCURRENT_TURNS) return 'busy'
+  void runTurn(projectId, WAKE_PROMPT, null, {
+    projectId,
+    content: '',
+    actionMode,
+    processPrompt,
+    ...confirmationOptions({ forceConfirmation: session.forceConfirmation })
+  })
+  return 'started'
+}
+
+const WAKE_PROMPT = 'a waiting process'
+
 type TurnInput = Omit<
   Parameters<typeof streamSolMessage>[0],
   'conversationId' | 'onEvent' | 'signal' | 'preferences'
@@ -460,9 +489,9 @@ async function runTurn(
   return !failed
 }
 
-/** A resume the server declined on purpose (§5.5): `resume_limit` pauses SOL
- *  until the person replies; `already_resumed` is someone else's resume and
- *  vanishes silently. True when handled. */
+/** A resume or wake the server declined on purpose (§5.5, §11.2):
+ *  `resume_limit` pauses SOL until the person replies; `already_resumed` /
+ *  `already_woken` is someone else's continuation and vanishes silently. */
 function resumeRefusal(
   projectId: string,
   assistantId: string,
@@ -474,7 +503,7 @@ function resumeRefusal(
     patch((m) => ({ ...m, pending: false, content: RESUME_PAUSED }))
     return true
   }
-  if (error.code !== 'already_resumed') return false
+  if (error.code !== 'already_resumed' && error.code !== 'already_woken') return false
   patchSession(projectId, (s) => ({ ...s, items: s.items.filter((m) => m.id !== assistantId) }))
   return true
 }
@@ -612,7 +641,9 @@ export async function decideConfirmation(
   const outcome = await postDecision(projectId, confirmationId, decision, tracked, generation)
   if (outcome === null) return
   markDecided(projectId, confirmationId, decision)
-  if (approving) resumeAfterCommand(projectId, confirmationId, tool, options?.actionMode)
+  if (!approving) return
+  if (tool === 'code.process_start') recordProcessOwner(projectId, outcome.value)
+  resumeAfterCommand(projectId, confirmationId, tool, options?.actionMode)
 }
 
 /** SOLUSDEV-317 §5.5: SOL continues after an approved command. Never after a
@@ -624,6 +655,18 @@ function resumeAfterCommand(
   actionMode: SolActionMode | undefined
 ): void {
   if (isCommandTool(tool) && actionMode) void resumeTurn(projectId, confirmationId, actionMode)
+}
+
+/** §11.3: remember which conversation started this process, for its wakes. */
+function recordProcessOwner(
+  projectId: string,
+  value: Readonly<Record<string, unknown>> | null | undefined
+): void {
+  const processId = processIdOf(value)
+  const conversationId = selectSession(useSolChatStore.getState(), projectId).conversationId
+  if (processId !== null && conversationId !== null) {
+    rememberProcessOwner(projectId, processId, conversationId)
+  }
 }
 
 function findConfirmation(projectId: string, confirmationId: string): PendingConfirmation | null {

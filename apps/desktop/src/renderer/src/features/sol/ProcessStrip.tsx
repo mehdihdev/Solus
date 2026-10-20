@@ -2,11 +2,14 @@
 // "Running processes strip"). One row per process SOL started on THIS machine
 // for the open project: name or program, state, elapsed time, an Output toggle
 // (bounded, keyboard-scrollable plain text, polled while open) and Stop — a
-// direct user action through the owner-scoped route, no approval card.
+// direct user action through the owner-scoped route, no approval card. An
+// interactive process that is asking gets a waiting row (§11.3).
 // Process text is untrusted machine output: plain text only, never HTML.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CodeProcess } from '../../lib/api/resources.commands'
+import { ProcessInputRow } from './ProcessInputRow'
 import './ProcessStrip.css'
+import type { SolActionMode } from './solApi'
 import {
   MAX_CHUNK_CHARS,
   MAX_PROCESS_OUTPUT_CHARS,
@@ -133,6 +136,11 @@ function ProcessRow({
     [deps, projectId, id, machineId]
   )
   const { busy, error, stop } = useStop(stopProcess, refresh)
+  const [draft, setDraft] = useState('')
+  const sendInput = useCallback(
+    (text: string) => deps.sendCodeProcessInput(projectId, id, machineId, { text, enter: true }),
+    [deps, projectId, id, machineId]
+  )
   const running = process.state === 'running'
   return (
     <li className="process-strip__row">
@@ -155,6 +163,15 @@ function ProcessRow({
         <p role="alert" className="process-strip__error">
           {error}
         </p>
+      )}
+      {process.awaiting_input && (
+        <ProcessInputRow
+          process={process}
+          draft={draft}
+          onDraft={setDraft}
+          sendInput={sendInput}
+          onSent={refresh}
+        />
       )}
       {open && (
         <ProcessOutputView
@@ -193,15 +210,24 @@ export interface ProcessStripProps {
   readonly projectId: string
   /** Changes when the transcript grows, so a just-started process appears now. */
   readonly refreshSignal?: unknown
+  /** The surface's current action mode: a wake turn runs in it (§7a). Without
+   *  it the strip never wakes SOL. */
+  readonly actionMode?: SolActionMode
   readonly deps?: ProcessStripDeps
 }
 
 export function ProcessStrip({
   projectId,
   refreshSignal,
+  actionMode,
   deps = REAL_PROCESS_DEPS
 }: ProcessStripProps): React.JSX.Element | null {
-  const { snapshot, machineId, refresh } = useCodeProcesses(projectId, deps, refreshSignal)
+  const { snapshot, machineId, refresh } = useCodeProcesses(
+    projectId,
+    deps,
+    refreshSignal,
+    actionMode
+  )
   if (snapshot === null || machineId === null) return null
   return (
     <StripList
