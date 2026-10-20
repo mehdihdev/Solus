@@ -1217,6 +1217,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/code/processes/{process_id}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Process Input
+         * @description The person's own input box or Enter button (§11.2): a user action, no card.
+         */
+        post: operations["send_process_input_api_v1_projects__project_id__code_processes__process_id__input_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/sources/{source_id}/hosted/{server}": {
         parameters: {
             query?: never;
@@ -2288,12 +2308,6 @@ export interface paths {
         /**
          * Decide Tool Confirmation
          * @description Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
-         *
-         *     The turn that proposed it has long since ended — a one-shot SSE stream cannot
-         *     block for a click — so the tool runs HERE, with the registry rebuilt under
-         *     the deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.
-         *     The request body carries a decision and nothing else, so what the user
-         *     approved is what executes (CLAUDE.md §7).
          */
         post: operations["decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post"];
         delete?: never;
@@ -4672,6 +4686,7 @@ export interface components {
             content?: string | null;
             /** Resume Confirmation Id */
             resume_confirmation_id?: string | null;
+            process_prompt?: components["schemas"]["ProcessPrompt"] | null;
             /** @default guide */
             action_mode: components["schemas"]["ActionMode"];
             /**
@@ -4961,6 +4976,32 @@ export interface components {
             channel: string;
             /** Wiring Proposal Id */
             wiring_proposal_id?: string | null;
+        };
+        /**
+         * ProcessInput
+         * @description `{text, enter}` (§11.1 bounds): printable text, a newline only via `enter`.
+         */
+        ProcessInput: {
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /**
+             * Enter
+             * @default true
+             */
+            enter: boolean;
+        };
+        /**
+         * ProcessPrompt
+         * @description Which waiting prompt woke the desktop: the process and its prompt number.
+         */
+        ProcessPrompt: {
+            /** Process Id */
+            process_id: string;
+            /** Prompt Seq */
+            prompt_seq: number;
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -8352,6 +8393,44 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_process_input_api_v1_projects__project_id__code_processes__process_id__input_post: {
+        parameters: {
+            query: {
+                machine_id: string;
+            };
+            header?: never;
+            path: {
+                process_id: string;
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProcessInput"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

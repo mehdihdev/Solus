@@ -611,3 +611,20 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
   "SOL paused — reply to continue". It wakes at most once per `(process_id, prompt_seq)`.
 - **Card.** A `code.process_input` card is a command card. It shows the prompt and input rows,
   and Cmd/Ctrl+Enter approves it under the same arming rules as other command cards.
+
+### 11.4 Error codes added during implementation
+
+- **User input route:** `504 input_unconfirmed` means the input was sent but no reply arrived in
+  time. `409 not_waiting` also covers a process that is not interactive or not running.
+- **Wake turn:**
+  - `404 not_found` when this conversation has no successful `code.process_start` with that
+    `process_id` (this also covers another member's or another team's conversation).
+  - `409 bridge_offline` when the caller's own bridge is missing or does not answer.
+  - `409 not_waiting` when the live status is not awaiting input or `prompt_seq` differs.
+  - `402` and `429` from the budget and frequency gates; these do not use up the wake.
+- **Card and wake details.**
+  - The `process_input` card's `prompt` row is the redacted tail, at most 500 chars.
+  - Approving after the prompt has moved on is refused as stale.
+  - The wake instruction names the process id and program basename, not the model-chosen
+    process `name`.
+  - An approved `process_input` card does not trigger a resume turn; the next prompt wakes SOL.
