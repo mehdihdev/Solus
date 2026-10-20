@@ -361,3 +361,36 @@ def test_home_containment_is_judged_by_inode_not_spelling(tmp_path: Path) -> Non
     assert landlock.holds_home(str(tmp_path / "USERS"), str(home))
     assert landlock.holds_home(str(tmp_path / "users" / "ME" / ".SOLUS" / "x"), str(home))
     assert not landlock.holds_home(str(tmp_path / "users" / "me" / "robot"), str(home))
+
+
+@pytest.mark.parametrize("descriptor", ["0", "1", "2"])
+def test_env_fd_may_never_be_a_standard_stream(descriptor: str) -> None:
+    """§11.1: an interactive child's terminal is fds 0-2; the helper must not consume
+    (and close) one of them as its environment descriptor."""
+    execs: list[object] = []
+    code = landlock.main(
+        ["--env-fd", descriptor, *HOME_ARGS, "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=lambda *args: execs.append(args),
+    )
+    assert code == landlock.EXIT_USAGE and execs == []
+
+
+def test_standard_streams_reach_the_program_untouched(tmp_path: Path) -> None:
+    """The helper passes fds 0-2 through to the final execve (the interactive PTY)."""
+    streams = [(info.st_dev, info.st_ino, info.st_rdev) for info in map(os.fstat, (0, 1, 2))]
+    read, write = os.pipe()
+    writer = threading.Thread(target=_feed, args=(write, b"A=1\0"))
+    writer.start()
+    seen: list[list[tuple[int, int, int]]] = []
+
+    def execve(*_args: object) -> None:
+        seen.append([(i.st_dev, i.st_ino, i.st_rdev) for i in map(os.fstat, (0, 1, 2))])
+
+    code = landlock.main(
+        ["--env-fd", str(read), *HOME_ARGS, "--rw", str(tmp_path), "--", "/bin/true"],
+        landlock=landlock.Landlock(FakeSyscalls()),
+        execve=execve,
+    )
+    writer.join()
+    assert code == 0 and seen == [streams]

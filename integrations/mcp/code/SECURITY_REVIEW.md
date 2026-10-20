@@ -506,3 +506,151 @@ Both items change what the planner lets through, so both are re-review triggers.
   under a workspace overlay. So does an explicit workspace venv `environment`
   (`create_environment` excepted: it creates one, it does not run it). The spawn-time
   recomputation uses the same plan fields.
+
+### 2026-10-19 addendum (6) — interactive processes and `process_input` (append-only)
+
+Governing text: ADR-031 amendment 2026-10-19 (interactive processes) and
+docs/api/code-command-execution.md §11.1. Agent verification; the human sign-offs above are
+unchanged and still required.
+
+- [x] `process_start {interactive: true}` attaches a Solus-owned pseudo-terminal
+  (`process_os.default_pty_spawn`): `os.openpty()`, slave as fds 0-2, `start_new_session`,
+  24x120 window, slave closed in the parent, master non-blocking and non-inheritable; a failed
+  spawn closes both ends (tested: no descriptor leak). It runs through the unchanged
+  `sandbox.wrap` (sandbox-exec / Landlock helper). The child gets `TERM=dumb`. The PTY is not
+  made the controlling terminal (no TIOCSCTTY): no line-discipline signals exist to send, and
+  `/dev/tty` opens fail closed. Non-interactive processes keep stdin closed.
+- [x] Landlock helper: `--env-fd` must now be > 2, so the helper can never consume and close a
+  standard stream; a test proves fds 0-2 reach the final `execve` untouched.
+- [x] REPLs and bare shells are refused in interactive mode (`command_deny.repl_reason`): an
+  `INLINE_CODE` interpreter or shell (argv[0] and resolved names, matched like the deny table)
+  with no non-option positional and no `-m <module>`; option values are consumed by the same
+  per-interpreter option tables, `-` (stdin) and a bare `--` count as no script. The plan answer
+  for `process_start` carries `interactive`, so the card and fingerprint reflect it.
+- [x] Output: UTF-8 with replacement; 7- and 8-bit CSI, OSC/DCS/SOS/PM/APC strings (BEL or ST
+  terminated; an unterminated string stops being discarded after 4096 chars), other ESC
+  sequences, C0 controls except `\n`/`\t`, DEL and C1 controls are removed; `\r\n` → `\n`,
+  lone `\r` ends a line. Lines keep the 2048-char suppression rule and the 256 KiB ring. The
+  held partial line is exposed at most 512 chars; `prompt_tail` is ≤ 5 lines + pending,
+  ≤ 1024 chars, tabs → spaces, no controls. Output is still untrusted data; redaction stays
+  cloud-side (§11.2).
+- [x] `awaiting_input` per §11.1 with an injectable clock; `prompt_seq` increments on each new
+  detection. Interpretation: after input is sent, the answered line (and the terminal's echo
+  of the input) never re-triggers detection; new output past the echo does.
+- [x] `process_input` (gated, strict schema, `text` maxLength 1024): text must satisfy
+  `str.isprintable()` (no C0/C1, no line/paragraph separators, no tab); a newline is written
+  only for `enter`. Refused for unknown, not-running or non-interactive processes and for
+  empty-without-Enter. The write holds a per-entry lock shared with the master close, so input
+  can never land on a reused descriptor, and gives up after 2 s (`ok: false`, partial
+  `sent_chars`). The companion never replays `code.process_input`.
+- [x] Cleanup: the reader closes the master at EOF/EIO; stop, timeout, exit and shutdown join
+  the reader and, if a descendant still holds the slave, stop it and close the master (tested
+  with a held slave, and on real sandboxed processes for stop and stop-all).
+- Residual: a program reading the terminal in raw mode receives exactly the printable text;
+  the line discipline's canonical-mode limit (MAX_CANON, 1024 bytes on macOS) can truncate a
+  long multi-byte line — the write then times out and reports `ok: false`.
+- Re-review relevance: the escape stripper, the REPL table, the input validator and the
+  master-fd lifecycle.
+
+### 2026-10-19 addendum (7) — REPL guard hardening (append-only; addendum 6 stands as written)
+
+- [x] The interactive-mode REPL check moved to `solus/repl_guard.py` and now fails closed:
+  an interpreter must reach its script through options its table knows; any unknown option
+  refuses. REPL-forcing flags are refused anywhere among leading options, including inside
+  short clusters: python `-i`, node/bun `-i`/`--interactive`, perl `-d`, lua `-i`, php `-a`.
+  Shells must start with their script (any leading `-`/`+` option refuses: `-i`, `-s`,
+  `--rcfile`, `--init-file`, `-o`, `+o`, …). `-` (stdin) and a bare `--` are no script.
+- [x] `-m <module>` counts only for python-family interpreters (python, pypy), and not for
+  the REPL/debugger modules code, pdb, idlelib, asyncio, IPython, ipdb, pudb, ptpython,
+  bpython (top-level package matched). perl -m/-M, ruby -r and node -r load a library and
+  then read code from the terminal, so without a script they are refused. REPL/debugger
+  subcommands are refused: node `inspect`/`debug`, bun `repl`, deno `repl`/`eval`; bare deno
+  is refused.
+- [x] REPL, debugger and database-shell programs are refused in interactive mode whatever
+  their arguments: ipython, ptpython, bpython, irb, pry, rails, sqlite3, psql, mysql, mongo,
+  mongosh, redis-cli, gdb, lldb, pdb, R, julia, ghci, erl, iex, node-inspect, tclsh, wish
+  (casefolded basename or normalised name, so versioned names like `tclsh8.6` match).
+  Non-interactive processes and `code.exec` are unaffected (stdin closed).
+- Residual: this is a denylist of known REPL programs. An unknown program that reads and
+  runs code from its terminal is not detected; every interactive start remains behind the
+  approval card.
+
+### 2026-10-19 addendum (8) — REPL guard: workspace scripts, stdin paths, more programs (append-only)
+
+- [x] In interactive mode the script an interpreter or shell runs, and `deno run`'s module,
+  must be an existing regular file inside the workspace, resolved relative to the planned cwd
+  with the same check as §10.2 shell scripts (`command_plan._script_file`). Paths outside the
+  workspace, directories, missing files and `..` escapes are refused. With no script check
+  supplied, the guard refuses everything (fail closed).
+- [x] For every interactive program, an argument (or an option's `=value`) that is `-`, or
+  whose normalised absolute path is under `/dev/` or `/proc/<pid|self>/fd`, is refused, so
+  code is never read from stdin or the terminal through a path (e.g. `make -f /dev/stdin`,
+  `deno run /dev/tty`). Consequence: an interactive program cannot be given a serial device
+  path such as `/dev/cu.usbmodem*` as an argument; such programs run non-interactively.
+- [x] python `-m` additionally refuses cProfile, profile, trace, runpy, timeit, xonsh,
+  sqlite3, jupyter, jupyter_console, ptipython, bpdb, web_pdb, rpdb, remote_pdb and ipykernel
+  (they run or forward other code, or open a prompt).
+- [x] Also refused as interactive programs, whatever their arguments: less, more, most,
+  man, vi, vim, nvim, view, ex, ed, emacs, ftp, telnet, ssh, nc, ncat, socat, screen, tmux,
+  script, expect (pagers and editors have shell escapes; the rest are remote or terminal
+  shells).
+
+### 2026-10-19 addendum (9) — REPL guard: fail-closed structure instead of denylists (append-only)
+
+Supersedes, for interactive mode only, the corresponding points of addenda (7) and (8); those
+entries stand as written for the record.
+
+- [x] python `-m` is allowed only when the module's top-level package is a workspace package
+  (a directory with `__init__.py`) or a workspace `.py` file, looked up relative to the
+  planned cwd and to the workspace root with the §10.2 regular-file-inside-workspace check
+  (`command_plan._module_file`; the top-level name must be an identifier, so no path tricks).
+  No stdlib or site-packages module can run interactively (`-m http.server`, `-m json.tool`,
+  `-m serial.tools.miniterm` are refused). The REPL/debugger module list remains an extra
+  refusal on top.
+- [x] deno runs interactively only as `deno [known global options] run [known run options]
+  <workspace file> [args]`. Run options come from an explicit table: permission flags (bare or
+  `=list`), `-A`, `-q`, `--no-check`, `--check`, `--reload`/`-r`, `--watch`, `--unstable`,
+  `--no-prompt`, `--cached-only`, `--no-remote`, `--no-npm`, `--env-file=…`, and the value
+  options `--config`/`-c`, `--import-map`, `--lock`, `--location`, `--seed`, `--cert`. Every
+  other subcommand (task, test, eval, repl, …) and every unknown option (incl. `--inspect*`)
+  is refused.
+- [x] Path-like arguments: for every interactive program, an argument or `=value` that is
+  `-` or a `file:` URL (any case) is refused outright. One containing `/` is joined to the
+  planned cwd; it is refused when either its normalised spelling or its realpath is under
+  `/dev` or `/proc/<pid|self>/fd`. A workspace symlink to `/dev/stdin` or `/dev/null` is
+  therefore refused. Serial ports are allowed back as plain arguments: `/dev/cu.*`, `/dev/tty.*`
+  (macOS), `/dev/ttyUSB<n>`, `/dev/ttyACM<n>` (Linux). `/dev/tty` and `/dev/ttys*` stay
+  refused. Example now allowed: `python -m mytool.miniterm /dev/cu.usbmodem1` with a workspace
+  `mytool` package.
+- Residual: a bare argument without `/` is not resolved as a path (a program could open a
+  workspace symlink named in it itself); the script/module checks and the card still apply.
+
+### 2026-10-19 addendum (10) — attached option values, `-m` resolution; recorded residuals (append-only)
+
+- [x] The path check also inspects a short option's attached value: for an argument `-<letter>…`
+  the remainder after the first letter gets the same rules (`-f-`, `-f/dev/stdin`, `-f./in`
+  where `in` links to a device are refused; `-fMakefile` is fine).
+- [x] python `-m` in interactive mode is refused when any preceding short flag (in any
+  cluster before the `m`) is `I`, `P` or `E`, since isolation, safe-path and ignored
+  environment change where the module is found. A `-W`/`-X` value is no longer scanned as
+  flags (`-Wignore` is accepted).
+- [x] The module's top-level package is looked up ONLY in the planned cwd (python's
+  `sys.path[0]` for `-m`), not in the workspace root as well.
+- [x] `-m` is refused when the applied profile sets PYTHONSAFEPATH (any value) or a PYTHONPATH
+  entry outside the workspace (absolute entries judged by inode containment; empty or relative
+  entries mean the cwd, which is inside). Scripts are not affected by this rule.
+- [x] `_pyrepl`, `pyrepl` and `pydoc` were added to the refused modules.
+
+**Residuals (accepted, recorded for the reviewers):**
+
+1. Bare-name arguments a program opens itself are not resolved. Only path-like arguments
+   (containing `/`), `=value`s and attached short-option values are checked, so a program
+   given `in` that opens a workspace symlink `in → /dev/stdin` itself is not detected.
+2. REPL_PROGRAMS and REPL_MODULES are denylists. An unknown program, or a workspace
+   script/module, that reads and runs code from its terminal is not detected by the guard.
+   The structural rules (workspace script/module required, known options only, no
+   stdin/device paths) narrow this but cannot close it.
+3. The primary control is the approval card. Every interactive `process_start` and every
+   non-Enter `process_input` is human-approved, showing the exact argv or input text. The
+   REPL guard is defense in depth, not the boundary. The OS sandbox applies to anything that
+   runs, whatever is typed.

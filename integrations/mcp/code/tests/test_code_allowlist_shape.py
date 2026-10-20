@@ -43,6 +43,7 @@ EXPECTED_GATED = frozenset(
         "exec",
         "process_start",
         "process_stop",
+        "process_input",
         "profile_capture",
         "profile_delete",
     }
@@ -129,6 +130,7 @@ def test_command_tools_have_the_documented_dispatch_bounds() -> None:
         "process_start": (True, 30),
         "process_stop": (True, 30),
         "process_status": (False, 15),
+        "process_input": (True, 15),
         "profile_capture": (True, 60),
         "profile_list": (False, 15),
         "profile_delete": (True, 15),

@@ -81,6 +81,8 @@ class Plan:
     #: `process_start`: the label and the runtime bound.
     label: str | None = None
     max_runtime_seconds: int | None = None
+    #: `process_start`: attach a Solus-owned pseudo-terminal (§11.1).
+    interactive: bool = False
     #: `profile_capture`: the profile being captured and its resolved setup file.
     capture_name: str | None = None
     setup_file: str | None = None
@@ -101,7 +103,7 @@ class Plan:
         profile = (
             {"name": self.profile.name, "digest": self.profile.digest} if self.profile else None
         )
-        return {
+        answer = {
             "argv": list(self.argv),
             "cwd": self.cwd,
             "ok": self.ok,
@@ -111,6 +113,9 @@ class Plan:
             "environment": self.environment,
             "program_scope": self.program_scope if self.ok else None,
         }
+        if self.action == "process_start":
+            answer["interactive"] = self.interactive
+        return answer
 
 
 def _refuse(action: str, reason: str) -> Plan:
