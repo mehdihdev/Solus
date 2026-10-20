@@ -16,7 +16,7 @@ the future. Expiry is evaluated at read time, so nothing has to sweep expired co
 
 from datetime import UTC, datetime
 
-from solus_api.models import PlanType, Subscription, default_limits, utcnow
+from solus_api.models import PlanType, Subscription, SubscriptionStatus, default_limits, utcnow
 
 
 def _aware(moment: datetime) -> datetime:
@@ -48,3 +48,14 @@ def effective_limits(sub: Subscription, now: datetime | None = None) -> dict[str
     else:
         base = dict(sub.limits or {})
     return {**base, **(sub.limits_override or {})}
+
+
+def is_local_trial_expired(sub: Subscription, now: datetime | None = None) -> bool:
+    """Whether a trial that Stripe does not back has run past `expires_at` (ADR-024
+    amendment, SOLUSDEV-236). Stripe-linked trials are Stripe's to end; a NULL
+    `expires_at` never expires. `expires_at <= now` counts as expired."""
+    if sub.status != SubscriptionStatus.TRIALING or sub.stripe_subscription_id is not None:
+        return False
+    if sub.expires_at is None:
+        return False
+    return _aware(sub.expires_at) <= _aware(now or utcnow())

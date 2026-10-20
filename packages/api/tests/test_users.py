@@ -1,8 +1,17 @@
 """§2.1 Users & settings (api-keys deferred to a later slice per §8 Phase 1)."""
 
-from conftest import ALICE, BOB, add_member, create_team, me
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from conftest import ALICE, BOB, add_member, bearer, create_team, me
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
+from solus_api.core.config import Settings
+from solus_api.main import create_app
+from solus_api.models import Subscription, SubscriptionStatus
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def test_get_me_shape(client: AsyncClient, alice_headers: dict[str, str]) -> None:
@@ -261,3 +270,78 @@ async def test_custom_instruction_is_private_to_its_owner(
     assert resp.status_code == 200
     assert resp.json()["data"]["sol_custom_instruction"] is None
     assert secret_note not in resp.text
+
+
+# --- SOLUSDEV-236: trial length + team trial_ends_at come from the caller's subscription ---
+
+
+async def _own_sub(db: AsyncSession, user_id: str) -> Subscription:
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uuid.UUID(user_id)))
+    assert sub is not None
+    return sub
+
+
+def _parse(stamp: str) -> datetime:
+    parsed = datetime.fromisoformat(stamp)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+async def test_team_trial_ends_at_is_callers_subscription_expiry(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _own_sub(db, alice["id"])
+    sub.expires_at = datetime(2031, 3, 4, 5, 6, tzinfo=UTC)
+    await db.commit()
+    data = await me(client, alice_headers)
+    assert _parse(data["teams"][0]["trial_ends_at"]) == datetime(2031, 3, 4, 5, 6, tzinfo=UTC)
+
+
+async def test_team_trial_ends_at_is_null_when_not_trialing(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _own_sub(db, alice["id"])
+    sub.status = SubscriptionStatus.ACTIVE
+    await db.commit()
+    data = await me(client, alice_headers)
+    assert data["teams"][0]["trial_ends_at"] is None
+
+
+async def test_team_trial_ends_at_never_uses_another_members_subscription(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    alice = await me(client, alice_headers)
+    bob = await me(client, bob_headers)
+    alice_end = datetime(2031, 1, 1, tzinfo=UTC)
+    bob_end = datetime(2032, 2, 2, tzinfo=UTC)
+    (await _own_sub(db, alice["id"])).expires_at = alice_end
+    (await _own_sub(db, bob["id"])).expires_at = bob_end
+    await db.commit()
+    team = await create_team(client, alice_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"])
+    for headers, expected in ((alice_headers, alice_end), (bob_headers, bob_end)):
+        teams = (await me(client, headers))["teams"]
+        shared = next(t for t in teams if t["team_id"] == team["id"])
+        assert _parse(shared["trial_ends_at"]) == expected
+
+
+async def test_provisioned_trial_length_reads_single_config_value(
+    settings: Settings, engine: Any, db: AsyncSession
+) -> None:
+    app = create_app(settings=settings.model_copy(update={"stripe_trial_days": 7}), engine=engine)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        headers = bearer(ALICE["sub"], ALICE["email"])
+        user = await me(c, headers)
+    sub = await _own_sub(db, user["id"])
+    assert sub.expires_at is not None
+    remaining = _expires(sub) - datetime.now(UTC)
+    assert timedelta(days=6, hours=23) < remaining <= timedelta(days=7)
+
+
+def _expires(sub: Subscription) -> datetime:
+    assert sub.expires_at is not None
+    return sub.expires_at if sub.expires_at.tzinfo else sub.expires_at.replace(tzinfo=UTC)

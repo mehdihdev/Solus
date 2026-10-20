@@ -86,7 +86,7 @@ async def test_subscription_checkout_sets_trial_metadata_and_ref(captured: dict[
         user_id="u1",
         success_url="https://ok",
         cancel_url="https://no",
-        trial_days=14,
+        trial_end=1_900_000_000,
     )
     assert url == "https://checkout.stripe.com/c/cs_1"
     p = captured["checkout"]
@@ -94,7 +94,7 @@ async def test_subscription_checkout_sets_trial_metadata_and_ref(captured: dict[
     assert p["line_items"] == [{"price": "price_bm", "quantity": 1}]
     assert p["client_reference_id"] == "u1"
     assert p["metadata"] == {"solus_user_id": "u1", "price_id": "price_bm"}
-    assert p["subscription_data"] == {"trial_period_days": 14}
+    assert p["subscription_data"] == {"trial_end": 1_900_000_000}
     assert p["success_url"] == "https://ok"
     assert p["api_key"] == "sk_test_x"
 
@@ -108,7 +108,7 @@ async def test_payment_checkout_has_no_subscription_data(captured: dict[str, Any
         user_id="u1",
         success_url="https://ok",
         cancel_url="https://no",
-        trial_days=None,
+        trial_end=None,
     )
     assert "subscription_data" not in captured["checkout"]
 

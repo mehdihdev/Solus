@@ -12,6 +12,7 @@ decisions; this route was authorized for SOLUSDEV-83. Documented in docs/api.
 import json
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import stripe
 from fastapi import APIRouter, Request
@@ -54,11 +55,29 @@ async def _subscription(session: AsyncSession, user_id: uuid.UUID) -> Subscripti
 _LIVE_SUBSCRIPTION_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
 
 
+# Stripe rejects a Checkout `trial_end` less than ~48h in the future, so a local trial
+# with less than this left is not carried over (SOLUSDEV-236).
+_MIN_STRIPE_TRIAL_LEAD = timedelta(hours=48)
+
+
+def _carried_trial_end(sub: Subscription, now: datetime | None = None) -> int | None:
+    """Stripe `trial_end` (epoch seconds) that carries a LIVE local trial's remaining
+    time into the paid subscription (wireflow billing.md Decisions 1). None when the
+    trial is Stripe-backed, expired, has no end date, or has under 48h left (Stripe
+    would refuse it) — the customer then starts paying immediately."""
+    if sub.stripe_subscription_id is not None or sub.expires_at is None:
+        return None
+    ends_at = sub.expires_at if sub.expires_at.tzinfo else sub.expires_at.replace(tzinfo=UTC)
+    if ends_at - (now or datetime.now(UTC)) <= _MIN_STRIPE_TRIAL_LEAD:
+        return None
+    return int(ends_at.timestamp())
+
+
 def _resolve_checkout_target(
     body: CheckoutSessionCreate, sub: Subscription, settings: Settings
 ) -> tuple[CheckoutMode, str, int | None]:
     """Validate the request against config + the caller's current subscription and
-    return (mode, price_id, trial_days). Raises APIError with a specific code on
+    return (mode, price_id, trial_end). Raises APIError with a specific code on
     any invalid / unconfigured / duplicate-subscription case."""
     if body.kind == "subscription":
         if body.plan not in CHECKOUTABLE_PLANS:
@@ -82,7 +101,7 @@ def _resolve_checkout_target(
             raise APIError(
                 503, "billing_unconfigured", "No Stripe price is configured for this plan"
             )
-        return "subscription", price_id, settings.stripe_trial_days
+        return "subscription", price_id, _carried_trial_end(sub)
 
     # credit pack: empty catalog is a server-config gap (503); a non-empty catalog
     # with an unknown id is a bad request (400).
@@ -123,7 +142,7 @@ async def create_checkout_session(
     the hosted redirect URL. The entitlement is applied by the webhook once Stripe
     confirms payment — never from this request (SOLUSDEV-83 / ADR-024)."""
     sub = await _subscription(session, user.id)
-    mode, price_id, trial = _resolve_checkout_target(body, sub, settings)
+    mode, price_id, trial_end = _resolve_checkout_target(body, sub, settings)
 
     try:
         customer = await gateway.get_or_create_customer(
@@ -139,7 +158,7 @@ async def create_checkout_session(
             user_id=str(user.id),
             success_url=settings.stripe_checkout_success_url,
             cancel_url=settings.stripe_checkout_cancel_url,
-            trial_days=trial,
+            trial_end=trial_end,
         )
     except BillingUnconfiguredError as exc:
         raise APIError(503, "billing_unconfigured", "Billing is not configured") from exc

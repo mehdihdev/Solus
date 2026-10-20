@@ -1,11 +1,11 @@
 """SubscriptionRead serves EFFECTIVE limits (SOLUSDEV-313, ADR-023 clarification)."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from conftest import me
 from httpx import AsyncClient
-from solus_api.models import PlanType, Subscription, default_limits
+from solus_api.models import PlanType, Subscription, SubscriptionStatus, default_limits
 from solus_api.schemas import SubscriptionRead
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -83,3 +83,36 @@ async def test_read_exposes_billing_interval_and_period_end(
     data = (await client.get("/api/v1/users/me/subscription", headers=alice_headers)).json()["data"]
     assert data["billing_interval"] == "year"
     assert data["current_period_end"].startswith("2030-01-02")
+
+
+async def test_read_trial_expired_false_for_live_local_trial(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    await me(client, alice_headers)
+    data = (await client.get("/api/v1/users/me/subscription", headers=alice_headers)).json()["data"]
+    assert data["trial_expired"] is False
+
+
+async def test_read_trial_expired_true_for_expired_local_trial(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _sub(db, alice["id"])
+    sub.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    await db.commit()
+    data = (await client.get("/api/v1/users/me/subscription", headers=alice_headers)).json()["data"]
+    assert data["trial_expired"] is True
+
+
+async def test_read_trial_expired_false_when_stripe_linked_or_not_trialing(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
+) -> None:
+    alice = await me(client, alice_headers)
+    sub = await _sub(db, alice["id"])
+    sub.expires_at = datetime.now(UTC) - timedelta(days=1)
+    sub.stripe_subscription_id = "sub_1"
+    await db.commit()
+    assert SubscriptionRead.model_validate(sub).trial_expired is False
+    sub.stripe_subscription_id = None
+    sub.status = SubscriptionStatus.ACTIVE
+    assert SubscriptionRead.model_validate(sub).trial_expired is False

@@ -342,7 +342,7 @@ class StripeGateway:
         user_id: str,
         success_url: str,
         cancel_url: str,
-        trial_days: int | None = None,
+        trial_end: int | None = None,
     ) -> str:
         """Create a hosted Checkout Session and return its redirect URL. The user
         id rides in both `client_reference_id` and `metadata.solus_user_id`, and
@@ -359,8 +359,10 @@ class StripeGateway:
             "cancel_url": cancel_url,
             "api_key": key,
         }
-        if mode == "subscription" and trial_days:
-            params["subscription_data"] = {"trial_period_days": trial_days}
+        if mode == "subscription" and trial_end:
+            # Carries a live local trial over (SOLUSDEV-236): the customer is not
+            # charged until the local trial would have ended.
+            params["subscription_data"] = {"trial_end": trial_end}
         session = await stripe.checkout.Session.create_async(**params)
         return str(session.url)
 

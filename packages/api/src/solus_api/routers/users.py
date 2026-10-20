@@ -53,19 +53,32 @@ from solus_api.services.events import emit_event
 router = APIRouter(prefix="/api/v1/users/me")
 
 
-@router.get("")
-async def get_me(user: CurrentUser, session: SessionDep, settings: SettingsDep) -> dict[str, Any]:
-    teams = [
-        serialize_team_summary(team, membership.role, settings)
+async def _team_summaries(session: AsyncSession, user: User) -> list[dict[str, Any]]:
+    """Team summaries for `user`. `trial_ends_at` comes from the CALLER's own
+    subscription (loaded by user_id) while trialing — never another member's
+    (SOLUSDEV-236)."""
+    sub = await session.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user.id, Subscription.deleted_at.is_(None)
+        )
+    )
+    trial_ends_at = (
+        sub.expires_at if sub is not None and sub.status == SubscriptionStatus.TRIALING else None
+    )
+    return [
+        serialize_team_summary(team, membership.role, trial_ends_at)
         for team, membership in await team_memberships(session, user)
     ]
+
+
+@router.get("")
+async def get_me(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
+    teams = await _team_summaries(session, user)
     return envelope(serialize_user(user, teams))
 
 
 @router.patch("")
-async def update_me(
-    body: UserUpdate, user: CurrentUser, session: SessionDep, settings: SettingsDep
-) -> dict[str, Any]:
+async def update_me(body: UserUpdate, user: CurrentUser, session: SessionDep) -> dict[str, Any]:
     updates = body.model_dump(exclude_unset=True)
     if "name" in updates:
         user.display_name = updates["name"]
@@ -73,10 +86,7 @@ async def update_me(
         user.avatar_url = updates["avatar_url"]
     await session.commit()
     await session.refresh(user)
-    teams = [
-        serialize_team_summary(team, membership.role, settings)
-        for team, membership in await team_memberships(session, user)
-    ]
+    teams = await _team_summaries(session, user)
     return envelope(serialize_user(user, teams))
 
 

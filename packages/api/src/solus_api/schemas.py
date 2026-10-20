@@ -2,17 +2,16 @@
 mutating endpoint (CLAUDE.md §7 input handling)."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from solus_api.billing.entitlements import effective_limits
+from solus_api.billing.entitlements import effective_limits, is_local_trial_expired
 from solus_api.billing.plans import CHECKOUTABLE_PLANS
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
-from solus_api.core.config import Settings
 from solus_api.models import (
     SOL_CUSTOM_INSTRUCTION_CAP,
     AccountConnection,
@@ -530,14 +529,18 @@ def serialize_sync(sync: Sync) -> dict[str, Any]:
     }
 
 
-def serialize_team_summary(team: Team, role: Role, settings: Settings) -> dict[str, Any]:
+def serialize_team_summary(
+    team: Team, role: Role, trial_ends_at: datetime | None
+) -> dict[str, Any]:
+    """`trial_ends_at` is the REQUESTING user's own trial end (SOLUSDEV-236) — the
+    caller passes it from their own subscription, never another member's."""
     return {
         "team_id": team.id,
         "name": team.name,
         "role": role.value,
         "is_personal": team.kind == TeamKind.PERSONAL,
         "plan_status": team.plan_status,
-        "trial_ends_at": ensure_utc(team.created_at) + timedelta(days=settings.trial_days),
+        "trial_ends_at": trial_ends_at,
     }
 
 
@@ -835,6 +838,8 @@ class SubscriptionRead(_SoftDeletable):
     # Cadence of the Stripe Price and the raw renewal date (SOLUSDEV-236); null when unlinked.
     billing_interval: str | None
     current_period_end: datetime | None
+    # Same predicate as the spend gate (SOLUSDEV-236); computed, not stored.
+    trial_expired: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -843,8 +848,14 @@ class SubscriptionRead(_SoftDeletable):
         comp) with the staff `limits_override` merged on top (ADR-023). Staff-only fields
         (`limits_override`, `comp_*`) are deliberately not exposed."""
         if isinstance(data, Subscription):
-            values = {name: getattr(data, name) for name in cls.model_fields}
-            return {**values, "limits": effective_limits(data)}
+            values = {
+                name: getattr(data, name) for name in cls.model_fields if name != "trial_expired"
+            }
+            return {
+                **values,
+                "limits": effective_limits(data),
+                "trial_expired": is_local_trial_expired(data),
+            }
         return data
 
 
