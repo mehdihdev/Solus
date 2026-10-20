@@ -506,3 +506,48 @@ Both items change what the planner lets through, so both are re-review triggers.
   under a workspace overlay. So does an explicit workspace venv `environment`
   (`create_environment` excepted: it creates one, it does not run it). The spawn-time
   recomputation uses the same plan fields.
+
+### 2026-10-19 addendum (6) — interactive processes and `process_input` (append-only)
+
+Governing text: ADR-031 amendment 2026-10-19 (interactive processes) and
+docs/api/code-command-execution.md §11.1. Agent verification; the human sign-offs above are
+unchanged and still required.
+
+- [x] `process_start {interactive: true}` attaches a Solus-owned pseudo-terminal
+  (`process_os.default_pty_spawn`): `os.openpty()`, slave as fds 0-2, `start_new_session`,
+  24x120 window, slave closed in the parent, master non-blocking and non-inheritable; a failed
+  spawn closes both ends (tested: no descriptor leak). It runs through the unchanged
+  `sandbox.wrap` (sandbox-exec / Landlock helper). The child gets `TERM=dumb`. The PTY is not
+  made the controlling terminal (no TIOCSCTTY): no line-discipline signals exist to send, and
+  `/dev/tty` opens fail closed. Non-interactive processes keep stdin closed.
+- [x] Landlock helper: `--env-fd` must now be > 2, so the helper can never consume and close a
+  standard stream; a test proves fds 0-2 reach the final `execve` untouched.
+- [x] REPLs and bare shells are refused in interactive mode (`command_deny.repl_reason`): an
+  `INLINE_CODE` interpreter or shell (argv[0] and resolved names, matched like the deny table)
+  with no non-option positional and no `-m <module>`; option values are consumed by the same
+  per-interpreter option tables, `-` (stdin) and a bare `--` count as no script. The plan answer
+  for `process_start` carries `interactive`, so the card and fingerprint reflect it.
+- [x] Output: UTF-8 with replacement; 7- and 8-bit CSI, OSC/DCS/SOS/PM/APC strings (BEL or ST
+  terminated; an unterminated string stops being discarded after 4096 chars), other ESC
+  sequences, C0 controls except `\n`/`\t`, DEL and C1 controls are removed; `\r\n` → `\n`,
+  lone `\r` ends a line. Lines keep the 2048-char suppression rule and the 256 KiB ring. The
+  held partial line is exposed at most 512 chars; `prompt_tail` is ≤ 5 lines + pending,
+  ≤ 1024 chars, tabs → spaces, no controls. Output is still untrusted data; redaction stays
+  cloud-side (§11.2).
+- [x] `awaiting_input` per §11.1 with an injectable clock; `prompt_seq` increments on each new
+  detection. Interpretation: after input is sent, the answered line (and the terminal's echo
+  of the input) never re-triggers detection; new output past the echo does.
+- [x] `process_input` (gated, strict schema, `text` maxLength 1024): text must satisfy
+  `str.isprintable()` (no C0/C1, no line/paragraph separators, no tab); a newline is written
+  only for `enter`. Refused for unknown, not-running or non-interactive processes and for
+  empty-without-Enter. The write holds a per-entry lock shared with the master close, so input
+  can never land on a reused descriptor, and gives up after 2 s (`ok: false`, partial
+  `sent_chars`). The companion never replays `code.process_input`.
+- [x] Cleanup: the reader closes the master at EOF/EIO; stop, timeout, exit and shutdown join
+  the reader and, if a descendant still holds the slave, stop it and close the master (tested
+  with a held slave, and on real sandboxed processes for stop and stop-all).
+- Residual: a program reading the terminal in raw mode receives exactly the printable text;
+  the line discipline's canonical-mode limit (MAX_CANON, 1024 bytes on macOS) can truncate a
+  long multi-byte line — the write then times out and reports `ok: false`.
+- Re-review relevance: the escape stripper, the REPL table, the input validator and the
+  master-fd lifecycle.
