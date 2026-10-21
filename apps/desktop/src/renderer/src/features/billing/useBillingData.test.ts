@@ -7,21 +7,26 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
+import * as billing from '../../lib/api/resources.billing'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
   return {
     ...actual,
-    getSubscription: vi.fn(),
     getCredits: vi.fn(),
     getCreditPacks: vi.fn(),
     createSubscriptionCheckout: vi.fn(),
-    createPackCheckout: vi.fn(),
-    createBillingPortal: vi.fn()
+    createPackCheckout: vi.fn()
   }
 })
 
-const SUB: resources.Subscription = {
+vi.mock('../../lib/api/resources.billing', () => ({
+  getBillingSubscription: vi.fn(),
+  getBillingSummary: vi.fn(),
+  createBillingPortalFlow: vi.fn()
+}))
+
+const SUB: billing.BillingSubscription = {
   user_id: 'u1',
   plan: 'basic',
   status: 'trialing',
@@ -30,13 +35,28 @@ const SUB: resources.Subscription = {
   seat_count: 1
 }
 
+const SUMMARY: billing.BillingSummary = {
+  plan: 'basic',
+  status: 'trialing',
+  billing_interval: null,
+  current_period_end: null,
+  cancel_at: null,
+  trial: { state: 'active', ends_at: '2026-08-01T00:00:00Z' },
+  next_invoice: null,
+  payment_method: null,
+  prices: null,
+  packs_available: true,
+  stripe_status: 'ok'
+}
+
 const openExternal = vi.fn().mockResolvedValue({ ok: true })
 
 beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.com' } })
-  vi.mocked(resources.getSubscription).mockResolvedValue(SUB)
+  vi.mocked(billing.getBillingSubscription).mockResolvedValue(SUB)
+  vi.mocked(billing.getBillingSummary).mockResolvedValue(SUMMARY)
   vi.mocked(resources.getCredits).mockResolvedValue({ user_id: 'u1', balance: 1000 })
   vi.mocked(resources.getCreditPacks).mockResolvedValue([{ price_id: 'price_p10', credits: 1000 }])
   ;(window as unknown as { solus?: unknown }).solus = { billing: { openExternal } }
@@ -49,6 +69,8 @@ afterEach(() => {
 describe('useBillingData', () => {
   billingSnapshotTests()
   billingActionsTests()
+  billingSummaryTests()
+  billingPortalFlowTests()
 })
 
 // --- in-app checkout window (SOLUSDEV-114) -----------------------------------
@@ -66,7 +88,7 @@ describe('useBillingData with the in-app checkout bridge', () => {
     openCheckout.mockReset()
     installCheckoutBridge()
     vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
-    vi.mocked(resources.createBillingPortal).mockResolvedValue({ url: 'https://portal/x' })
+    vi.mocked(billing.createBillingPortalFlow).mockResolvedValue({ url: 'https://portal/x' })
   })
   checkoutBridgeSuccessTests()
   checkoutWebhookRefreshTests()
@@ -119,11 +141,11 @@ function billingSnapshotTests(): void {
     useAuthStore.setState({ status: 'unauthenticated', user: null })
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('offline'))
-    expect(resources.getSubscription).not.toHaveBeenCalled()
+    expect(billing.getBillingSubscription).not.toHaveBeenCalled()
   })
 
   it('treats a 404 (no subscription) as ready with a null plan', async () => {
-    vi.mocked(resources.getSubscription).mockRejectedValue(new Error('404'))
+    vi.mocked(billing.getBillingSubscription).mockRejectedValue(new Error('404'))
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.subscription).toBeNull()
@@ -154,7 +176,7 @@ function billingActionsTests(): void {
   })
 
   it('openPortal opens the billing-portal URL', async () => {
-    vi.mocked(resources.createBillingPortal).mockResolvedValue({ url: 'https://portal/x' })
+    vi.mocked(billing.createBillingPortalFlow).mockResolvedValue({ url: 'https://portal/x' })
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
     await act(async () => {
@@ -195,12 +217,14 @@ function checkoutBridgeSuccessTests(): void {
     window.addEventListener('solus:notifications-refresh', bellRefresh)
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
-    const callsBefore = vi.mocked(resources.getSubscription).mock.calls.length
+    const callsBefore = vi.mocked(billing.getBillingSubscription).mock.calls.length
     await act(async () => {
       await result.current.startCheckout('pro', 'month')
     })
     await waitFor(() =>
-      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(callsBefore)
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBeGreaterThan(
+        callsBefore
+      )
     )
     expect(result.current.notice).toMatch(/payment received/i)
     expect(bellRefresh).toHaveBeenCalled()
@@ -218,11 +242,11 @@ function checkoutWebhookRefreshTests(): void {
       await act(async () => {
         await result.current.startCheckout('pro', 'month')
       })
-      const callsAfterImmediate = vi.mocked(resources.getSubscription).mock.calls.length
+      const callsAfterImmediate = vi.mocked(billing.getBillingSubscription).mock.calls.length
       await act(async () => {
         await vi.advanceTimersByTimeAsync(15_000)
       })
-      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBeGreaterThan(
         callsAfterImmediate
       )
     } finally {
@@ -249,12 +273,14 @@ function checkoutBridgeOutcomesTests(): void {
     openCheckout.mockResolvedValue({ status: 'return' })
     const { result } = renderHook(() => useBillingData())
     await waitFor(() => expect(result.current.status).toBe('ready'))
-    const callsBefore = vi.mocked(resources.getSubscription).mock.calls.length
+    const callsBefore = vi.mocked(billing.getBillingSubscription).mock.calls.length
     await act(async () => {
       await result.current.openPortal()
     })
     await waitFor(() =>
-      expect(vi.mocked(resources.getSubscription).mock.calls.length).toBeGreaterThan(callsBefore)
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBeGreaterThan(
+        callsBefore
+      )
     )
     expect(result.current.notice).toBeNull()
   })
@@ -276,6 +302,133 @@ function checkoutBridgeOutcomesTests(): void {
     await act(async () => {
       await result.current.startCheckout('pro', 'month')
     })
-    expect(result.current.notice).toMatch(/went wrong/i)
+    expect(result.current.notice).toMatch(/couldn.t open checkout/i)
+  })
+}
+
+function billingSummaryTests(): void {
+  it('exposes the summary alongside the other data', async () => {
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.summary).toEqual(SUMMARY)
+  })
+
+  it('a failing summary does not flip the page offline (summary is null = degraded)', async () => {
+    vi.mocked(billing.getBillingSummary).mockRejectedValue(new ApiError(429, 'rate_limited', 'x'))
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.summary).toBeNull()
+    expect(result.current.subscription?.plan).toBe('basic')
+  })
+
+  it('stamps the snapshot time used for read-time trial expiry', async () => {
+    const before = Date.now()
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.asOf).toBeGreaterThanOrEqual(before)
+  })
+
+  it('refetches the summary on window focus', async () => {
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const before = vi.mocked(billing.getBillingSummary).mock.calls.length
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    await waitFor(() =>
+      expect(vi.mocked(billing.getBillingSummary).mock.calls.length).toBeGreaterThan(before)
+    )
+  })
+}
+
+async function openFlow(
+  flow: 'update' | 'cancel' | undefined
+): Promise<ReturnType<typeof renderHook<ReturnType<typeof useBillingData>, unknown>>> {
+  const hook = renderHook(() => useBillingData())
+  await waitFor(() => expect(hook.result.current.status).toBe('ready'))
+  await act(async () => {
+    await hook.result.current.openPortalFlow(flow)
+  })
+  return hook
+}
+
+function billingPortalFlowTests(): void {
+  it.each([undefined, 'update', 'cancel'] as const)(
+    'openPortalFlow(%s) requests that flow and opens the URL',
+    async (flow) => {
+      vi.mocked(billing.createBillingPortalFlow).mockResolvedValue({ url: 'https://portal/f' })
+      await openFlow(flow)
+      expect(billing.createBillingPortalFlow).toHaveBeenCalledWith(flow)
+      expect(openExternal).toHaveBeenCalledWith('https://portal/f')
+    }
+  )
+
+  it('portal flows trigger the 1.5/4/10 s refetches (subscription and summary)', async () => {
+    vi.mocked(billing.createBillingPortalFlow).mockResolvedValue({ url: 'https://portal/f' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    vi.useFakeTimers()
+    try {
+      await act(async () => {
+        await result.current.openPortalFlow('update')
+      })
+      const subBefore = vi.mocked(billing.getBillingSubscription).mock.calls.length
+      const sumBefore = vi.mocked(billing.getBillingSummary).mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1600)
+      })
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBe(subBefore + 1)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBe(subBefore + 3)
+      expect(vi.mocked(billing.getBillingSummary).mock.calls.length).toBe(sumBefore + 3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    ['update', 'no_active_subscription', /can.t be changed right now — use Manage billing/],
+    ['cancel', 'cancel_already_scheduled', /already scheduled to end/],
+    [undefined, 'no_billing_customer', /Start a subscription first/]
+  ] as const)('maps a 409 on flow %s (%s) to the wireflow copy', async (flow, code, copy) => {
+    vi.mocked(billing.createBillingPortalFlow).mockRejectedValue(new ApiError(409, code, 'x'))
+    const { result } = await openFlow(flow)
+    expect(result.current.notice).toMatch(copy)
+    expect(openExternal).not.toHaveBeenCalled()
+  })
+
+  it('cancel_already_scheduled also refetches so the page shows the pending cancel', async () => {
+    vi.mocked(billing.createBillingPortalFlow).mockRejectedValue(
+      new ApiError(409, 'cancel_already_scheduled', 'x')
+    )
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    const before = vi.mocked(billing.getBillingSubscription).mock.calls.length
+    await act(async () => {
+      await result.current.openPortalFlow('cancel')
+    })
+    await waitFor(() =>
+      expect(vi.mocked(billing.getBillingSubscription).mock.calls.length).toBeGreaterThan(before)
+    )
+  })
+
+  it('a generic portal failure says it could not open billing', async () => {
+    vi.mocked(billing.createBillingPortalFlow).mockRejectedValue(new Error('boom'))
+    const { result } = await openFlow(undefined)
+    expect(result.current.notice).toBe('Couldn’t open billing — try again.')
+  })
+
+  it('a 502/503 checkout failure uses the Stripe-unavailable copy', async () => {
+    vi.mocked(resources.createSubscriptionCheckout).mockRejectedValue(
+      new ApiError(502, 'billing_provider_error', 'x')
+    )
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.startCheckout('pro', 'month')
+    })
+    expect(result.current.notice).toMatch(/temporarily unavailable/)
   })
 }

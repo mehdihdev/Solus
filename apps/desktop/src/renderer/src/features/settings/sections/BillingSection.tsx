@@ -3,9 +3,16 @@
 // the provider-facing checkout/portal routes are deferred (API.md §2.14).
 import { Mono } from '../../../components/ui/Mono'
 import { Section, Row } from '../settingsUi'
-import { planLabel, statusLabel, trialDaysLeft, limitLabel } from '../billingFormat'
+import {
+  formatDate,
+  planLabel,
+  statusLabel,
+  trialEndsLabel,
+  trialState,
+  limitLabel
+} from '../billingFormat'
 import type { SettingsData } from '../useSettingsData'
-import type { Subscription } from '../../../lib/api/resources'
+import type { BillingSubscription } from '../../../lib/api/resources.billing'
 
 const LIMIT_ROWS: readonly (readonly [string, string])[] = [
   ['max_integrations', 'Integrations'],
@@ -13,8 +20,14 @@ const LIMIT_ROWS: readonly (readonly [string, string])[] = [
   ['max_teams', 'Teams']
 ]
 
-function SubscriptionSummary({ sub, now }: { sub: Subscription; now: number }): React.JSX.Element {
-  const days = sub.status === 'trialing' ? trialDaysLeft(sub.expires_at, now) : null
+function SubscriptionSummary({
+  sub,
+  now
+}: {
+  sub: BillingSubscription
+  now?: number
+}): React.JSX.Element {
+  const trial = trialState(sub, now)
   return (
     <>
       <Row label="Plan">
@@ -25,11 +38,14 @@ function SubscriptionSummary({ sub, now }: { sub: Subscription; now: number }): 
           </Mono>
         </span>
       </Row>
-      {days !== null && (
+      {trial.kind === 'active' && (
         <Row label="Trial ends">
-          <span style={{ fontSize: 12.5 }}>
-            {days === 0 ? 'today' : `in ${days} ${days === 1 ? 'day' : 'days'}`}
-          </span>
+          <span style={{ fontSize: 12.5 }}>{trialEndsLabel(trial.days)}</span>
+        </Row>
+      )}
+      {trial.kind === 'ended' && (
+        <Row label="Trial ended">
+          <span style={{ fontSize: 12.5 }}>{formatDate(trial.endsAt)}</span>
         </Row>
       )}
       <Row label="Seats">
@@ -48,7 +64,7 @@ function SubscriptionSummary({ sub, now }: { sub: Subscription; now: number }): 
 
 export function BillingSection({
   data,
-  now = Date.now()
+  now
 }: {
   data: SettingsData
   now?: number
