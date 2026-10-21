@@ -195,6 +195,28 @@ async def test_list_portal_configurations_active_and_paginated(
     assert seen[1]["starting_after"] == "bpc_1"
 
 
+async def test_list_portal_configurations_returns_plain_dicts_from_real_sdk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (live QA 2026-10-21): SDK 15 StripeObjects are not Mappings and have no
+    # .get(), so the matcher crashed on real responses. The gateway must hand back dicts.
+    page = stripe.StripeObject.construct_from(
+        {
+            "data": [{"id": "bpc_1", "metadata": {"solus_portal_config": "v1"}}],
+            "has_more": False,
+        },
+        "sk_test_x",
+    )
+
+    async def fake_list(**params: Any) -> stripe.StripeObject:
+        return page
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    got = await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert got == [{"id": "bpc_1", "metadata": {"solus_portal_config": "v1"}}]
+    assert all(type(c) is dict and type(c["metadata"]) is dict for c in got)
+
+
 async def test_list_portal_configurations_pagination_is_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

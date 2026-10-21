@@ -466,7 +466,8 @@ class StripeGateway:
                 **params,
             )
             data = list(_g(page, "data") or [])
-            found.extend(data)
+            # Plain dicts out: SDK 15 StripeObjects are not Mappings (no .get()).
+            found.extend(c.to_dict() if hasattr(c, "to_dict") else c for c in data)
             last = _g(data[-1], "id") if data else None
             if not _g(page, "has_more") or not isinstance(last, str):
                 break
