@@ -763,3 +763,45 @@ function registerTeamRepoDispatchTests(): void {
     })
   })
 }
+
+it('unmounting mid-flight cancels the attempt and forgets its tile state', async () => {
+  // The wizard's input resolvers die with the component that started the flow.
+  // A flow left waiting after its surface unmounts (Accounts → Project view)
+  // leaves a picker in the shared store that no click can ever answer.
+  withBridge()
+  parkOAuth({ phase: 'busy', stage: 'configure', label: 'Choose documents to track…' })
+  const { result, unmount } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+  act(() => result.current.open(GITHUB))
+  act(() => {
+    void result.current.begin()
+  })
+  await act(async () => undefined)
+  expect(useOnboardingStore.getState().connections.github?.phase).toBe('busy')
+
+  unmount()
+  expect(cancelOAuth).toHaveBeenCalled()
+  expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+})
+
+it('opening clears an in-flight picker this wizard does not own, so Track is never dead', () => {
+  // Another wizard's abandoned flow left a busy picker behind. Its resolver is
+  // unreachable from here, so showing it would render a button that does nothing.
+  useOnboardingStore.getState().setConnection('github', {
+    phase: 'busy',
+    stage: 'configure',
+    label: 'Choose repositories to track…',
+    sourceId: 's9',
+    selectable: [{ id: 'r1', name: 'repo' }],
+    selectionMode: 'single'
+  })
+  const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+  act(() => result.current.open(GITHUB))
+  expect(useOnboardingStore.getState().connections.github).toBeUndefined()
+})
+
+it('opening keeps a settled error or done state (retryable, not stale)', () => {
+  useOnboardingStore.getState().failConnect('github', 'Sync failed.')
+  const { result } = renderHook(() => useConnectWizard({ projectId: 'p1' }))
+  act(() => result.current.open(GITHUB))
+  expect(useOnboardingStore.getState().connections.github?.phase).toBe('error')
+})

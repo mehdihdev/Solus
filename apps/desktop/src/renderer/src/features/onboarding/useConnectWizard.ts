@@ -383,8 +383,39 @@ function useWizardAttempt(options: UseConnectWizardOptions) {
     useOnboardingStore.getState().clearConnection(entry.id)
   }
 
+  // The flow's input resolvers live in THIS hook, but its tile state lives in
+  // the shared store. Unmounting mid-flight (Accounts → Project view) would
+  // leave a picker on screen that no click can answer, so it cancels instead.
+  const cancels = useRef({ oauth: oauth.cancel, eda: eda.cancel })
+  useEffect(() => {
+    cancels.current = { oauth: oauth.cancel, eda: eda.cancel }
+  }, [oauth.cancel, eda.cancel])
+  useEffect(
+    () => () => {
+      const live = Object.entries(attempts.current).filter(
+        ([, attempt]) => !attempt.settled && !attempt.cancelled
+      )
+      if (live.length === 0) return
+      cancels.current.oauth()
+      cancels.current.eda()
+      for (const [id, attempt] of live) {
+        attempt.cancelled = true
+        useOnboardingStore.getState().clearConnection(id)
+      }
+    },
+    []
+  )
+
   const open = (entry: CatalogEntry): void => {
     clearTeamPick()
+    // A busy state this wizard did not start belongs to a flow whose resolvers
+    // are out of reach (another surface's wizard): showing it would render a
+    // dead Track button. Settled states (error, done) stay as they are.
+    const own = attempts.current[entry.id]
+    const store = useOnboardingStore.getState()
+    if (store.connections[entry.id]?.phase === 'busy' && (!own || own.settled || own.cancelled)) {
+      store.clearConnection(entry.id)
+    }
     setActive(entry)
   }
 
