@@ -20,6 +20,7 @@ import { usePinsStore } from '../extensions/pinsStore'
 import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 import { useAccountEvents } from '../live/useAccountEvents'
 import { useLiveProject } from './useLiveProject'
+import { usePaletteStore } from '../palette/paletteStore'
 
 const workspaceActions = vi.hoisted(() => ({ enabled: false }))
 vi.mock('../graph/WorkspaceScreen', async (importOriginal) => {
@@ -823,4 +824,31 @@ it('opens and consumes the existing Workspace Hardware request without reopening
   await userEvent.click(screen.getByText('Live Bench'))
   await userEvent.click(screen.getByText('Workspace'))
   expect(screen.getByTestId('workspace-actions')).toHaveAttribute('data-request', '')
+})
+
+describe('WorkspaceShell — ⌘K command palette (SOLUSDEV-317)', () => {
+  beforeEach(() => usePaletteStore.getState().reset())
+
+  it('opens from the search box and jumps to a page', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: /Search pages, projects, nodes/ }))
+    const input = screen.getByRole('combobox', { name: 'Search Solus' })
+    fireEvent.change(input, { target: { value: 'bench' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(useShellStore.getState().lastMain).toBe('bench')
+    expect(screen.queryByRole('dialog', { name: 'Search' })).toBeNull()
+  })
+
+  it('opens with the keyboard shortcut and opens a project on its Workspace', async () => {
+    renderShell()
+    const mac = /mac/i.test(navigator.platform)
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: mac, ctrlKey: !mac }))
+    })
+    const input = screen.getByRole('combobox', { name: 'Search Solus' })
+    fireEvent.change(input, { target: { value: 'mk3' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p2', teamId: 't1' })
+    expect(useShellStore.getState().lastMain).toBe('workspace')
+  })
 })

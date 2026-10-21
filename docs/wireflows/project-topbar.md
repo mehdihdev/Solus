@@ -41,7 +41,9 @@ design**; reshape by editing the constant.
 
 Right cluster, unchanged from the previous topbar: bridge pill, search box
 (⌘K), notifications bell with unread badge, `Sign out`. The notifications
-popover anchors under this row.
+popover anchors under this row. The search box is a button that opens the ⌘K
+command palette (SOLUSDEV-317, see `command-palette.md`). Its label reads
+`Search pages, projects, nodes…` and its hint is `⌘K` on macOS, `Ctrl K` elsewhere.
 
 ## Rail
 

@@ -16,7 +16,7 @@ export interface ApproveShortcut {
   readonly aria: string
 }
 
-function isMac(): boolean {
+export function isMac(): boolean {
   const platform = getDesktopPlatform()
   if (platform !== null) return platform === 'darwin'
   return typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)

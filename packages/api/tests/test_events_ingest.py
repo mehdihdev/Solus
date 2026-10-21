@@ -439,3 +439,63 @@ async def test_store_suggested_is_a_typed_client_event(
         bad = {**good, "payload": payload}
         resp = await client.post("/api/v1/events", json={"events": [bad]}, headers=headers)
         assert resp.status_code == 422, (payload, resp.text)
+
+
+async def test_search_palette_opened_is_a_typed_client_event(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-317: the desktop records that a ⌘K palette result was opened —
+    which kind, at which rank, after how long a query. Never the query text or
+    the result's label: the payload is closed and bounded."""
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    good = {
+        "event_type": "search.palette_opened",
+        "project_id": project["id"],
+        "payload": {"kind": "node", "rank": 2, "query_length": 5},
+    }
+    resp = await client.post("/api/v1/events", json={"events": [good]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "search.palette_opened")
+    rows = list((await db.scalars(stmt)).all())
+    assert len(rows) == 1 and str(rows[0].user_id) == alice_id
+    assert str(rows[0].project_id) == project["id"]
+    assert rows[0].payload == {"kind": "node", "rank": 2, "query_length": 5}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "file", "rank": 0, "query_length": 0},
+        {"kind": "node", "rank": -1, "query_length": 0},
+        {"kind": "node", "rank": 500, "query_length": 0},
+        {"kind": "node", "rank": 0, "query_length": 201},
+        {"kind": "node", "rank": 0, "query_length": 3, "query": "imu"},
+        {"kind": "node", "rank": 0},
+    ],
+)
+async def test_search_palette_opened_payload_is_strictly_typed(
+    client: AsyncClient, payload: dict[str, Any]
+) -> None:
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = {"event_type": "search.palette_opened", "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 422, (payload, resp.text)
+
+
+async def test_project_switched_accepts_the_palette_surface(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-317: opening a project from ⌘K reports `surface: "palette"`."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    event = {
+        "event_type": "project.switched",
+        "project_id": project["id"],
+        "payload": {"from_project_id": None, "surface": "palette"},
+    }
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text

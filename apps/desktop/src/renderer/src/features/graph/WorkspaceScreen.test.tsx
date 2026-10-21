@@ -10,6 +10,7 @@ import { WorkspaceScreen } from './WorkspaceScreen'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useFocusStore } from '../workspace/focusStore'
+import { usePaletteStore } from '../palette/paletteStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 import * as workspaceApi from '../../lib/api/workspace'
@@ -713,6 +714,28 @@ function registerRootRobotCreationTests(): void {
 }
 
 function registerContainmentFocusTests(): void {
+  it('serves a ⌘K jump to a nested node: enters its level and focuses it with its path (SOLUSDEV-317)', async () => {
+    linkProject()
+    const root = entity('root', 'Assembly')
+    const leaf = entity('leaf', 'Motor')
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1, [{ id: 's1' }]))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([root, leaf])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
+      { id: 'r1', type: 'contains', from_entity_id: 'root', to_entity_id: 'leaf' }
+    ])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [root, leaf],
+      edges: [],
+      truncated: false
+    })
+    usePaletteStore.getState().requestJump('p1', 'leaf')
+    render(<WorkspaceScreen />)
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('leaf'))
+    expect(useFocusStore.getState().path.map((step) => step.entity.entityId)).toEqual(['root'])
+    expect(await screen.findByRole('button', { name: 'Select Motor' })).toBeInTheDocument()
+    expect(usePaletteStore.getState().jump).toBeNull()
+  })
+
   it('navigates a containment level and selects a leaf with its shared focus path', async () => {
     linkProject()
     const root = entity('root', 'Assembly')
