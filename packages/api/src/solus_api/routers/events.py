@@ -17,6 +17,7 @@ call still succeeds and nothing is stored.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Annotated, Any, Literal
@@ -161,8 +162,11 @@ class ClientEvent(BaseModel):
         schema = PAYLOAD_SCHEMAS.get(self.event_type)
         if schema is None:
             return self
+        # JSON-strict: the RAW payload is what gets stored, so it must already be the
+        # schema's types — "7", true or 7.0 for an int reject instead of being coerced
+        # and stored as sent. JSON mode still takes UUIDs as strings, as on the wire.
         try:
-            schema.model_validate(self.payload)
+            schema.model_validate_json(json.dumps(self.payload), strict=True)
         except ValidationError as exc:
             raise ValueError(
                 f"payload does not match {self.event_type}: {exc.error_count()} error(s)"

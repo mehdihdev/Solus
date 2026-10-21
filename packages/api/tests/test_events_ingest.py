@@ -499,3 +499,42 @@ async def test_project_switched_accepts_the_palette_surface(
     }
     resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
     assert resp.status_code == 202, resp.text
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        ("search.palette_opened", {"kind": "node", "rank": "7", "query_length": 3}),
+        ("search.palette_opened", {"kind": "node", "rank": 7, "query_length": True}),
+        ("search.palette_opened", {"kind": "node", "rank": 7.0, "query_length": 3}),
+        ("store.suggested", {"slug": "bom", "unlocked_by": ["eda"], "candidates": "1"}),
+        ("project.switched", {"from_project_id": None, "surface": 1}),
+    ],
+)
+async def test_typed_payloads_reject_coercible_values(
+    client: AsyncClient, event_type: str, payload: dict[str, Any]
+) -> None:
+    """The raw payload is what gets stored, so a typed event must already BE
+    its schema's types: a numeric string, a bool or a float where an int is
+    declared rejects rather than being coerced and stored as sent."""
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = {"event_type": event_type, "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 422, (payload, resp.text)
+
+
+async def test_typed_payloads_still_accept_uuid_strings(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Strictness is JSON-strict: ids arrive as strings over the wire and stay valid."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    event = {
+        "event_type": "project.switched",
+        "project_id": project["id"],
+        "payload": {"from_project_id": project["id"], "surface": "palette"},
+    }
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
