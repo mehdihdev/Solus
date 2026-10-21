@@ -16,6 +16,7 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import stripe
@@ -322,6 +323,42 @@ def _translate(operation: str, exc: stripe.StripeError) -> StripeOperationError:
     return StripeOperationError(operation, code=code, http_status=status, retryable=retryable)
 
 
+@dataclass(frozen=True)
+class InvoicePreview:
+    """The upcoming invoice, reduced to what the Billing screen shows (SOLUSDEV-236)."""
+
+    amount_cents: int
+    currency: str
+    date: datetime
+
+
+@dataclass(frozen=True)
+class CardSummary:
+    """Brand and last four only; the PaymentMethod id is never carried (CLAUDE.md section 7)."""
+
+    brand: str
+    last4: str
+
+
+@dataclass(frozen=True)
+class PriceAmount:
+    amount_cents: int
+    currency: str
+    interval: str
+
+
+_NO_UPCOMING_INVOICE_CODE = "invoice_upcoming_none"
+
+
+def _card_of(payment_method: Any) -> CardSummary | None:
+    """A card brand/last4 from an expanded PaymentMethod; None for non-cards or bare ids."""
+    card = _g(payment_method, "card")
+    brand, last4 = _g(card, "brand"), _g(card, "last4")
+    if not isinstance(brand, str) or not isinstance(last4, str):
+        return None
+    return CardSummary(brand=brand, last4=last4)
+
+
 class StripeGateway:
     """Thin async wrapper over the Stripe SDK, keyed from the SecretStore."""
 
@@ -457,6 +494,73 @@ class StripeGateway:
             if product is None:
                 raise StripeOperationError("price.retrieve", code="no_product")
             out[price_id] = product
+        return out
+
+    async def upcoming_invoice(
+        self, customer_id: str, subscription_id: str
+    ) -> InvoicePreview | None:
+        """Preview of the subscription's next invoice (SOLUSDEV-236); None when Stripe
+        reports there is none (canceled or cancel-pending)."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+        try:
+            invoice = await self._call(
+                "invoice.create_preview",
+                stripe.Invoice.create_preview_async,
+                customer=customer_id,
+                subscription=subscription_id,
+            )
+        except StripeOperationError as exc:
+            if exc.code == _NO_UPCOMING_INVOICE_CODE:
+                return None
+            raise
+        when = _g(invoice, "next_payment_attempt") or _g(invoice, "period_end")
+        amount, currency = _g(invoice, "amount_due"), _g(invoice, "currency")
+        if (
+            not isinstance(when, int)
+            or not isinstance(amount, int)
+            or not isinstance(currency, str)
+        ):
+            raise StripeOperationError("invoice.create_preview", code="malformed_invoice")
+        return InvoicePreview(amount, currency, datetime.fromtimestamp(when, UTC))
+
+    async def default_payment_method(
+        self, customer_id: str, subscription_id: str
+    ) -> CardSummary | None:
+        """The default card: the subscription's, else the customer's invoice default."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+        sub = await self._call(
+            "subscription.retrieve",
+            stripe.Subscription.retrieve_async,
+            subscription_id,
+            expand=["default_payment_method"],
+        )
+        card = _card_of(_g(sub, "default_payment_method"))
+        if card is not None:
+            return card
+        customer = await self._call(
+            "customer.retrieve",
+            stripe.Customer.retrieve_async,
+            customer_id,
+            expand=["invoice_settings.default_payment_method"],
+        )
+        return _card_of(_g(_g(customer, "invoice_settings"), "default_payment_method"))
+
+    async def price_amounts(self, price_ids: list[str]) -> dict[str, PriceAmount]:
+        """Amount, currency and interval of each recurring Price, fetched concurrently."""
+        for price_id in price_ids:
+            _check_id(price_id, _PRICE_ID_RE, "price id")
+        prices = await asyncio.gather(
+            *(self._call("price.retrieve", stripe.Price.retrieve_async, p) for p in price_ids)
+        )
+        out: dict[str, PriceAmount] = {}
+        for price_id, price in zip(price_ids, prices, strict=True):
+            amount, currency = _g(price, "unit_amount"), _g(price, "currency")
+            interval = _g(_g(price, "recurring"), "interval")
+            if not isinstance(amount, int) or not isinstance(currency, str) or not interval:
+                raise StripeOperationError("price.retrieve", code="unusable_price")
+            out[price_id] = PriceAmount(amount, currency, str(interval))
         return out
 
     # ------------------------------------------------------------------ #

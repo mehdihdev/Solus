@@ -897,6 +897,50 @@ class PortalSessionRead(BaseModel):
     url: str
 
 
+class BillingTrialRead(BaseModel):
+    """Trial state derived at read time (SOLUSDEV-236)."""
+
+    state: Literal["active", "expired", "none"]
+    ends_at: datetime | None
+
+
+class BillingInvoiceRead(BaseModel):
+    amount_cents: int
+    currency: str
+    date: datetime
+
+
+class BillingCardRead(BaseModel):
+    """Brand and last four digits only (CLAUDE.md section 7)."""
+
+    brand: str
+    last4: str
+
+
+class BillingPriceRead(BaseModel):
+    plan: PlanType
+    interval: Literal["month", "year"]
+    amount_cents: int
+    currency: str
+
+
+class BillingSummaryRead(BaseModel):
+    """GET /billing/summary read model for the Billing screen (SOLUSDEV-236). Carries no
+    Stripe object ids; Stripe-derived fields are null in degraded mode."""
+
+    plan: PlanType
+    status: SubscriptionStatus
+    billing_interval: str | None
+    current_period_end: datetime | None
+    cancel_at: datetime | None
+    trial: BillingTrialRead
+    next_invoice: BillingInvoiceRead | None
+    payment_method: BillingCardRead | None
+    prices: list[BillingPriceRead] | None
+    packs_available: bool
+    stripe_status: Literal["ok", "unavailable", "unconfigured"]
+
+
 class CreditBalanceView(BaseModel):
     """Lightweight credit-balance response for the UI (always answerable, even
     before any ledger row exists — balance is then 0)."""

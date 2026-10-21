@@ -1149,3 +1149,146 @@ async def test_ensure_configured_raises_without_a_key() -> None:
     await StripeGateway(_FakeStore("sk_test_x")).ensure_configured()
     with pytest.raises(BillingUnconfiguredError):
         await StripeGateway(_FakeStore(None)).ensure_configured()
+
+
+# ---- SOLUSDEV-236 T5: billing summary reads ------------------------------- #
+
+_PREVIEW_AT = 1_900_000_000
+
+
+def _patch_reads(st: _Stripe, monkeypatch: pytest.MonkeyPatch, **defaults: Any) -> None:
+    for name, cls, attr in (
+        ("invoice.preview", stripe.Invoice, "create_preview_async"),
+        ("price.retrieve", stripe.Price, "retrieve_async"),
+        ("sub.retrieve", stripe.Subscription, "retrieve_async"),
+        ("customer.retrieve", stripe.Customer, "retrieve_async"),
+    ):
+        monkeypatch.setattr(cls, attr, st.make(name, defaults.get(name)))
+
+
+_CARD = {"id": "pm_secret", "type": "card", "card": {"brand": "visa", "last4": "4242"}}
+
+
+async def test_upcoming_invoice_shape_and_params(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["invoice.preview"] = {
+        "id": "in_x",
+        "amount_due": 2500,
+        "currency": "usd",
+        "next_payment_attempt": _PREVIEW_AT,
+        "period_end": 1,
+    }
+    out = await gw().upcoming_invoice("cus_1", "sub_1")
+    assert out is not None
+    assert (out.amount_cents, out.currency) == (2500, "usd")
+    assert int(out.date.timestamp()) == _PREVIEW_AT
+    _, params = st.one("invoice.preview")
+    assert params["customer"] == "cus_1" and params["subscription"] == "sub_1"
+    assert "in_x" not in repr(out)
+
+
+async def test_upcoming_invoice_falls_back_to_period_end(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["invoice.preview"] = {
+        "amount_due": 1,
+        "currency": "usd",
+        "next_payment_attempt": None,
+        "period_end": _PREVIEW_AT,
+    }
+    out = await gw().upcoming_invoice("cus_1", "sub_1")
+    assert out is not None and int(out.date.timestamp()) == _PREVIEW_AT
+
+
+async def test_upcoming_invoice_none_when_stripe_has_none(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.errors["invoice.preview"] = [_invalid("invoice_upcoming_none")]
+    assert await gw().upcoming_invoice("cus_1", "sub_1") is None
+
+
+async def test_upcoming_invoice_other_errors_propagate_and_ids_validated(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.errors["invoice.preview"] = [stripe.APIConnectionError("boom")]  # type: ignore[no-untyped-call]
+    with pytest.raises(StripeOperationError):
+        await gw().upcoming_invoice("cus_1", "sub_1")
+    with pytest.raises(ValueError):
+        await gw().upcoming_invoice("bad", "sub_1")
+    with pytest.raises(ValueError):
+        await gw().upcoming_invoice("cus_1", "bad")
+
+
+async def test_default_payment_method_prefers_subscription_and_hides_id(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"id": "sub_1", "default_payment_method": _CARD}
+    out = await gw().default_payment_method("cus_1", "sub_1")
+    assert out is not None and (out.brand, out.last4) == ("visa", "4242")
+    assert "pm_secret" not in repr(out)
+    assert st.of("customer.retrieve") == []
+    assert st.one("sub.retrieve")[1]["expand"] == ["default_payment_method"]
+
+
+async def test_default_payment_method_falls_back_to_customer(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"id": "sub_1", "default_payment_method": None}
+    st.results["customer.retrieve"] = {
+        "id": "cus_1",
+        "invoice_settings": {"default_payment_method": _CARD},
+    }
+    out = await gw().default_payment_method("cus_1", "sub_1")
+    assert out is not None and out.last4 == "4242"
+    assert st.one("customer.retrieve")[1]["expand"] == ["invoice_settings.default_payment_method"]
+
+
+async def test_default_payment_method_none_cases(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"default_payment_method": {"id": "pm_1", "type": "sepa_debit"}}
+    st.results["customer.retrieve"] = {"invoice_settings": {"default_payment_method": None}}
+    assert await gw().default_payment_method("cus_1", "sub_1") is None
+    with pytest.raises(ValueError):
+        await gw().default_payment_method("bad", "sub_1")
+
+
+async def test_price_amounts_shape_and_validation(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["price.retrieve"] = {
+        "id": "price_a",
+        "unit_amount": 2500,
+        "currency": "usd",
+        "recurring": {"interval": "month"},
+    }
+    out = await gw().price_amounts(["price_a"])
+    assert out["price_a"].amount_cents == 2500
+    assert (out["price_a"].currency, out["price_a"].interval) == ("usd", "month")
+    with pytest.raises(ValueError):
+        await gw().price_amounts(["nope"])
+
+
+async def test_price_amounts_rejects_priceless_or_non_recurring(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["price.retrieve"] = {
+        "unit_amount": None,
+        "currency": "usd",
+        "recurring": {"interval": "month"},
+    }
+    with pytest.raises(StripeOperationError):
+        await gw().price_amounts(["price_a"])
+    st.results["price.retrieve"] = {"unit_amount": 5, "currency": "usd", "recurring": None}
+    with pytest.raises(StripeOperationError):
+        await gw().price_amounts(["price_a"])

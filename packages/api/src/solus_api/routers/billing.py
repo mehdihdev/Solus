@@ -28,6 +28,7 @@ from solus_api.billing.stripe_gateway import (
     CheckoutMode,
     StripeOperationError,
 )
+from solus_api.billing.summary import BillingSummaryService
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
@@ -74,6 +75,10 @@ _PORTAL_FLOW_STATUSES = frozenset(
 _PORTAL_LIMITER_ATTR = "billing_portal_limiter"
 _PORTAL_WINDOW_SECONDS = 60
 PORTAL_SESSIONS_PER_MINUTE = 10
+
+_SUMMARY_LIMITER_ATTR = "billing_summary_limiter"
+_SUMMARY_WINDOW_SECONDS = 60
+SUMMARY_REQUESTS_PER_MINUTE = 30
 
 # Stripe rejects a Checkout `trial_end` less than ~48h in the future, so a local trial
 # with less than this left is not carried over (SOLUSDEV-236).
@@ -206,6 +211,28 @@ def _portal_flow_target(sub: Subscription, flow: str | None) -> str | None:
     if flow == "cancel" and sub.cancel_at is not None:
         raise APIError(409, "cancel_already_scheduled", "Cancellation is already scheduled")
     return sub.stripe_subscription_id
+
+
+@actions_router.get("/summary")
+async def get_billing_summary(
+    request: Request,
+    user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+    gateway: StripeGatewayDep,
+) -> Any:
+    """The caller's own billing read model (SOLUSDEV-236). Stripe trouble degrades the
+    Stripe-derived fields to null with a 200; it never produces a 502/503 here."""
+    limiter = get_or_create_limiter(
+        request.app.state, _SUMMARY_LIMITER_ATTR, _SUMMARY_WINDOW_SECONDS
+    )
+    if limiter.bump(str(user.id)) > SUMMARY_REQUESTS_PER_MINUTE:
+        return rate_limited_response(
+            "Too many billing summary requests; slow down", _SUMMARY_WINDOW_SECONDS
+        )
+    sub = await _subscription(session, user.id)
+    summary = await BillingSummaryService(gateway, settings).summarize(sub)
+    return envelope(summary.model_dump(mode="json"))
 
 
 @actions_router.post("/portal-session")
