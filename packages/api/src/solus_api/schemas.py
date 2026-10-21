@@ -886,6 +886,13 @@ class CheckoutSessionRead(BaseModel):
     url: str
 
 
+class PortalSessionCreate(StrictModel):
+    """Optional body of POST /billing/portal-session (SOLUSDEV-236). No ids: the
+    subscription is always derived server-side from the caller's own row."""
+
+    flow: Literal["update", "cancel"] | None = None
+
+
 class PortalSessionRead(BaseModel):
     url: str
 

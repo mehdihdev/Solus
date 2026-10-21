@@ -115,11 +115,130 @@ async def test_payment_checkout_has_no_subscription_data(captured: dict[str, Any
 
 async def test_portal_session_returns_url(captured: dict[str, Any]) -> None:
     gw = StripeGateway(_FakeStore("sk_test_x"))
-    url = await gw.create_portal_session(customer="cus_1", return_url="https://back")
+    url = await gw.create_portal_session(
+        customer="cus_1", return_url="https://back", configuration="bpc_1"
+    )
     assert url == "https://billing.stripe.com/p/bps_1"
     assert captured["portal"]["customer"] == "cus_1"
     assert captured["portal"]["return_url"] == "https://back"
+    assert captured["portal"]["configuration"] == "bpc_1"
     assert captured["portal"]["api_key"] == "sk_test_x"
+    assert "flow_data" not in captured["portal"]
+
+
+@pytest.mark.parametrize(
+    ("flow", "type_", "key"),
+    [
+        ("update", "subscription_update", "subscription_update"),
+        ("cancel", "subscription_cancel", "subscription_cancel"),
+    ],
+)
+async def test_portal_session_flow_data_shape(
+    captured: dict[str, Any], flow: Any, type_: str, key: str
+) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    await gw.create_portal_session(
+        customer="cus_1",
+        return_url="https://back",
+        configuration="bpc_1",
+        flow=flow,
+        subscription_id="sub_9",
+    )
+    assert captured["portal"]["flow_data"] == {
+        "type": type_,
+        key: {"subscription": "sub_9"},
+        "after_completion": {"type": "redirect", "redirect": {"return_url": "https://back"}},
+    }
+
+
+async def test_portal_session_flow_requires_valid_subscription_id(
+    captured: dict[str, Any],
+) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    for bad in (None, "cus_1", "sub_x y"):
+        with pytest.raises(ValueError):
+            await gw.create_portal_session(
+                customer="cus_1",
+                return_url="https://back",
+                configuration="bpc_1",
+                flow="cancel",
+                subscription_id=bad,
+            )
+    assert "portal" not in captured
+
+
+async def test_portal_session_rejects_bad_configuration_id(captured: dict[str, Any]) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    with pytest.raises(ValueError):
+        await gw.create_portal_session(
+            customer="cus_1", return_url="https://back", configuration="nope"
+        )
+
+
+async def test_list_portal_configurations_active_and_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [
+        _Obj(data=[{"id": "bpc_1"}], has_more=True),
+        _Obj(data=[{"id": "bpc_2"}], has_more=False),
+    ]
+    seen: list[dict[str, Any]] = []
+
+    async def fake_list(**params: Any) -> _Obj:
+        seen.append(params)
+        return pages[len(seen) - 1]
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    got = await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert [c["id"] for c in got] == ["bpc_1", "bpc_2"]
+    assert seen[0]["active"] is True
+    assert seen[1]["starting_after"] == "bpc_1"
+
+
+async def test_list_portal_configurations_pagination_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_list(**params: Any) -> _Obj:
+        nonlocal calls
+        calls += 1
+        return _Obj(data=[{"id": f"bpc_{calls}"}], has_more=True)
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert calls == 10
+
+
+async def test_create_portal_configuration_uses_hash_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_create(**params: Any) -> _Obj:
+        seen.update(params)
+        return _Obj(id="bpc_new")
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "create_async", fake_create)
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    cid = await gw.create_portal_configuration({"features": {}}, key_hash="abc123")
+    assert cid == "bpc_new"
+    assert seen["idempotency_key"] == "solus-portal-config-abc123"
+    assert seen["features"] == {}
+    with pytest.raises(ValueError):
+        await gw.create_portal_configuration({}, key_hash="bad hash!")
+
+
+async def test_price_products_maps_price_to_product(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_retrieve(price_id: str, **params: Any) -> _Obj:
+        return _Obj(id=price_id, product={"price_a": "prod_1"}.get(price_id, _Obj(id="prod_2")))
+
+    monkeypatch.setattr(stripe.Price, "retrieve_async", fake_retrieve)
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    got = await gw.price_products(["price_a", "price_b"])
+    assert got == {"price_a": "prod_1", "price_b": "prod_2"}
+    with pytest.raises(ValueError):
+        await gw.price_products(["bad"])
 
 
 async def test_missing_key_raises_billing_unconfigured() -> None:
@@ -127,7 +246,9 @@ async def test_missing_key_raises_billing_unconfigured() -> None:
     with pytest.raises(BillingUnconfiguredError):
         await gw.get_or_create_customer(existing=None, email="a@b.co", user_id="u1")
     with pytest.raises(BillingUnconfiguredError):
-        await gw.create_portal_session(customer="cus_1", return_url="https://back")
+        await gw.create_portal_session(
+            customer="cus_1", return_url="https://back", configuration="bpc_1"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -1019,7 +1140,7 @@ async def test_customer_exists_true_false_and_deleted_stub(st: _Stripe) -> None:
 
 
 async def test_customer_exists_propagates_other_errors(st: _Stripe) -> None:
-    st.errors["customer.retrieve"] = [stripe.APIConnectionError("boom")]
+    st.errors["customer.retrieve"] = [stripe.APIConnectionError("boom")]  # type: ignore[no-untyped-call]
     with pytest.raises(StripeOperationError):
         await gw().customer_exists("cus_1")
 

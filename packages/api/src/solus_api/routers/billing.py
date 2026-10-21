@@ -13,6 +13,7 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import stripe
 from fastapi import APIRouter, Request
@@ -20,14 +21,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing.plans import CHECKOUTABLE_PLANS, VALID_INTERVALS, plan_price_id
+from solus_api.billing.portal_config import ensure_portal_configuration
 from solus_api.billing.stripe_events import process_event
-from solus_api.billing.stripe_gateway import BillingUnconfiguredError, CheckoutMode
+from solus_api.billing.stripe_gateway import (
+    BillingUnconfiguredError,
+    CheckoutMode,
+    StripeOperationError,
+)
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import CurrentUser, SessionDep, SettingsDep, StripeGatewayDep
+from solus_api.extensions.ratelimit import get_or_create_limiter, rate_limited_response
 from solus_api.models import Subscription, SubscriptionStatus
-from solus_api.schemas import CheckoutSessionCreate, CheckoutSessionRead, PortalSessionRead
+from solus_api.schemas import (
+    CheckoutSessionCreate,
+    CheckoutSessionRead,
+    PortalSessionCreate,
+    PortalSessionRead,
+)
 from solus_api.services.events import emit_event
 
 logger = logging.getLogger("solus.billing.webhook")
@@ -54,6 +66,14 @@ async def _subscription(session: AsyncSession, user_id: uuid.UUID) -> Subscripti
 # already billing — a new Checkout would double-bill (see _resolve_checkout_target).
 _LIVE_SUBSCRIPTION_STATUSES = frozenset({SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING})
 
+
+# Portal deep links need a subscription that is still billable (SOLUSDEV-236).
+_PORTAL_FLOW_STATUSES = frozenset(
+    {SubscriptionStatus.ACTIVE, SubscriptionStatus.TRIALING, SubscriptionStatus.PAST_DUE}
+)
+_PORTAL_LIMITER_ATTR = "billing_portal_limiter"
+_PORTAL_WINDOW_SECONDS = 60
+PORTAL_SESSIONS_PER_MINUTE = 10
 
 # Stripe rejects a Checkout `trial_end` less than ~48h in the future, so a local trial
 # with less than this left is not carried over (SOLUSDEV-236).
@@ -176,28 +196,61 @@ async def create_checkout_session(
     return envelope(CheckoutSessionRead(url=url).model_dump())
 
 
+def _portal_flow_target(sub: Subscription, flow: str | None) -> str | None:
+    """The caller's own Stripe subscription id for a portal deep link (None for the
+    general portal). 409s when the flow cannot apply."""
+    if flow is None:
+        return None
+    if sub.stripe_subscription_id is None or sub.status not in _PORTAL_FLOW_STATUSES:
+        raise APIError(409, "no_active_subscription", "You have no active subscription")
+    if flow == "cancel" and sub.cancel_at is not None:
+        raise APIError(409, "cancel_already_scheduled", "Cancellation is already scheduled")
+    return sub.stripe_subscription_id
+
+
 @actions_router.post("/portal-session")
 async def create_portal_session(
+    request: Request,
     user: CurrentUser,
     session: SessionDep,
     settings: SettingsDep,
     gateway: StripeGatewayDep,
-) -> dict[str, object]:
+    body: PortalSessionCreate | None = None,
+) -> Any:
     """Open the Stripe-hosted billing portal (manage payment method, cancel,
-    switch plan). Requires an existing Stripe customer (i.e. a prior checkout)."""
+    switch plan), optionally deep-linked into the update/cancel flow. Requires an
+    existing Stripe customer (i.e. a prior checkout)."""
+    limiter = get_or_create_limiter(request.app.state, _PORTAL_LIMITER_ATTR, _PORTAL_WINDOW_SECONDS)
+    if limiter.bump(str(user.id)) > PORTAL_SESSIONS_PER_MINUTE:
+        return rate_limited_response(
+            "Too many billing portal requests; slow down", _PORTAL_WINDOW_SECONDS
+        )
+    flow = body.flow if body is not None else None
     sub = await _subscription(session, user.id)
     if not sub.stripe_customer_id:
         raise APIError(409, "no_billing_customer", "No billing account yet — subscribe first")
+    subscription_id = _portal_flow_target(sub, flow)
     try:
+        configuration = await ensure_portal_configuration(gateway, settings)
         url = await gateway.create_portal_session(
             customer=sub.stripe_customer_id,
             return_url=settings.stripe_billing_portal_return_url,
+            configuration=configuration,
+            flow=flow,
+            subscription_id=subscription_id,
         )
     except BillingUnconfiguredError as exc:
         raise APIError(503, "billing_unconfigured", "Billing is not configured") from exc
-    except stripe.error.StripeError as exc:
+    except (stripe.error.StripeError, StripeOperationError) as exc:
         logger.warning("stripe portal error: %s", type(exc).__name__)
         raise APIError(502, "billing_provider_error", "Payment provider error") from exc
+    emit_event(
+        session,
+        user=user,
+        event_type="billing.portal_session.created",
+        payload={"flow": flow or "general"},
+    )
+    await session.commit()
     return envelope(PortalSessionRead(url=url).model_dump())
 
 

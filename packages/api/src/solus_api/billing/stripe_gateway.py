@@ -32,6 +32,7 @@ CheckoutMode = Literal["subscription", "payment"]
 Proration = Literal["create_prorations", "none", "always_invoice"]
 CompDuration = Literal["once", "repeating", "forever"]
 CancelMode = Literal["immediate", "period_end"]
+PortalFlow = Literal["update", "cancel"]
 
 # Subscription metadata written on every staff-initiated write (SOLUSDEV-313).
 ADMIN_ACTION_METADATA_KEY = "solus_admin_action_id"
@@ -64,6 +65,7 @@ _SUB_ID_RE = re.compile(r"sub_[A-Za-z0-9]{1,64}")
 _CUSTOMER_ID_RE = re.compile(r"cus_[A-Za-z0-9]{1,64}")
 _SCHEDULE_ID_RE = re.compile(r"sub_sched_[A-Za-z0-9]{1,64}")
 _PRICE_ID_RE = re.compile(r"price_[A-Za-z0-9]{1,64}")
+_CONFIG_ID_RE = re.compile(r"bpc_[A-Za-z0-9]{1,64}")
 _COMP_COUPON_RE = re.compile(r"solus-comp-(once|forever|repeating-([1-9][0-9]?))")
 
 
@@ -119,6 +121,27 @@ def _check_id(value: object, pattern: re.Pattern[str], label: str) -> str:
     if not isinstance(value, str) or not pattern.fullmatch(value):
         raise ValueError(f"invalid {label}")
     return value
+
+
+def _portal_flow_data(
+    flow: PortalFlow, subscription_id: str | None, return_url: str
+) -> dict[str, Any]:
+    """`flow_data` for a portal deep link, bound to the caller's own subscription."""
+    sub = _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+    after = {"type": "redirect", "redirect": {"return_url": return_url}}
+    if flow == "update":
+        return {
+            "type": "subscription_update",
+            "subscription_update": {"subscription": sub},
+            "after_completion": after,
+        }
+    if flow == "cancel":
+        return {
+            "type": "subscription_cancel",
+            "subscription_cancel": {"subscription": sub},
+            "after_completion": after,
+        }
+    raise ValueError("invalid portal flow")
 
 
 def _check_comp_coupon(coupon_id: object) -> str:
@@ -366,13 +389,75 @@ class StripeGateway:
         session = await stripe.checkout.Session.create_async(**params)
         return str(session.url)
 
-    async def create_portal_session(self, *, customer: str, return_url: str) -> str:
-        """Create a Stripe-hosted Billing Portal session (manage/cancel/update
-        card) and return its URL."""
-        key = await self._api_key()
-        params: dict[str, Any] = {"customer": customer, "return_url": return_url, "api_key": key}
-        session = await stripe.billing_portal.Session.create_async(**params)
+    async def create_portal_session(
+        self,
+        *,
+        customer: str,
+        return_url: str,
+        configuration: str,
+        flow: PortalFlow | None = None,
+        subscription_id: str | None = None,
+    ) -> str:
+        """Create a Stripe-hosted Billing Portal session on the code-managed
+        `configuration` and return its URL. With a `flow`, deep-link into the
+        subscription update/cancel screen for `subscription_id` (SOLUSDEV-236)."""
+        _check_id(customer, _CUSTOMER_ID_RE, "customer id")
+        _check_id(configuration, _CONFIG_ID_RE, "portal configuration id")
+        params: dict[str, Any] = {
+            "customer": customer,
+            "return_url": return_url,
+            "configuration": configuration,
+        }
+        if flow is not None:
+            params["flow_data"] = _portal_flow_data(flow, subscription_id, return_url)
+        session = await self._call(
+            "billing_portal.session.create", stripe.billing_portal.Session.create_async, **params
+        )
         return str(session.url)
+
+    async def list_portal_configurations(self) -> list[Any]:
+        """Active billing-portal configurations (bounded pagination)."""
+        found: list[Any] = []
+        cursor: str | None = None
+        for _ in range(MAX_LIST_PAGES):
+            params: dict[str, Any] = {"active": True, "limit": LIST_PAGE_SIZE}
+            if cursor is not None:
+                params["starting_after"] = cursor
+            page = await self._call(
+                "billing_portal.configuration.list",
+                stripe.billing_portal.Configuration.list_async,
+                **params,
+            )
+            data = list(_g(page, "data") or [])
+            found.extend(data)
+            last = _g(data[-1], "id") if data else None
+            if not _g(page, "has_more") or not isinstance(last, str):
+                break
+            cursor = last
+        return found
+
+    async def create_portal_configuration(self, params: dict[str, Any], *, key_hash: str) -> str:
+        """Create a portal configuration; the idempotency key derives from its hash."""
+        _check_token(key_hash, "configuration hash")
+        config = await self._call(
+            "billing_portal.configuration.create",
+            stripe.billing_portal.Configuration.create_async,
+            idempotency_key=f"solus-portal-config-{key_hash}",
+            **params,
+        )
+        return str(_g(config, "id"))
+
+    async def price_products(self, price_ids: list[str]) -> dict[str, str]:
+        """Map each Stripe Price id to its Product id."""
+        out: dict[str, str] = {}
+        for price_id in price_ids:
+            _check_id(price_id, _PRICE_ID_RE, "price id")
+            price = await self._call("price.retrieve", stripe.Price.retrieve_async, price_id)
+            product = _id_of(_g(price, "product"))
+            if product is None:
+                raise StripeOperationError("price.retrieve", code="no_product")
+            out[price_id] = product
+        return out
 
     # ------------------------------------------------------------------ #
     # SOLUSDEV-313: staff subscription operations. Every write validates all

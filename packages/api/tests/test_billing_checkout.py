@@ -14,6 +14,7 @@ import pytest
 import stripe
 from conftest import ALICE, BOB, TEST_AUDIENCE, TEST_DATABASE_URL, TEST_JWT_SECRET, bearer, me
 from httpx import ASGITransport, AsyncClient
+from solus_api.billing.portal_config import reset_portal_config_cache
 from solus_api.billing.stripe_gateway import BillingUnconfiguredError
 from solus_api.core.config import Settings
 from solus_api.deps import get_stripe_gateway
@@ -50,6 +51,18 @@ class FakeGateway:
         self.checkout_calls.append(kwargs)
         return "https://checkout.stripe.com/c/test"
 
+    async def price_products(self, price_ids: list[str]) -> dict[str, str]:
+        self._guard()
+        return {p: "prod_1" for p in price_ids}
+
+    async def list_portal_configurations(self) -> list[Any]:
+        self._guard()
+        return []
+
+    async def create_portal_configuration(self, params: dict[str, Any], *, key_hash: str) -> str:
+        self._guard()
+        return "bpc_test"
+
     async def create_portal_session(self, **kwargs: Any) -> str:
         self._guard()
         self.portal_calls.append(kwargs)
@@ -70,6 +83,11 @@ def _settings() -> Settings:
         stripe_pack_usd={"price_pack10": 10},  # pack25 deliberately unmapped
         stripe_trial_days=14,
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_portal_cache() -> None:
+    reset_portal_config_cache()
 
 
 @pytest.fixture
@@ -214,7 +232,9 @@ async def test_portal_409_without_customer(bclient: AsyncClient) -> None:
     assert resp.json()["error"]["code"] == "no_billing_customer"
 
 
-async def test_portal_returns_url_after_checkout(bclient: AsyncClient) -> None:
+async def test_portal_returns_url_after_checkout(
+    bclient: AsyncClient, gateway: FakeGateway
+) -> None:
     headers = bearer(ALICE["sub"], ALICE["email"])
     await me(bclient, headers)
     await bclient.post(
@@ -225,6 +245,7 @@ async def test_portal_returns_url_after_checkout(bclient: AsyncClient) -> None:
     resp = await bclient.post("/api/v1/billing/portal-session", headers=headers)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["url"] == "https://billing.stripe.com/p/test"
+    assert gateway.portal_calls[-1]["configuration"] == "bpc_test"
 
 
 async def test_list_credit_packs_returns_configured_packs(bclient: AsyncClient) -> None:

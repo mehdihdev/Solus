@@ -207,9 +207,39 @@ class FakeStripeGateway:
         self._enter("create_checkout_session", (), kwargs)
         return "https://checkout.stripe.test/c/fake"
 
-    async def create_portal_session(self, *, customer: str, return_url: str) -> str:
-        self._enter("create_portal_session", (), {"customer": customer, "return_url": return_url})
+    async def create_portal_session(
+        self,
+        *,
+        customer: str,
+        return_url: str,
+        configuration: str | None = None,
+        flow: str | None = None,
+        subscription_id: str | None = None,
+    ) -> str:
+        self._enter(
+            "create_portal_session",
+            (),
+            {
+                "customer": customer,
+                "return_url": return_url,
+                "configuration": configuration,
+                "flow": flow,
+                "subscription_id": subscription_id,
+            },
+        )
         return "https://billing.stripe.test/p/fake"
+
+    async def price_products(self, price_ids: list[str]) -> dict[str, str]:
+        self._enter("price_products", (), {"price_ids": list(price_ids)})
+        return {p: "prod_fake" for p in price_ids}
+
+    async def list_portal_configurations(self) -> list[Any]:
+        self._enter("list_portal_configurations", (), {})
+        return []
+
+    async def create_portal_configuration(self, params: dict[str, Any], *, key_hash: str) -> str:
+        self._enter("create_portal_configuration", (), {"params": params, "key_hash": key_hash})
+        return "bpc_fake"
 
     # ---- subscription operations ---------------------------------------- #
 
