@@ -125,6 +125,9 @@ class RemoteMCPSpec:
     authorize_url: str = ""
     token_url: str = ""
     register_url: str = ""
+    #: RFC 8707 resource indicator sent on authorize, exchange and refresh, as
+    #: the server's protected-resource metadata names it. Pinned like the rest.
+    resource: str = ""
     #: Exactly what we ask for and exactly what we accept back. A grant that
     #: comes back wider than this is an escalation and is REFUSED, not stored.
     scopes: tuple[str, ...] = ()
@@ -181,6 +184,7 @@ FS_MCP = RemoteMCPSpec(
     # server's own discovery document. No secret appears in this file.
     token_url="https://mcp-auth.labs.onshape.app/token",  # noqa: S106
     register_url="https://mcp-auth.labs.onshape.app/register",
+    resource="https://fs-mcp.labs.onshape.app",
     # Read + Write only. `OAuth2Delete` and `OAuth2ReadPII` are forbidden on the
     # record; the live spike confirmed the server issues a token without them.
     scopes=("OAuth2Read", "OAuth2Write"),

@@ -311,6 +311,7 @@ def authorize_url(
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
             "scope": " ".join(spec.scopes),
+            **_resource_form(spec),
         }
     )
 
@@ -333,6 +334,11 @@ def _token_from(data: dict[str, Any], spec: RemoteMCPSpec, *, now: float) -> Hos
         refresh_token=refresh if isinstance(refresh, str) and refresh else None,
         expires_at=now + lifetime,
     )
+
+
+def _resource_form(spec: RemoteMCPSpec) -> dict[str, str]:
+    """RFC 8707: name the server the token is for, when the spec pins one."""
+    return {"resource": spec.resource} if spec.resource else {}
 
 
 def _client_form(client: HostedClient) -> dict[str, str]:
@@ -358,6 +364,7 @@ async def exchange_code(
             "code": code,
             "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
+            **_resource_form(spec),
             **_client_form(client),
         },
         code="token_unreachable",
@@ -390,6 +397,7 @@ async def refresh_token(
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
             "scope": " ".join(spec.scopes),
+            **_resource_form(spec),
             **_client_form(client),
         },
         code="token_unreachable",

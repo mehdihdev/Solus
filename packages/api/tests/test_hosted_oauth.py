@@ -174,6 +174,7 @@ def test_authorize_url_pins_scope_and_carries_pkce() -> None:
     assert url.startswith("https://mcp-auth.labs.onshape.app/authorize?")
     assert "code_challenge_method=S256" in url
     assert "scope=OAuth2Read+OAuth2Write" in url
+    assert "resource=https%3A%2F%2Ffs-mcp.labs.onshape.app" in url
     assert "OAuth2Delete" not in url and "OAuth2ReadPII" not in url
 
 
@@ -202,6 +203,7 @@ async def test_exchange_sends_the_verifier_and_stores_an_expiry(
     assert seen["url"] == FS_MCP.token_url
     assert seen["code_verifier"] == "v"
     assert seen["client_secret"] == "csecret"
+    assert seen["resource"] == FS_MCP.resource
     assert token == HostedToken(access_token="at", refresh_token="rt", expires_at=4599.0)
 
 
@@ -237,6 +239,7 @@ async def test_refresh_explicitly_requests_only_pinned_scopes(
 ) -> None:
     def handler(_url: str, kwargs: dict[str, Any]) -> httpx.Response:
         assert kwargs["data"]["scope"] == "OAuth2Read OAuth2Write"
+        assert kwargs["data"]["resource"] == FS_MCP.resource
         return _json_response(200, {"access_token": "at2", "expires_in": 3599})
 
     monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))

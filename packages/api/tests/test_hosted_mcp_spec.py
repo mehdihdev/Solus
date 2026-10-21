@@ -35,6 +35,7 @@ def test_every_hosted_url_is_https_on_a_reviewed_host() -> None:
             ("authorize_url", spec.authorize_url),
             ("token_url", spec.token_url),
             ("register_url", spec.register_url),
+            ("resource", spec.resource),
         ):
             parts = urlsplit(url)
             assert parts.scheme == "https", f"{spec.name}.{label} is not https: {url}"
@@ -49,6 +50,9 @@ def test_fs_mcp_oauth_endpoints_are_pinned_to_onshapes_auth_host() -> None:
     assert FS_MCP.authorize_url == "https://mcp-auth.labs.onshape.app/authorize"
     assert FS_MCP.token_url == "https://mcp-auth.labs.onshape.app/token"  # noqa: S105
     assert FS_MCP.register_url == "https://mcp-auth.labs.onshape.app/register"
+    # RFC 8707: the auth host refuses an authorize request without it. This is
+    # the `resource` fs-mcp's protected-resource metadata advertises.
+    assert FS_MCP.resource == "https://fs-mcp.labs.onshape.app"
 
 
 def test_fs_mcp_never_requests_delete_or_pii() -> None:
