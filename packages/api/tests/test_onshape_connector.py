@@ -1474,7 +1474,7 @@ async def test_identity_prefers_display_name_then_email_without_opaque_label(
 
 @requires_occt
 @respx.mock
-async def test_synced_cad_graph_carries_observed_revision_and_actual_geometry():
+async def test_synced_cad_graph_carries_observed_revision_and_actual_geometry() -> None:
     _mock_export()
     result = await _connector().sync(_ctx())
     assert all(e.properties["observed_microversion"] == "abc123def456" for e in result.entities)
@@ -1485,11 +1485,11 @@ async def test_synced_cad_graph_carries_observed_revision_and_actual_geometry():
 
 @respx.mock
 @pytest.mark.parametrize("marker", [None, "cad-geometry-v0", True, 1])
-async def test_old_projection_reingests_an_unchanged_onshape_revision(marker):
+async def test_old_projection_reingests_an_unchanged_onshape_revision(marker: object) -> None:
     respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents/d/{DID}/w/{WID}/currentmicroversion").respond(
         200, json=CURRENT_MICROVERSION
     )
-    cursor = {"microversion": "abc123def456"}
+    cursor: dict[str, Any] = {"microversion": "abc123def456"}
     if marker is not None:
         cursor["projection_version"] = marker
     context = SyncContext(credentials=Credentials(token="fixture"), config=CONFIG, cursor=cursor)
@@ -1498,7 +1498,7 @@ async def test_old_projection_reingests_an_unchanged_onshape_revision(marker):
 
 @requires_occt
 @respx.mock
-async def test_successful_projection_records_version_and_then_skips_same_revision():
+async def test_successful_projection_records_version_and_then_skips_same_revision() -> None:
     _mock_export()
     connector = _connector()
     result = await connector.sync(_ctx())
@@ -1509,7 +1509,9 @@ async def test_successful_projection_records_version_and_then_skips_same_revisio
     assert await connector.detect_changes(context) is False
 
 
-async def _staged_connector(monkeypatch, count=26, **kwargs):
+async def _staged_connector(
+    monkeypatch: pytest.MonkeyPatch, count: int = 26, **kwargs: Any
+) -> OnshapeConnector:
     from unittest.mock import AsyncMock
 
     from solus_api.connectors.document_graph import document_root
@@ -1522,14 +1524,16 @@ async def _staged_connector(monkeypatch, count=26, **kwargs):
         AsyncMock(return_value=[(f"e{i}", "partstudios") for i in range(count)]),
     )
 
-    async def ingest(client, target, recorder, *, version):
+    async def ingest(client: Any, target: Any, recorder: Any, *, version: Any) -> Any:
         return [document_root(target.element_id)], []
 
     monkeypatch.setattr(connector, "_ingest", ingest)
     return connector
 
 
-async def test_complete_staging_supports_twenty_six_elements(monkeypatch):
+async def test_complete_staging_supports_twenty_six_elements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     connector = await _staged_connector(monkeypatch)
     result = await connector.sync(_selection_ctx(["docA"]))
     assert len(result.entities) == 27 and len(result.relations) == 26
@@ -1537,12 +1541,14 @@ async def test_complete_staging_supports_twenty_six_elements(monkeypatch):
     assert {node.source_key for node in result.entities} >= {f"e{i}:document" for i in range(26)}
 
 
-async def test_late_staging_failure_returns_no_partial_snapshot(monkeypatch):
+async def test_late_staging_failure_returns_no_partial_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     connector = await _staged_connector(monkeypatch)
     original = connector._ingest
-    calls = []
+    calls: list[str] = []
 
-    async def ingest(client, target, recorder, *, version):
+    async def ingest(client: Any, target: Any, recorder: Any, *, version: Any) -> Any:
         calls.append(target.element_id)
         if target.element_id == "e25":
             raise ConnectorError("export_unavailable", "late export failure")
@@ -1558,14 +1564,18 @@ async def test_late_staging_failure_returns_no_partial_snapshot(monkeypatch):
 
 
 @pytest.mark.parametrize("limits", [{"max_staged_records": 2}, {"max_staged_bytes": 100}])
-async def test_staging_resource_budget_refuses_complete_result(monkeypatch, limits):
+async def test_staging_resource_budget_refuses_complete_result(
+    monkeypatch: pytest.MonkeyPatch, limits: dict[str, int]
+) -> None:
     connector = await _staged_connector(monkeypatch, count=1, **limits)
     with pytest.raises(ConnectorError) as error:
         await connector.sync(_selection_ctx(["docA"]))
     assert error.value.code == "selection_too_large"
 
 
-async def test_default_element_bound_still_refuses_257_before_export(monkeypatch):
+async def test_default_element_bound_still_refuses_257_before_export(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from unittest.mock import AsyncMock
 
     connector = await _staged_connector(monkeypatch, count=257)
