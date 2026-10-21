@@ -119,6 +119,8 @@ async def test_no_body_general_portal(
     assert call["flow"] is None
     assert call["subscription_id"] is None
     assert call["customer"] == "cus_a"
+    # The in-app window closes on this marker (desktop checkoutReturn.ts).
+    assert "portal=return" in call["return_url"]
 
 
 async def test_general_portal_works_without_stripe_subscription(

@@ -12,6 +12,7 @@ from solus_api.billing.portal_config import (
     PortalConfigCache,
     ensure_portal_configuration,
     portal_configuration_params,
+    with_portal_return_marker,
 )
 from solus_api.billing.stripe_gateway import BillingUnconfiguredError
 from solus_api.core.config import Settings
@@ -88,6 +89,29 @@ def test_params_only_offer_self_serve_plans_and_intervals() -> None:
     f = portal_configuration_params(_settings(prices), PRODUCTS)["features"]
     offered = {p for row in f["subscription_update"]["products"] for p in row["prices"]}
     assert offered == {"price_bm", "price_by", "price_pm"}
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [
+        # Live QA: an env override without the marker left the in-app window open.
+        ("http://localhost:5173/#/billing", "http://localhost:5173/#/billing?portal=return"),
+        (
+            "http://localhost:5173/#/billing?x=1",
+            "http://localhost:5173/#/billing?x=1&portal=return",
+        ),
+        ("https://app.solus.dev/billing", "https://app.solus.dev/billing?portal=return"),
+        ("https://app.solus.dev/billing?x=1", "https://app.solus.dev/billing?x=1&portal=return"),
+        # Already marked (query or hash-query): unchanged, never duplicated.
+        (
+            "http://localhost:5173/#/billing?portal=return",
+            "http://localhost:5173/#/billing?portal=return",
+        ),
+        ("https://app.solus.dev/b?portal=return", "https://app.solus.dev/b?portal=return"),
+    ],
+)
+def test_portal_return_url_always_carries_the_close_marker(configured: str, expected: str) -> None:
+    assert with_portal_return_marker(configured) == expected
 
 
 def test_params_have_no_invented_branding() -> None:

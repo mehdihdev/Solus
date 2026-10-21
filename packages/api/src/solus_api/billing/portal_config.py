@@ -58,6 +58,24 @@ def _stable_hash(payload: object) -> str:
     return hashlib.sha256(blob.encode()).hexdigest()[:_HASH_HEX_LENGTH]
 
 
+PORTAL_RETURN_MARKER = "portal=return"
+
+
+def with_portal_return_marker(url: str) -> str:
+    """`url` carrying the `portal=return` marker the desktop's in-app Stripe window
+    closes on (main/checkoutReturn.ts). An env override that drops it left the window
+    open on the page itself (live QA, SOLUSDEV-236); added to the hash-router query
+    when there is a fragment, else to the query string. Never duplicated."""
+    if PORTAL_RETURN_MARKER in url:
+        return url
+    base, hash_sep, fragment = url.partition("#")
+    if hash_sep:
+        joiner = "&" if "?" in fragment else "?"
+        return f"{base}#{fragment}{joiner}{PORTAL_RETURN_MARKER}"
+    joiner = "&" if "?" in base else "?"
+    return f"{base}{joiner}{PORTAL_RETURN_MARKER}"
+
+
 def portal_fingerprint(settings: Settings) -> str:
     """Cache key: identity of the configuration derivable WITHOUT any Stripe call."""
     return _stable_hash({"v": PORTAL_CONFIG_VERSION, "prices": _plan_price_ids(settings)})

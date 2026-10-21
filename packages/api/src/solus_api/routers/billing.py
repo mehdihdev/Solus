@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing.plans import CHECKOUTABLE_PLANS, VALID_INTERVALS, plan_price_id
-from solus_api.billing.portal_config import ensure_portal_configuration
+from solus_api.billing.portal_config import ensure_portal_configuration, with_portal_return_marker
 from solus_api.billing.stripe_events import process_event
 from solus_api.billing.stripe_gateway import (
     BillingUnconfiguredError,
@@ -261,7 +261,7 @@ async def create_portal_session(
         configuration = await ensure_portal_configuration(gateway, settings)
         url = await gateway.create_portal_session(
             customer=sub.stripe_customer_id,
-            return_url=settings.stripe_billing_portal_return_url,
+            return_url=with_portal_return_marker(settings.stripe_billing_portal_return_url),
             configuration=configuration,
             flow=flow,
             subscription_id=subscription_id,
