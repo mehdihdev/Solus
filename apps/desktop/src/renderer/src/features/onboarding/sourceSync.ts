@@ -63,6 +63,13 @@ export function isSettledJob(job: SyncJob): boolean {
   return job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled'
 }
 
+/** Why a polled job did not succeed; null when it succeeded or is still running. */
+export function jobFailure(job: SyncJob | undefined): string | null {
+  if (!job) return 'Sync timed out.'
+  if (job.status !== 'failed' && job.status !== 'cancelled') return null
+  return job.error?.message ?? (job.status === 'cancelled' ? 'Sync cancelled.' : 'Sync failed.')
+}
+
 /**
  * Poll the accepted job until it settles or the budget runs out. Out of tries,
  * the job comes back as last seen (still queued or running): a long sync is not

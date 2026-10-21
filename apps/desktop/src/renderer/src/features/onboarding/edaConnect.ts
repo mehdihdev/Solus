@@ -9,6 +9,7 @@ import { NO_FILES_ERROR, type EdaExportFile, type EdaExportFiles } from './kicad
 import type { ConnectionState } from './onboardingStore'
 import {
   isSettledJob,
+  jobFailure,
   pollAcceptedSync,
   STILL_INDEXING_RESULT,
   indexedSyncDetail,
@@ -119,14 +120,8 @@ export async function runEdaConnect(
       deps.onProgress({ phase: 'done', sourceId: source.id, result: STILL_INDEXING_RESULT })
       return { ok: true, sourceId: source.id, result: STILL_INDEXING_RESULT }
     }
-    if (!job) {
-      const error = 'Sync timed out.'
-      deps.onProgress({ phase: 'error', error, sourceId: source.id })
-      return { ok: false, error, sourceId: source.id }
-    }
-    if (job.status !== 'succeeded') {
-      const error =
-        job.error?.message ?? (job.status === 'cancelled' ? 'Sync cancelled.' : 'Sync failed.')
+    const error = jobFailure(job)
+    if (error) {
       deps.onProgress({ phase: 'error', error, sourceId: source.id })
       return { ok: false, error, sourceId: source.id }
     }

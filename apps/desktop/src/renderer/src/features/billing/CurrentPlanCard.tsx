@@ -59,6 +59,13 @@ function cardText(summary: BillingSummary | null, view: BillingView): string {
   return card ? `${capitalize(card.brand)} •••• ${card.last4}` : 'No card on file'
 }
 
+function nextInvoiceText(summary: BillingSummary | null): string {
+  const invoice = summary?.next_invoice
+  return invoice
+    ? `${formatMoney(invoice.amount_cents, invoice.currency)} on ${formatDate(invoice.date)}`
+    : '—'
+}
+
 function TimelineRow({
   sub,
   summary,
@@ -68,7 +75,6 @@ function TimelineRow({
   summary: BillingSummary | null
   view: BillingView
 }): React.JSX.Element | null {
-  const periodEnd = sub.current_period_end ?? summary?.current_period_end ?? null
   switch (view.kind) {
     case 'local_trial_active':
       return (
@@ -82,17 +88,12 @@ function TimelineRow({
           <Value>{formatDate(view.trial.endsAt)}</Value>
         </Row>
       )
-    case 'stripe_trialing': {
-      const invoice = summary?.next_invoice
-      const then = invoice
-        ? `${formatMoney(invoice.amount_cents, invoice.currency)} on ${formatDate(invoice.date)}`
-        : '—'
+    case 'stripe_trialing':
       return (
         <Row label="Trial ends">
-          <Value>{`${formatDate(view.trial.endsAt)}, then ${then}`}</Value>
+          <Value>{`${formatDate(view.trial.endsAt)}, then ${nextInvoiceText(summary)}`}</Value>
         </Row>
       )
-    }
     case 'cancel_pending':
       return (
         <Row label="Ends">
@@ -102,7 +103,7 @@ function TimelineRow({
     case 'active':
       return (
         <Row label="Renews">
-          <Value>{formatDate(periodEnd)}</Value>
+          <Value>{formatDate(sub.current_period_end ?? summary?.current_period_end ?? null)}</Value>
         </Row>
       )
     default:

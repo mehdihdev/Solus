@@ -102,19 +102,29 @@ function placeholder(kind: 'offline' | 'loading'): BillingView {
   }
 }
 
+/** Stripe's expired-trial verdict outranks the local clock on a trialing sub. */
+function effectiveTrial(
+  sub: ClassifyInput['subscription'],
+  summary: ClassifyInput['summary'],
+  now: ClassifyInput['now']
+): TrialInfo {
+  const local = sub ? trialState(sub, now) : NONE
+  if (summary?.trial.state !== 'expired' || sub?.status !== 'trialing') return local
+  return { ...local, kind: 'ended', endsAt: summary.trial.ends_at ?? local.endsAt }
+}
+
+function isLiveSub(sub: ClassifyInput['subscription'], kind: BillingView['kind']): boolean {
+  return !!sub?.stripe_subscription_id && kind !== 'canceled' && LIVE_STATUSES.includes(sub.status)
+}
+
 export function classifyBilling(input: ClassifyInput): BillingView {
   const { status, subscription: sub, summary, now } = input
   if (status === 'offline') return placeholder('offline')
   if (status === 'loading') return placeholder('loading')
-  const local = sub ? trialState(sub, now) : NONE
-  const trial =
-    summary?.trial.state === 'expired' && sub?.status === 'trialing'
-      ? { ...local, kind: 'ended' as const, endsAt: summary.trial.ends_at ?? local.endsAt }
-      : local
+  const trial = effectiveTrial(sub, summary, now)
   const kind = kindOf(sub, trial)
   const degraded: StripeStatus = summary ? summary.stripe_status : 'unavailable'
-  const isLive =
-    !!sub?.stripe_subscription_id && kind !== 'canceled' && LIVE_STATUSES.includes(sub.status)
+  const isLive = isLiveSub(sub, kind)
   const cancelPending = kind === 'cancel_pending'
   return {
     kind,
