@@ -176,8 +176,14 @@ function useOAuthInputs() {
   }, [])
 
   useEffect(() => {
+    // Cancel on a session change: signed out, or a different user. NOT on a
+    // routine token refresh — Supabase rotates the token (hourly, and on
+    // refocus after the browser sign-in), and cancelling then left the picker
+    // on screen with nothing listening, so Track did nothing.
     const unsubscribe = useAuthStore.subscribe((state, previous) => {
-      if (state.accessToken !== previous.accessToken) cancel()
+      const signedOut = !state.accessToken && Boolean(previous.accessToken)
+      const otherUser = state.user?.email !== previous.user?.email
+      if (signedOut || otherUser) cancel()
     })
     return () => {
       unsubscribe()

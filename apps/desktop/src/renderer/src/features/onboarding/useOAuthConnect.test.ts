@@ -7,6 +7,7 @@ import { useOAuthConnect } from './useOAuthConnect'
 import { useOnboardingStore } from './onboardingStore'
 import * as oauthConnect from './oauthConnect'
 import * as bridgeModule from '../../lib/desktopBridge'
+import { useAuthStore } from '../../store/authStore'
 import type { SelectableItem } from '../../lib/api/resources'
 
 vi.mock('./oauthConnect', async (importOriginal) => {
@@ -64,7 +65,57 @@ describe('useOAuthConnect', () => {
   registerOAuthAttemptIsolationTests()
 
   registerOAuthProgressTests()
+
+  registerSessionChangeTests()
 })
+
+function registerSessionChangeTests(): void {
+  const ME = { email: 'me@example.com', emailVerified: true }
+
+  async function parkedOnInput(): Promise<{
+    result: { current: ReturnType<typeof useOAuthConnect> }
+    outcome: ReturnType<oauthConnect.ConfigureStep>
+  }> {
+    withBridge()
+    useAuthStore.setState({ user: ME, accessToken: 'token-1' })
+    const { result } = renderHook(() => useOAuthConnect())
+    let captured: oauthConnect.ConfigureStep | undefined
+    mockedRun.mockImplementation(async (deps) => {
+      captured = deps.configure
+      return { ok: true }
+    })
+    await act(async () => {
+      await result.current.start('p1', 'someFutureCad', { configFields: ['document_id'] })
+    })
+    const outcome = captured!({ projectId: 'p1', sourceId: 's1', provider: 'someFutureCad' })
+    await act(async () => undefined)
+    return { result, outcome }
+  }
+
+  it('a routine token refresh for the same user keeps the flow waiting on the user', async () => {
+    // Supabase rotates the access token (hourly, and on refocus after the
+    // browser sign-in). Cancelling on that left the picker on screen with
+    // nothing listening, so Track did nothing.
+    const { result, outcome } = await parkedOnInput()
+    act(() => useAuthStore.setState({ user: ME, accessToken: 'token-2' }))
+    act(() => result.current.submitConfig({ document_id: 'd1' }))
+    await expect(outcome).resolves.toEqual({ config: { document_id: 'd1' } })
+  })
+
+  it('signing out cancels the flow', async () => {
+    const { outcome } = await parkedOnInput()
+    act(() => useAuthStore.setState({ user: null, accessToken: null }))
+    await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
+  })
+
+  it('a different user signing in cancels the flow', async () => {
+    const { outcome } = await parkedOnInput()
+    act(() =>
+      useAuthStore.setState({ user: { ...ME, email: 'other@example.com' }, accessToken: 'token-9' })
+    )
+    await expect(outcome).resolves.toEqual({ error: 'Configuration cancelled.' })
+  })
+}
 
 function registerOAuthDispatchTests(): void {
   it('starts the orchestration with the provider and the bridge redirect uri', async () => {
