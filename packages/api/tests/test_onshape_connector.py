@@ -949,6 +949,32 @@ async def test_list_selectable_returns_the_accounts_documents() -> None:
 
 
 @respx.mock
+async def test_list_selectable_carries_when_each_document_was_last_edited() -> None:
+    """The picker sorts by recency so look-alike names ("Assembly 21/22") are
+    told apart. Onshape's value is untrusted: only a real timestamp passes,
+    normalised to UTC; anything else is simply left off the item."""
+    respx.get(f"{ONSHAPE_API_BASE}/api/v6/documents").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"id": "docA", "name": "A", "modifiedAt": "2026-10-20T08:15:00.123+00:00"},
+                    {"id": "docB", "name": "B", "modifiedAt": "not a date"},
+                    {"id": "docC", "name": "C", "modifiedAt": 12345},
+                    {"id": "docD", "name": "D"},
+                    {"id": "docE", "name": "E", "modifiedAt": "0001-01-01T00:00:00+05:00"},
+                ]
+            },
+        )
+    )
+
+    items = await _connector().list_selectable(Credentials(token="at"))
+
+    assert items[0]["modified_at"] == "2026-10-20T08:15:00.123000Z"
+    assert all("modified_at" not in item for item in items[1:])
+
+
+@respx.mock
 async def test_list_selectable_asks_for_no_more_than_onshape_allows() -> None:
     """Onshape caps `limit` at 20 on /documents and answers 400 above it — which
     is exactly how the picker failed against a real tenant."""

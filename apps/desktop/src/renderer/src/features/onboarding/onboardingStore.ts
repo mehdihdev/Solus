@@ -35,6 +35,8 @@ export type ConnectionState =
       selectable?: readonly SelectableItem[]
       /** Whether that picker takes one item or many. */
       selectionMode?: 'single' | 'multi'
+      /** The connector's noun for what is being picked ("document"). */
+      selectionLabel?: string
       configFields?: readonly string[]
       /** The grants offered, when the connect-time access choice is open. */
       accessModes?: IntegrationAccessModes

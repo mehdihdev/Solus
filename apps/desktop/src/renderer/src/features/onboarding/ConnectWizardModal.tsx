@@ -471,6 +471,7 @@ function BusyAction({
         key={state.sourceId}
         items={state.selectable}
         mode={state.selectionMode}
+        label={state.selectionLabel}
         onSelect={onSelect}
         onRefresh={onRefreshSelection}
       />

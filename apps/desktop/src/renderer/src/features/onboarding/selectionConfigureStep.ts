@@ -96,7 +96,8 @@ function pick(
     label: `Choose ${plural(deps.selection.label)} to track…`,
     sourceId,
     selectable: items,
-    selectionMode: deps.selection.mode
+    selectionMode: deps.selection.mode,
+    selectionLabel: deps.selection.label
   })
   return deps.onSelect(items)
 }

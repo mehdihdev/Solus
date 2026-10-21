@@ -4,11 +4,11 @@
 //
 // Nothing here knows what an item IS: `mode` comes from the connector's declared
 // selection, and the item's own `name`/`subtitle` are the only copy shown.
-import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Spinner } from '../../components/ui/Spinner'
 import type { SelectableItem } from '../../lib/api/resources'
 import type { PickerSection } from './teamRepoSection'
+import { MultiSelectPicker, useRefreshedItems, type PickerVariant } from './MultiSelectPicker'
 
 export const PICKER_FIELD_STYLE = {
   width: '100%',
@@ -46,6 +46,12 @@ export interface SelectionPickerProps {
   onSelect?: (items: SelectableItem[] | null) => void
   /** Items already tracked, so an edit starts from the current selection. */
   initial?: readonly string[]
+  /** The connector's noun ("document") for multi-select copy. */
+  label?: string
+  /** Multi-select: first pick (`connect`) or changing a selection (`edit`). */
+  variant?: PickerVariant
+  /** Multi-select edit: leave without saving. */
+  onCancel?: () => void
   onRefresh?: () => Promise<SelectableItem[]>
   refreshLabel?: string
   disabled?: boolean
@@ -184,90 +190,30 @@ function SinglePicker({ items, onSelect }: SelectionPickerProps): React.JSX.Elem
   )
 }
 
-/** Multi-select: any number of items, confirmed together. Selecting none is a
- *  valid answer — the source stays connected and simply tracks nothing. */
-function MultiPicker({ items, onSelect, initial = [] }: SelectionPickerProps): React.JSX.Element {
-  const [chosen, setChosen] = useState<readonly string[]>(initial)
-  const selected = items.filter((item) => chosen.includes(item.id))
-  const toggle = (id: string): void =>
-    setChosen((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
-
-  return (
-    <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-      <div style={{ maxHeight: 148, overflowY: 'auto', display: 'grid', gap: 4 }}>
-        {items.map((item) => (
-          <label
-            key={item.id}
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              fontSize: 11.5,
-              cursor: 'pointer'
-            }}
-          >
-            <input
-              type="checkbox"
-              aria-label={item.name}
-              checked={chosen.includes(item.id)}
-              onChange={() => toggle(item.id)}
-            />
-            <span style={{ flex: 1, minWidth: 0 }}>{item.name}</span>
-            {item.subtitle && <span style={{ ...SUB, color: 'var(--mut)' }}>{item.subtitle}</span>}
-          </label>
-        ))}
-      </div>
-      <Button kind="primary" size="sm" onClick={() => onSelect?.(selected)}>
-        Track {selected.length > 0 ? selected.length : 'none'}
-      </Button>
-    </div>
-  )
-}
-
-function useRefreshedItems(props: SelectionPickerProps) {
-  const [items, setItems] = useState(props.items)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const generation = useRef(0)
-  const pending = useRef(false)
-  useEffect(() => {
-    setItems(props.items)
-    setBusy(false)
-    setError(null)
-    pending.current = false
-    generation.current += 1
-    return () => {
-      generation.current += 1
-    }
-  }, [props.items])
-  const refresh = async (): Promise<void> => {
-    if (!props.onRefresh || pending.current || props.disabled) return
-    const current = generation.current
-    pending.current = true
-    setBusy(true)
-    setError(null)
-    try {
-      const found = await props.onRefresh()
-      if (current === generation.current) setItems(found)
-    } catch {
-      if (current === generation.current)
-        setError('Could not refresh the list. Your selection is unchanged.')
-    } finally {
-      if (current === generation.current) {
-        pending.current = false
-        setBusy(false)
-      }
-    }
-  }
-  return { items, busy, error, refresh }
-}
-
 function PickerBody(props: SelectionPickerProps): React.JSX.Element {
   if (props.sections) return <SectionedPicker {...props} />
-  return props.mode === 'multi' ? <MultiPicker {...props} /> : <SinglePicker {...props} />
+  return <SinglePicker {...props} />
 }
 
 export function SelectionPicker(props: SelectionPickerProps): React.JSX.Element {
+  if (!props.sections && props.mode === 'multi') {
+    return (
+      <MultiSelectPicker
+        items={props.items}
+        label={props.label ?? 'item'}
+        variant={props.variant ?? 'connect'}
+        initial={props.initial ?? []}
+        onSelect={props.onSelect}
+        onCancel={props.onCancel}
+        onRefresh={props.onRefresh}
+        disabled={props.disabled}
+      />
+    )
+  }
+  return <SingleOrSections {...props} />
+}
+
+function SingleOrSections(props: SelectionPickerProps): React.JSX.Element {
   const listing = useRefreshedItems(props)
   const pickerProps = { ...props, items: listing.items }
   return (

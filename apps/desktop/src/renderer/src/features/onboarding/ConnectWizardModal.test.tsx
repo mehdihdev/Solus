@@ -280,15 +280,29 @@ function registerWizardInputsTests(): void {
     expect(handlers.onSubmitConfig).not.toHaveBeenCalled()
   })
 
-  it('lets a multi-select picker submit an empty selection (connected but idle)', () => {
+  it('lets a multi-select picker skip for now (connected but idle)', () => {
     const handlers = renderWizard(OAUTH_PICK, {
       phase: 'busy',
       stage: 'configure',
       selectable: [{ id: 'docA', name: 'Rover chassis' }],
-      selectionMode: 'multi'
+      selectionMode: 'multi',
+      selectionLabel: 'document'
     })
-    fireEvent.click(screen.getByRole('button', { name: /track none/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
     expect(handlers.onSelect).toHaveBeenCalledWith([])
+  })
+
+  it('counts picks in the connector’s own noun', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      selectable: [{ id: 'docA', name: 'Rover chassis' }],
+      selectionMode: 'multi',
+      selectionLabel: 'document'
+    })
+    fireEvent.click(screen.getByLabelText('Rover chassis'))
+    fireEvent.click(screen.getByRole('button', { name: 'Track 1 document' }))
+    expect(handlers.onSelect).toHaveBeenCalledWith([{ id: 'docA', name: 'Rover chassis' }])
   })
 
   it('starts the grant choice on the connector’s own default, not the widest', () => {

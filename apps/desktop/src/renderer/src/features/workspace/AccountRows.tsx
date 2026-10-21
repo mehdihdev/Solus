@@ -4,7 +4,7 @@
 // to move / confirmed Move), and each source the current project holds for the
 // tool (confirmed Disconnect). The tool's own row — mark, name, the NEXT step —
 // lives in ConnectedAccountsCard; these are what already exists beneath it.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Icons } from '../../components/ui/icons.constants'
 import type { Connection, LegacyConnection, Source } from '../../lib/api/resources'
@@ -12,7 +12,7 @@ import { relativeTime } from '../../lib/relativeTime'
 import type { CatalogEntry } from '../onboarding/integrationCatalog'
 import { plural } from '../onboarding/selectionConfigureStep'
 import { DisconnectSourceModal } from '../project/DisconnectSourceModal'
-import { EditSelectionModal } from '../project/EditSelectionModal'
+import { EditSelectionModal, type SavedChange } from '../project/EditSelectionModal'
 import { HostedAddOnRow } from '../project/HostedAddOnRow'
 import { LocalProjectBinding } from '../project/LocalProjectBinding'
 import { sourceErrorText, sourceStatusColor, trackedIds } from '../project/sourcePresentation'
@@ -336,8 +336,11 @@ export function LegacyRow({
   )
 }
 
-/** "Choose documents…" — only when the CONNECTOR declares a selection, per the
- *  live registry; a new connector gains the action for free. */
+const SAVED_NOTICE_MS = 8000
+
+/** "Edit documents · N" — only when the CONNECTOR declares a selection, per the
+ *  live registry; a new connector gains the action for free. A save is
+ *  acknowledged on the row while the re-sync it started runs. */
 function SelectionAction({
   source,
   entry,
@@ -350,27 +353,47 @@ function SelectionAction({
   onSaved: () => void
 }): React.JSX.Element | null {
   const [editing, setEditing] = useState(false)
+  const [saved, setSaved] = useState<SavedChange | null>(null)
+  // The notice acknowledges the save; the row's own sync status takes over.
+  useEffect(() => {
+    if (!saved) return
+    const timer = setTimeout(() => setSaved(null), SAVED_NOTICE_MS)
+    return () => clearTimeout(timer)
+  }, [saved])
   const selection = entry.selection
   if (!selection) return null
+  const tracked = trackedIds(source, selection.config_key)
+  const noun = plural(selection.label)
   return (
     <>
       <Button
         kind="ghost"
         size="sm"
-        aria-label={`Choose ${plural(selection.label)} for ${source.name}`}
-        onClick={() => setEditing(true)}
+        aria-label={`Edit ${noun} for ${source.name}`}
+        onClick={() => {
+          setSaved(null)
+          setEditing(true)
+        }}
       >
-        {plural(selection.label)}
+        Edit {noun} · {tracked.length}
       </Button>
+      {saved && (
+        <span role="status" style={{ fontSize: 10.5, color: 'var(--ok)' }}>
+          Selection saved · added {saved.added}, removed {saved.removed} · syncing
+        </span>
+      )}
       {editing && (
         <EditSelectionModal
           projectId={projectId}
           sourceId={source.id}
           sourceName={source.name}
           selection={selection}
-          current={trackedIds(source, selection.config_key)}
+          current={tracked}
           onClose={() => setEditing(false)}
-          onSaved={onSaved}
+          onSaved={(change) => {
+            setSaved(change)
+            onSaved()
+          }}
         />
       )}
     </>

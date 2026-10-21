@@ -213,6 +213,8 @@ export interface SelectableItem {
   id: string
   name: string
   subtitle?: string
+  /** ISO time the item was last edited at the provider, when the connector knows. */
+  modified_at?: string
   config?: Record<string, unknown>
 }
 
