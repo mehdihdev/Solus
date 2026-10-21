@@ -21,7 +21,7 @@ from solus_api.models import SourceType
 #: The mirror image of `test_mcp_license.test_vendor_run_specs_are_loopback_only`.
 #: There, a url means loopback-on-the-customer's-machine; here it means a vendor's
 #: cloud — so the guard inverts: https only, and only hosts we have reviewed.
-ALLOWED_HOSTS = frozenset({"fs-mcp.labs.onshape.app"})
+ALLOWED_HOSTS = frozenset({"fs-mcp.labs.onshape.app", "mcp-auth.labs.onshape.app"})
 
 
 def test_every_hosted_url_is_https_on_a_reviewed_host() -> None:
@@ -39,6 +39,16 @@ def test_every_hosted_url_is_https_on_a_reviewed_host() -> None:
             parts = urlsplit(url)
             assert parts.scheme == "https", f"{spec.name}.{label} is not https: {url}"
             assert parts.hostname in ALLOWED_HOSTS, f"{spec.name}.{label} host {parts.hostname}"
+
+
+def test_fs_mcp_oauth_endpoints_are_pinned_to_onshapes_auth_host() -> None:
+    """Onshape split fs-mcp's authorization server onto its own host: the
+    resource's metadata now names `mcp-auth.labs.onshape.app`, and fs-mcp's own
+    `/authorize` answers 404. Pinned here, never discovered (ADR §4)."""
+    assert urlsplit(FS_MCP.url).hostname == "fs-mcp.labs.onshape.app"
+    assert FS_MCP.authorize_url == "https://mcp-auth.labs.onshape.app/authorize"
+    assert FS_MCP.token_url == "https://mcp-auth.labs.onshape.app/token"  # noqa: S105
+    assert FS_MCP.register_url == "https://mcp-auth.labs.onshape.app/register"
 
 
 def test_fs_mcp_never_requests_delete_or_pii() -> None:
@@ -123,8 +133,7 @@ def test_a_new_hosted_server_is_data_only() -> None:
     assert other.consent_summary("read_thing") == "Run `vendor_x` — `read_thing`"
 
 
-def test_connect_notice_does_not_claim_a_customer_annual_api_allocation():
-    from solus_api.agent.tools.remote_mcp import FS_MCP
-
+def test_connect_notice_does_not_claim_a_customer_annual_api_allocation() -> None:
+    assert FS_MCP.connect_notice is not None
     assert "consumes your account's API allocation" not in FS_MCP.connect_notice
     assert "service limits" in FS_MCP.connect_notice

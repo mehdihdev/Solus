@@ -172,12 +172,15 @@ FS_MCP = RemoteMCPSpec(
     url="https://fs-mcp.labs.onshape.app/mcp",
     display_name="FeatureScript",
     source_type=SourceType.ONSHAPE,
-    authorize_url="https://fs-mcp.labs.onshape.app/authorize",
+    # Onshape moved fs-mcp's authorization server onto its own host (the
+    # resource metadata names it; fs-mcp's own `/authorize` now 404s). Still
+    # pinned here from a reviewed live check, never discovered at runtime.
+    authorize_url="https://mcp-auth.labs.onshape.app/authorize",
     # noqa on the next line: S106 sees "token" in the NAME and assumes a
     # credential. This is the OAuth token ENDPOINT — a public URL from the
     # server's own discovery document. No secret appears in this file.
-    token_url="https://fs-mcp.labs.onshape.app/token",  # noqa: S106
-    register_url="https://fs-mcp.labs.onshape.app/register",
+    token_url="https://mcp-auth.labs.onshape.app/token",  # noqa: S106
+    register_url="https://mcp-auth.labs.onshape.app/register",
     # Read + Write only. `OAuth2Delete` and `OAuth2ReadPII` are forbidden on the
     # record; the live spike confirmed the server issues a token without them.
     scopes=("OAuth2Read", "OAuth2Write"),
