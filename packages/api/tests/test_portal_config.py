@@ -81,6 +81,15 @@ def test_params_products_grouped_by_product() -> None:
     ]
 
 
+def test_params_only_offer_self_serve_plans_and_intervals() -> None:
+    # Same gate as Checkout (CHECKOUTABLE_PLANS × VALID_INTERVALS): an enterprise or
+    # malformed key in the config must never become a portal switch target.
+    prices = {**PRICES, "enterprise:month": "price_em", "pro:week": "price_pw", "junk": "price_j"}
+    f = portal_configuration_params(_settings(prices), PRODUCTS)["features"]
+    offered = {p for row in f["subscription_update"]["products"] for p in row["prices"]}
+    assert offered == {"price_bm", "price_by", "price_pm"}
+
+
 def test_params_have_no_invented_branding() -> None:
     assert "business_profile" not in portal_configuration_params(_settings(), PRODUCTS)
 

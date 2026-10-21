@@ -17,6 +17,7 @@ import weakref
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+from solus_api.billing.plans import CHECKOUTABLE_PLANS, VALID_INTERVALS, plan_price_id
 from solus_api.billing.stripe_gateway import BillingUnconfiguredError
 from solus_api.core.config import Settings
 
@@ -41,7 +42,15 @@ class PortalConfigGateway(Protocol):
 
 
 def _plan_price_ids(settings: Settings) -> list[str]:
-    return sorted(set(settings.stripe_plan_prices.values()))
+    """Prices the portal may switch between — the same gate as Checkout
+    (CHECKOUTABLE_PLANS × VALID_INTERVALS), so a stray enterprise or malformed key
+    in `stripe_plan_prices` never becomes a self-serve switch target."""
+    ids = {
+        plan_price_id(settings, plan, interval)
+        for plan in CHECKOUTABLE_PLANS
+        for interval in VALID_INTERVALS
+    }
+    return sorted(pid for pid in ids if pid)
 
 
 def _stable_hash(payload: object) -> str:
