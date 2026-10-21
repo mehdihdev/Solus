@@ -158,7 +158,7 @@ async def _notes(maker: Maker, uid: uuid.UUID) -> list[Notification]:
 
 
 async def _run(maker: Maker, gw: _Gateway) -> int:
-    return await reconcile_subscriptions(maker, gw, _settings(), NOW)  # type: ignore[arg-type]
+    return await reconcile_subscriptions(maker, gw, _settings(), NOW)
 
 
 async def test_no_drift_writes_nothing_and_emits_nothing(maker: Maker) -> None:
