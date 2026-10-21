@@ -136,7 +136,7 @@ _COMMAND_NOTE: Final = (
     "/opt/ros/<distro>/setup.bash) and pass that profile to later commands. For things "
     "that do not exit — ros2 launch, a dev server — use code.process_start and read "
     "them with code.process_status; stop them with code.process_stop. For programs "
-    "that ask questions or say \"Press Enter\", start them with code.process_start and "
+    'that ask questions or say "Press Enter", start them with code.process_start and '
     "interactive: true. When one is waiting for input, relay what it asks in plain "
     "words. A bare Enter (code.process_input with empty text) may be sent when the "
     "program needs nothing from the person; any typed answer waits for the person's "
