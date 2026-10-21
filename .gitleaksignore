@@ -80,3 +80,13 @@ de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:ge
 de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:77
 de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:95
 de1eddd8b1661c54e4a66e82d0e28ea6e6776ad5:packages/api/tests/test_untrusted.py:github-pat:97
+
+# SOLUSDEV-317: the command-gate redaction tests use a made-up, alphabet-sequence
+# token ("aB3dE5fG7hJ9…", also with a ghp_ prefix) to prove secret-shaped argv,
+# cwd and refusal reasons never reach an approval card. Not a credential.
+a91efe2f9383b13c92a8323f7e5bc2c426512862:packages/api/tests/test_command_gate.py:generic-api-key:494
+633d77a060386c8db0d1f76d16ebdb6d8bcadc40:packages/api/tests/test_command_gate.py:generic-api-key:489
+aaa7c9ee5f6a04b05e3225a168b7abdebe74e553:packages/api/tests/test_command_previews.py:github-pat:188
+aaa7c9ee5f6a04b05e3225a168b7abdebe74e553:packages/api/tests/test_command_previews.py:generic-api-key:188
+165acf0dae8aa3be1e411c645592b764ff5c743b:packages/api/tests/test_command_previews.py:generic-api-key:188
+165acf0dae8aa3be1e411c645592b764ff5c743b:packages/api/tests/test_command_previews.py:github-pat:188
