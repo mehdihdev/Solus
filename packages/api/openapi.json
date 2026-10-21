@@ -2660,23 +2660,75 @@
         ]
       }
     },
-    "/api/v1/billing/portal-session": {
-      "post": {
+    "/api/v1/billing/summary": {
+      "get": {
         "tags": [
           "billing"
         ],
-        "summary": "Create Portal Session",
-        "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan). Requires an existing Stripe customer (i.e. a prior checkout).",
-        "operationId": "create_portal_session_api_v1_billing_portal_session_post",
+        "summary": "Get Billing Summary",
+        "description": "The caller's own billing read model (SOLUSDEV-236). Stripe trouble degrades the\nStripe-derived fields to null with a 200; it never produces a 502/503 here.",
+        "operationId": "get_billing_summary_api_v1_billing_summary_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "title": "Response Get Billing Summary Api V1 Billing Summary Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/portal-session": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Create Portal Session",
+        "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan), optionally deep-linked into the update/cancel flow. Requires an\nexisting Stripe customer (i.e. a prior checkout).",
+        "operationId": "create_portal_session_api_v1_billing_portal_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PortalSessionCreate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
                   "title": "Response Create Portal Session Api V1 Billing Portal Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -17517,6 +17569,29 @@
           "binding"
         ],
         "title": "PortableTransportBinding"
+      },
+      "PortalSessionCreate": {
+        "properties": {
+          "flow": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "update",
+                  "cancel"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PortalSessionCreate",
+        "description": "Optional body of POST /billing/portal-session (SOLUSDEV-236). No ids: the\nsubscription is always derived server-side from the caller's own row."
       },
       "PreferencesBody": {
         "properties": {

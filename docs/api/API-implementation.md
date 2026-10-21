@@ -726,7 +726,7 @@ token so a sign-out/sign-in shares nothing with the previous account:
 | §2.1 API keys (`/users/me/api-keys`)                                                                                                                                                                                               | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | §2.4–§2.15, WS/SSE                                                                                                                                                                                                                 | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `POST /graph/query`, MCP server, presence topic                                                                                                                                                                                    | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Stripe billing routes (`POST /api/v1/webhooks/stripe`, `POST /api/v1/billing/checkout-session`, `POST /api/v1/billing/portal-session`, `GET /api/v1/billing/packs`, `GET /api/v1/users/me/credits`, `GET /api/v1/billing/summary`) | **Built** — webhook (SOLUSDEV-83) + the checkout/portal/packs/credits routes (SOLUSDEV-83 follow-up) lift the §7.2 deferral by human decision. **SOLUSDEV-236 (PLANNED, pending build):** `GET /api/v1/billing/summary` (new), `POST /api/v1/billing/portal-session` flow body, trial expiry (`402 trial_expired`), `billing_interval`/`current_period_end` and the hourly subscription reconciliation cron (§10). Locked by ADR-024 (2026-10-19 amendment); the summary shape was approved in-chat 2026-10-19. Full "select plan → Stripe Checkout → webhook confirms" flow. See §10. The trial-only `PATCH /users/me/subscription` (no Stripe call — ADR-032) remains live for onboarding, see §3. Enterprise stays contact-sales. |
+| Stripe billing routes (`POST /api/v1/webhooks/stripe`, `POST /api/v1/billing/checkout-session`, `POST /api/v1/billing/portal-session`, `GET /api/v1/billing/packs`, `GET /api/v1/users/me/credits`, `GET /api/v1/billing/summary`) | **Built** — webhook (SOLUSDEV-83) + the checkout/portal/packs/credits routes (SOLUSDEV-83 follow-up) lift the §7.2 deferral by human decision. **SOLUSDEV-236 (Built 2026-10-21):** `GET /api/v1/billing/summary` (new), `POST /api/v1/billing/portal-session` flow body, trial expiry (`402 trial_expired`), `billing_interval`/`current_period_end` and the hourly subscription reconciliation cron (§10). Locked by ADR-024 (2026-10-19 amendment); the summary shape was approved in-chat 2026-10-19. Full "select plan → Stripe Checkout → webhook confirms" flow. See §10. The trial-only `PATCH /users/me/subscription` (no Stripe call — ADR-032) remains live for onboarding, see §3. Enterprise stays contact-sales. |
 | Alembic migrations                                                                                                                                                                                                                 | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | ARQ/Redis worker wiring                                                                                                                                                                                                            | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Data-collection consent (§2.13)                                                                                                                                                                                                    | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -808,7 +808,7 @@ billing_unconfigured`; Stripe API error → `502 billing_provider_error`.
 - `200 {"data": {"url": "<Stripe billing-portal URL>"}}` — manage payment method,
   cancel, or switch plan. Requires an existing `stripe_customer_id` (a prior
   checkout): none → `409 no_billing_customer`. No key → `503`, Stripe error → `502`.
-- **Optional body (SOLUSDEV-236, PLANNED):** `{"flow": "update" | "cancel"}`.
+- **Optional body (SOLUSDEV-236, built):** `{"flow": "update" | "cancel"}`.
   Strict schema (`extra=forbid`): unknown fields or an unknown `flow` → `422 validation_error`.
   No body = the general portal (today's behaviour).
   - The subscription id is ALWAYS derived server-side from the caller's own row. The
@@ -828,11 +828,11 @@ billing_unconfigured`; Stripe API error → `502 billing_provider_error`.
 "always_invoice"` plus `schedule_at_period_end.conditions =
 [decreasing_item_amount, shortening_interval]`.
   - Emits `billing.portal_session.created {flow: "general" | "update" | "cancel"}`.
-  - Rate-limited (`429 rate_limited`). **PROPOSED:** 10/min/user, same limiter as the
-    other billing actions.
+  - Rate-limited (`429 rate_limited`). 10/min/user (its own limiter,
+    `billing_portal_limiter`).
   - Stripe errors → `502 billing_provider_error` (unchanged).
 
-### GET /api/v1/billing/summary — billing summary for the caller (authenticated, SOLUSDEV-236, PLANNED)
+### GET /api/v1/billing/summary — billing summary for the caller (authenticated, SOLUSDEV-236, built)
 
 **Shape approved 2026-10-19 (in-chat, SOLUSDEV-236).** One read model for the Billing screen
 (`docs/wireflows/billing.md`).
@@ -902,12 +902,14 @@ billing_unconfigured`; Stripe API error → `502 billing_provider_error`.
 - `packs_available`: `SOLUS_STRIPE_PACK_CREDITS` is non-empty. No Stripe call.
 - `stripe_status`:
   - `ok`: every Stripe call this response needs succeeded (or none was needed).
-  - `unavailable`: a Stripe call errored or timed out. **PROPOSED** budget: 3 s per call.
+  - `unavailable`: a Stripe call errored or timed out. Budget: 3 s per call.
   - `unconfigured`: no Stripe key (or no price mapping for the self-serve plans).
 - Degraded mode returns `200`. Stripe errors never produce a `502` or `503` here.
   Stripe-derived fields (`next_invoice`, `payment_method`, `prices`) are `null`.
 - Never returned: `cus_…`, `sub_…`, `pm_…`, `in_…` ids, or card data beyond brand and last four.
-- Rate-limited: `429 rate_limited`, **PROPOSED** 30/min/user. Per-user response cache ~60 s.
+- Rate-limited: `429 rate_limited`, 30/min/user (`billing_summary_limiter`). Per-user Stripe reads
+  (next invoice, card) are cached ~60 s (10 s when degraded); local fields are recomputed
+  from the row on every request; prices share one global ~10 min cache.
 - Errors: `401 unauthorized`; `404 not_found` if the caller has no subscription row (not expected after provisioning); `429 rate_limited`.
 - Team-scoping N/A: the summary is the caller's own subscription (ADR-023/025).
 - Emits no data-collection event (read-only).
@@ -932,7 +934,7 @@ set from the purchased Stripe **Price** (reverse `SOLUS_STRIPE_PLAN_PRICES`
 lookup), so entitlement always reflects what was actually paid for — never a
 client-supplied plan name. An unmapped price leaves the plan unchanged.
 
-### Subscription state derivation, reconciliation and trial length (SOLUSDEV-236, PLANNED)
+### Subscription state derivation, reconciliation and trial length (SOLUSDEV-236, built)
 
 - **Shared derivation.** The webhook (`_apply_subscription`) and the reconciliation cron
   write `billing_interval`, `current_period_end` and `expires_at` through one pure
@@ -945,8 +947,8 @@ client-supplied plan name. An unmapped price leaves the plan unchanged.
   (`stripe_subscription_id` set). A row whose subscription returns Stripe
   `resource_missing` is canceled through the term-end path (`_apply_term_end`: limits
   clamp to BASIC, `cancel_at` clears, `subscription.ended` notice). A circuit breaker
-  aborts the run and alerts when more than 5 % of linked rows (minimum 10) report missing
-  in one sweep. **PROPOSED** threshold. Local-only rows are never touched. Each changed
+  aborts the run (nothing is written, `billing.reconcile.aborted` is logged) when more than
+  5 % of the batch (minimum 10) report missing in one sweep. Local-only rows are never touched. Each changed
   row emits `billing.subscription.reconciled {changed_fields, from_status, to_status,
 cause}` (consent-gated, ids and codes only). Not the same job as the credit-debit
   reconciler (`billing/reconciliation.py`).
@@ -975,7 +977,7 @@ cause}` (consent-gated, ids and codes only). Not the same job as the credit-debi
 - **Conversion + prices are PROVISIONAL** (`orchestration/models.yaml`:
   `margin_multiplier`, `credits_per_dollar`; `SOLUS_STRIPE_PACK_CREDITS`) —
   calibrate post-pilot (ADR-024).
-- **Trial expiry block (SOLUSDEV-236, ADR-024 amendment 2026-10-19; PLANNED):** the
+- **Trial expiry block (SOLUSDEV-236, ADR-024 amendment 2026-10-19; built):** the
   pre-flight gate (`orchestration/gates.py` `assert_can_spend`) refuses a metered call with
   **`402 trial_expired`** when the caller's subscription is a local trial
   (`stripe_subscription_id` IS NULL, `status` trialing) and `expires_at` < now. The
@@ -984,9 +986,8 @@ cause}` (consent-gated, ids and codes only). Not the same job as the credit-debi
   Order of checks: development-allowlist bypass, then the trial-expiry check, then the
   existing trial-cap and credit checks.
   - **Purchased credits still unlock spend.** An expired trial may spend only when the
-    ledger holds at least one `purchase` entry and the cached balance covers the
-    estimate. **PROPOSED** rule; a purchased sub-balance is not tracked separately today
-    (see `docs/wireflows/billing.md` §Open questions). Confirm before implementation.
+    ledger holds at least one `purchase` entry and the cached balance covers one credit
+    (ADR-024 2026-10-19). A purchase with an empty balance is still `trial_expired`.
   - Projects, data, sync and unmetered features are never blocked by this rule.
   - Stripe-backed trials (`stripe_subscription_id` set) are never blocked by it.
   - Each block emits `orchestration.blocked {reason: "trial_expired", ends_at}`

@@ -899,6 +899,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/billing/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Billing Summary
+         * @description The caller's own billing read model (SOLUSDEV-236). Stripe trouble degrades the
+         *     Stripe-derived fields to null with a 200; it never produces a 502/503 here.
+         */
+        get: operations["get_billing_summary_api_v1_billing_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/billing/portal-session": {
         parameters: {
             query?: never;
@@ -911,7 +932,8 @@ export interface paths {
         /**
          * Create Portal Session
          * @description Open the Stripe-hosted billing portal (manage payment method, cancel,
-         *     switch plan). Requires an existing Stripe customer (i.e. a prior checkout).
+         *     switch plan), optionally deep-linked into the update/cancel flow. Requires an
+         *     existing Stripe customer (i.e. a prior checkout).
          */
         post: operations["create_portal_session_api_v1_billing_portal_session_post"];
         delete?: never;
@@ -4932,6 +4954,15 @@ export interface components {
             pid?: number | null;
         };
         /**
+         * PortalSessionCreate
+         * @description Optional body of POST /billing/portal-session (SOLUSDEV-236). No ids: the
+         *     subscription is always derived server-side from the caller's own row.
+         */
+        PortalSessionCreate: {
+            /** Flow */
+            flow?: ("update" | "cancel") | null;
+        };
+        /**
          * PreferencesBody
          * @description The `~/.solus/preferences.json` sections the engine reads (engine.PREFERENCE_KEYS) —
          *     ranking context only. Other sections of the user's file are dropped at the boundary, never
@@ -7614,7 +7645,7 @@ export interface operations {
             };
         };
     };
-    create_portal_session_api_v1_billing_portal_session_post: {
+    get_billing_summary_api_v1_billing_summary_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -7629,9 +7660,40 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    create_portal_session_api_v1_billing_portal_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PortalSessionCreate"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

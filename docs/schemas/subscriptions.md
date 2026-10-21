@@ -9,7 +9,7 @@ One live subscription per user. The row is per **user**, not per team (ADR-023/0
 
 ## Columns
 
-Columns marked **new** are PLANNED by SOLUSDEV-236. Everything else exists in the model today.
+Columns marked **new** were added by SOLUSDEV-236 (migration `a23600000001`). Everything else exists in the model today.
 
 | Column                   | Type                                                                     | Null | Default                                       | Meaning                                                                                                                         |
 | ------------------------ | ------------------------------------------------------------------------ | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -44,13 +44,13 @@ Columns marked **new** are PLANNED by SOLUSDEV-236. Everything else exists in th
 ## expires_at rules
 
 `expires_at` has one meaning per row state. The table below is the locked rule. The
-webhook and reconciliation columns are PLANNED (today's webhook does not write `expires_at`).
+webhook and reconciliation columns are built (SOLUSDEV-236).
 
 | Row state                                                      | `expires_at` value                                                          | Written by                                                 |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | Local trial (`stripe_subscription_id` NULL, `status` trialing) | Provisioning trial end: signup time + `stripe_trial_days` (14). Never reset | Provisioning (today: `deps._provision_user`, `TRIAL_DAYS`) |
-| Stripe-linked, `status` trialing                               | Stripe `trial_end`                                                          | Webhook (PLANNED), reconciliation (PLANNED)                |
-| Stripe-linked, `status` active or past_due                     | Stripe `current_period_end`                                                 | Webhook (PLANNED), reconciliation (PLANNED)                |
+| Stripe-linked, `status` trialing                               | Stripe `trial_end`                                                          | Webhook, reconciliation                                    |
+| Stripe-linked, `status` active or past_due                     | Stripe `current_period_end`                                                 | Webhook, reconciliation                                    |
 | Stripe-linked, `status` canceled                               | Last value kept (not cleared)                                               | Not written after term end                                 |
 | Staff comp (`comp_plan`)                                       | Unchanged. The comp clock is `comp_expires_at`, not `expires_at`            | —                                                          |
 
@@ -66,14 +66,14 @@ Rules:
 
 ## Who writes each column
 
-| Column                                | Provisioning (signup)   | Trial PATCH                     | Webhook                                                             | Reconciliation (PLANNED)           | Staff ops                                                          | Notes                                      |
+| Column                                | Provisioning (signup)   | Trial PATCH                     | Webhook                                                             | Reconciliation                     | Staff ops                                                          | Notes                                      |
 | ------------------------------------- | ----------------------- | ------------------------------- | ------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------ | ------------------------------------------ |
 | `id`, `user_id`, `created_at`         | yes                     | —                               | —                                                                   | —                                  | —                                                                  |                                            |
 | `plan`                                | `basic`                 | yes (trial only, `basic`/`pro`) | yes (from Stripe Price)                                             | yes (same path)                    | via comp/plan flows; Stripe-backed plan changes are made in Stripe | Unmapped price leaves plan unchanged       |
 | `status`                              | `trialing`              | —                               | yes (`_STATUS_MAP`)                                                 | yes; `resource_missing` → canceled | yes (converges from Stripe)                                        | `deleted` event → canceled                 |
 | `limits`                              | `default_limits(basic)` | yes (`default_limits(plan)`)    | yes (`default_limits` of the price's plan; BASIC clamp at term end) | yes (same path)                    | —                                                                  | Never plan names in enforcement            |
 | `limits_override`                     | —                       | —                               | **never**                                                           | **never**                          | yes                                                                | Staff only                                 |
-| `expires_at`                          | yes (trial end)         | never                           | yes (PLANNED, rule above)                                           | yes (PLANNED)                      | —                                                                  |                                            |
+| `expires_at`                          | yes (trial end)         | never                           | yes (rule above)                                                    | yes                                | —                                                                  |                                            |
 | `cancel_at`                           | —                       | —                               | yes (`_cancel_at_dt`); cleared on resume and term end               | yes                                | yes (via Stripe)                                                   |                                            |
 | `stripe_customer_id`                  | —                       | —                               | yes (checkout completed, subscription events)                       | — (no re-link)                     | —                                                                  | Set on checkout (`get_or_create_customer`) |
 | `stripe_subscription_id`              | —                       | —                               | yes (link on subscription event or checkout completed)              | — (no re-link)                     | —                                                                  | A new id clears a local comp               |
@@ -87,14 +87,13 @@ Rules:
 **Read-time only (no column):** trial state, `trial_expired`, `effective_limits`
 (`limits` + `limits_override` + active comp), `is_comp_active`.
 
-**Reconciliation** is the hourly cron that converges Stripe-linked rows (PLANNED).
+**Reconciliation** is the hourly cron that converges Stripe-linked rows (`billing/subscription_sync.py`, minute 5).
 It does not touch local-only rows. It uses the same pure derivation as the webhook
 (`expires_at`, `billing_interval`, `current_period_end`, `status`, `cancel_at`).
 If Stripe returns `resource_missing` for a linked subscription, the row is canceled
 through the term-end path (the same path as `customer.subscription.deleted`). A
 circuit breaker stops the sweep when too many linked rows are missing in one run
-(threshold in config, `PROPOSED`: abort and alert when more than 5 % of linked rows,
-minimum 10). Every changed row emits `billing.subscription.reconciled
+(more than 5 % of the batch, minimum 10: the run aborts and writes nothing). Every changed row emits `billing.subscription.reconciled
 {changed_fields, from_status, to_status, cause}`.
 
 Do not confuse this with `billing/reconciliation.py`, which reconciles credit debits
