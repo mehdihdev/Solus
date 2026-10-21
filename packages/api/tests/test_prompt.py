@@ -545,3 +545,71 @@ def test_repository_read_guidance_precedes_untrusted_preferences(mode: SolMode) 
     assert "related repository files" in instructions
     assert "Do not use machine.read_file for connected repository explanations" in instructions
     assert "other explicit machine tasks" in instructions
+
+
+# ------------------------------------------- SOLUSDEV-317: running commands (Build only)
+
+
+def test_build_mode_teaches_argv_commands_profiles_and_processes() -> None:
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    for phrase in (
+        "code.exec",
+        "argv",
+        "&&",
+        "cwd",
+        "code.profile_capture",
+        "setup.bash",
+        "code.process_start",
+        "code.process_status",
+        "approval",
+        "never claim a command ran",
+        "code.git_status",
+    ):
+        assert phrase in text, phrase
+
+
+def test_build_mode_explains_interactive_processes() -> None:
+    """SOLUSDEV-317 §11.2 prompt guidance."""
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    for phrase in (
+        "interactive: true",
+        "Press Enter",
+        "code.process_input",
+        "relay what it asks in plain words",
+        "Never invent an answer the person has to give",
+    ):
+        assert phrase in text, phrase
+
+
+def test_build_mode_says_to_use_bare_program_names() -> None:
+    # Live QA 2026-10-19: SOL guessed /usr/bin/ls on macOS, where ls is /bin/ls, and the
+    # server rightly refused the non-existent path. Bare names resolve per machine.
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    assert "bare program name" in text
+    assert "never guess an absolute path" in text
+
+
+def test_build_mode_says_no_risk_commands_run_directly_and_scripts_go_through_bash() -> None:
+    # ADR-031 amendment 2026-10-19 / code-command-execution.md §10.
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.EXPERT, action_mode=ActionMode.DO)
+    assert "runs straight away" in text
+    assert "waits for the person's approval on its card" in text
+    assert "bash scripts/build.sh" in text
+    assert "never bash -c" in text
+    assert "Every command waits" not in text
+
+
+def test_guide_mode_never_proposes_execution() -> None:
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.GUIDE, action_mode=ActionMode.GUIDE)
+    assert "code.exec" not in text
+    assert "never execute changes" in text

@@ -1,0 +1,66 @@
+/* Home motion (SOLUSDEV-317) — the house pattern (sol-fade-rise,
+   accounts-panel-in): transform/opacity only, tokens only, short, and off
+   entirely under prefers-reduced-motion. */
+@keyframes home-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The pane, keyed to the project / view / tab it shows: each change eases in. */
+.home-pane-in {
+  animation: home-fade-rise 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* A list row; its delay comes from homeStagger(). `both` holds the first frame
+   through the delay, so a row never flashes in before its turn. */
+.home-row-in {
+  animation: home-fade-rise 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+/* Cards and rows that change state (selected, hovered) ease between states. */
+.home-card {
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.12s ease;
+}
+
+/* The one underline that slides to the selected project tab. */
+.home-tab-indicator {
+  transition:
+    transform 0.24s cubic-bezier(0.2, 0.9, 0.3, 1),
+    width 0.24s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* .solus segments fill in rather than snap. */
+.home-segment {
+  transition: background-color 0.3s ease;
+}
+
+/* The pane header's repo link: plain text colour until hovered. */
+.repo-link {
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.repo-link:hover {
+  color: var(--acc) !important;
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-pane-in,
+  .home-row-in {
+    animation: none;
+  }
+  .home-card,
+  .home-tab-indicator,
+  .home-segment {
+    transition: none;
+  }
+}

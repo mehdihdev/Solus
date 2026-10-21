@@ -10,16 +10,21 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Switch } from '../../components/ui/Switch'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
-import { ConfirmationCard } from './ConfirmationCard'
+import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
+import { AutoRunsView } from './AutoRunRow'
+import { CommandOutput } from './CommandOutput'
+import { ProcessStrip } from './ProcessStrip'
+import { COMPOSER_ATTR, CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { SolMarkdown } from './Markdown'
 import { ModeBadge } from './ModeBadge'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { Entity } from '../../lib/api/resources'
+import type { PendingConfirmation } from '../../lib/api/solStream'
 import { useClassifyPreview } from './useClassifyPreview'
 import { useMentionPicker, type MentionPicker } from './useMentionPicker'
 import type { SolActionMode, SolScreenshot } from './solApi'
@@ -123,6 +128,50 @@ function CitationsView({ citations }: { citations: readonly string[] }): React.J
   )
 }
 
+/** A message the person sent. */
+function UserRow({ item, rowClass }: { item: ChatItem; rowClass: string }): React.JSX.Element {
+  return (
+    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
+      <div
+        style={{
+          background: 'var(--sur2)',
+          border: '1px solid var(--bd)',
+          borderRadius: 6,
+          padding: '8px 10px',
+          fontSize: 12.5,
+          whiteSpace: 'pre-wrap'
+        }}
+      >
+        {item.content}
+      </div>
+      {/* SOLUSDEV-252 S3: a flag, never the pixels (sol-window.md §8). */}
+      {item.hasScreenshot && (
+        <div style={{ ...MUTED, fontSize: 10, textAlign: 'right', marginTop: 3 }}>
+          screen attached
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** One parked action's card, with a decide callback that is stable for as long
+ *  as the card and the surface's decide are, so the card's keyboard approver is
+ *  not re-registered on every transcript render (SOLUSDEV-317). */
+function ParkedConfirmation({
+  pending,
+  onDecide
+}: {
+  pending: PendingConfirmation
+  onDecide: SolChat['decide']
+}): React.JSX.Element {
+  const { confirmationId } = pending
+  const decide = useCallback(
+    (decision: ConfirmationDecision) => onDecide(confirmationId, decision),
+    [onDecide, confirmationId]
+  )
+  return <ConfirmationCard pending={pending} onDecide={decide} />
+}
+
 // memo (S2): a token patch replaces ONE ChatItem immutably, so every other row
 // keeps its `item` identity and skips the render. `onDecide` is stable from
 // useSolChat. `settled` rows (not the last, not streaming) also opt into CSS
@@ -143,30 +192,7 @@ const MessageRow = memo(function MessageRow({
   settled: boolean
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
-  if (item.role === 'user') {
-    return (
-      <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
-        <div
-          style={{
-            background: 'var(--sur2)',
-            border: '1px solid var(--bd)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            fontSize: 12.5,
-            whiteSpace: 'pre-wrap'
-          }}
-        >
-          {item.content}
-        </div>
-        {/* SOLUSDEV-252 S3: a flag, never the pixels (sol-window.md §8). */}
-        {item.hasScreenshot && (
-          <div style={{ ...MUTED, fontSize: 10, textAlign: 'right', marginTop: 3 }}>
-            screen attached
-          </div>
-        )}
-      </div>
-    )
-  }
+  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} />
   if (item.role === 'tool') {
     return (
       <div
@@ -182,6 +208,8 @@ const MessageRow = memo(function MessageRow({
     <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
       <TraceView trace={item.trace} />
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
+      {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
+      <AutoRunsView runs={item.autoRuns} />
       {item.content ? (
         <SolMarkdown content={item.content} />
       ) : item.pending ? (
@@ -194,12 +222,16 @@ const MessageRow = memo(function MessageRow({
           and each is approved on its own — approving a batch would suspend the
           staleness re-check that makes "what you saw is what runs" true. */}
       {confirmations.map((confirmation) => (
-        <ConfirmationCard
+        <ParkedConfirmation
           key={confirmation.confirmationId}
-          projectId={projectId}
           pending={confirmation}
-          onDecide={(decision) => onDecide(confirmation.confirmationId, decision)}
+          onDecide={onDecide}
         />
+      ))}
+      {/* SOLUSDEV-317: an approved command's output, live while it runs and
+          kept with its exit status after the card is gone. */}
+      {(item.commandRuns ?? []).map((run) => (
+        <CommandOutput key={run.confirmationId} run={run} />
       ))}
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
@@ -216,11 +248,13 @@ const FOLLOW_SLACK_PX = 48
 function MessageList({
   chat,
   projectId,
-  page
+  page,
+  onDecide
 }: {
   chat: SolChat
   projectId: string
   page: boolean
+  onDecide: SolChat['decide']
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -274,7 +308,7 @@ function MessageList({
           key={item.id}
           item={item}
           projectId={projectId}
-          onDecide={chat.decide}
+          onDecide={onDecide}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
         />
@@ -402,6 +436,7 @@ function MessageInput({
         aria-activedescendant={mention.active ? `sol-mention-${mention.active.id}` : undefined}
         placeholder={placeholder}
         aria-label="Message SOL"
+        {...{ [COMPOSER_ATTR]: '' }}
         style={{
           flex: 1,
           minWidth: 0,
@@ -566,6 +601,13 @@ export function SolChat({
     (state) => selectSession(state, projectId).forceConfirmation ?? false
   )
   const { mode, setMode } = useSolActionMode()
+  // SOLUSDEV-317: an approved command resumes SOL in the surface's current mode;
+  // Cmd/Ctrl+Enter approves the newest command card inside THIS surface only.
+  const decideInMode = useCallback<SolChat['decide']>(
+    (confirmationId, decision) => chat.decide(confirmationId, decision, mode),
+    [chat, mode]
+  )
+  const shortcut = useCommandShortcut(chat.items)
   // The circled region (SOL window only — main pushes it to that renderer).
   // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
   // but only once that turn settled clean: a failed send keeps it attached so
@@ -593,33 +635,37 @@ export function SolChat({
   }
   const page = layout === 'page'
   return (
-    <div
-      style={{
-        flex: 1,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
-      }}
-    >
-      <MessageList chat={chat} projectId={projectId} page={page} />
-      {region && (
-        <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
-      )}
-      <Composer
-        streaming={chat.streaming}
-        page={page}
-        projectId={projectId}
-        mode={mode}
-        onModeChange={setMode}
-        regionAttached={region !== null}
-        onDismissRegion={clearRegion}
-        forceConfirmation={forceConfirmation}
-        onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
-        onSend={sendWithRegion}
-      />
-    </div>
+    <CommandApprovalContext.Provider value={shortcut.registry}>
+      <div
+        onKeyDownCapture={shortcut.onKeyDownCapture}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
+        }}
+      >
+        <MessageList chat={chat} projectId={projectId} page={page} onDecide={decideInMode} />
+        {region && (
+          <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
+        )}
+        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
+        <Composer
+          streaming={chat.streaming}
+          page={page}
+          projectId={projectId}
+          mode={mode}
+          onModeChange={setMode}
+          regionAttached={region !== null}
+          onDismissRegion={clearRegion}
+          forceConfirmation={forceConfirmation}
+          onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
+          onSend={sendWithRegion}
+        />
+      </div>
+    </CommandApprovalContext.Provider>
   )
 }
 

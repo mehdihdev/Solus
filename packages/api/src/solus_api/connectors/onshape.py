@@ -364,6 +364,34 @@ def _text(value: Any) -> str:
     return label(str(value or "").strip(), _METADATA_LIMIT)
 
 
+def _iso_utc(value: Any) -> str | None:
+    """Onshape's `modifiedAt`, re-serialised as UTC ISO 8601, or None when it is
+    not a real timestamp (the value is untrusted provider data)."""
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        utc = parsed.astimezone(UTC)
+    except (ValueError, OverflowError):  # out-of-range offsets overflow on conversion
+        return None
+    return utc.isoformat().replace("+00:00", "Z")
+
+
+def _selectable_item(document: dict[str, Any], doc_id: str) -> dict[str, Any]:
+    """One picker row: id, name, owner, and when it was last edited if known."""
+    item: dict[str, Any] = {
+        "id": doc_id,
+        "name": _text(document.get("name")) or doc_id,
+        "subtitle": _owner_name(document),
+    }
+    edited = _iso_utc(document.get("modifiedAt"))
+    if edited:
+        item["modified_at"] = edited
+    return item
+
+
 def _owner_name(document: dict[str, Any]) -> str:
     owner = document.get("owner")
     return _text(owner.get("name")) if isinstance(owner, dict) else ""
@@ -1224,13 +1252,7 @@ class OnshapeConnector(OAuthConnector):
                     if raw in seen_ids:
                         continue
                     seen_ids.add(raw)
-                    items.append(
-                        {
-                            "id": raw,
-                            "name": _text(document.get("name")) or raw,
-                            "subtitle": _owner_name(document),
-                        }
-                    )
+                    items.append(_selectable_item(document, raw))
                 next_link = body.get("next")
                 path = next_link if isinstance(next_link, str) and next_link else None
                 params = None

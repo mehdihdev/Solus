@@ -49,6 +49,7 @@ from solus_api.orchestration.gates import (
     InsufficientCreditsError,
     RedisLike,
     TrialCapReachedError,
+    TrialExpiredError,
     assert_can_spend,
     check_frequency_cap,
 )
@@ -93,6 +94,7 @@ _PASSTHROUGH_ERRORS = (
     ProviderError,  # includes ProviderTransientError
     FrequencyCapExceededError,
     TrialCapReachedError,
+    TrialExpiredError,
     InsufficientCreditsError,
     OverrideNotViableError,
     ContextWindowExceededError,

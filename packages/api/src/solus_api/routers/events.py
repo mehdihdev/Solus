@@ -17,6 +17,7 @@ call still succeeds and nothing is stored.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Annotated, Any, Literal
@@ -57,6 +58,8 @@ CLIENT_EVENT_TYPES = frozenset(
         # SOLUSDEV-311: a desktop error caught by a boundary or global handler, or a
         # prior-session main/renderer crash reported on the next launch.
         "client.error",
+        # SOLUSDEV-317: a ⌘K command-palette result was opened.
+        "search.palette_opened",
     }
 )
 MAX_EVENTS_PER_BATCH = 50
@@ -72,7 +75,7 @@ class ProjectSwitchedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     from_project_id: uuid.UUID | None = None
-    surface: Literal["home", "topbar", "team", "validation", "onboarding", "overview"]
+    surface: Literal["home", "topbar", "team", "validation", "onboarding", "overview", "palette"]
 
 
 class StoreSuggestedPayload(BaseModel):
@@ -124,6 +127,18 @@ class ClientErrorPayload(BaseModel):
     ]
 
 
+class SearchPaletteOpenedPayload(BaseModel):
+    """`search.palette_opened` (SOLUSDEV-317): which kind of ⌘K result was
+    opened, its rank in the visible list and the query's length — never the
+    query text or the result's label, which can carry ingested content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["page", "project", "team", "node"]
+    rank: Annotated[int, Field(ge=0, le=199)]
+    query_length: Annotated[int, Field(ge=0, le=200)]
+
+
 #: Per-event payload schemas. A client event WITH a schema is validated against
 #: it (unknown keys, bad enums and malformed ids reject); the data-collection
 #: store never accepts free-form strings under a Solus-authored event name.
@@ -131,6 +146,7 @@ PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
     "project.switched": ProjectSwitchedPayload,
     "store.suggested": StoreSuggestedPayload,
     "client.error": ClientErrorPayload,
+    "search.palette_opened": SearchPaletteOpenedPayload,
 }
 
 
@@ -146,8 +162,11 @@ class ClientEvent(BaseModel):
         schema = PAYLOAD_SCHEMAS.get(self.event_type)
         if schema is None:
             return self
+        # JSON-strict: the RAW payload is what gets stored, so it must already be the
+        # schema's types — "7", true or 7.0 for an int reject instead of being coerced
+        # and stored as sent. JSON mode still takes UUIDs as strings, as on the wire.
         try:
-            schema.model_validate(self.payload)
+            schema.model_validate_json(json.dumps(self.payload), strict=True)
         except ValidationError as exc:
             raise ValueError(
                 f"payload does not match {self.event_type}: {exc.error_count()} error(s)"

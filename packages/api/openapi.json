@@ -105,6 +105,7 @@
       },
       "delete": {
         "summary": "Delete Me",
+        "description": "Self-service deletion. Never accepts `ownership_transfers` (staff-only, SOLUSDEV-314).",
         "operationId": "delete_me_api_v1_users_me_delete",
         "responses": {
           "204": {
@@ -255,7 +256,7 @@
       },
       "patch": {
         "summary": "Update Subscription",
-        "description": "Pick/change the plan during onboarding: (re)starts a 14-day trial of the chosen plan\nwith that plan's limits (ADR-032). Enforcement reads `limits`; real billing is deferred.",
+        "description": "Pick/change the trial plan during onboarding (ADR-032): sets the plan and that plan's\ndefault limits while the subscription stays TRIALING. Allowed ONLY for an unpaid local\ntrial (status TRIALING and no Stripe subscription); otherwise 409, because paid plan\nchanges go through Billing/Stripe. `expires_at` is never touched, so repeated calls\ncannot restart the trial.",
         "operationId": "update_subscription_api_v1_users_me_subscription_patch",
         "requestBody": {
           "content": {
@@ -2659,23 +2660,75 @@
         ]
       }
     },
-    "/api/v1/billing/portal-session": {
-      "post": {
+    "/api/v1/billing/summary": {
+      "get": {
         "tags": [
           "billing"
         ],
-        "summary": "Create Portal Session",
-        "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan). Requires an existing Stripe customer (i.e. a prior checkout).",
-        "operationId": "create_portal_session_api_v1_billing_portal_session_post",
+        "summary": "Get Billing Summary",
+        "description": "The caller's own billing read model (SOLUSDEV-236). Stripe trouble degrades the\nStripe-derived fields to null with a 200; it never produces a 502/503 here.",
+        "operationId": "get_billing_summary_api_v1_billing_summary_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "type": "object",
+                  "title": "Response Get Billing Summary Api V1 Billing Summary Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/portal-session": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Create Portal Session",
+        "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan), optionally deep-linked into the update/cancel flow. Requires an\nexisting Stripe customer (i.e. a prior checkout).",
+        "operationId": "create_portal_session_api_v1_billing_portal_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PortalSessionCreate"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
                   "title": "Response Create Portal Session Api V1 Billing Portal Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -3888,6 +3941,292 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Get Code Environment Api V1 Projects  Project Id  Code Environment Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/code/processes": {
+      "get": {
+        "summary": "List Processes",
+        "operationId": "list_processes_api_v1_projects__project_id__code_processes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Processes Api V1 Projects  Project Id  Code Processes Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/code/processes/{process_id}/output": {
+      "get": {
+        "summary": "Process Output",
+        "operationId": "process_output_api_v1_projects__project_id__code_processes__process_id__output_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Process Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Process Output Api V1 Projects  Project Id  Code Processes  Process Id  Output Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/code/processes/{process_id}/stop": {
+      "post": {
+        "summary": "Stop Process",
+        "operationId": "stop_process_api_v1_projects__project_id__code_processes__process_id__stop_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Process Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Stop Process Api V1 Projects  Project Id  Code Processes  Process Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/code/processes/{process_id}/input": {
+      "post": {
+        "summary": "Send Process Input",
+        "description": "The person's own input box or Enter button (\u00a711.2): a user action, no card.",
+        "operationId": "send_process_input_api_v1_projects__project_id__code_processes__process_id__input_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "process_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$",
+              "title": "Process Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "machine_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 32,
+              "maxLength": 32,
+              "pattern": "^[0-9a-f]{32}$",
+              "title": "Machine Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Process Input Api V1 Projects  Project Id  Code Processes  Process Id  Input Post"
                 }
               }
             }
@@ -8576,7 +8915,7 @@
     "/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}": {
       "post": {
         "summary": "Decide Tool Confirmation",
-        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).\n\nThe turn that proposed it has long since ended \u2014 a one-shot SSE stream cannot\nblock for a click \u2014 so the tool runs HERE, with the registry rebuilt under\nthe deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.\nThe request body carries a decision and nothing else, so what the user\napproved is what executes (CLAUDE.md \u00a77).",
+        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).",
         "operationId": "decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post",
         "security": [
           {
@@ -11238,6 +11577,406 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/github/install/start": {
+      "post": {
+        "tags": [
+          "github-org"
+        ],
+        "summary": "Install Start",
+        "operationId": "install_start_api_v1_teams__team_id__github_install_start_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Install Start Api V1 Teams  Team Id  Github Install Start Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/github/install/complete": {
+      "post": {
+        "tags": [
+          "github-org"
+        ],
+        "summary": "Install Complete",
+        "operationId": "install_complete_api_v1_teams__team_id__github_install_complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallComplete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Install Complete Api V1 Teams  Team Id  Github Install Complete Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/github/installation": {
+      "get": {
+        "tags": [
+          "github-org"
+        ],
+        "summary": "Get Installation",
+        "operationId": "get_installation_api_v1_teams__team_id__github_installation_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Installation Api V1 Teams  Team Id  Github Installation Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "github-org"
+        ],
+        "summary": "Delete Installation",
+        "operationId": "delete_installation_api_v1_teams__team_id__github_installation_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Installation Api V1 Teams  Team Id  Github Installation Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/github/repos": {
+      "get": {
+        "tags": [
+          "github-org-repos"
+        ],
+        "summary": "List Repos",
+        "operationId": "list_repos_api_v1_teams__team_id__github_repos_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Repos Api V1 Teams  Team Id  Github Repos Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/teams/{team_id}/github/members": {
+      "get": {
+        "tags": [
+          "github-org-members"
+        ],
+        "summary": "List Org Members",
+        "operationId": "list_org_members_api_v1_teams__team_id__github_members_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Team Id"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response List Org Members Api V1 Teams  Team Id  Github Members Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/webhooks/github/app": {
+      "post": {
+        "tags": [
+          "github-app-webhooks"
+        ],
+        "summary": "Github App Webhook",
+        "operationId": "github_app_webhook_api_v1_webhooks_github_app_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           }
         }
       }
@@ -15404,6 +16143,76 @@
         ],
         "title": "InstallBody"
       },
+      "InstallComplete": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "State"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "installation_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Installation Id"
+          },
+          "setup_action": {
+            "type": "string",
+            "enum": [
+              "install",
+              "update",
+              "request"
+            ],
+            "title": "Setup Action"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "setup_action"
+        ],
+        "title": "InstallComplete"
+      },
+      "InstallStart": {
+        "properties": {
+          "redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect Uri"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "InstallStart"
+      },
       "InteractionContext": {
         "type": "string",
         "enum": [
@@ -15418,9 +16227,40 @@
       "InviteCreate": {
         "properties": {
           "email": {
-            "type": "string",
-            "format": "email",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Email"
+          },
+          "github_user_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9.223372036854776e+18,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github User Id"
+          },
+          "github_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Github Login"
           },
           "role": {
             "type": "string",
@@ -15435,10 +16275,8 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "email"
-        ],
-        "title": "InviteCreate"
+        "title": "InviteCreate",
+        "description": "Exactly one target: an `email`, or a GitHub org member (`github_user_id` + display-only\n`github_login`, docs/api/github-orgs.md)."
       },
       "IsaacConnectionEnvelope": {
         "properties": {
@@ -15922,10 +16760,39 @@
       "MessageCreate": {
         "properties": {
           "content": {
-            "type": "string",
-            "maxLength": 8000,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Content"
+          },
+          "resume_confirmation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resume Confirmation Id"
+          },
+          "process_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "action_mode": {
             "$ref": "#/components/schemas/ActionMode",
@@ -15973,9 +16840,6 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "content"
-        ],
         "title": "MessageCreate"
       },
       "MujocoSimConfig": {
@@ -16706,6 +17570,29 @@
         ],
         "title": "PortableTransportBinding"
       },
+      "PortalSessionCreate": {
+        "properties": {
+          "flow": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "update",
+                  "cancel"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Flow"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PortalSessionCreate",
+        "description": "Optional body of POST /billing/portal-session (SOLUSDEV-236). No ids: the\nsubscription is always derived server-side from the caller's own row."
+      },
       "PreferencesBody": {
         "properties": {
           "mechanical": {
@@ -16829,6 +17716,49 @@
           "channel"
         ],
         "title": "PreparePresence"
+      },
+      "ProcessInput": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Text",
+            "default": ""
+          },
+          "enter": {
+            "type": "boolean",
+            "title": "Enter",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ProcessInput",
+        "description": "`{text, enter}` (\u00a711.1 bounds): printable text, a newline only via `enter`."
+      },
+      "ProcessPrompt": {
+        "properties": {
+          "process_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Process Id"
+          },
+          "prompt_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Prompt Seq"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "process_id",
+          "prompt_seq"
+        ],
+        "title": "ProcessPrompt",
+        "description": "Which waiting prompt woke the desktop: the process and its prompt number."
       },
       "ProjectCreate": {
         "properties": {
@@ -17966,6 +18896,11 @@
               }
             ],
             "title": "Connection Id"
+          },
+          "installation": {
+            "type": "boolean",
+            "title": "Installation",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -18205,7 +19140,8 @@
         "required": [
           "plan"
         ],
-        "title": "SubscriptionUpdate"
+        "title": "SubscriptionUpdate",
+        "description": "Trial plan pick: self-serve plans only (enterprise is contact-sales)."
       },
       "TeamCreate": {
         "properties": {

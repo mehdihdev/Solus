@@ -5,6 +5,7 @@ import uuid
 import pytest
 from alembic import command
 from alembic.script import ScriptDirectory
+from sqlalchemy import Table
 from sqlalchemy.exc import IntegrityError
 from test_hardware_data_migration import MigrationDatabase
 from test_hardware_data_migration import _schema as _schema
@@ -36,11 +37,11 @@ def _has_table(db: MigrationDatabase) -> bool:
 
 def test_there_is_exactly_one_alembic_head_and_it_descends_from_the_previous() -> None:
     script = ScriptDirectory(str(__import__("test_hardware_data_migration").API_DIR / "migrations"))
-    heads = script.get_heads()
-    assert len(heads) == 1
-    head = script.get_revision(heads[0])
-    assert head is not None
-    assert head.down_revision == PREVIOUS
+    assert len(script.get_heads()) == 1
+    # Pin this migration's parent, not the global head, so later tickets can stack on it.
+    billing = script.get_revision("a31300000001")
+    assert billing is not None
+    assert billing.down_revision == PREVIOUS
 
 
 def test_upgrade_adds_nullable_columns_and_the_tombstone_table(
@@ -142,7 +143,9 @@ def test_due_index_is_partial_on_pending_rows_and_customer_index_is_unique(
 def test_model_declares_the_same_partial_index() -> None:
     from solus_api.models import StripeCancelRequest
 
-    declared = {i.name: i for i in StripeCancelRequest.__table__.indexes}
+    table = StripeCancelRequest.__table__
+    assert isinstance(table, Table)
+    declared = {str(i.name): i for i in table.indexes}
     due = declared["ix_stripe_cancel_requests_pending_next_attempt"]
     assert [c.name for c in due.columns] == ["next_attempt_at"]
     assert "completed_at IS NULL" in str(due.dialect_options["postgresql"]["where"])

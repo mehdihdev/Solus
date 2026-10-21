@@ -3,11 +3,20 @@
 // action area (button / grant choice / picker / details form / file pick /
 // progress / done / error). Assertions avoid provider ids on purpose.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ConnectWizardModal, isSecretField } from './ConnectWizardModal'
 import type { CatalogEntry } from './integrationCatalog'
 import type { ConnectionState } from './onboardingStore'
 import { useSettingsStore } from '../../store/settingsStore'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import * as teamGithub from '../../lib/api/resources.teamGithub'
+import { useTeamPick } from './useConnectWizard'
+import { pickerText } from './teamRepoSection'
+
+vi.mock('../../lib/api/resources.teamGithub', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources.teamGithub')>()
+  return { ...actual, getTeamInstallation: vi.fn(), listTeamGithubRepos: vi.fn() }
+})
 
 const OAUTH_PICK: CatalogEntry = {
   id: 'github',
@@ -271,15 +280,29 @@ function registerWizardInputsTests(): void {
     expect(handlers.onSubmitConfig).not.toHaveBeenCalled()
   })
 
-  it('lets a multi-select picker submit an empty selection (connected but idle)', () => {
+  it('lets a multi-select picker skip for now (connected but idle)', () => {
     const handlers = renderWizard(OAUTH_PICK, {
       phase: 'busy',
       stage: 'configure',
       selectable: [{ id: 'docA', name: 'Rover chassis' }],
-      selectionMode: 'multi'
+      selectionMode: 'multi',
+      selectionLabel: 'document'
     })
-    fireEvent.click(screen.getByRole('button', { name: /track none/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
     expect(handlers.onSelect).toHaveBeenCalledWith([])
+  })
+
+  it('counts picks in the connector’s own noun', () => {
+    const handlers = renderWizard(OAUTH_PICK, {
+      phase: 'busy',
+      stage: 'configure',
+      selectable: [{ id: 'docA', name: 'Rover chassis' }],
+      selectionMode: 'multi',
+      selectionLabel: 'document'
+    })
+    fireEvent.click(screen.getByLabelText('Rover chassis'))
+    fireEvent.click(screen.getByRole('button', { name: 'Track 1 document' }))
+    expect(handlers.onSelect).toHaveBeenCalledWith([{ id: 'docA', name: 'Rover chassis' }])
   })
 
   it('starts the grant choice on the connector’s own default, not the widest', () => {
@@ -403,3 +426,240 @@ function registerWizardModesTests(): void {
     expect(guideCopy.length).toBeGreaterThan(expertCopy.length)
   })
 }
+
+describe('ConnectWizardModal — team GitHub organization (SOLUSDEV-216)', () => {
+  const INSTALLATION = {
+    id: 'i1',
+    provider: 'github',
+    account_login: 'fsae-ev',
+    account_type: 'Organization',
+    status: 'active'
+  } as teamGithub.TeamInstallation
+  const REPO = { id: 'fsae-ev/vcu', name: 'fsae-ev/vcu', subtitle: 'private' }
+
+  beforeEach(() => {
+    vi.mocked(teamGithub.getTeamInstallation).mockReset()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockReset()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValue({
+      items: [REPO],
+      total: 1,
+      cursor: null
+    })
+    useTeamPick.setState({ picked: null })
+    useWorkspaceStore.setState({ teamId: 't1', project: { id: 'p1', name: 'Rover', teamId: 't1' } })
+  })
+
+  function renderTeam(
+    entry: CatalogEntry,
+    linkedAccount: { login: string | null } | null = null
+  ): Handlers {
+    const handlers: Handlers = {
+      onBegin: vi.fn(),
+      onPickFiles: vi.fn(),
+      onSelect: vi.fn(),
+      onSubmitConfig: vi.fn(),
+      onChooseAccess: vi.fn(),
+      onClose: vi.fn()
+    }
+    render(<ConnectWizardModal entry={entry} linkedAccount={linkedAccount} {...handlers} />)
+    return handlers
+  }
+
+  it('shows the team and account sections and a rail without a sign-in', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    renderTeam(OAUTH_PICK, { login: 'maya-k' })
+
+    expect(await screen.findByRole('group', { name: 'From fsae-ev (team)' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Your account · maya-k' })).toBeInTheDocument()
+    const rail = screen.getByLabelText('Connect steps')
+    expect(rail).toHaveTextContent('Pick repositoriesBuild graph')
+    expect(rail).not.toHaveTextContent('Sign in')
+  })
+
+  it('picking a team repo stages it and begins', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    const handlers = renderTeam(OAUTH_PICK, { login: 'maya-k' })
+
+    fireEvent.click(await screen.findByRole('button', { name: /fsae-ev\/vcu/ }))
+
+    expect(useTeamPick.getState().picked).toEqual(REPO)
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('picking the account entry begins without staging a team repo', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    const handlers = renderTeam(OAUTH_PICK)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use my own GitHub account' }))
+
+    expect(useTeamPick.getState().picked).toBeNull()
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('a suspended installation reads "Suspended on GitHub" and lists nothing', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue({
+      ...INSTALLATION,
+      status: 'suspended'
+    })
+    renderTeam(OAUTH_PICK)
+
+    expect(await screen.findByText(pickerText('suspended', 'Guide'))).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /fsae-ev\/vcu/ })).not.toBeInTheDocument()
+  })
+
+  it('offers the picker again after a failed team bind instead of a dead Retry', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        state={{ phase: 'error', error: 'That repository is not shared.' }}
+        onBegin={vi.fn()}
+        onPickFiles={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByTestId('cw-instruction')).toHaveTextContent('That repository is not shared.')
+    expect(await screen.findByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
+  })
+
+  it('with no installation the wizard is exactly the legacy one', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(null)
+    renderTeam(OAUTH_PICK)
+
+    await waitFor(() => expect(teamGithub.getTeamInstallation).toHaveBeenCalledWith('t1'))
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+    expect(screen.queryByRole('group')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the legacy wizard when the installation lookup fails', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    renderTeam(OAUTH_PICK)
+
+    await waitFor(() => expect(teamGithub.getTeamInstallation).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
+  })
+
+  it('disables Connect behind a spinner while the team lookup is pending', async () => {
+    let resolve: (i: teamGithub.TeamInstallation | null) => void = () => undefined
+    vi.mocked(teamGithub.getTeamInstallation).mockReturnValue(
+      new Promise((r) => {
+        resolve = r
+      })
+    )
+    const handlers = renderTeam(OAUTH_PICK)
+
+    const connect = screen.getByRole('button', { name: 'Connect GitHub' })
+    expect(connect).toBeDisabled()
+    fireEvent.click(connect)
+    expect(handlers.onBegin).not.toHaveBeenCalled()
+    expect(screen.getByRole('status', { hidden: true })).toBeInTheDocument()
+
+    await act(async () => resolve(null))
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeEnabled()
+  })
+
+  it('a failed lookup shows a non-fatal notice and the legacy Connect action', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    const handlers = renderTeam(OAUTH_PICK)
+
+    const notice = await screen.findByText(pickerText('lookup_failed', 'Guide'))
+    expect(notice).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+    expect(handlers.onBegin).toHaveBeenCalledTimes(1)
+  })
+
+  it('words the failure notice in Expert mode', async () => {
+    useSettingsStore.getState().setSolMode('Expert')
+    vi.mocked(teamGithub.getTeamInstallation).mockRejectedValue(new Error('offline'))
+    renderTeam(OAUTH_PICK)
+    expect(await screen.findByText(pickerText('lookup_failed', 'Expert'))).toBeInTheDocument()
+  })
+
+  it('searches the team repos with a debounced q', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    vi.mocked(teamGithub.listTeamGithubRepos).mockClear()
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValue({
+      items: [{ id: 'fsae-ev/bms', name: 'fsae-ev/bms' }],
+      total: 1,
+      cursor: null
+    })
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search repositories' }), {
+      target: { value: 'b' }
+    })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search repositories' }), {
+      target: { value: 'bms' }
+    })
+    expect(teamGithub.listTeamGithubRepos).not.toHaveBeenCalled()
+
+    expect(await screen.findByRole('button', { name: /fsae-ev\/bms/ })).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenCalledTimes(1)
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenCalledWith('t1', { q: 'bms' })
+  })
+
+  it('loads more with the cursor and says how many of the total are showing', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [REPO],
+      total: 2,
+      cursor: 'c2'
+    })
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    expect(screen.getByTestId('picker-showing')).toHaveTextContent('Showing 1 of 2')
+
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [{ id: 'fsae-ev/bms', name: 'fsae-ev/bms' }],
+      total: 2,
+      cursor: null
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+
+    expect(await screen.findByRole('button', { name: /fsae-ev\/bms/ })).toBeInTheDocument()
+    expect(teamGithub.listTeamGithubRepos).toHaveBeenLastCalledWith('t1', { cursor: 'c2' })
+    expect(screen.getByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+  })
+
+  it('surfaces a failed page fetch without losing the listed repos', async () => {
+    vi.mocked(teamGithub.getTeamInstallation).mockResolvedValue(INSTALLATION)
+    vi.mocked(teamGithub.listTeamGithubRepos).mockResolvedValueOnce({
+      items: [REPO],
+      total: 2,
+      cursor: 'c2'
+    })
+    renderTeam(OAUTH_PICK)
+    await screen.findByRole('button', { name: /fsae-ev\/vcu/ })
+    vi.mocked(teamGithub.listTeamGithubRepos).mockRejectedValueOnce(new Error('x'))
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(pickerText('load_failed', 'Guide'))
+    expect(screen.getByRole('button', { name: /fsae-ev\/vcu/ })).toBeInTheDocument()
+  })
+
+  it('never looks up a team installation for another provider', () => {
+    renderTeam(OAUTH_FIELDS)
+    expect(teamGithub.getTeamInstallation).not.toHaveBeenCalled()
+  })
+
+  it('never looks up an installation in account scope', () => {
+    render(
+      <ConnectWizardModal
+        entry={OAUTH_PICK}
+        scope="account"
+        onBegin={vi.fn()}
+        onPickFiles={vi.fn()}
+        onSelect={vi.fn()}
+        onSubmitConfig={vi.fn()}
+        onChooseAccess={vi.fn()}
+        onClose={vi.fn()}
+      />
+    )
+    expect(teamGithub.getTeamInstallation).not.toHaveBeenCalled()
+  })
+})

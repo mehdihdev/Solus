@@ -20,7 +20,21 @@ import {
   type StateParam
 } from './oauthCallback'
 
-const TIMEOUT_MS = 5 * 60 * 1000
+/** Connector default. */
+export const DEFAULT_OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+/** GitHub App install (SOLUSDEV-216): an org owner may take several minutes to approve. */
+export const INSTALL_OAUTH_TIMEOUT_MS = 10 * 60 * 1000
+
+export interface OAuthAwaitOptions {
+  /** Per-call loopback lifetime; defaults to DEFAULT_OAUTH_TIMEOUT_MS. */
+  timeoutMs?: number
+}
+
+/** Accept only a sane positive finite timeout; anything else falls back. */
+function resolveTimeout(options?: OAuthAwaitOptions): number {
+  const t = options?.timeoutMs
+  return typeof t === 'number' && Number.isFinite(t) && t > 0 ? t : DEFAULT_OAUTH_TIMEOUT_MS
+}
 
 const DONE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Solus</title></head>
 <body style="font-family:system-ui;background:#0A0C0F;color:#E6E9EE;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
@@ -30,7 +44,7 @@ const DONE_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Solus
 let active: Server[] = []
 let currentState = ''
 /** The in-flight flow's `finish`, so a wizard close can settle it NOW instead
- *  of leaving the loopback armed for TIMEOUT_MS (SOLUSDEV-165 cancel seam). */
+ *  of leaving the loopback armed for its timeout (SOLUSDEV-165 cancel seam). */
 let activeFinish: ((result: OAuthCallbackResult) => void) | null = null
 /** Resolves once the in-flight flow's sockets are fully released. A supersede
  *  must await this before binding: `finish` empties `active` synchronously but
@@ -70,7 +84,7 @@ export function awaitGithubCallback(
   port: number = OAUTH_LOOPBACK_PORT
 ): Promise<OAuthCallbackResult> {
   if (!currentState) return Promise.resolve({ error: 'Sign-in was not initialized.' })
-  return captureCallback(authorizeUrl, currentState, 'solus_cb', port)
+  return captureCallback(authorizeUrl, currentState, 'solus_cb', port, DEFAULT_OAUTH_TIMEOUT_MS)
 }
 
 /**
@@ -81,10 +95,11 @@ export function awaitGithubCallback(
 export function awaitOAuthCallback(
   authorizeUrl: string,
   expectedState: string,
-  port: number = OAUTH_LOOPBACK_PORT
+  port: number = OAUTH_LOOPBACK_PORT,
+  options?: OAuthAwaitOptions
 ): Promise<OAuthCallbackResult> {
   if (!expectedState) return Promise.resolve({ error: 'Sign-in was not initialized.' })
-  return captureCallback(authorizeUrl, expectedState, 'state', port)
+  return captureCallback(authorizeUrl, expectedState, 'state', port, resolveTimeout(options))
 }
 
 /** `port` is a seam for tests ONLY: the real flow must use the fixed port that
@@ -95,7 +110,8 @@ async function captureCallback(
   authorizeUrl: string,
   expectedState: string,
   stateParam: StateParam,
-  port: number
+  port: number,
+  timeoutMs: number
 ): Promise<OAuthCallbackResult> {
   if (!isValidAuthorizeUrl(authorizeUrl)) {
     return { error: 'Invalid sign-in URL.' }
@@ -104,7 +120,7 @@ async function captureCallback(
   // A NEW sign-in SUPERSEDES an in-flight one rather than being refused.
   //
   // We cannot tell that the user closed the browser tab — nothing reports that
-  // — so the previous capture stayed armed for the full TIMEOUT_MS and every
+  // — so the previous capture stayed armed for the full timeout and every
   // retry answered "A sign-in is already in progress." for five minutes after
   // the user had visibly given up. Refusing was only ever right if the earlier
   // flow might still complete; a person clicking sign-in again is saying it will
@@ -150,7 +166,7 @@ async function captureCallback(
 
     const handle = callbackHandler(expectedState, stateParam, finish)
 
-    const timer = setTimeout(() => finish({ error: 'Sign-in timed out.' }), TIMEOUT_MS)
+    const timer = setTimeout(() => finish({ error: 'Sign-in timed out.' }), timeoutMs)
     activeFinish = finish
 
     // BOTH loopback stacks. The connector redirect URL says `localhost` (Onshape

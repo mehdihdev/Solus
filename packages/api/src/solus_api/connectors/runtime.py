@@ -31,6 +31,7 @@ from solus_api.connectors.contracts import (
     SyncContext,
     SyncResult,
 )
+from solus_api.connectors.github_app import is_installation_ref, resolve_installation_credentials
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.connectors.sync_events import emit_sync_outcome
 from solus_api.graph.live import graph_changed_frame
@@ -312,7 +313,13 @@ def refresh_secret_ref(secret_ref: str) -> str:
 
 
 async def resolve_credentials(secret_store: SecretStore, secret_ref: str) -> Credentials:
-    """Access token plus, when one was stored, the refresh token."""
+    """Access token plus, when one was stored, the refresh token.
+
+    A reserved `github-app/installation/{id}` ref (SOLUSDEV-216) is never in the store:
+    it is dispatched to the App minter, which checks the installation is live and active
+    and returns a short-lived token. The SecretStore is not touched for it."""
+    if is_installation_ref(secret_ref):
+        return await resolve_installation_credentials(secret_ref)
     token = await secret_store.get(secret_ref)
     try:
         refresh_token: str | None = await secret_store.get(refresh_secret_ref(secret_ref))
@@ -357,6 +364,8 @@ async def call_with_refresh[T](
             or type(connector).refresh_credentials is OAuthConnector.refresh_credentials
             or not credentials.refresh_token
             or not secret_ref
+            # An installation token is re-minted, never stored: no write-back, ever.
+            or is_installation_ref(secret_ref)
         ):
             raise
         logger.info("refreshing expired %s credentials", connector.provider)

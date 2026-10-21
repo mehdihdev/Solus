@@ -14,6 +14,87 @@ describe('ModalShell', () => {
     expect(container.querySelector('.modal-backdrop-in')).not.toBeNull()
     expect(container.querySelector('.modal-card-in')).not.toBeNull()
   })
+
+  it('moves focus into the dialog on mount and restores it on close', () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    const { unmount } = render(
+      <ModalShell onClose={vi.fn()} labelledBy="t">
+        <div id="t">Title</div>
+        <button>Inside</button>
+      </ModalShell>
+    )
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
+    unmount()
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
+  })
+
+  it('leaves focus alone when a child already took it (autoFocus)', () => {
+    render(
+      <ModalShell onClose={vi.fn()}>
+        <input aria-label="field" autoFocus />
+      </ModalShell>
+    )
+    expect(screen.getByLabelText('field')).toHaveFocus()
+  })
+
+  it('ignores Escape unless closeOnEscape is set (existing modals own theirs)', async () => {
+    const onClose = vi.fn()
+    render(
+      <ModalShell onClose={onClose}>
+        <button>Inside</button>
+      </ModalShell>
+    )
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('calls onClose on Escape when closeOnEscape is set', async () => {
+    const onClose = vi.fn()
+    render(
+      <ModalShell onClose={onClose} closeOnEscape>
+        <button>Inside</button>
+      </ModalShell>
+    )
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('only the topmost of stacked shells handles Escape', async () => {
+    const outer = vi.fn()
+    const inner = vi.fn()
+    render(
+      <>
+        <ModalShell onClose={outer} closeOnEscape>
+          <div>a</div>
+        </ModalShell>
+        <ModalShell onClose={inner} closeOnEscape>
+          <div>b</div>
+        </ModalShell>
+      </>
+    )
+    await userEvent.keyboard('{Escape}')
+    expect(inner).toHaveBeenCalledTimes(1)
+    expect(outer).not.toHaveBeenCalled()
+  })
+
+  it('exposes a labelled modal dialog only when labelledBy is given', () => {
+    const { rerender } = render(
+      <ModalShell onClose={vi.fn()}>
+        <div>body</div>
+      </ModalShell>
+    )
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(
+      <ModalShell onClose={vi.fn()} labelledBy="ttl">
+        <h2 id="ttl">My title</h2>
+      </ModalShell>
+    )
+    const dialog = screen.getByRole('dialog', { name: 'My title' })
+    expect(dialog).toHaveAttribute('aria-modal', 'true')
+  })
 })
 
 describe('NameModal', () => {

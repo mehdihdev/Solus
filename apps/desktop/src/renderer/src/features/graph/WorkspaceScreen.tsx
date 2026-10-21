@@ -13,6 +13,7 @@ import type { Entity, Relation } from '../../lib/api/resources'
 import type { Point } from '../../lib/api/workspace'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
+import { useGraphJump } from './useGraphJump'
 import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnline'
 import { NodeSidebar } from './sidebar/NodeSidebar'
 import { accountDocuments, isAccountAnchor, withAccountAnchors } from './accountAnchors'
@@ -527,6 +528,8 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     summary.entities ?? [],
     onGraphChanged
   )
+  // A ⌘K node pick (SOLUSDEV-317) rides the same reveal once this graph is loaded.
+  useGraphJump(projectId, summary.entities, onReveal)
   const robots = usePhysicalRobots(
     projectId,
     onGraphChanged,

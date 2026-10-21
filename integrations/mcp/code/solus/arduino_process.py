@@ -143,17 +143,23 @@ def sealed_cli(cli: Path) -> int:
         body = read_bounded(cli, 64 * 1024**2)
         if hashlib.sha256(body).hexdigest() != CLI_SHA256:
             raise ArduinoError("cli_unavailable")
-        descriptor = os.memfd_create("solus-arduino-cli", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+        if not hasattr(os, "memfd_create"):  # memfd sealing is Linux-only (bubblewrap path)
+            raise ArduinoError("cli_unavailable")
+        linux: Any = os  # Linux-only names; the guard above refuses everywhere else
+        seals: Any = fcntl
+        descriptor: int = linux.memfd_create(
+            "solus-arduino-cli", linux.MFD_CLOEXEC | linux.MFD_ALLOW_SEALING
+        )
         try:
             view = memoryview(body)
             while view:
                 written = os.write(descriptor, view)
                 view = view[written:]
             os.fchmod(descriptor, 0o555)
-            fcntl.fcntl(
+            seals.fcntl(
                 descriptor,
-                fcntl.F_ADD_SEALS,
-                fcntl.F_SEAL_SEAL | fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW | fcntl.F_SEAL_SHRINK,
+                seals.F_ADD_SEALS,
+                seals.F_SEAL_SEAL | seals.F_SEAL_WRITE | seals.F_SEAL_GROW | seals.F_SEAL_SHRINK,
             )
             _CLI_IMAGES[CLI_SHA256] = descriptor
             return descriptor

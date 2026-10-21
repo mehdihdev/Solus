@@ -176,6 +176,14 @@ carries one.
 | `arduino_sketch`                              | code       | `arduino:<dir>`        | dir basename                | `path, sketch_file`                                                                                                                       |
 | `python_code`                                 | code       | `python:`              | `root_name (python)`        | `file_count, top_dirs[] (≤50)`                                                                                                            |
 
+**API view (SOLUSDEV-317).** A `local` source's API representation (`GET /sources`, the
+local-folder route's `source`) carries `remote: {repo, host}` — the cursor's normalised
+`owner/name` and host kind (`github`/`gitlab`/`other`) — when the last scan found an origin,
+and no `remote` key otherwise. Nothing else of the cursor is serialised (no raw URL, digest or
+detected list). Home uses it to mark the folder as a clone of the project's GitHub/GitLab
+source when `host` equals that source's type and `repo` equals its `config.repo`
+(case-insensitive) — the same match `services/local_links.py` makes for the `clone_of` edge.
+
 Relations: `clone: —contains→ <every project node>` (intra-source). The `clone_of` edge to the
 sibling code-host repo node is landed by `services/local_links.py` after the sync applies
 (cross-source; `origin="connector"`, `source_id` = the local source, relation `clone_of`,

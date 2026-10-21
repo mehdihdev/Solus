@@ -15,13 +15,23 @@ against its pinned search roots — never the inherited PATH.
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from . import sandbox
+from .profiles import Profile
 from .workspace import is_safe_relative, resolve_inside
 
-ACTIONS: tuple[str, ...] = ("create_environment", "install", "run", "test")
+ACTIONS: tuple[str, ...] = (
+    "create_environment",
+    "install",
+    "run",
+    "test",
+    "exec",
+    "process_start",
+    "profile_capture",
+)
 DEFAULT_ENVIRONMENT = ".venv"
 DEFAULT_PYTHON = "3.12"
 DEFAULT_TEST_TARGET = "tests"
@@ -62,9 +72,50 @@ class Plan:
     environment: str | None = None
     #: `create_environment` only: the target path.
     path: str | None = None
+    #: Workspace-relative working directory (`exec` / `process_start` may set it).
+    cwd: str = "."
+    #: The sandbox kind every executing action runs in (None only when refused).
+    sandbox: str | None = None
+    #: The profile applied to the child (`profile_capture`: the `extends` profile).
+    profile: Profile | None = None
+    #: `process_start`: the label and the runtime bound.
+    label: str | None = None
+    max_runtime_seconds: int | None = None
+    #: `process_start`: attach a Solus-owned pseudo-terminal (§11.1).
+    interactive: bool = False
+    #: `profile_capture`: the profile being captured and its resolved setup file.
+    capture_name: str | None = None
+    setup_file: str | None = None
+    #: §10.1: "workspace" | "system" for an accepted plan, None when refused.
+    program_scope: str | None = None
+    #: The planned program's realpath; execute refuses when it changed (TOCTOU).
+    program_realpath: str | None = None
 
     def answer(self) -> dict[str, Any]:
-        return {"argv": list(self.argv), "cwd": ".", "ok": self.ok, "reason": self.reason}
+        """The §2.2 wire shape: the argv plus sandbox, profile and environment."""
+        box = None
+        if self.ok and self.sandbox is not None:
+            box = {
+                "kind": self.sandbox,
+                "writable": list(sandbox.WRITABLE_LABELS),
+                "limitations": sandbox.limitations(self.sandbox),
+            }
+        profile = (
+            {"name": self.profile.name, "digest": self.profile.digest} if self.profile else None
+        )
+        answer = {
+            "argv": list(self.argv),
+            "cwd": self.cwd,
+            "ok": self.ok,
+            "reason": self.reason,
+            "sandbox": box,
+            "profile": profile,
+            "environment": self.environment,
+            "program_scope": self.program_scope if self.ok else None,
+        }
+        if self.action == "process_start":
+            answer["interactive"] = self.interactive
+        return answer
 
 
 def _refuse(action: str, reason: str) -> Plan:
@@ -277,12 +328,42 @@ _PLANNERS: dict[str, Callable[[Path, Args, Which], Plan]] = {
 }
 
 
+def _planner(action: str) -> Callable[[Path, Args, Which], Plan] | None:
+    if action in _PLANNERS:
+        return _PLANNERS[action]
+    # Imported lazily: command planning resolves programs against execute's roots.
+    from .command_plan import COMMAND_PLANNERS
+
+    return COMMAND_PLANNERS.get(action)
+
+
 def plan_action(root: Path, action: object, args: object, *, which: Which) -> Plan:
-    """The plan for `action` over untrusted `args`. Never raises on shape."""
-    if not isinstance(action, str) or action not in _PLANNERS:
+    """The plan for `action` over untrusted `args`. Never raises on shape. Every
+    executing action is refused unless an OS sandbox is available (§3), and when
+    the workspace holds HOME or ~/.solus (§9.4)."""
+    planner = _planner(action) if isinstance(action, str) else None
+    if planner is None:
         return _refuse(_echo(action), f"unknown action; expected one of {', '.join(ACTIONS)}")
+    assert isinstance(action, str)
+    conflict = sandbox.home_conflict(root)
+    if conflict is not None:
+        return _refuse(action, conflict)
     if args is None:
         args = {}
     if not isinstance(args, dict):
         return _refuse(action, "args must be an object")
-    return _PLANNERS[action](root, args, which)
+    planned = planner(root, args, which)
+    if not planned.ok:
+        return planned
+    kind, why = sandbox.available()
+    if kind is None:
+        return _refuse(action, f"sandbox unavailable: {why}")
+    from .command_plan import planned_program, program_scope
+
+    program = planned_program(root, planned.argv[0], which)
+    return replace(
+        planned,
+        sandbox=kind,
+        program_scope=program_scope(root, planned, program),
+        program_realpath=os.path.realpath(program) if program is not None else None,
+    )

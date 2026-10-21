@@ -8,7 +8,8 @@ creates the venv, installs packages, runs scripts and tests in the USER's enviro
 command an argument list assembled by Solus code, confirmation-gated with the exact argv on the
 approval card, workspace-confined, and bounded.
 
-Authoritative tool contracts: `docs/api/code-environment.md` §4 and
+Authoritative tool contracts: `docs/api/code-command-execution.md` (SOLUSDEV-317: `exec`,
+`process_*`, `profile_*`, the sandbox), `docs/api/code-environment.md` §4 and
 `docs/api/code-git-development.md` and `docs/api/code-arduino-development.md` (names, arguments, answers,
 caps, the never-raises rule). The scan-side half of the feature (dependency parsing) lives in
 the `local` fork (`../local`, §3 of the same doc).
@@ -18,8 +19,8 @@ the `local` fork (`../local`, §3 of the same doc).
 | Path                    | Contents                                                                                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bin/launch`            | The ONLY entrypoint. Fixed argv, `env -i` scrub to the allowlist declared in `solus/env_allowlist.py` (local's set + `VIRTUAL_ENV`), `PATH=/usr/bin:/bin`, fork-private `.venv/bin/python3`, zero network I/O. |
-| `allowlist.yaml`        | `server: code` + fourteen tools: six reads and eight confirmation-required actions. Single source of truth for discovery, the cloud ingress gate, and `solus/roster.py`. |
-| `solus/`                | The server: `server.py` (FastMCP entry), `workspace.py` (fail-closed root + confinement, verbatim from `local`), `plan.py` (pure argv assembly + validation), `execute.py` (bounded, scrubbed execution), `probe.py`, `roster.py`, `env_allowlist.py`, `env.allow`. |
+| `allowlist.yaml`        | `server: code` + twenty-two tools: eight reads and fourteen confirmation-required actions. Single source of truth for discovery, the cloud ingress gate, and `solus/roster.py`. |
+| `solus/`                | The server: `server.py` (FastMCP entry), `workspace.py` (fail-closed root + confinement, verbatim from `local`), `plan.py` (pure argv assembly + validation), `execute.py` (bounded, scrubbed execution), `probe.py`, `roster.py`, `env_allowlist.py`, `env.allow`; SOLUSDEV-317: `command_plan.py` + `command_deny.py` (exec planning and deny table), `sandbox.py` + `git_guard.py` + `landlock_exec.py` (OS sandbox), `profiles.py`, `processes.py` + `process_os.py`. |
 | `requirements.lock.txt` | Hash-pinned `mcp` closure — byte-identical below the header to `../local/requirements.lock.txt`. `scripts/install-mcp-forks.sh` materializes `.venv/` from it; `.venv/` is gitignored.    |
 | `PROVENANCE.md`         | Identity, license (MIT, Solus), no-upstream statement, exposed tools, blank sign-offs.                                                                                                       |
 | `SECURITY_REVIEW.md`    | DRAFT checklist with pasted evidence — awaiting both human sign-offs.                                                                                                                        |
@@ -109,3 +110,30 @@ compilation snapshots a linked Uno sketch and runs offline in Bubblewrap, exposi
 only the verified toolchain and isolated job. Successful builds publish verified
 immutable artifacts. Neither tool identifies, opens or flashes attached hardware.
 The API plan documents limits, cancellation, failures and setup requirements.
+
+## Command execution, processes and profiles (SOLUSDEV-317)
+
+Contract: `docs/api/code-command-execution.md`. All confirmation-gated except the two reads.
+
+- `exec {argv, cwd?, environment?, profile?, timeout_seconds?: 1–600 (120)}` — one argument
+  list, never a shell. `argv[0]` resolves to an absolute program without the inherited PATH
+  (workspace file → absolute in an allowed root → `<env>/bin` → profile PATH →
+  `SEARCH_ROOTS`); `solus/command_deny.py` refuses shells, wrappers, elevation, inline code
+  and `git`/`git-*` (use the dedicated git tools). Answers the `run` shape plus `sandbox` and
+  `git_metadata_changed`; output streams like `run`/`test`.
+- `process_start {argv, cwd?, environment?, profile?, name?, max_runtime_seconds?: 60–14400}`,
+  `process_stop {process_id}`, `process_status {process_id?, cursor?}` — at most 4 running,
+  16 entries kept 30 min, 256 KiB line ring per process; stopped on server exit and
+  reaped by start token on the next start; never restarted.
+- `profile_capture {name, setup_file, extends?}`, `profile_list {}`, `profile_delete {name}` —
+  a fixed Solus script sources the setup file inside the sandbox; the filtered variables are
+  stored in `~/.solus/code-profiles/<workspace key>/` (0600); answers carry names only.
+- `plan` answers every action with `sandbox {kind, writable, limitations}`, `profile
+  {name, digest}` and `environment`.
+
+**Sandbox (every executing tool).** macOS: root-owned `/usr/bin/sandbox-exec` with a constant
+profile; Linux: `solus/landlock_exec.py` (Landlock ABI ≥ 1, kind `landlock-abi<N>`). Writes are
+limited to the workspace, temp, a few devices and the declared HOME caches; `~/.solus` is
+denied, the whole gitdir is read-only on macOS and git metadata changes are detected on Linux.
+Leftover descendants (group and snapshotted tree) are killed when a command ends. No sandbox →
+refused.

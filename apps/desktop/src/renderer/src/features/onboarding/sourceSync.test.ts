@@ -2,12 +2,13 @@
 // also exercised end-to-end by githubConnect.test.ts / edaConnect.test.ts; here
 // we pin the pure pieces, especially the SyncError-object message handling.
 import { describe, it, expect, vi } from 'vitest'
-import type { Sync } from '../../lib/api/resources'
+import type { Sync, SyncJob } from '../../lib/api/resources'
 import {
   latestSync,
   pollSync,
   pollAcceptedSync,
   indexedSyncDetail,
+  jobFailure,
   syncErrorMessage
 } from './sourceSync'
 
@@ -104,7 +105,31 @@ describe('accepted sync job', () => {
       status: 'running' as const,
       error: null
     }))
-    expect(await pollAcceptedSync({ getJob: pending }, 'p1', 'j1', noSleep)).toBeUndefined()
+    // Out of tries on a live job: hand back the job as last seen, so the
+    // caller can tell "still running" from a failure.
+    expect((await pollAcceptedSync({ getJob: pending }, 'p1', 'j1', noSleep))?.status).toBe(
+      'running'
+    )
+  })
+})
+
+describe('jobFailure', () => {
+  const job = (status: SyncJob['status'], error: SyncJob['error'] = null): SyncJob => ({
+    id: 'j1',
+    project_id: 'p1',
+    status,
+    error
+  })
+
+  it.each([
+    [undefined, 'Sync timed out.'],
+    [job('failed', { message: 'Quota exhausted' }), 'Quota exhausted'],
+    [job('failed'), 'Sync failed.'],
+    [job('cancelled'), 'Sync cancelled.'],
+    [job('succeeded'), null],
+    [job('running'), null]
+  ])('reports %o as %o', (input, expected) => {
+    expect(jobFailure(input)).toBe(expected)
   })
 })
 

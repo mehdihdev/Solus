@@ -12,9 +12,19 @@
 // Home's connected-accounts card, where the confirmed Disconnect already lives. And a flow that
 // completed successfully despite the cancel keeps its source and is reported —
 // finished work is never silently discarded.
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { create } from 'zustand'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
 import { listSelectable, type Connection, type SelectableItem } from '../../lib/api/resources'
+import {
+  getTeamInstallation,
+  listTeamGithubRepos,
+  type TeamInstallation
+} from '../../lib/api/resources.teamGithub'
+import { useSettingsStore, type SolMode } from '../../store/settingsStore'
+import { useWorkspaceStore } from '../../store/workspaceStore'
+import { pickerText, teamRepoSections, type PickerSection } from './teamRepoSection'
+import type { PickerPaging } from './SelectionPicker'
 import { linkedAccountFor } from '../workspace/useAccountConnections'
 import type { WizardScope } from './connectSteps'
 import {
@@ -38,6 +48,218 @@ import { useEdaConnect } from './useEdaConnect'
 import { connectOptions, useOAuthConnect } from './useOAuthConnect'
 
 export const NOT_LINKED_ERROR = 'Solus API unreachable — retry once you are back online.'
+
+/** The team repo the user just clicked in the picker, staged for the next
+ *  `begin()` (SOLUSDEV-216). The modal's props are fixed by its callers, so the
+ *  pick travels through this one-slot store instead of a new prop: begin()
+ *  takes it exactly once, open()/close() forget it. */
+export const useTeamPick = create<{ picked: SelectableItem | null }>(() => ({ picked: null }))
+
+export const stageTeamPick = (item: SelectableItem): void => useTeamPick.setState({ picked: item })
+export const clearTeamPick = (): void => useTeamPick.setState({ picked: null })
+
+const takeTeamPick = (): SelectableItem | null => {
+  const { picked } = useTeamPick.getState()
+  if (picked) clearTeamPick()
+  return picked
+}
+
+/** Debounce before a typed search reaches the API. */
+export const TEAM_SEARCH_DEBOUNCE_MS = 300
+
+interface TeamRepoPage {
+  repos: SelectableItem[]
+  total: number | null
+  cursor: string | null
+}
+
+/** The installation's first page of repos; none for a suspended installation. */
+async function loadTeamGithub(teamId: string) {
+  const installation = await getTeamInstallation(teamId)
+  if (installation?.status !== 'active') {
+    return { installation, page: { repos: [], total: null, cursor: null } as TeamRepoPage }
+  }
+  const first = await listTeamGithubRepos(teamId)
+  return {
+    installation,
+    page: { repos: first.items, total: first.total, cursor: first.cursor } as TeamRepoPage
+  }
+}
+
+interface PickerData {
+  /** The team the data belongs to; a mismatch reads as "still loading". */
+  forTeam: string | null
+  phase: 'idle' | 'ready' | 'failed'
+  installation: TeamInstallation | null
+  page: TeamRepoPage
+  /** The query `page` answers. */
+  q: string
+  busy: boolean
+  error: boolean
+}
+
+const NO_PAGE: TeamRepoPage = { repos: [], total: null, cursor: null }
+const IDLE_DATA: PickerData = {
+  forTeam: null,
+  phase: 'idle',
+  installation: null,
+  page: NO_PAGE,
+  q: '',
+  busy: false,
+  error: false
+}
+
+export interface TeamPicker {
+  /** null for every other provider/scope, no installation, or a failed lookup. */
+  sections: readonly PickerSection[] | null
+  /** The installation lookup is in flight: no connect action may start yet. */
+  loading: boolean
+  /** The lookup failed — the legacy wizard, plus a non-fatal notice. */
+  failed: boolean
+  /** Mode-aware notice for `failed`. */
+  failedNotice: string | null
+  /** Search + load-more for the team section; null without an active listing. */
+  paging: PickerPaging | null
+}
+
+interface TeamListing {
+  data: PickerData
+  /** The lookup finished for the CURRENT team. */
+  ready: boolean
+  failed: boolean
+  query: string
+  setQuery: (query: string) => void
+  loadMore: () => void
+}
+
+/** The installation + repo listing behind the picker: one lookup per team, then
+ *  debounced search and cursor paging over the same list. Every reply is
+ *  checked against a sequence so a stale one (old team, old query) is dropped. */
+function useTeamListing(enabled: boolean, teamId: string | null): TeamListing {
+  const [data, setData] = useState<PickerData>(IDLE_DATA)
+  const [query, setQuery] = useState('')
+  const [applied, setApplied] = useState('')
+  const seq = useRef(0)
+
+  useEffect(() => {
+    setQuery('')
+    setApplied('')
+    if (!enabled || !teamId) {
+      setData(IDLE_DATA)
+      return
+    }
+    const mine = ++seq.current
+    loadTeamGithub(teamId).then(
+      (loaded) => {
+        if (mine === seq.current)
+          setData({ ...IDLE_DATA, ...loaded, forTeam: teamId, phase: 'ready' })
+      },
+      () => {
+        if (mine === seq.current) setData({ ...IDLE_DATA, forTeam: teamId, phase: 'failed' })
+      }
+    )
+    return () => {
+      seq.current += 1
+      setData(IDLE_DATA)
+    }
+  }, [enabled, teamId])
+
+  useEffect(() => {
+    const timer = setTimeout(() => setApplied(query), TEAM_SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query])
+
+  const fetchPage = useCallback(
+    (cursor: string | undefined, q: string, append: boolean): void => {
+      if (!teamId) return
+      const mine = ++seq.current
+      setData((d) => ({ ...d, busy: true, error: false }))
+      listTeamGithubRepos(teamId, { ...(cursor ? { cursor } : {}), ...(q ? { q } : {}) }).then(
+        (res) => {
+          if (mine !== seq.current) return
+          const page = { total: res.total, cursor: res.cursor }
+          setData((d) => ({
+            ...d,
+            busy: false,
+            q,
+            page: { ...page, repos: append ? [...d.page.repos, ...res.items] : res.items }
+          }))
+        },
+        () => {
+          if (mine === seq.current) setData((d) => ({ ...d, busy: false, error: true, q }))
+        }
+      )
+    },
+    [teamId]
+  )
+
+  const current = data.forTeam === teamId
+  const ready = data.phase === 'ready' && current
+  const searchable = ready && data.installation?.status === 'active'
+  useEffect(() => {
+    if (searchable && applied !== data.q) fetchPage(undefined, applied, false)
+  }, [searchable, applied, data.q, fetchPage])
+
+  const loadMore = (): void => {
+    if (data.page.cursor && !data.busy) fetchPage(data.page.cursor, data.q, true)
+  }
+  return { data, ready, failed: data.phase === 'failed' && current, query, setQuery, loadMore }
+}
+
+function buildPaging(listing: TeamListing, mode: SolMode): PickerPaging | null {
+  const { data } = listing
+  if (data.installation?.status !== 'active') return null
+  return {
+    query: listing.query,
+    onSearch: listing.setQuery,
+    shown: data.page.repos.length,
+    total: data.page.total,
+    hasMore: data.page.cursor !== null,
+    busy: data.busy,
+    error: data.error ? pickerText('load_failed', mode) : null,
+    onLoadMore: listing.loadMore
+  }
+}
+
+/**
+ * SOLUSDEV-216: the GitHub picker's team section, for a project whose team has
+ * an installation. `sections` is null for every other provider/scope, for a team
+ * with no installation, and when the lookup fails — each of which is the legacy
+ * wizard (a failure is additionally flagged so the modal can say so).
+ */
+export function useTeamPicker(
+  entry: Pick<CatalogEntry, 'id'>,
+  scope: WizardScope,
+  linkedLogin: string | null
+): TeamPicker {
+  const solMode = useSettingsStore((s) => s.solMode)
+  const teamId = useWorkspaceStore((s) => s.project?.teamId ?? s.teamId)
+  const enabled = scope === 'project' && entry.id === 'github' && !!teamId
+  const listing = useTeamListing(enabled, teamId)
+  const { data, ready, failed } = listing
+
+  const sections = useMemo(
+    () =>
+      enabled && ready
+        ? teamRepoSections({
+            installation: data.installation,
+            repos: data.page.repos,
+            linkedLogin,
+            mode: solMode
+          })
+        : null,
+    [enabled, ready, data.installation, data.page.repos, linkedLogin, solMode]
+  )
+  const paging = sections ? buildPaging(listing, solMode) : null
+  const lookupFailed = enabled && failed
+  return {
+    sections,
+    loading: enabled && !ready && !lookupFailed,
+    failed: lookupFailed,
+    failedNotice: lookupFailed ? pickerText('lookup_failed', solMode) : null,
+    paging
+  }
+}
 
 /** One begin/pickFiles invocation for one entry. Latches are PER ATTEMPT so a
  * late-settling abandoned flow is never governed by a newer attempt's cancel. */
@@ -147,6 +369,7 @@ function useWizardAttempt(options: UseConnectWizardOptions) {
   const close = (): void => {
     const entry = active
     setActive(null)
+    clearTeamPick()
     if (!entry) return
     const attempt = attempts.current[entry.id]
     // Settled (done, error, or never started): keep the tile state — an error
@@ -160,9 +383,46 @@ function useWizardAttempt(options: UseConnectWizardOptions) {
     useOnboardingStore.getState().clearConnection(entry.id)
   }
 
+  // The flow's input resolvers live in THIS hook, but its tile state lives in
+  // the shared store. Unmounting mid-flight (Accounts → Project view) would
+  // leave a picker on screen that no click can answer, so it cancels instead.
+  const cancels = useRef({ oauth: oauth.cancel, eda: eda.cancel })
+  useEffect(() => {
+    cancels.current = { oauth: oauth.cancel, eda: eda.cancel }
+  }, [oauth.cancel, eda.cancel])
+  useEffect(
+    () => () => {
+      const live = Object.entries(attempts.current).filter(
+        ([, attempt]) => !attempt.settled && !attempt.cancelled
+      )
+      if (live.length === 0) return
+      cancels.current.oauth()
+      cancels.current.eda()
+      for (const [id, attempt] of live) {
+        attempt.cancelled = true
+        useOnboardingStore.getState().clearConnection(id)
+      }
+    },
+    []
+  )
+
+  const open = (entry: CatalogEntry): void => {
+    clearTeamPick()
+    // A busy state this wizard did not start belongs to a flow whose resolvers
+    // are out of reach (another surface's wizard): showing it would render a
+    // dead Track button. Settled states (error, done) stay as they are.
+    const own = attempts.current[entry.id]
+    const store = useOnboardingStore.getState()
+    if (store.connections[entry.id]?.phase === 'busy' && (!own || own.settled || own.cancelled)) {
+      store.clearConnection(entry.id)
+    }
+    setActive(entry)
+  }
+
   return {
     active,
     linkedAccount,
+    open,
     setActive,
     oauth,
     eda,
@@ -182,7 +442,7 @@ export function useConnectWizard(options: UseConnectWizardOptions): UseConnectWi
   return {
     active: context.active,
     linkedAccount: context.linkedAccount,
-    open: context.setActive,
+    open: context.open,
     begin: beginOAuthAttempt(context),
     pickFiles: beginExportAttempt(context),
     close: context.close,
@@ -199,8 +459,13 @@ function beginOAuthAttempt(
   const { active, guard, beginAttempt, scope, oauth, settle, linkedConnections, projectId } =
     context
   return async (): Promise<void> => {
+    // First line: a pick must never outlive the click that made it, even when
+    // begin() returns early. A team bind needs no desktop bridge, so it is also
+    // taken BEFORE the guard.
+    const pickedTeamRepo = takeTeamPick()
     const entry = active
-    if (!entry || !guard(entry)) return
+    if (!entry) return
+    if (!guard(entry, pickedTeamRepo !== null)) return
     const attempt = beginAttempt(entry)
     if (scope === 'account') {
       const bound = await oauth.startAccount(entry.id, connectOptions(entry))
@@ -210,7 +475,8 @@ function beginOAuthAttempt(
     const linked = linkedAccountFor(linkedConnections, entry.id)
     const result = await oauth.start(projectId!, entry.id, {
       ...connectOptions(entry),
-      linkedConnection: linked ? { id: linked.id, login: linked.account_login } : null
+      linkedConnection: linked ? { id: linked.id, login: linked.account_login } : null,
+      teamRepo: pickedTeamRepo
     })
     settle(entry, attempt, result)
   }
@@ -261,14 +527,15 @@ function wizardAvailability(
   projectId: string | null,
   linkedConnections: readonly Connection[]
 ) {
-  const guard = (entry: CatalogEntry): boolean => {
+  const guard = (entry: CatalogEntry, bindsThroughTeam = false): boolean => {
     const { failConnect } = useOnboardingStore.getState()
     if (scope === 'project' && !projectId) {
       failConnect(entry.id, NOT_LINKED_ERROR)
       return false
     }
     const reusesAccount = scope === 'project' && linkedAccountFor(linkedConnections, entry.id)
-    if (entry.mode === 'oauth' && !reusesAccount && !getDesktopOAuthBridge()) {
+    const needsBridge = entry.mode === 'oauth' && !reusesAccount && !bindsThroughTeam
+    if (needsBridge && !getDesktopOAuthBridge()) {
       failConnect(entry.id, noBridgeError(entry.name))
       return false
     }

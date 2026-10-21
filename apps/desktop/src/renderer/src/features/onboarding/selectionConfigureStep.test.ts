@@ -93,7 +93,11 @@ describe('selectionConfigureStep — multi select', () => {
     const outcome = await step(CTX)
 
     expect(outcome).toEqual({ config: { documents: ['docA', 'docB'] }, label: '2 documents' })
-    expect(states.some((s) => s.phase === 'busy' && s.selectionMode === 'multi')).toBe(true)
+    expect(
+      states.some(
+        (s) => s.phase === 'busy' && s.selectionMode === 'multi' && s.selectionLabel === 'document'
+      )
+    ).toBe(true)
   })
 
   it('always shows the picker, even for a single option', async () => {

@@ -1,6 +1,6 @@
-"""SOLUSDEV-250 — `allowlist.yaml` is the complete fifteen-tool draft, validates
+"""SOLUSDEV-250/317 — `allowlist.yaml` is the complete twenty-two-tool list, validates
 against the cloud-side `ServerAllowlist`, survives the ingress gate, gates
-exactly the nine acting tools with reasons, and agrees with the roster."""
+exactly the fourteen acting tools with reasons, and agrees with the roster."""
 
 import logging
 
@@ -18,7 +18,16 @@ from code_paths import ALLOWLIST_YAML, FORK_DIR, MCP_ROOT, overlay_module  # iso
 
 roster = overlay_module("roster")
 EXPECTED_READ = frozenset(
-    {"probe_environment", "plan", "git_status", "git_log", "git_diff", "arduino_probe"}
+    {
+        "probe_environment",
+        "plan",
+        "git_status",
+        "git_log",
+        "git_diff",
+        "arduino_probe",
+        "process_status",
+        "profile_list",
+    }
 )
 EXPECTED_GATED = frozenset(
     {
@@ -31,6 +40,12 @@ EXPECTED_GATED = frozenset(
         "arduino_prepare",
         "arduino_compile",
         "arduino_upload",
+        "exec",
+        "process_start",
+        "process_stop",
+        "process_input",
+        "profile_capture",
+        "profile_delete",
     }
 )
 
@@ -105,3 +120,23 @@ def test_validate_inventory_gates_the_acting_tools_and_drops_strangers() -> None
     for name in EXPECTED_READ:
         assert by_remote[name].descriptor.requires_confirmation is False, name
     assert by_remote["plan"].descriptor.name == "code.plan"
+
+
+def test_command_tools_have_the_documented_dispatch_bounds() -> None:
+    """docs/api/code-command-execution.md §5.1."""
+    by_name = {tool.name: tool for tool in _parsed().tools}
+    expected = {
+        "exec": (True, 630),
+        "process_start": (True, 30),
+        "process_stop": (True, 30),
+        "process_status": (False, 15),
+        "process_input": (True, 15),
+        "profile_capture": (True, 60),
+        "profile_list": (False, 15),
+        "profile_delete": (True, 15),
+    }
+    for name, (gated, timeout) in expected.items():
+        assert (by_name[name].requires_confirmation, by_name[name].timeout_seconds) == (
+            gated,
+            timeout,
+        ), name

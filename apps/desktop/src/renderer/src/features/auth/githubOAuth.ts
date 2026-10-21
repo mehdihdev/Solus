@@ -15,10 +15,18 @@ export interface OAuthBridge {
    *  match the registered URI exactly), with the backend's OAuth state as the
    *  nonce the provider echoes back. */
   getConnectorRedirectUrl: () => Promise<string>
+  /** `{install: true}` (SOLUSDEV-216) asks main for the longer GitHub App install
+   *  wait; the callback then also carries `installationId` / `setupAction`. */
   awaitOAuth: (
     authorizeUrl: string,
-    expectedState: string
-  ) => Promise<{ code?: string; error?: string }>
+    expectedState: string,
+    options?: { install?: boolean }
+  ) => Promise<{
+    code?: string
+    error?: string
+    installationId?: number
+    setupAction?: 'install' | 'update' | 'request'
+  }>
   /** Cancel the in-flight connector handshake so `awaitOAuth` settles now
    *  (wizard closed mid-flow — SOLUSDEV-165). Optional: older preloads and
    *  test stubs without it degrade to letting the flow time out. */

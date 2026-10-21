@@ -4,7 +4,12 @@ import copy
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from solus_api.billing.entitlements import effective_limits, effective_plan, is_comp_active
+from solus_api.billing.entitlements import (
+    effective_limits,
+    effective_plan,
+    is_comp_active,
+    is_local_trial_expired,
+)
 from solus_api.models import (
     PlanType,
     Subscription,
@@ -157,3 +162,58 @@ def test_empty_stored_limits_with_no_comp_stays_empty_plus_override() -> None:
 @pytest.mark.parametrize("plan", list(PlanType))
 def test_every_plan_resolves_without_branching_on_names(plan: PlanType) -> None:
     assert effective_limits(_sub(plan), NOW) == default_limits(plan)
+
+
+# --- is_local_trial_expired (SOLUSDEV-236, ADR-024 trial expiry) ---
+
+
+def _trial(
+    expires_at: datetime | None,
+    *,
+    status: SubscriptionStatus = SubscriptionStatus.TRIALING,
+    stripe_id: str | None = None,
+) -> Subscription:
+    return Subscription(
+        plan=PlanType.BASIC,
+        status=status,
+        expires_at=expires_at,
+        stripe_subscription_id=stripe_id,
+    )
+
+
+def test_local_trial_past_expiry_is_expired() -> None:
+    assert is_local_trial_expired(_trial(NOW - timedelta(seconds=1)), NOW) is True
+
+
+def test_local_trial_at_exact_expiry_is_expired() -> None:
+    assert is_local_trial_expired(_trial(NOW), NOW) is True
+
+
+def test_local_trial_before_expiry_is_live() -> None:
+    assert is_local_trial_expired(_trial(NOW + timedelta(seconds=1)), NOW) is False
+
+
+def test_local_trial_without_expiry_is_never_expired() -> None:
+    assert is_local_trial_expired(_trial(None), NOW) is False
+
+
+def test_stripe_linked_trial_is_never_locally_expired() -> None:
+    past = NOW - timedelta(days=3)
+    assert is_local_trial_expired(_trial(past, stripe_id="sub_1"), NOW) is False
+
+
+@pytest.mark.parametrize(
+    "status", [SubscriptionStatus.ACTIVE, SubscriptionStatus.CANCELED, SubscriptionStatus.PAST_DUE]
+)
+def test_non_trialing_status_is_not_trial_expired(status: SubscriptionStatus) -> None:
+    assert is_local_trial_expired(_trial(NOW - timedelta(days=1), status=status), NOW) is False
+
+
+def test_naive_expires_at_is_treated_as_utc() -> None:
+    naive = (NOW - timedelta(hours=1)).replace(tzinfo=None)
+    assert is_local_trial_expired(_trial(naive), NOW) is True
+
+
+def test_default_now_is_the_current_time() -> None:
+    assert is_local_trial_expired(_trial(datetime.now(UTC) - timedelta(minutes=1))) is True
+    assert is_local_trial_expired(_trial(datetime.now(UTC) + timedelta(days=1))) is False

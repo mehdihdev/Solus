@@ -16,6 +16,7 @@ import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import stripe
@@ -32,6 +33,7 @@ CheckoutMode = Literal["subscription", "payment"]
 Proration = Literal["create_prorations", "none", "always_invoice"]
 CompDuration = Literal["once", "repeating", "forever"]
 CancelMode = Literal["immediate", "period_end"]
+PortalFlow = Literal["update", "cancel"]
 
 # Subscription metadata written on every staff-initiated write (SOLUSDEV-313).
 ADMIN_ACTION_METADATA_KEY = "solus_admin_action_id"
@@ -64,6 +66,7 @@ _SUB_ID_RE = re.compile(r"sub_[A-Za-z0-9]{1,64}")
 _CUSTOMER_ID_RE = re.compile(r"cus_[A-Za-z0-9]{1,64}")
 _SCHEDULE_ID_RE = re.compile(r"sub_sched_[A-Za-z0-9]{1,64}")
 _PRICE_ID_RE = re.compile(r"price_[A-Za-z0-9]{1,64}")
+_CONFIG_ID_RE = re.compile(r"bpc_[A-Za-z0-9]{1,64}")
 _COMP_COUPON_RE = re.compile(r"solus-comp-(once|forever|repeating-([1-9][0-9]?))")
 
 
@@ -119,6 +122,27 @@ def _check_id(value: object, pattern: re.Pattern[str], label: str) -> str:
     if not isinstance(value, str) or not pattern.fullmatch(value):
         raise ValueError(f"invalid {label}")
     return value
+
+
+def _portal_flow_data(
+    flow: PortalFlow, subscription_id: str | None, return_url: str
+) -> dict[str, Any]:
+    """`flow_data` for a portal deep link, bound to the caller's own subscription."""
+    sub = _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+    after = {"type": "redirect", "redirect": {"return_url": return_url}}
+    if flow == "update":
+        return {
+            "type": "subscription_update",
+            "subscription_update": {"subscription": sub},
+            "after_completion": after,
+        }
+    if flow == "cancel":
+        return {
+            "type": "subscription_cancel",
+            "subscription_cancel": {"subscription": sub},
+            "after_completion": after,
+        }
+    raise ValueError("invalid portal flow")
 
 
 def _check_comp_coupon(coupon_id: object) -> str:
@@ -207,6 +231,9 @@ class SubscriptionSnapshot:
     #: EVERY attached discount coupon id. `coupon_id` is the Solus comp coupon when one is
     #: attached (a customer promo can sort ahead of it), else the first coupon.
     coupon_ids: tuple[str, ...] = ()
+    #: Stripe `trial_end` (epoch seconds) and the price's `recurring.interval` (SOLUSDEV-236).
+    trial_end: int | None = None
+    interval: str | None = None
 
     def stripe_refs(self) -> dict[str, str]:
         refs = {
@@ -277,6 +304,8 @@ def snapshot_from_stripe(sub: Any) -> SubscriptionSnapshot:
         latest_invoice_id=_id_of(_g(sub, "latest_invoice")),
         metadata=dict(_g(sub, "metadata") or {}),
         coupon_ids=tuple(coupons),
+        trial_end=_g(sub, "trial_end"),
+        interval=_g(_g(_g(item, "price"), "recurring"), "interval"),
     )
 
 
@@ -292,6 +321,42 @@ def _translate(operation: str, exc: stripe.StripeError) -> StripeOperationError:
         isinstance(exc, stripe.APIError) and not isinstance(exc, stripe.InvalidRequestError)
     )
     return StripeOperationError(operation, code=code, http_status=status, retryable=retryable)
+
+
+@dataclass(frozen=True)
+class InvoicePreview:
+    """The upcoming invoice, reduced to what the Billing screen shows (SOLUSDEV-236)."""
+
+    amount_cents: int
+    currency: str
+    date: datetime
+
+
+@dataclass(frozen=True)
+class CardSummary:
+    """Brand and last four only; the PaymentMethod id is never carried (CLAUDE.md section 7)."""
+
+    brand: str
+    last4: str
+
+
+@dataclass(frozen=True)
+class PriceAmount:
+    amount_cents: int
+    currency: str
+    interval: str
+
+
+_NO_UPCOMING_INVOICE_CODE = "invoice_upcoming_none"
+
+
+def _card_of(payment_method: Any) -> CardSummary | None:
+    """A card brand/last4 from an expanded PaymentMethod; None for non-cards or bare ids."""
+    card = _g(payment_method, "card")
+    brand, last4 = _g(card, "brand"), _g(card, "last4")
+    if not isinstance(brand, str) or not isinstance(last4, str):
+        return None
+    return CardSummary(brand=brand, last4=last4)
 
 
 class StripeGateway:
@@ -337,7 +402,7 @@ class StripeGateway:
         user_id: str,
         success_url: str,
         cancel_url: str,
-        trial_days: int | None = None,
+        trial_end: int | None = None,
     ) -> str:
         """Create a hosted Checkout Session and return its redirect URL. The user
         id rides in both `client_reference_id` and `metadata.solus_user_id`, and
@@ -354,18 +419,150 @@ class StripeGateway:
             "cancel_url": cancel_url,
             "api_key": key,
         }
-        if mode == "subscription" and trial_days:
-            params["subscription_data"] = {"trial_period_days": trial_days}
+        if mode == "subscription" and trial_end:
+            # Carries a live local trial over (SOLUSDEV-236): the customer is not
+            # charged until the local trial would have ended.
+            params["subscription_data"] = {"trial_end": trial_end}
         session = await stripe.checkout.Session.create_async(**params)
         return str(session.url)
 
-    async def create_portal_session(self, *, customer: str, return_url: str) -> str:
-        """Create a Stripe-hosted Billing Portal session (manage/cancel/update
-        card) and return its URL."""
-        key = await self._api_key()
-        params: dict[str, Any] = {"customer": customer, "return_url": return_url, "api_key": key}
-        session = await stripe.billing_portal.Session.create_async(**params)
+    async def create_portal_session(
+        self,
+        *,
+        customer: str,
+        return_url: str,
+        configuration: str,
+        flow: PortalFlow | None = None,
+        subscription_id: str | None = None,
+    ) -> str:
+        """Create a Stripe-hosted Billing Portal session on the code-managed
+        `configuration` and return its URL. With a `flow`, deep-link into the
+        subscription update/cancel screen for `subscription_id` (SOLUSDEV-236)."""
+        _check_id(customer, _CUSTOMER_ID_RE, "customer id")
+        _check_id(configuration, _CONFIG_ID_RE, "portal configuration id")
+        params: dict[str, Any] = {
+            "customer": customer,
+            "return_url": return_url,
+            "configuration": configuration,
+        }
+        if flow is not None:
+            params["flow_data"] = _portal_flow_data(flow, subscription_id, return_url)
+        session = await self._call(
+            "billing_portal.session.create", stripe.billing_portal.Session.create_async, **params
+        )
         return str(session.url)
+
+    async def list_portal_configurations(self) -> list[Any]:
+        """Active billing-portal configurations (bounded pagination)."""
+        found: list[Any] = []
+        cursor: str | None = None
+        for _ in range(MAX_LIST_PAGES):
+            params: dict[str, Any] = {"active": True, "limit": LIST_PAGE_SIZE}
+            if cursor is not None:
+                params["starting_after"] = cursor
+            page = await self._call(
+                "billing_portal.configuration.list",
+                stripe.billing_portal.Configuration.list_async,
+                **params,
+            )
+            data = list(_g(page, "data") or [])
+            # Plain dicts out: SDK 15 StripeObjects are not Mappings (no .get()).
+            found.extend(c.to_dict() if hasattr(c, "to_dict") else c for c in data)
+            last = _g(data[-1], "id") if data else None
+            if not _g(page, "has_more") or not isinstance(last, str):
+                break
+            cursor = last
+        return found
+
+    async def create_portal_configuration(self, params: dict[str, Any], *, key_hash: str) -> str:
+        """Create a portal configuration; the idempotency key derives from its hash."""
+        _check_token(key_hash, "configuration hash")
+        config = await self._call(
+            "billing_portal.configuration.create",
+            stripe.billing_portal.Configuration.create_async,
+            idempotency_key=f"solus-portal-config-{key_hash}",
+            **params,
+        )
+        return str(_g(config, "id"))
+
+    async def price_products(self, price_ids: list[str]) -> dict[str, str]:
+        """Map each Stripe Price id to its Product id."""
+        out: dict[str, str] = {}
+        for price_id in price_ids:
+            _check_id(price_id, _PRICE_ID_RE, "price id")
+            price = await self._call("price.retrieve", stripe.Price.retrieve_async, price_id)
+            product = _id_of(_g(price, "product"))
+            if product is None:
+                raise StripeOperationError("price.retrieve", code="no_product")
+            out[price_id] = product
+        return out
+
+    async def upcoming_invoice(
+        self, customer_id: str, subscription_id: str
+    ) -> InvoicePreview | None:
+        """Preview of the subscription's next invoice (SOLUSDEV-236); None when Stripe
+        reports there is none (canceled or cancel-pending)."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+        try:
+            invoice = await self._call(
+                "invoice.create_preview",
+                stripe.Invoice.create_preview_async,
+                customer=customer_id,
+                subscription=subscription_id,
+            )
+        except StripeOperationError as exc:
+            if exc.code == _NO_UPCOMING_INVOICE_CODE:
+                return None
+            raise
+        when = _g(invoice, "next_payment_attempt") or _g(invoice, "period_end")
+        amount, currency = _g(invoice, "amount_due"), _g(invoice, "currency")
+        if (
+            not isinstance(when, int)
+            or not isinstance(amount, int)
+            or not isinstance(currency, str)
+        ):
+            raise StripeOperationError("invoice.create_preview", code="malformed_invoice")
+        return InvoicePreview(amount, currency, datetime.fromtimestamp(when, UTC))
+
+    async def default_payment_method(
+        self, customer_id: str, subscription_id: str
+    ) -> CardSummary | None:
+        """The default card: the subscription's, else the customer's invoice default."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        _check_id(subscription_id, _SUB_ID_RE, "subscription id")
+        sub = await self._call(
+            "subscription.retrieve",
+            stripe.Subscription.retrieve_async,
+            subscription_id,
+            expand=["default_payment_method"],
+        )
+        card = _card_of(_g(sub, "default_payment_method"))
+        if card is not None:
+            return card
+        customer = await self._call(
+            "customer.retrieve",
+            stripe.Customer.retrieve_async,
+            customer_id,
+            expand=["invoice_settings.default_payment_method"],
+        )
+        return _card_of(_g(_g(customer, "invoice_settings"), "default_payment_method"))
+
+    async def price_amounts(self, price_ids: list[str]) -> dict[str, PriceAmount]:
+        """Amount, currency and interval of each recurring Price, fetched concurrently."""
+        for price_id in price_ids:
+            _check_id(price_id, _PRICE_ID_RE, "price id")
+        prices = await asyncio.gather(
+            *(self._call("price.retrieve", stripe.Price.retrieve_async, p) for p in price_ids)
+        )
+        out: dict[str, PriceAmount] = {}
+        for price_id, price in zip(price_ids, prices, strict=True):
+            amount, currency = _g(price, "unit_amount"), _g(price, "currency")
+            interval = _g(_g(price, "recurring"), "interval")
+            if not isinstance(amount, int) or not isinstance(currency, str) or not interval:
+                raise StripeOperationError("price.retrieve", code="unusable_price")
+            out[price_id] = PriceAmount(amount, currency, str(interval))
+        return out
 
     # ------------------------------------------------------------------ #
     # SOLUSDEV-313: staff subscription operations. Every write validates all
@@ -402,6 +599,31 @@ class StripeGateway:
             expand=["discounts"],
         )
         return snapshot_from_stripe(sub)
+
+    async def ensure_configured(self) -> None:
+        """Raise `BillingUnconfiguredError` when no Stripe key is provisioned (no network)."""
+        await self._api_key()
+
+    async def retrieve_subscription_raw(self, sub_id: str) -> dict[str, Any]:
+        """Read a subscription as a plain dict (SOLUSDEV-236 reconciliation): the same shape
+        a signed webhook payload carries, so `derive_subscription_state` consumes it as-is."""
+        _check_id(sub_id, _SUB_ID_RE, "subscription id")
+        sub = await self._call("subscription.retrieve", stripe.Subscription.retrieve_async, sub_id)
+        raw = sub.to_dict() if hasattr(sub, "to_dict") else sub
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
+    async def customer_exists(self, customer_id: str) -> bool:
+        """False when Stripe reports the customer missing or deleted (`resource_missing`, or
+        a `deleted` stub); other failures propagate. Lets the reconciler tell a really
+        ended subscription from a key/mode mismatch."""
+        _check_id(customer_id, _CUSTOMER_ID_RE, "customer id")
+        try:
+            customer = await self._call(
+                "customer.retrieve", stripe.Customer.retrieve_async, customer_id
+            )
+        except StripeResourceMissingError:
+            return False
+        return not _g(customer, "deleted", False)
 
     async def list_customer_subscriptions(self, customer_id: str) -> list[str]:
         """Ids of every NON-terminal subscription of the customer (not canceled /

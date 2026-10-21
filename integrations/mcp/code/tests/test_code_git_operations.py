@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 git = overlay_module("git_operations")
 
@@ -273,7 +274,7 @@ async def test_actual_mcp_commit_readback_failure_remains_uncertain_in_history(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from solus_api.agent.tools.shapes import ToolResult
-    from solus_api.routers.sol import _decision_summary
+    from solus_api.routers.sol_confirmations import _decision_summary
 
     (repo / "a.txt").write_text("approved change\n")
     command(repo, "add", "a.txt")

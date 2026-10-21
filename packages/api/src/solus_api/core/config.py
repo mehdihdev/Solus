@@ -1,10 +1,12 @@
 """Application settings. All secrets come from the environment (CLAUDE.md §7)."""
 
+import logging
 import uuid
+from functools import cached_property
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -97,6 +99,12 @@ class Settings(BaseSettings):
     # MO-04 classify preview: fired on typing pauses, so it gets its own
     # generous separate bucket (never counts against the global budget above).
     classify_rate_limit_per_minute: int = 600
+    # SOLUSDEV-216 GitHub App webhook: unauthenticated (the HMAC is the credential) and every
+    # delivery from GitHub shares one source IP behind the ALB, so it gets its OWN path bucket
+    # sized for GitHub volume. Failed-signature attempts are throttled separately per source IP
+    # inside the route; valid deliveries are never counted against that.
+    github_app_webhook_rate_limit_per_minute: int = 1200
+    github_app_webhook_bad_signature_per_minute: int = 60
 
     invite_ttl_days: int = 7
     trial_days: int = 30
@@ -166,6 +174,18 @@ class Settings(BaseSettings):
     # `${api}/api/v1/integrations/github/oauth/callback`.
     github_client_id: str | None = None
     github_client_secret: str | None = None
+
+    # GitHub App for team organizations (SOLUSDEV-216, ADR-039); see
+    # docs/integrations/github-setup.md. Separate from the OAuth App above. Every field is
+    # optional: until all are present the org feature reports unconfigured and stays hidden.
+    github_app_id: str | None = None
+    github_app_slug: str | None = None
+    github_app_client_id: str | None = None
+    github_app_client_secret: SecretStr | None = None
+    # PEM, inline (literal "\n" escapes accepted) or as a file path (read once).
+    github_app_private_key: SecretStr | None = None
+    github_app_private_key_path: str | None = None
+    github_app_webhook_secret: SecretStr | None = None
 
     # GitLab OAuth application (SOLUSDEV-104). base_url supports self-hosted
     # instances; the OAuth app is registered on that instance.
@@ -345,6 +365,45 @@ class Settings(BaseSettings):
     # bytes/values on demand (store assets; extension storage values).
     extension_asset_downloads_per_minute_per_user: int = 240
     extension_storage_reads_per_minute_per_user: int = 240
+
+    @field_validator("github_app_private_key", mode="before")
+    @classmethod
+    def _normalise_private_key_newlines(cls, raw: object) -> object:
+        """Env files carry the PEM on one line with literal `\\n` escapes."""
+        if isinstance(raw, str):
+            return raw.replace("\\n", "\n")
+        if isinstance(raw, SecretStr):
+            return SecretStr(raw.get_secret_value().replace("\\n", "\n"))
+        return raw
+
+    @cached_property
+    def github_app_private_key_pem(self) -> str | None:
+        """The App's PEM: the inline key, else the file at the configured path (read once)."""
+        if self.github_app_private_key is not None:
+            inline = self.github_app_private_key.get_secret_value()
+            if inline.strip():
+                return inline
+        if not self.github_app_private_key_path:
+            return None
+        try:
+            return Path(self.github_app_private_key_path).read_text() or None
+        except OSError as exc:
+            logging.getLogger("solus.config").error(
+                "GitHub App private key file unreadable: %s", type(exc).__name__
+            )
+            return None
+
+    @property
+    def github_app_configured(self) -> bool:
+        """True only when every GitHub App credential is present (key inline or by path)."""
+        secrets = (self.github_app_client_secret, self.github_app_webhook_secret)
+        return bool(
+            self.github_app_id
+            and self.github_app_slug
+            and self.github_app_client_id
+            and all(s is not None and s.get_secret_value() for s in secrets)
+            and self.github_app_private_key_pem
+        )
 
     @field_validator("staff_user_ids")
     @classmethod

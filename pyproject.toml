@@ -177,4 +177,7 @@ norecursedirs = [
 ]
 markers = [
     "live: real provider-API smoke tests; needs API keys, never run in CI (run with -m live)",
+    "real_sandbox: executes through the real OS sandbox (skips without one)",
+    "own_sandbox_probe: the test manages the sandbox probe itself",
+    "real_writable_roots: the code server's program check sees the real temp roots",
 ]

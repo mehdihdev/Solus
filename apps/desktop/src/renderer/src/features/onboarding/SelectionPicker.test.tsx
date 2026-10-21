@@ -1,9 +1,9 @@
 // The shared picker. Its whole job is to be item-agnostic: `mode` decides the
 // shape, and the items supply their own copy. No provider id appears here.
 import { describe, it, expect, vi } from 'vitest'
-import { act, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { SelectionPicker } from './SelectionPicker'
+import { SelectionPicker, type PickerPaging } from './SelectionPicker'
 import type { SelectableItem } from '../../lib/api/resources'
 
 const DOCS: SelectableItem[] = [
@@ -23,118 +23,102 @@ describe('SelectionPicker — single', () => {
   })
 })
 
-describe('SelectionPicker — multi', () => {
-  it('reports every ticked item', async () => {
+// Multi-select behaviour lives in MultiSelectPicker.test.tsx.
+
+describe('SelectionPicker — sections (SOLUSDEV-216)', () => {
+  const SECTIONS = [
+    { header: 'From fsae-ev (team)', items: [{ id: 'o/vcu', name: 'o/vcu', subtitle: 'private' }] },
+    {
+      header: 'Your account · maya-k',
+      items: [{ id: 'solus:account', name: 'Pick from my repositories' }]
+    }
+  ]
+
+  it('renders one header per section with that section’s items beneath it', () => {
+    render(<SelectionPicker items={[]} sections={SECTIONS} onSelect={vi.fn()} />)
+
+    expect(screen.getByRole('group', { name: 'From fsae-ev (team)' })).toHaveTextContent('o/vcu')
+    expect(screen.getByRole('group', { name: 'Your account · maya-k' })).toHaveTextContent(
+      'Pick from my repositories'
+    )
+    expect(screen.getByText('private')).toBeInTheDocument()
+    expect(screen.queryByText('No items found.')).not.toBeInTheDocument()
+  })
+
+  it('reports the clicked item as the single choice', async () => {
     const onSelect = vi.fn()
-    render(<SelectionPicker items={DOCS} mode="multi" onSelect={onSelect} />)
+    render(<SelectionPicker items={[]} sections={SECTIONS} onSelect={onSelect} />)
 
-    await userEvent.click(screen.getByLabelText('Rover chassis'))
-    await userEvent.click(screen.getByLabelText('Gripper'))
-    await userEvent.click(screen.getByRole('button', { name: /track 2/i }))
+    await userEvent.click(screen.getByRole('button', { name: /o\/vcu/ }))
 
-    expect(onSelect).toHaveBeenCalledWith([DOCS[0], DOCS[2]])
+    expect(onSelect).toHaveBeenCalledWith([SECTIONS[0].items[0]])
   })
 
-  it('allows confirming an empty selection — connected but tracking nothing', async () => {
-    const onSelect = vi.fn()
-    render(<SelectionPicker items={DOCS} mode="multi" onSelect={onSelect} />)
-
-    await userEvent.click(screen.getByRole('button', { name: /track none/i }))
-
-    expect(onSelect).toHaveBeenCalledWith([])
+  it('shows a section notice and no items for a suspended section', () => {
+    render(
+      <SelectionPicker
+        items={[]}
+        sections={[{ header: 'From fsae-ev (team)', items: [], notice: 'Suspended on GitHub' }]}
+      />
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('Suspended on GitHub')
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 
-  it('starts from the currently tracked items when editing an existing selection', async () => {
-    const onSelect = vi.fn()
-    render(<SelectionPicker items={DOCS} mode="multi" initial={['docB']} onSelect={onSelect} />)
-
-    expect(screen.getByLabelText('Arm')).toBeChecked()
-    await userEvent.click(screen.getByRole('button', { name: /track 1/i }))
-
-    expect(onSelect).toHaveBeenCalledWith([DOCS[1]])
+  it('renders section headers in natural case, uppercased by CSS', () => {
+    render(<SelectionPicker items={[]} sections={SECTIONS} onSelect={vi.fn()} />)
+    const header = screen.getByText('From fsae-ev (team)')
+    expect(header).toHaveStyle({ textTransform: 'uppercase' })
+    expect(header.textContent).toBe('From fsae-ev (team)')
   })
 
-  it('shows an item’s own subtitle rather than invented copy', () => {
-    render(<SelectionPicker items={DOCS} mode="multi" />)
-    expect(screen.getByText('Maya')).toBeInTheDocument()
-  })
-})
-
-it('refreshes explicitly, retains checked items, and does not select before Track', async () => {
-  const fresh = { id: 'saved', name: 'FeatureScript MCP Workspace' }
-  const onRefresh = vi.fn(async () => [...DOCS, fresh])
-  const onSelect = vi.fn()
-  render(<SelectionPicker items={DOCS} mode="multi" onRefresh={onRefresh} onSelect={onSelect} />)
-  await userEvent.click(screen.getByLabelText('Arm'))
-  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
-  expect(await screen.findByLabelText(fresh.name)).toBeInTheDocument()
-  expect(screen.getByLabelText('Arm')).toBeChecked()
-  expect(onRefresh).toHaveBeenCalledTimes(1)
-  expect(onSelect).not.toHaveBeenCalled()
-  await userEvent.click(screen.getByLabelText(fresh.name))
-  await userEvent.click(screen.getByRole('button', { name: /track 2/i }))
-  expect(onSelect).toHaveBeenCalledWith([DOCS[1], fresh])
-})
-
-it('keeps the old listing and selection when refresh fails', async () => {
-  render(
-    <SelectionPicker
-      items={DOCS}
-      mode="multi"
-      initial={['docB']}
-      onRefresh={vi.fn(async () => {
-        throw new Error('quota')
-      })}
-    />
-  )
-  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
-  expect(await screen.findByRole('alert')).toHaveTextContent(/refresh/i)
-  expect(screen.getByLabelText('Arm')).toBeChecked()
-})
-
-it('prevents concurrent refresh and Track while the request is pending', async () => {
-  let finish!: (items: SelectableItem[]) => void
-  const onRefresh = vi.fn(
-    () =>
-      new Promise<SelectableItem[]>((resolve) => {
-        finish = resolve
-      })
-  )
-  const onSelect = vi.fn()
-  render(
-    <SelectionPicker
-      items={DOCS}
-      mode="multi"
-      initial={['docB']}
-      onRefresh={onRefresh}
-      onSelect={onSelect}
-    />
-  )
-  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
-  expect(screen.getByRole('button', { name: /track 1/i })).toBeDisabled()
-  await userEvent.click(screen.getByRole('button', { name: /refreshing/i }))
-  expect(onRefresh).toHaveBeenCalledTimes(1)
-  expect(onSelect).not.toHaveBeenCalled()
-  await act(async () => finish([]))
-  expect(screen.getByRole('status')).toHaveTextContent('No items found')
-  expect(screen.getByRole('button', { name: /track none/i })).toBeEnabled()
-})
-
-it('ignores a late refresh after the picker closes or changes source', async () => {
-  let finish!: (items: SelectableItem[]) => void
-  const onRefresh = () =>
-    new Promise<SelectableItem[]>((resolve) => {
-      finish = resolve
+  describe('paging', () => {
+    const paging = (over: Partial<PickerPaging> = {}): PickerPaging => ({
+      query: '',
+      onSearch: vi.fn(),
+      shown: 1,
+      total: 5,
+      hasMore: true,
+      busy: false,
+      error: null,
+      onLoadMore: vi.fn(),
+      ...over
     })
-  const { rerender, unmount } = render(
-    <SelectionPicker key="source-a" items={DOCS} mode="multi" onRefresh={onRefresh} />
-  )
-  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
-  rerender(
-    <SelectionPicker key="source-b" items={[{ id: 'b', name: 'Other source' }]} mode="multi" />
-  )
-  await act(async () => finish([{ id: 'late', name: 'Late old document' }]))
-  expect(screen.queryByLabelText('Late old document')).not.toBeInTheDocument()
-  expect(screen.getByLabelText('Other source')).toBeInTheDocument()
-  unmount()
+
+    it('reports typed search text and the Load more click', async () => {
+      const p = paging()
+      render(<SelectionPicker items={[]} sections={SECTIONS} paging={p} onSelect={vi.fn()} />)
+      await userEvent.type(screen.getByRole('searchbox', { name: 'Search repositories' }), 'v')
+      expect(p.onSearch).toHaveBeenCalledWith('v')
+      await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
+      expect(p.onLoadMore).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('picker-showing')).toHaveTextContent('Showing 1 of 5')
+    })
+
+    it('hides the count and Load more when nothing more is available', () => {
+      render(
+        <SelectionPicker
+          items={[]}
+          sections={SECTIONS}
+          paging={paging({ hasMore: false })}
+          onSelect={vi.fn()}
+        />
+      )
+      expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('picker-showing')).not.toBeInTheDocument()
+    })
+
+    it('disables Load more while busy and shows an error line', () => {
+      render(
+        <SelectionPicker
+          items={[]}
+          sections={SECTIONS}
+          paging={paging({ busy: true, error: 'Nope' })}
+          onSelect={vi.fn()}
+        />
+      )
+      expect(screen.getByRole('button', { name: 'Load more' })).toBeDisabled()
+      expect(screen.getByRole('alert')).toHaveTextContent('Nope')
+    })
+  })
 })

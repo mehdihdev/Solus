@@ -25,6 +25,17 @@ from .arduino_process import closed_environment, run_bounded, sandbox_argv
 from .arduino_toolchain import ArduinoError, ArduinoRuntime, _display_digest, _fingerprint
 
 _SYS_TTY = Path("/sys/class/tty")
+
+
+def _o_path() -> int:
+    """Linux's O_PATH. There is no fallback to a real open, which would invoke the
+    serial driver's open/reset, so other platforms refuse."""
+    if not hasattr(os, "O_PATH"):
+        raise ArduinoError("device_unavailable")
+    flag: int = getattr(os, "O_PATH")  # noqa: B009 - Linux-only attribute
+    return flag
+
+
 _PROC = Path("/proc")
 
 
@@ -154,7 +165,8 @@ def _refuse_busy(device: UsbTarget) -> None:
                         if int(process.name) == os.getpid():
                             import fcntl
 
-                            if fcntl.fcntl(int(handle.name), fcntl.F_GETFL) & os.O_PATH:
+                            flags = fcntl.fcntl(int(handle.name), fcntl.F_GETFL)
+                            if flags & _o_path():
                                 continue
                         raise ArduinoError("device_busy")
                 except FileNotFoundError:
@@ -382,7 +394,7 @@ def _run_upload(
     if before != device_inode:
         raise ArduinoError("stale_state")
     # O_PATH holds the inode without invoking the serial driver's open/reset operation.
-    descriptor = os.open(device.path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    descriptor = os.open(device.path, _o_path() | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         pinned = os.fstat(descriptor)
         if (pinned.st_dev, pinned.st_ino, pinned.st_rdev) != before or not stat.S_ISCHR(

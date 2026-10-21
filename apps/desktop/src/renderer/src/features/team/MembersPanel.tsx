@@ -1,23 +1,16 @@
-// Member-management surface (roster, roles, invite/revoke/remove) — hosted by
-// Home since SOLUSDEV-244 / HOME H5 (the Team screen and Settings > Members
-// were retired; this is the one implementation). Callback types are its own,
-// so any hook can drive it. The invite modal shows the one-time token ONCE,
-// offers Copy, and guards Done so the token is not lost by a reflex click.
+// Member-management pieces shared by Home (SOLUSDEV-244 / HOME H5): the invite
+// dialog, the remove / revoke confirmations, and the refusal wording. The roster
+// itself is the People table in features/teamInvites (SOLUSDEV-317, design A).
+// The invite modal shows the one-time token ONCE, offers Copy, and guards Done
+// so the token is not lost by a reflex click.
 import { useState } from 'react'
-import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
-import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
-import { Icons } from '../../components/ui/icons.constants'
 import type { InviteApi, TeamMemberApi, TeamRole } from '../../lib/api/resources'
 import { ConfirmModal, ModalShell } from '../workspace/modals'
 import { PlanLimitNotice } from '../workspace/PlanLimitNotice'
 import type { InviteOutcome, MemberOutcome } from '../workspace/useHomeTeam'
 
-export type ChangeRoleFn = (userId: string, role: TeamRole) => Promise<MemberOutcome>
-export type RemoveMemberFn = (userId: string) => Promise<MemberOutcome>
-export type RevokeInviteFn = (inviteId: string) => Promise<MemberOutcome>
 export type InviteFn = (email: string) => Promise<InviteOutcome>
 
 /** Why a member mutation was refused — shown inline, never swallowed
@@ -32,7 +25,7 @@ export function memberFailureText(outcome: MemberOutcome): string | null {
   return outcome.ok ? null : MEMBER_FAILURE[outcome.reason]
 }
 
-type PendingConfirm =
+export type PendingConfirm =
   | { kind: 'remove'; member: TeamMemberApi }
   | { kind: 'revoke'; invite: InviteApi }
   | null
@@ -40,226 +33,7 @@ type PendingConfirm =
 export const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 export const MANAGER_ROLES: readonly TeamRole[] = ['owner', 'admin']
 
-/** Assignable roles (owner is transferred, not picked from a dropdown). */
-const ASSIGNABLE_ROLES = ['admin', 'member', 'viewer'] as const
-
-const selectStyle: React.CSSProperties = {
-  background: 'var(--bg)',
-  color: 'var(--tx)',
-  border: '1px solid var(--bd)',
-  borderRadius: 3,
-  padding: '4px 6px',
-  fontSize: 11,
-  fontFamily: 'var(--font-ui)'
-}
-
-const iconButtonStyle: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  color: 'var(--mut)',
-  cursor: 'pointer',
-  padding: 4
-}
-
-function MemberRow({
-  member,
-  canManage,
-  onChangeRole,
-  onRemove
-}: {
-  member: TeamMemberApi
-  canManage: boolean
-  onChangeRole: (userId: string, role: TeamRole) => void
-  onRemove: (member: TeamMemberApi) => void
-}): React.JSX.Element {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 11,
-        alignItems: 'center',
-        padding: '11px 16px',
-        borderBottom: '1px solid var(--bd)'
-      }}
-    >
-      <Avatar name={member.name ?? member.email} size={28} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{member.name ?? member.email}</div>
-        <div style={{ fontSize: 10.5, color: 'var(--mut)' }}>{member.email}</div>
-      </div>
-      {canManage ? (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <select
-            aria-label={`Role for ${member.email}`}
-            value={member.role}
-            onChange={(e) => onChangeRole(member.user_id, e.target.value as TeamRole)}
-            style={selectStyle}
-          >
-            {ASSIGNABLE_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            aria-label={`Remove ${member.email}`}
-            onClick={() => onRemove(member)}
-            style={iconButtonStyle}
-          >
-            <Icons.x size={13} />
-          </button>
-        </div>
-      ) : (
-        <Mono size={8.5} color="var(--mut)">
-          ● {member.role.toUpperCase()}
-        </Mono>
-      )}
-    </div>
-  )
-}
-
-function PendingInviteRow({
-  invite,
-  canManage,
-  onRevoke
-}: {
-  invite: InviteApi
-  canManage: boolean
-  onRevoke: (invite: InviteApi) => void
-}): React.JSX.Element {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        gap: 11,
-        alignItems: 'center',
-        padding: '11px 16px',
-        borderBottom: '1px solid var(--bd)',
-        opacity: 0.75
-      }}
-    >
-      <span
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 99,
-          border: '1px dashed var(--bd)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'var(--mut)'
-        }}
-      >
-        <Icons.team size={13} />
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5 }}>{invite.email}</div>
-        <Mono size={8.5} color="var(--warn)">
-          INVITE PENDING · {invite.role.toUpperCase()}
-        </Mono>
-      </div>
-      {canManage && (
-        <button
-          type="button"
-          aria-label={`Revoke invite for ${invite.email}`}
-          onClick={() => onRevoke(invite)}
-          style={iconButtonStyle}
-        >
-          <Icons.x size={13} />
-        </button>
-      )}
-    </div>
-  )
-}
-
-export interface LiveMembersProps {
-  members: readonly TeamMemberApi[]
-  invites: readonly InviteApi[]
-  myRole: TeamRole | null
-  canManage: boolean
-  onChangeRole: ChangeRoleFn
-  onRemove: RemoveMemberFn
-  onRevoke: RevokeInviteFn
-  /** Header action (Home's Invite teammate lives here for managers). */
-  onInvite?: () => void
-}
-
-/** The MEMBERS card: roster + pending invites. Removing a member and revoking
- *  an invite are CONFIRMED with the person named (§7: an irreversible access
- *  change never runs on a reflex click); every refusal is shown inline. */
-export function LiveMembers({
-  members,
-  invites,
-  myRole,
-  canManage,
-  onChangeRole,
-  onRemove,
-  onRevoke,
-  onInvite
-}: LiveMembersProps): React.JSX.Element {
-  const [confirm, setConfirm] = useState<PendingConfirm>(null)
-  const [error, setError] = useState<string | null>(null)
-  const report = (outcome: MemberOutcome): boolean => {
-    setError(memberFailureText(outcome))
-    return outcome.ok
-  }
-  const changeRole = (userId: string, role: TeamRole): void => {
-    void onChangeRole(userId, role).then(report)
-  }
-  const confirmed = async (): Promise<boolean | { message: string }> => {
-    if (!confirm) return false
-    const outcome =
-      confirm.kind === 'remove'
-        ? await onRemove(confirm.member.user_id)
-        : await onRevoke(confirm.invite.id)
-    return outcome.ok ? true : { message: MEMBER_FAILURE[outcome.reason] }
-  }
-  return (
-    <Card pad={0}>
-      <MembersHeader
-        members={members}
-        invites={invites}
-        canManage={canManage}
-        onInvite={onInvite}
-      />
-      {members.map((m) => (
-        <MemberRow
-          key={m.user_id}
-          member={m}
-          canManage={canManage && m.role !== 'owner'}
-          onChangeRole={changeRole}
-          onRemove={(member) => setConfirm({ kind: 'remove', member })}
-        />
-      ))}
-      {invites.map((inv) => (
-        <PendingInviteRow
-          key={inv.id}
-          invite={inv}
-          canManage={canManage}
-          onRevoke={(invite) => setConfirm({ kind: 'revoke', invite })}
-        />
-      ))}
-      {error && (
-        <div role="alert" style={{ padding: '10px 16px', fontSize: 11.5, color: 'var(--err)' }}>
-          {error}
-        </div>
-      )}
-      <div style={{ padding: '12px 16px', fontSize: 11, color: 'var(--mut)', lineHeight: 1.55 }}>
-        {myRole === 'viewer'
-          ? 'You have view access to this team.'
-          : 'Teammates are notified when their changes cross into your domains.'}
-      </div>
-      <MembershipConfirmation
-        confirm={confirm}
-        onClose={() => setConfirm(null)}
-        confirmed={confirmed}
-      />
-    </Card>
-  )
-}
-
-const INVITE_FAILURE: Record<Exclude<InviteOutcome, { ok: true }>['reason'], string> = {
+export const INVITE_FAILURE: Record<Exclude<InviteOutcome, { ok: true }>['reason'], string> = {
   plan_limit: '',
   already_member: 'That person is already on this team.',
   invite_pending: 'An invite for that email is already pending — revoke it to send a new one.',
@@ -432,35 +206,6 @@ export function InviteModal({
   )
 }
 
-function MembersHeader({
-  members,
-  invites,
-  canManage,
-  onInvite
-}: Pick<LiveMembersProps, 'members' | 'invites' | 'canManage' | 'onInvite'>): React.JSX.Element {
-  return (
-    <div
-      style={{
-        padding: '10px 16px',
-        borderBottom: '1px solid var(--bd)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}
-    >
-      <Mono size={9.5}>
-        MEMBERS · {members.length}
-        {invites.length > 0 ? ` · ${invites.length} PENDING` : ''}
-      </Mono>
-      {canManage && onInvite && (
-        <Button kind="bare" size="sm" onClick={onInvite}>
-          <Icons.plus size={12} /> Invite
-        </Button>
-      )}
-    </div>
-  )
-}
-
 function InviteEmail({
   email,
   setEmail,
@@ -495,7 +240,7 @@ function InviteEmail({
   )
 }
 
-function MembershipConfirmation({
+export function MembershipConfirmation({
   confirm,
   onClose,
   confirmed

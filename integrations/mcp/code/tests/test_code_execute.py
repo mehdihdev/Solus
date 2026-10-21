@@ -3,6 +3,7 @@ resolved inside the workspace or against the pinned roots), scrubbed child
 env (only PATH/HOME/LANG/TMPDIR/VIRTUAL_ENV — never a secret), 16 KiB tails,
 timeout → process-group kill, never raises; plus the real runner."""
 
+import dataclasses
 import os
 import subprocess
 import sys
@@ -13,10 +14,14 @@ from typing import Any
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
+from sandbox_fixture import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 execute = overlay_module("execute")
 plan = overlay_module("plan")
+sandbox = overlay_module("sandbox")
+profiles = overlay_module("profiles")
 
 
 class Recorder:
@@ -80,9 +85,14 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
     recorder = Recorder()
     planned = _run_plan(ws)
     result = execute.execute_plan(ws, planned, runner=recorder)
-    ((argv, cwd, env, timeout),) = recorder.calls
-    assert argv == [str(ws / ".venv" / "bin" / "python"), "a.py"]
+    ((argv, cwd, _runner_env, timeout),) = recorder.calls
+    # The sandbox prefix is platform-specific (Linux adds `--env-fd N`); the tail is exact.
+    expected = sandbox.wrap(FAKE_KIND, [str(ws / ".venv" / "bin" / "python"), "a.py"], workspace=ws)
+    assert argv[0] == expected[0] and argv[-2:] == expected[-2:]
     assert cwd == ws and timeout == 7
+    prepared = execute.prepare(ws, planned)
+    assert not isinstance(prepared, str)
+    env = prepared.child_env
     assert env["VIRTUAL_ENV"] == str(ws / ".venv") and "GITHUB_TOKEN" not in env
     assert result == {
         "ok": True,
@@ -94,15 +104,20 @@ def test_executes_exactly_the_plan_with_a_resolved_interpreter(ws: Path, scrub: 
         "duration_ms": result["duration_ms"],
         "timed_out": False,
         "reason": None,
+        "sandbox": FAKE_KIND,
+        "git_metadata_changed": False,
     }
     assert isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0
 
 
 def test_bare_tool_names_resolve_against_the_pinned_roots_only(ws: Path) -> None:
     recorder = Recorder()
-    planned = plan.plan_action(ws, "install", {"packages": ["numpy"]}, which=lambda n: "/opt/x/uv")
-    execute.execute_plan(ws, planned, runner=recorder, which=lambda n: "/opt/roots/uv")
-    assert recorder.calls[0][0][0] == "/opt/roots/uv"
+    roots = lambda n: "/opt/roots/uv"  # noqa: E731
+    planned = plan.plan_action(ws, "install", {"packages": ["numpy"]}, which=roots)
+    execute.execute_plan(ws, planned, runner=recorder, which=roots)
+    assert recorder.calls[0][0][-7:-5] == ["/opt/roots/uv", "pip"]
+    moved = execute.execute_plan(ws, planned, runner=Recorder(), which=lambda n: "/opt/x/uv")
+    assert moved["reason"] == "the program changed after it was planned"
     missing = execute.execute_plan(ws, planned, runner=Recorder(), which=lambda n: None)
     assert missing["ok"] is False and missing["reason"] == "executable not found: uv"
 
@@ -172,6 +187,8 @@ def test_refused_plans_and_spawn_failures_answer_the_refusal_shape(ws: Path) -> 
         "duration_ms",
         "timed_out",
         "reason",
+        "sandbox",
+        "git_metadata_changed",
     }
 
 
@@ -229,3 +246,296 @@ def test_default_runner_stdin_is_closed(tmp_path: Path) -> None:
     code = "import sys; print(repr(sys.stdin.read()))"
     outcome = execute.default_runner([sys.executable, "-c", code], tmp_path, _env(), 30)
     assert outcome.stdout.strip() == b"''"
+
+
+# --- SOLUSDEV-317: sandbox, profiles, cwd, git metadata ------------------------------
+
+
+def _exec_plan(ws: Path, **fields: Any) -> Any:
+    tool = ws / "tools" / "t.sh"
+    tool.parent.mkdir(exist_ok=True)
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    base = plan.Plan(
+        action="exec", ok=True, argv=[str(tool), "x"], sandbox=FAKE_KIND, timeout_seconds=5
+    )
+    return dataclasses.replace(base, **fields)
+
+
+def test_a_plan_without_sandbox_never_runs(ws: Path) -> None:
+    recorder = Recorder()
+    result = execute.execute_plan(ws, _exec_plan(ws, sandbox=None), runner=recorder)
+    assert recorder.calls == [] and result["reason"].startswith("sandbox unavailable")
+
+
+def test_absolute_program_cwd_and_profile_environment(ws: Path, scrub: None) -> None:
+    (ws / "sub").mkdir()
+    profile = profiles.Profile(
+        name="ros",
+        setup_file="/opt/ros/x.bash",
+        extends=None,
+        captured_at="t",
+        variables=(("PATH", "/opt/ros/bin:/usr/bin:/bin"), ("ROS_DISTRO", "jazzy"), ("HOME", "/x")),
+        digest="d",
+    )
+    recorder = Recorder()
+    planned = _exec_plan(ws, cwd="sub", profile=profile, environment=".venv")
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    ((argv, cwd, _runner_env, timeout),) = recorder.calls
+    assert argv[-2:] == [str(ws / "tools" / "t.sh"), "x"] and cwd == ws / "sub"
+    prepared = execute.prepare(ws, planned)
+    assert not isinstance(prepared, str)
+    env = prepared.child_env  # what the command runs with (Linux passes it over --env-fd)
+    assert env["ROS_DISTRO"] == "jazzy" and env["HOME"] == "/home/u"
+    assert env["PATH"] == f"{ws / '.venv' / 'bin'}:/opt/ros/bin:/usr/bin:/bin"
+    assert result["cwd"] == "sub" and result["sandbox"] == FAKE_KIND and timeout == 5
+
+
+def test_git_metadata_change_is_reported(ws: Path) -> None:
+    (ws / ".git" / "hooks").mkdir(parents=True)
+
+    def tamper(*_args: object) -> Any:
+        (ws / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n")
+        return execute.Outcome(0, b"", b"", False)
+
+    assert execute.execute_plan(ws, _exec_plan(ws), runner=tamper)["git_metadata_changed"] is True
+    quiet = execute.execute_plan(ws, _exec_plan(ws), runner=Recorder())
+    assert quiet["git_metadata_changed"] is False
+
+
+def test_moved_cwd_and_missing_program_refuse(ws: Path) -> None:
+    assert (
+        "cwd" in execute.execute_plan(ws, _exec_plan(ws, cwd="gone"), runner=Recorder())["reason"]
+    )
+    missing = _exec_plan(ws, argv=[str(ws / "nope"), "x"])
+    assert "executable not found" in execute.execute_plan(ws, missing, runner=Recorder())["reason"]
+
+
+@pytest.mark.real_sandbox
+def test_real_exec_runs_sandboxed(tmp_path: Path) -> None:
+    ws = tmp_path.resolve()
+    tool = ws / "w.sh"
+    tool.write_text("#!/bin/sh\necho hi > inside.txt && echo done\necho x > .git/config || true\n")
+    tool.chmod(0o755)
+    (ws / ".git").mkdir()
+    (ws / ".git" / "config").write_text("[core]\n")
+    kind = sandbox.probe()[0]
+    planned = plan.Plan(action="exec", ok=True, argv=[str(tool)], sandbox=kind, timeout_seconds=30)
+    result = execute.execute_plan(ws, planned)
+    assert result["ok"] is True and result["stdout_tail"] == "done\n", result
+    assert (ws / "inside.txt").read_text() == "hi\n"
+    assert result["git_metadata_changed"] is (kind != "sandbox-exec")
+
+
+def _profile_with(variables: tuple[tuple[str, str], ...]) -> Any:
+    return profiles.Profile(
+        name="p", setup_file="/x.sh", extends=None, captured_at="t", variables=variables, digest="d"
+    )
+
+
+def test_loader_injection_variables_never_reach_a_child(ws: Path, scrub: None) -> None:
+    hostile = _profile_with(
+        (
+            ("LD_PRELOAD", "/evil.so"),
+            ("LD_AUDIT", "x"),
+            ("DYLD_INSERT_LIBRARIES", "x"),
+            ("GCONV_PATH", "/evil"),
+            ("LD_LIBRARY_PATH", "/opt/ros/lib"),
+        )
+    )
+    env = execute.child_env(ws, _exec_plan(ws, profile=hostile))
+    assert not {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "GCONV_PATH"} & set(env)
+    assert env["LD_LIBRARY_PATH"] == "/opt/ros/lib"
+
+
+def test_linux_helper_gets_a_fixed_env_and_the_child_env_over_a_descriptor(
+    ws: Path, scrub: None
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def runner(argv: list[str], cwd: Path, env: dict[str, str], timeout: int) -> Any:
+        fd = int(argv[argv.index("--env-fd") + 1])
+        seen["payload"] = os.pread(fd, 1 << 20, 0)
+        seen["fds"] = execute.sandbox.PASS_FDS.get()
+        seen["fd"], seen["env"] = fd, env
+        return execute.Outcome(0, b"", b"", False)
+
+    profile = _profile_with((("ROS_DISTRO", "jazzy"), ("LD_LIBRARY_PATH", "/opt/ros/lib")))
+    planned = _exec_plan(ws, sandbox="landlock-abi3", profile=profile)
+    result = execute.execute_plan(ws, planned, runner=runner)
+    assert result["ok"] is True, result
+    assert seen["env"] == {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"}
+    assert seen["fds"] == (seen["fd"],)
+    entries = dict(e.split(b"=", 1) for e in seen["payload"].split(b"\0") if e)
+    assert entries[b"ROS_DISTRO"] == b"jazzy" and entries[b"LD_LIBRARY_PATH"] == b"/opt/ros/lib"
+    assert entries[b"HOME"] == b"/home/u" and b"AWS_SECRET_ACCESS_KEY" not in entries
+    with pytest.raises(OSError):
+        os.fstat(seen["fd"])  # closed once the command finished
+
+
+def test_oversized_child_environment_is_refused(ws: Path, scrub: None) -> None:
+    huge = _profile_with(tuple((f"V{i}", "x" * 8000) for i in range(200)))
+    recorder = Recorder()
+    planned = _exec_plan(ws, sandbox="landlock-abi3", profile=huge)
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and "environment too large" in result["reason"]
+
+
+def test_default_runner_kills_the_group_after_the_leader_exits(tmp_path: Path) -> None:
+    code = (
+        "import subprocess, sys\n"
+        f"child = subprocess.Popen([{sys.executable!r}, '-c', 'import time; time.sleep(60)'])\n"
+        "print(child.pid, flush=True)\n"
+    )
+    outcome = execute.default_runner([sys.executable, "-c", code], tmp_path, _env(), 30)
+    assert outcome.exit_code == 0
+    leftover = int(outcome.stdout.split()[0])
+    for _ in range(50):
+        if _process_state(leftover) in ("", "Z"):
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("a descendant outlived the command's process group")
+
+
+def test_pinned_which_refuses_a_program_in_a_writable_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """§9.5: a tool planted in a writable cache by an earlier command never resolves."""
+    home = tmp_path / "home"
+    planted = home / ".cache" / "bin" / "uv"
+    planted.parent.mkdir(parents=True)
+    planted.write_text("#!/bin/sh\n")
+    planted.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(execute, "SEARCH_ROOTS", ("~/.cache/bin",))
+    assert execute.pinned_which("uv") is None
+
+
+@pytest.mark.real_writable_roots
+def test_resolve_executable_refuses_a_venv_interpreter_linked_into_tmp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ws = tmp_path / "ws"
+    planted = tmp_path / "planted-python"
+    planted.write_text("#!/bin/sh\n")
+    planted.chmod(0o755)
+    (ws / ".venv" / "bin").mkdir(parents=True)
+    (ws / ".venv" / "bin" / "python").symlink_to(planted)
+    assert execute.resolve_executable(ws, ".venv/bin/python") is None
+    assert execute.resolve_executable(ws, str(planted)) is None
+    inside = ws / "bin" / "tool.sh"
+    inside.parent.mkdir()
+    inside.write_text("#!/bin/sh\n")
+    inside.chmod(0o755)
+    assert execute.resolve_executable(ws, "bin/tool.sh") == str(inside)
+
+
+def test_runner_functions_stay_small() -> None:
+    """Phase 4 LOW: default_runner is split into focused pieces (< 50 lines each)."""
+    import inspect
+
+    for function in (execute.default_runner, execute._supervise, execute._spawn):
+        assert len(inspect.getsource(function).splitlines()) < 50, function.__name__
+
+
+# --- §10.2: a workspace shell script through the real macOS sandbox ------------------
+
+
+@pytest.mark.real_sandbox
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS sandbox-exec write confinement")
+def test_real_workspace_shell_scripts_run_sandboxed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = tmp_path.resolve()
+    ws, home, tmp = base / "ws", base / "home", base / "tmp"
+    for directory in (ws / "scripts", home, tmp):
+        directory.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("TMPDIR", str(tmp))
+    # Only this test's own temp dir is writable, so a sibling of the workspace is not.
+    monkeypatch.setattr(sandbox, "default_tmpdir", lambda: tmp)
+    outside = base / "outside.txt"
+    (ws / "scripts" / "hello.sh").write_text('echo "hello $1"\necho made > made.txt\n')
+    (ws / "scripts" / "escape.sh").write_text(f"echo x > {outside} 2>/dev/null || echo denied\n")
+
+    def run(script: str, *args: str) -> Any:
+        planned = plan.plan_action(
+            ws, "exec", {"argv": ["bash", script, *args]}, which=lambda _n: None
+        )
+        assert planned.ok, planned.reason
+        return execute.execute_plan(ws, planned)
+
+    hello = run("scripts/hello.sh", "bench")
+    assert hello["ok"] is True and hello["stdout_tail"] == "hello bench\n", hello
+    assert (ws / "made.txt").read_text() == "made\n"
+    escape = run("scripts/escape.sh")
+    assert escape["stdout_tail"] == "denied\n", escape
+    assert not outside.exists()
+
+
+# --- TOCTOU: the program must be the one that was planned ------------------------------
+
+
+def _planned_tool(ws: Path) -> Any:
+    tools = ws / "tools"
+    tools.mkdir()
+    for name in ("a.sh", "b.sh"):
+        (tools / name).write_text("#!/bin/sh\n")
+        (tools / name).chmod(0o755)
+    planned = plan.plan_action(ws, "exec", {"argv": ["./tools/a.sh"]}, which=lambda _n: None)
+    assert planned.ok and planned.program_scope == "workspace", planned.reason
+    return planned
+
+
+def test_an_unchanged_planned_program_runs(ws: Path) -> None:
+    recorder = Recorder()
+    result = execute.execute_plan(ws, _planned_tool(ws), runner=recorder)
+    assert len(recorder.calls) == 1 and result["ok"] is True
+
+
+def test_a_program_whose_realpath_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = _planned_tool(ws)
+    swapped = ws / "tools" / "a.sh"  # the planned path now leads to another file
+    swapped.unlink()
+    swapped.symlink_to(ws / "tools" / "b.sh")
+    recorder = Recorder()
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and result["reason"] == "the program changed after it was planned"
+
+
+def test_a_program_whose_scope_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = dataclasses.replace(_planned_tool(ws), program_scope="system")
+    recorder = Recorder()
+    result = execute.execute_plan(ws, planned, runner=recorder)
+    assert recorder.calls == [] and result["reason"] == "the program changed after it was planned"
+
+
+def test_a_venv_interpreter_still_runs_through_its_link(ws: Path, scrub: None) -> None:
+    recorder = Recorder()
+    planned = _run_plan(ws)
+    assert planned.program_scope == "workspace"
+    execute.execute_plan(ws, planned, runner=recorder)
+    ((argv, _cwd, _env, _timeout),) = recorder.calls
+    assert str(ws / ".venv" / "bin" / "python") in argv  # never the realpath
+
+
+def test_a_profile_whose_scope_changed_after_planning_is_refused(ws: Path) -> None:
+    planned = _planned_tool(ws)
+    profile = profiles.Profile(
+        name="p",
+        setup_file="/x.sh",
+        extends=None,
+        captured_at="t",
+        variables=(("PYTHONPATH", "/opt/lib"),),
+        digest="d",
+    )
+    system = dataclasses.replace(planned, program_scope="system", profile=profile)
+    assert execute.execute_plan(ws, system, runner=Recorder())["reason"] == (
+        "the program changed after it was planned"
+    )
+    overlay = dataclasses.replace(profile, variables=(("PYTHONPATH", str(ws / "lib")),))
+    kept = dataclasses.replace(planned, profile=overlay)
+    recorder = Recorder()
+    assert execute.execute_plan(ws, kept, runner=recorder)["ok"] is True

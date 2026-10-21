@@ -28,6 +28,8 @@ function billing(overrides: Partial<billingData.BillingData> = {}): billingData.
     status: 'ready',
     unlimited: false,
     subscription: null,
+    summary: null,
+    asOf: 0,
     credits: 9059,
     packs: [
       { price_id: 'pk10', credits: 1000, usd: 10 },
@@ -39,6 +41,7 @@ function billing(overrides: Partial<billingData.BillingData> = {}): billingData.
     startCheckout: vi.fn(),
     buyPack: vi.fn(),
     openPortal: vi.fn(),
+    openPortalFlow: vi.fn(),
     refresh: vi.fn(),
     ...overrides
   }

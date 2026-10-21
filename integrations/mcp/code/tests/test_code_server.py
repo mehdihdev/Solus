@@ -9,11 +9,14 @@ import pytest
 from mcp.server.fastmcp.exceptions import ToolError
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
+from sandbox_fixture import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 server = overlay_module("server")
 roster = overlay_module("roster")
 execute = overlay_module("execute")
+sandbox = overlay_module("sandbox")
 
 
 def _venv(root: Path) -> None:
@@ -83,9 +86,16 @@ async def test_git_tools_have_explicit_schemas_and_protocol_refusals(
 
 
 @pytest.mark.parametrize("arguments", [{"limit": 1, "unexpected": True}, {"limit": "1"}])
-async def test_git_transport_rejects_extra_fields_and_type_coercion(arguments, monkeypatch) -> None:
-    reached = []
-    monkeypatch.setattr(server, "_git_call", lambda *_args, **kwargs: reached.append(kwargs) or {})
+async def test_git_transport_rejects_extra_fields_and_type_coercion(
+    arguments: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reached: list[dict[str, Any]] = []
+
+    def record(*_args: object, **kwargs: Any) -> dict[str, Any]:
+        reached.append(kwargs)
+        return {}
+
+    monkeypatch.setattr(server, "_git_call", record)
     with pytest.raises(ToolError):
         await server.build_server().call_tool("git_log", arguments)
     assert reached == []
@@ -101,6 +111,14 @@ async def test_plan_over_the_wire(ws: Path) -> None:
         "cwd": ".",
         "ok": True,
         "reason": None,
+        "sandbox": {
+            "kind": FAKE_KIND,
+            "writable": list(sandbox.WRITABLE_LABELS),
+            "limitations": sandbox.limitations(FAKE_KIND),
+        },
+        "profile": None,
+        "environment": ".venv",
+        "program_scope": "workspace",
     }
     _content, refused = await built.call_tool("plan", {"action": "run", "args": {"script": "../x"}})
     assert refused["ok"] is False and refused["argv"] == [] and refused["reason"]

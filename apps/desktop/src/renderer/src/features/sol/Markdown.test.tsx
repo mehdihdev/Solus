@@ -2,11 +2,11 @@
 // path (CLAUDE.md §7 — model output is untrusted). These tests pin the security
 // posture, not the typography: raw HTML stays inert, links never become
 // anchors, images never load.
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { SolMarkdown } from './Markdown'
+import { COMPONENTS, SolMarkdown } from './Markdown'
 import { buildBenchMarkdown } from './streamBench'
 
 describe('SolMarkdown', () => {
@@ -24,6 +24,27 @@ describe('SolMarkdown', () => {
     render(<SolMarkdown content={'```python\nprint("hi")\n```'} />)
     const code = screen.getByText('print("hi")')
     expect(code.closest('pre')).not.toBeNull()
+  })
+
+  it('gives fenced code the shared code block with a Copy code button', () => {
+    render(<SolMarkdown content={'Run:\n\n```sh\nls -la\npwd\n```\n\nthen `inline`'} />)
+    const code = screen.getByText(/ls -la/)
+    expect(code.closest('.code-block')).not.toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Copy code' })).toHaveLength(1)
+    // Inline code stays inline: no block, no button.
+    expect(screen.getByText('inline').closest('.code-block')).toBeNull()
+  })
+
+  it('copies the code block text without the trailing fence newline', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true
+    })
+    render(<SolMarkdown content={'```\n<b>a</b>\nb\n```'} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy code' }))
+    expect(writeText).toHaveBeenCalledWith('<b>a</b>\nb')
+    expect(document.querySelector('b')).toBeNull()
   })
 
   it('never parses raw HTML from model output into the DOM', () => {
@@ -64,7 +85,7 @@ describe('SolMarkdown', () => {
 describe('SolMarkdown two-parse streaming render', () => {
   function oneParse(content: string): string {
     const { container, unmount } = render(
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={COMPONENTS}>
         {content}
       </ReactMarkdown>
     )

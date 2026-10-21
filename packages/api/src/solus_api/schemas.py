@@ -2,17 +2,16 @@
 mutating endpoint (CLAUDE.md §7 input handling)."""
 
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Literal
+from datetime import datetime
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
-from solus_api.billing.entitlements import effective_limits
+from solus_api.billing.entitlements import effective_limits, is_local_trial_expired
 from solus_api.billing.plans import CHECKOUTABLE_PLANS
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
-from solus_api.core.config import Settings
 from solus_api.models import (
     SOL_CUSTOM_INSTRUCTION_CAP,
     AccountConnection,
@@ -44,11 +43,13 @@ from solus_api.models import (
     SubscriptionStatus,
     Sync,
     Team,
+    TeamInstallation,
     TeamKind,
     User,
     ensure_utc,
 )
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
+from solus_api.services.github_identity import GITHUB_LOGIN_PATTERN
 
 
 class StrictModel(BaseModel):
@@ -131,10 +132,34 @@ class MemberRoleUpdate(StrictModel):
     role: Literal["owner", "admin", "member", "viewer"]
 
 
+_MAX_GITHUB_ID = 2**63 - 1
+
+
 class InviteCreate(StrictModel):
-    email: EmailStr
+    """Exactly one target: an `email`, or a GitHub org member (`github_user_id` + display-only
+    `github_login`, docs/api/github-orgs.md)."""
+
+    email: EmailStr | None = None
+    github_user_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_GITHUB_ID)] | None = None
+    github_login: str | None = None
     # Owner is granted only via the members route, by an existing owner.
     role: Literal["admin", "member", "viewer"] = "member"
+
+    @field_validator("github_login")
+    @classmethod
+    def _login_shape(cls, value: str | None) -> str | None:
+        if value is not None and GITHUB_LOGIN_PATTERN.fullmatch(value) is None:
+            raise ValueError("not a valid GitHub login")
+        return value
+
+    @model_validator(mode="after")
+    def _exactly_one_target(self) -> "InviteCreate":
+        has_github = self.github_user_id is not None or self.github_login is not None
+        if has_github and (self.github_user_id is None or self.github_login is None):
+            raise ValueError("github_user_id and github_login must be sent together")
+        if (self.email is not None) == has_github:
+            raise ValueError("send exactly one of email or github_user_id + github_login")
+        return self
 
 
 class ProjectCreate(StrictModel):
@@ -222,6 +247,9 @@ class SourceCreate(StrictModel):
     # authorized (Home), instead of running a second OAuth. Exclusive with
     # `token`; must be the caller's own connection for this provider.
     connection_id: str | None = Field(default=None, max_length=64)
+    # SOLUSDEV-216: bind to the team's GitHub App installation instead of a personal
+    # token or connection (github only; exclusive with `token` and `connection_id`).
+    installation: bool = False
 
     _name_not_blank = field_validator("name")(_not_blank)
     _config_bounded = field_validator("config")(_bound_bulk_config)
@@ -316,6 +344,20 @@ def _account_label(account: Source | AccountConnection) -> str | None:
     return account.account_login
 
 
+def _local_remote(source: Source) -> dict[str, str] | None:
+    """SOLUSDEV-317: a local folder's git origin as the sync normalised it
+    (`owner/name` + host kind) so Home can mark it as a clone of the project's
+    GitHub/GitLab repo. Only these two cursor values leave the server — never
+    the raw remote URL, the digest or the detected list."""
+    if source.type is not SourceType.LOCAL:
+        return None
+    cursor = source.cursor or {}
+    repo, host = cursor.get("remote"), cursor.get("host")
+    if not isinstance(repo, str) or not repo or not isinstance(host, str) or not host:
+        return None
+    return {"repo": repo, "host": host}
+
+
 def serialize_source(
     source: Source,
     *,
@@ -352,6 +394,9 @@ def serialize_source(
     }
     if entity_count is not None:
         data["entity_count"] = entity_count
+    remote = _local_remote(source)
+    if remote is not None:
+        data["remote"] = remote
     if quota is not None:
         # SOLUSDEV-167 acceptance #5: the degraded state, visible BEFORE the wall.
         #
@@ -484,14 +529,18 @@ def serialize_sync(sync: Sync) -> dict[str, Any]:
     }
 
 
-def serialize_team_summary(team: Team, role: Role, settings: Settings) -> dict[str, Any]:
+def serialize_team_summary(
+    team: Team, role: Role, trial_ends_at: datetime | None
+) -> dict[str, Any]:
+    """`trial_ends_at` is the REQUESTING user's own trial end (SOLUSDEV-236) — the
+    caller passes it from their own subscription, never another member's."""
     return {
         "team_id": team.id,
         "name": team.name,
         "role": role.value,
         "is_personal": team.kind == TeamKind.PERSONAL,
         "plan_status": team.plan_status,
-        "trial_ends_at": ensure_utc(team.created_at) + timedelta(days=settings.trial_days),
+        "trial_ends_at": trial_ends_at,
     }
 
 
@@ -535,6 +584,8 @@ def serialize_invite(invite: Invite, *, include_token: bool = False) -> dict[str
         "id": invite.id,
         "team_id": invite.team_id,
         "email": invite.email,
+        "github_user_id": invite.github_user_id,
+        "github_login": invite.github_login,
         "role": invite.role.value,
         "status": invite.status.value,
         "created_at": invite.created_at,
@@ -544,6 +595,63 @@ def serialize_invite(invite: Invite, *, include_token: bool = False) -> dict[str
         # Secret shown once at creation (§2.1 pattern) — never on listings.
         data["token"] = invite.token
     return data
+
+
+class InstallationLinkedBy(BaseModel):
+    user_id: UUID
+    name: str
+
+
+class TeamInstallationRead(BaseModel):
+    """A team's linked GitHub App installation (docs/api/github-orgs.md §2). Never
+    carries a token, key or JWT."""
+
+    id: UUID
+    provider: str
+    account_login: str
+    account_type: str
+    account_avatar_url: str | None
+    repository_selection: str
+    status: str
+    linked_by: InstallationLinkedBy | None
+    linked_at: datetime
+    html_url: str
+    manage_url: str
+
+
+def _installation_manage_url(row: TeamInstallation) -> str:
+    base = row.web_base_url.rstrip("/")
+    if row.account_type == "Organization":
+        return (
+            f"{base}/organizations/{row.account_login}"
+            f"/settings/installations/{row.external_installation_id}"
+        )
+    return f"{base}/settings/installations/{row.external_installation_id}"
+
+
+def serialize_team_installation(
+    row: TeamInstallation, linked_by_user: User | None
+) -> TeamInstallationRead:
+    linked_by = (
+        InstallationLinkedBy(
+            user_id=linked_by_user.id, name=linked_by_user.display_name or linked_by_user.email
+        )
+        if linked_by_user is not None
+        else None
+    )
+    return TeamInstallationRead(
+        id=row.id,
+        provider=row.provider,
+        account_login=row.account_login,
+        account_type=row.account_type,
+        account_avatar_url=row.account_avatar_url,
+        repository_selection=row.repository_selection,
+        status=row.status.value,
+        linked_by=linked_by,
+        linked_at=ensure_utc(row.linked_at),
+        html_url=f"{row.web_base_url.rstrip('/')}/{row.account_login}",
+        manage_url=_installation_manage_url(row),
+    )
 
 
 def serialize_project(
@@ -727,6 +835,11 @@ class SubscriptionRead(_SoftDeletable):
     stripe_subscription_id: str | None
     seat_count: int | None
     custom_price_per_seat: int | None
+    # Cadence of the Stripe Price and the raw renewal date (SOLUSDEV-236); null when unlinked.
+    billing_interval: str | None
+    current_period_end: datetime | None
+    # Same predicate as the spend gate (SOLUSDEV-236); computed, not stored.
+    trial_expired: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -735,8 +848,14 @@ class SubscriptionRead(_SoftDeletable):
         comp) with the staff `limits_override` merged on top (ADR-023). Staff-only fields
         (`limits_override`, `comp_*`) are deliberately not exposed."""
         if isinstance(data, Subscription):
-            values = {name: getattr(data, name) for name in cls.model_fields}
-            return {**values, "limits": effective_limits(data)}
+            values = {
+                name: getattr(data, name) for name in cls.model_fields if name != "trial_expired"
+            }
+            return {
+                **values,
+                "limits": effective_limits(data),
+                "trial_expired": is_local_trial_expired(data),
+            }
         return data
 
 
@@ -767,8 +886,59 @@ class CheckoutSessionRead(BaseModel):
     url: str
 
 
+class PortalSessionCreate(StrictModel):
+    """Optional body of POST /billing/portal-session (SOLUSDEV-236). No ids: the
+    subscription is always derived server-side from the caller's own row."""
+
+    flow: Literal["update", "cancel"] | None = None
+
+
 class PortalSessionRead(BaseModel):
     url: str
+
+
+class BillingTrialRead(BaseModel):
+    """Trial state derived at read time (SOLUSDEV-236)."""
+
+    state: Literal["active", "expired", "none"]
+    ends_at: datetime | None
+
+
+class BillingInvoiceRead(BaseModel):
+    amount_cents: int
+    currency: str
+    date: datetime
+
+
+class BillingCardRead(BaseModel):
+    """Brand and last four digits only (CLAUDE.md section 7)."""
+
+    brand: str
+    last4: str
+
+
+class BillingPriceRead(BaseModel):
+    plan: PlanType
+    interval: Literal["month", "year"]
+    amount_cents: int
+    currency: str
+
+
+class BillingSummaryRead(BaseModel):
+    """GET /billing/summary read model for the Billing screen (SOLUSDEV-236). Carries no
+    Stripe object ids; Stripe-derived fields are null in degraded mode."""
+
+    plan: PlanType
+    status: SubscriptionStatus
+    billing_interval: str | None
+    current_period_end: datetime | None
+    cancel_at: datetime | None
+    trial: BillingTrialRead
+    next_invoice: BillingInvoiceRead | None
+    payment_method: BillingCardRead | None
+    prices: list[BillingPriceRead] | None
+    packs_available: bool
+    stripe_status: Literal["ok", "unavailable", "unconfigured"]
 
 
 class CreditBalanceView(BaseModel):

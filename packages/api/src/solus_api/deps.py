@@ -59,9 +59,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger("solus.deps")
 
 PERSONAL_TEAM_NAME = "Personal"
-# Every user starts on a 14-day trial of their chosen plan (ADR-032); onboarding picks it.
-TRIAL_DAYS = 14
-
 _bearer = HTTPBearer(auto_error=False)
 
 
@@ -144,7 +141,7 @@ StripeGatewayDep = Annotated[StripeGateway, Depends(get_stripe_gateway)]
 
 
 async def _provision_user(
-    session: AsyncSession, claims: TokenClaims, *, trial_credit_grant: int = 0
+    session: AsyncSession, claims: TokenClaims, *, trial_days: int, trial_credit_grant: int = 0
 ) -> User:
     """First authenticated request: create the user and their personal team
     (§1.3 — this is what makes individual→team an upgrade, not a migration)."""
@@ -153,7 +150,8 @@ async def _provision_user(
     session.add_all([user, team])
     await session.flush()
     session.add(Membership(team_id=team.id, user_id=user.id, role=Role.OWNER))
-    # Start every user on a 14-day BASIC trial (ADR-032). Enforcement reads `limits` as
+    # Start every user on a BASIC trial (ADR-032) whose length is the ONE trial config
+    # value (`stripe_trial_days`, ADR-024 / SOLUSDEV-236). Enforcement reads `limits` as
     # data; the plan is chosen/changed via PATCH /users/me/subscription during onboarding.
     session.add(
         Subscription(
@@ -161,7 +159,7 @@ async def _provision_user(
             plan=PlanType.BASIC,
             status=SubscriptionStatus.TRIALING,
             limits=default_limits(PlanType.BASIC),
-            expires_at=utcnow() + timedelta(days=TRIAL_DAYS),
+            expires_at=utcnow() + timedelta(days=trial_days),
         )
     )
     await session.commit()
@@ -227,7 +225,10 @@ async def get_current_user(claims: ClaimsDep, session: SessionDep, settings: Set
         if tombstoned is not None:
             raise APIError(401, "account_deleted", "This account has been deleted")
         user = await _provision_user(
-            session, claims, trial_credit_grant=settings.trial_credit_grant
+            session,
+            claims,
+            trial_days=settings.stripe_trial_days,
+            trial_credit_grant=settings.trial_credit_grant,
         )
     return user
 

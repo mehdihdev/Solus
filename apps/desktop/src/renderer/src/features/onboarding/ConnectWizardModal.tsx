@@ -22,9 +22,11 @@ import {
   type WizardStep
 } from './connectSteps'
 import type { CatalogEntry } from './integrationCatalog'
-import { integrationLogo } from './integrationLogos'
+import { integrationLogo, logoClass } from './integrationLogos'
 import { allowsMultipleFiles, exportFileAccept, exportFilePrompt } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
+import { ACCOUNT_ENTRY_ID, SIGN_IN_ENTRY_ID } from './teamRepoSection'
+import { stageTeamPick, useTeamPicker, type TeamPicker } from './useConnectWizard'
 
 const LINK_DOTS = 6
 
@@ -154,7 +156,12 @@ export function LinkHeader({
       </span>
       <EndpointMark label={entry.name} busy={status === 'busy'}>
         {logo ? (
-          <img src={logo} alt="" style={{ width: 34, height: 34, objectFit: 'contain' }} />
+          <img
+            src={logo}
+            alt=""
+            className={logoClass(entry.id)}
+            style={{ width: 34, height: 34, objectFit: 'contain' }}
+          />
         ) : (
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 500 }}>
             {entry.mark}
@@ -351,33 +358,93 @@ function ExportFilePick({
   )
 }
 
+/** The team lookup decides which path Connect takes: until it settles the
+ *  action is disabled, so a click can never start the personal path early. */
+function ConnectPending({ entry }: { entry: CatalogEntry }): React.JSX.Element {
+  return (
+    <>
+      <Button kind="primary" size="sm" disabled>
+        Connect {entry.name}
+      </Button>
+      <div style={{ marginTop: 8 }}>
+        <Spinner size={12} />
+      </div>
+    </>
+  )
+}
+
+/** The plain Connect button (legacy wizard), with the linked-account line and,
+ *  after a failed team lookup, a non-fatal notice. */
+function ConnectAction({
+  entry,
+  linkedAccount,
+  notice,
+  onBegin
+}: Pick<ConnectWizardModalProps, 'entry' | 'linkedAccount' | 'onBegin'> & {
+  notice: string | null
+}): React.JSX.Element {
+  return (
+    <>
+      <Button kind="primary" size="sm" onClick={onBegin}>
+        Connect {entry.name}
+      </Button>
+      {notice && (
+        <div role="status" style={{ marginTop: 8, fontSize: 11, color: 'var(--mut)' }}>
+          {notice}
+        </div>
+      )}
+      {linkedAccount && (
+        <div
+          data-testid="cw-linked-account"
+          style={{ marginTop: 8, fontSize: 11, color: 'var(--mut)' }}
+        >
+          Using your linked account{linkedAccount.login ? ` · ${linkedAccount.login}` : ''}
+        </div>
+      )}
+    </>
+  )
+}
+
 /** The step-zero call to action: pick the export file(s), or start the OAuth flow. */
 function IdleAction({
   entry,
   linkedAccount,
+  picker,
   onBegin,
   onPickFiles,
   onClose
 }: Pick<
   ConnectWizardModalProps,
   'entry' | 'linkedAccount' | 'onBegin' | 'onPickFiles' | 'onClose'
->): React.JSX.Element {
+> & { picker: TeamPicker }): React.JSX.Element {
   if (entry.mode === 'local-bridge') return <BridgeAction entry={entry} onClose={onClose} />
+  if (entry.mode === 'oauth' && picker.loading) return <ConnectPending entry={entry} />
+  if (entry.mode === 'oauth' && picker.sections) {
+    // A team repo is staged for begin(); the account entries are the unchanged
+    // linked-account / sign-in paths, which begin() already resolves.
+    return (
+      <SelectionPicker
+        items={[]}
+        sections={picker.sections}
+        paging={picker.paging ?? undefined}
+        onSelect={(items) => {
+          const item = items?.[0]
+          if (!item) return
+          const isAccountEntry = item.id === ACCOUNT_ENTRY_ID || item.id === SIGN_IN_ENTRY_ID
+          if (!isAccountEntry) stageTeamPick(item)
+          onBegin()
+        }}
+      />
+    )
+  }
   if (entry.mode !== 'export-file') {
     return (
-      <>
-        <Button kind="primary" size="sm" onClick={onBegin}>
-          Connect {entry.name}
-        </Button>
-        {linkedAccount && (
-          <div
-            data-testid="cw-linked-account"
-            style={{ marginTop: 8, fontSize: 11, color: 'var(--mut)' }}
-          >
-            Using your linked account{linkedAccount.login ? ` · ${linkedAccount.login}` : ''}
-          </div>
-        )}
-      </>
+      <ConnectAction
+        entry={entry}
+        linkedAccount={linkedAccount}
+        notice={picker.failedNotice}
+        onBegin={onBegin}
+      />
     )
   }
   return <ExportFilePick entry={entry} onPickFiles={onPickFiles} />
@@ -404,6 +471,7 @@ function BusyAction({
         key={state.sourceId}
         items={state.selectable}
         mode={state.selectionMode}
+        label={state.selectionLabel}
         onSelect={onSelect}
         onRefresh={onRefreshSelection}
       />
@@ -430,7 +498,10 @@ function BusyAction({
 
 /** Whatever the current moment needs from the user. */
 function ActionArea(
-  props: ConnectWizardModalProps & { status: 'idle' | 'busy' | 'done' | 'error' }
+  props: ConnectWizardModalProps & {
+    status: 'idle' | 'busy' | 'done' | 'error'
+    picker: TeamPicker
+  }
 ): React.JSX.Element {
   if (props.status === 'done') {
     return (
@@ -442,7 +513,9 @@ function ActionArea(
   if (props.status === 'error') {
     // A committed-export connector retries by picking the file again — its
     // begin() is the OAuth path and would honestly (but uselessly) fail.
-    if (props.entry.mode === 'export-file') return <IdleAction {...props} />
+    // Likewise a team-picker connector: picking again IS the retry.
+    if (props.entry.mode === 'export-file' || props.picker.sections)
+      return <IdleAction {...props} />
     return (
       <Button kind="primary" size="sm" onClick={props.onBegin}>
         Retry
@@ -502,10 +575,26 @@ function CloseButton({ onClose }: { onClose: () => void }): React.JSX.Element {
   )
 }
 
+/** The derived rail, plus the team sections whose presence changes it. The team
+ *  path skips the grant and sign-in like a linked account does — until the user
+ *  actually chooses to sign in with their own account. */
+function useWizardRail(
+  entry: CatalogEntry,
+  scope: WizardScope,
+  linkedAccount: { login: string | null } | null,
+  state: ConnectionState | undefined
+): { steps: readonly WizardStep[]; picker: TeamPicker } {
+  const picker = useTeamPicker(entry, scope, linkedAccount?.login ?? null)
+  const signingIn =
+    state?.phase === 'busy' && (state.stage === 'access' || state.stage === 'authorize')
+  const skipsSignIn = linkedAccount !== null || (picker.sections !== null && !signingIn)
+  return { steps: wizardSteps({ ...entry, scope, linkedAccount: skipsSignIn }), picker }
+}
+
 export function ConnectWizardModal(props: ConnectWizardModalProps): React.JSX.Element {
   const { entry, state, onClose, scope = 'project', linkedAccount = null } = props
   const solMode = useSettingsStore((s) => s.solMode)
-  const steps = wizardSteps({ ...entry, scope, linkedAccount: linkedAccount !== null })
+  const { steps, picker } = useWizardRail(entry, scope, linkedAccount, state)
   const { status, stepIndex } = wizardPosition(steps, state)
   const step = steps[Math.min(stepIndex, steps.length - 1)]
   const { headline, instruction } = wizardCopy(status, step, entry, state, solMode)
@@ -544,7 +633,7 @@ export function ConnectWizardModal(props: ConnectWizardModalProps): React.JSX.El
             }}
           >
             <div style={{ width: 320, maxWidth: '100%' }}>
-              <ActionArea {...props} status={status} />
+              <ActionArea {...props} status={status} picker={picker} />
             </div>
           </div>
         </div>

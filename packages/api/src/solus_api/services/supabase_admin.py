@@ -8,6 +8,8 @@ local dev and the test suite run without a live Supabase project.
 """
 
 import logging
+import re
+from typing import Any
 
 import httpx
 
@@ -16,6 +18,8 @@ from solus_api.core.config import Settings
 logger = logging.getLogger("solus.auth.admin")
 
 _TIMEOUT_SECONDS = 10.0
+#: A Supabase auth user id is a UUID; anything path-shaped is refused before it can reach a URL.
+_SAFE_USER_ID = re.compile(r"[A-Za-z0-9-]{1,64}")
 
 
 class SupabaseAdmin:
@@ -59,6 +63,43 @@ class SupabaseAdmin:
             logger.error("Supabase admin delete_user returned %s", resp.status_code)
             return False
         return True
+
+    async def github_identity(self, user_supabase_id: str) -> int | None:
+        """The numeric GitHub user id linked to this Supabase auth user, read through the
+        admin API (`identities[provider == "github"].id`), or None.
+
+        Server-side proof only: never read from a JWT. Returns None when unconfigured, the id
+        is not a plain auth-user id, or anything goes wrong; it never raises to the caller."""
+        if not self.configured or _SAFE_USER_ID.fullmatch(user_supabase_id) is None:
+            return None
+        url = f"{self._base_url}/auth/v1/admin/users/{user_supabase_id}"
+        headers = {
+            "apikey": self._service_role_key or "",
+            "Authorization": f"Bearer {self._service_role_key or ''}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
+                resp = await client.get(url, headers=headers)
+            if resp.status_code != httpx.codes.OK:
+                logger.warning("Supabase admin github_identity returned %s", resp.status_code)
+                return None
+            return _github_id_from(resp.json())
+        except (httpx.HTTPError, ValueError):
+            logger.warning("Supabase admin github_identity request failed")
+            return None
+
+
+def _github_id_from(body: Any) -> int | None:
+    identities = body.get("identities") if isinstance(body, dict) else None
+    if not isinstance(identities, list):
+        return None
+    for identity in identities:
+        if not isinstance(identity, dict) or identity.get("provider") != "github":
+            continue
+        raw = identity.get("id")
+        if isinstance(raw, str) and raw.isascii() and raw.isdigit() and int(raw) > 0:
+            return int(raw)
+    return None
 
 
 def build_supabase_admin(settings: Settings) -> SupabaseAdmin:

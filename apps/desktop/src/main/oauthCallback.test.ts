@@ -125,3 +125,93 @@ describe('parseOAuthCallback', () => {
     })
   })
 })
+
+// GitHub App install redirect (SOLUSDEV-216): the same loopback, with extra
+// optional query params carried through to the renderer.
+describe('parseOAuthCallback: GitHub App install params', () => {
+  const at = (query: string): ReturnType<typeof parseOAuthCallback> =>
+    parseOAuthCallback(`/auth/callback?state=${STATE}&${query}`, STATE, undefined, 'state')
+
+  it('carries a numeric installation_id and an install setup_action with the code', () => {
+    expect(at('code=abc&installation_id=12345&setup_action=install')).toEqual({
+      code: 'abc',
+      installationId: 12345,
+      setupAction: 'install'
+    })
+  })
+
+  it('accepts update', () => {
+    expect(at('code=abc&installation_id=7&setup_action=update')).toEqual({
+      code: 'abc',
+      installationId: 7,
+      setupAction: 'update'
+    })
+  })
+
+  it('accepts a request redirect that has no installation_id', () => {
+    expect(at('code=abc&setup_action=request')).toEqual({ code: 'abc', setupAction: 'request' })
+  })
+
+  it('omits both fields when GitHub sends neither (plain connector OAuth)', () => {
+    expect(at('code=abc')).toEqual({ code: 'abc' })
+  })
+
+  it.each(['abc', '12x', '-5', '1.5', '0', '', '1e3', '99999999999999999999'])(
+    'rejects a non-numeric or unsafe installation_id %j',
+    (bad) => {
+      expect(
+        at(`code=abc&installation_id=${encodeURIComponent(bad)}&setup_action=install`)
+      ).toEqual({ error: 'Invalid installation_id in callback' })
+    }
+  )
+
+  it.each(['delete', 'INSTALL', '', 'install%20', 'uninstall'])(
+    'rejects a setup_action outside install/update/request: %j',
+    (bad) => {
+      expect(at(`code=abc&installation_id=1&setup_action=${bad}`)).toEqual({
+        error: 'Invalid setup_action in callback'
+      })
+    }
+  )
+
+  it('accepts setup_action=request with no code as a success result', () => {
+    expect(at('setup_action=request')).toEqual({ setupAction: 'request' })
+    expect(at('installation_id=5&setup_action=request')).toEqual({
+      installationId: 5,
+      setupAction: 'request'
+    })
+  })
+
+  it.each(['install', 'update'])('still rejects a missing code for setup_action=%s', (action) => {
+    expect(at(`installation_id=1&setup_action=${action}`)).toEqual({
+      error: 'No authorization code in callback'
+    })
+  })
+
+  it('still rejects a missing code with no setup_action', () => {
+    expect(at('installation_id=1')).toEqual({ error: 'No authorization code in callback' })
+  })
+
+  it('rejects an invalid installation_id on a code-less request', () => {
+    expect(at('installation_id=abc&setup_action=request')).toEqual({
+      error: 'Invalid installation_id in callback'
+    })
+  })
+
+  it('still ignores a mismatched state even with valid install params', () => {
+    expect(
+      parseOAuthCallback(
+        '/auth/callback?state=wrong&code=abc&installation_id=1&setup_action=install',
+        STATE,
+        undefined,
+        'state'
+      )
+    ).toBeNull()
+  })
+
+  it('does not let install params override a provider error', () => {
+    expect(at('error=access_denied&installation_id=1&setup_action=install')).toEqual({
+      error: 'access_denied'
+    })
+  })
+})

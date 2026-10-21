@@ -117,6 +117,39 @@ _SYSTEM: Final = (
 )
 
 
+#: SOLUSDEV-317 (code-command-execution.md): Build mode only — Guide never
+#: proposes execution, and `build_mode_dispatch` refuses it there regardless.
+_COMMAND_NOTE: Final = (
+    "Running commands on the person's machine: code.exec runs ONE program as an argv "
+    "list in the linked folder, inside an OS sandbox. There is no shell — no &&, |, >, "
+    "<, globs, $VAR or ~ — so split work into separate calls and pass cwd instead of "
+    "cd. Give argv[0] as a bare program name (ls, make, colcon, ./scripts/build.sh "
+    "for a workspace script): Solus resolves it on that machine, and system paths "
+    "differ between macOS and Linux, so never guess an absolute path. "
+    "Shells, env/sudo-style wrappers and inline code (python -c, node -e) are "
+    "refused; write a script file and run it instead — a shell script runs as "
+    "bash scripts/build.sh [args] (or sh), with the script first and never bash -c "
+    "or any other shell option. git is refused there too: use "
+    "code.git_status, code.git_log, code.git_diff, code.git_commit and code.git_push. "
+    "For ROS or vendor setup files, "
+    "capture the environment once with code.profile_capture (for example "
+    "/opt/ros/<distro>/setup.bash) and pass that profile to later commands. For things "
+    "that do not exit — ros2 launch, a dev server — use code.process_start and read "
+    "them with code.process_status; stop them with code.process_stop. For programs "
+    'that ask questions or say "Press Enter", start them with code.process_start and '
+    "interactive: true. When one is waiting for input, relay what it asks in plain "
+    "words. A bare Enter (code.process_input with empty text) may be sent when the "
+    "program needs nothing from the person; any typed answer waits for the person's "
+    "approval on its card. Never invent an answer the person has to give. In Build, a "
+    "code.exec of a system program with no risk (no network, install, delete, hardware, "
+    "remote, shell or project code) runs straight away and its result comes back to you "
+    "in this turn; anything else — risky commands, scripts, interpreters, workspace "
+    "programs, processes and profiles — waits for the person's approval on its card. "
+    "Report only what a result says: "
+    "never claim a command ran, passed or failed unless its result says so."
+)
+
+
 def new_nonce() -> str:
     """A fresh fence token for ONE turn. Unguessable, so ingested content cannot
     name the delimiter that would close its own block."""
@@ -312,6 +345,8 @@ def system_prompt(
         if action_mode is ActionMode.DO
         else "Current action mode: Guide. Explain and use read-only tools; never execute changes."
     )
+    if action_mode is ActionMode.DO:
+        parts.append(_COMMAND_NOTE)
     if engineering_preferences:
         payload = bounded_payload(engineering_preferences, DATA_CAP)
         block = data_block(new_nonce(), ENGINEERING_PREFERENCES_KIND, payload, cap=DATA_CAP)

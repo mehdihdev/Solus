@@ -4,7 +4,10 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 from code_paths import overlay_module
+
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
 
 execute = overlay_module("execute")
 
@@ -72,10 +75,15 @@ def test_progress_budget_is_bounded() -> None:
     progress = overlay_module("progress")
     chunks = []
     observer = progress.LineOutput(lambda stream, text: chunks.append((stream, text)))
-    observer.feed("stdout", b"ok\n" * 2000)
+    observer.feed("stdout", b"ok\n" * 2000)  # many lines, few bytes: nothing is lost
     observer.finish()
-    assert len(chunks) <= 256
-    assert "truncated" in chunks[-1][1]
+    assert "".join(text for _, text in chunks) == "ok\n" * 2000
+    chunks.clear()
+    observer = progress.LineOutput(lambda stream, text: chunks.append((stream, text)))
+    observer.feed("stdout", (b"y" * 99 + b"\n") * 4000)  # 400 KB: the byte budget caps it
+    observer.finish()
+    assert sum(len(text.encode()) for _, text in chunks) <= progress.MAX_BYTES
+    assert chunks[-1][1] == progress.TRUNCATED
 
 
 def test_line_buffer_handles_split_unicode_and_partial_secret_line() -> None:
@@ -127,27 +135,34 @@ async def test_async_queue_is_bounded_and_reports_overflow() -> None:
     chunks = []
 
     class Context:
-        async def report_progress(self, sequence, *, message):
-            chunks.append(json.loads(message))
+        async def report_progress(self, sequence: float, *, message: str) -> None:
+            chunks.append(json.loads(message or "null"))
 
     output = progress.AsyncOutput(Context())
-    for _ in range(1000):
+    for _ in range(progress.MAX_PENDING + 10):
         output.output("stdout", "line\n")
-    assert output.pending.qsize() == 16 and output.overflow.is_set()
+    assert output.pending.qsize() == progress.MAX_PENDING and output.overflow.is_set()
     output.finished.set()
     await output.publish()
     assert chunks[-1]["text"] == progress.TRUNCATED
 
 
-async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Path) -> None:
+@pytest.fixture
+def base(tmp_path: Path) -> Path:
+    (tmp_path / "home").mkdir()
+    return tmp_path
+
+
+@pytest.mark.real_sandbox
+async def test_actual_stdio_mcp_reports_output_before_final_result(base: Path) -> None:
     import asyncio
     import json
-    import os
 
     from code_paths import FORK_DIR
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
+    tmp_path = base / "ws"
     binary = tmp_path / ".venv" / "bin"
     binary.mkdir(parents=True)
     (binary / "python").symlink_to(sys.executable)
@@ -157,8 +172,8 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
     )
     chunks = []
 
-    async def progress(progress, total, message):
-        chunks.append(json.loads(message))
+    async def progress(progress: float, total: float | None, message: str | None) -> None:
+        chunks.append(json.loads(message or "null"))
 
     params = StdioServerParameters(
         command=sys.executable,
@@ -166,7 +181,8 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
         env={
             "SOLUS_MCP_WORKSPACE": str(tmp_path),
             "PATH": "/usr/bin:/bin",
-            "HOME": os.environ.get("HOME", "/tmp"),
+            # HOME is never the workspace (§9.4): a separate temp home.
+            "HOME": str(base / "home"),
         },
     )
     async with stdio_client(params) as (read, write), ClientSession(read, write) as session:
@@ -182,6 +198,7 @@ async def test_actual_stdio_mcp_reports_output_before_final_result(tmp_path: Pat
         result = await result_task
     assert not result.isError
     assert chunks[0] == {"stream": "stdout", "text": "early\n"}
+    assert result.structuredContent is not None
     assert result.structuredContent["stdout_tail"] == "early\ndone\n"
 
 
@@ -196,7 +213,9 @@ def test_oversized_secret_prefix_suppresses_rest_of_stream() -> None:
     assert ("stderr", "safe diagnostic\n") in chunks
 
 
-def test_already_cancelled_execution_never_launches_process(tmp_path: Path, monkeypatch) -> None:
+def test_already_cancelled_execution_never_launches_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import threading
 
     cancelled = threading.Event()
@@ -213,14 +232,14 @@ def test_already_cancelled_execution_never_launches_process(tmp_path: Path, monk
     assert calls == [] and result.timed_out
 
 
-def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch) -> None:
+def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import io
     from types import SimpleNamespace
 
     reads = []
 
     class EndlessSpool(io.BytesIO):
-        def read(self, size=-1):
+        def read(self, size: int | None = -1) -> bytes:
             reads.append(size)
             if len(reads) > 40:
                 raise RuntimeError("unbounded post-exit spool scan")
@@ -231,8 +250,14 @@ def test_post_exit_spool_drain_is_bounded(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(
         execute.subprocess,
         "Popen",
-        lambda *args, **kwargs: SimpleNamespace(poll=lambda: 0, wait=lambda: 0, returncode=0),
+        lambda *args, **kwargs: SimpleNamespace(
+            poll=lambda: 0, wait=lambda: 0, returncode=0, pid=2**22 + 4321, kill=lambda: None
+        ),
     )
+    # Popen is faked module-wide, so the tree's (always fresh) kill-time snapshot reads
+    # an empty table instead of running /bin/ps through the fake.
+    tracker = execute.TreeTracker
+    monkeypatch.setattr(execute, "TreeTracker", lambda pid: tracker(pid, table=dict))
     chunks = []
     token = execute.OUTPUT_CALLBACK.set(lambda stream, text: chunks.append((stream, text)))
     try:
@@ -251,7 +276,7 @@ def test_post_exit_drain_raw_budget_and_deadline_drop_partial_context() -> None:
     class GrowingSpool:
         reads = 0
 
-        def read(self, size):
+        def read(self, size: int) -> bytes:
             self.reads += 1
             return (b"x" * 2000 + b"\n") * 4
 
@@ -266,3 +291,83 @@ def test_post_exit_drain_raw_budget_and_deadline_drop_partial_context() -> None:
     execute._drain_output(observer, "stdout", io.BytesIO(b"other"), 0, None)
     observer.finish()
     assert chunks == [("stdout", progress.TRUNCATED)]
+
+
+# --- live output is packed into frames, not dropped ------------------------------------
+
+
+async def _published(lines: bytes, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
+    import json
+
+    progress = overlay_module("progress")
+    monkeypatch.setattr(progress, "PUBLISH_SECONDS", 0)
+    frames: list[dict[str, str]] = []
+
+    class Context:
+        async def report_progress(self, sequence: float, *, message: str) -> None:
+            assert len(message) <= 16384
+            frames.append(json.loads(message))
+
+    output = progress.AsyncOutput(Context())
+    observer = progress.LineOutput(output.output)
+    observer.feed("stdout", lines)  # the whole burst arrives before publishing starts
+    observer.finish()
+    output.finished.set()
+    await output.publish()
+    return frames
+
+
+@pytest.mark.parametrize("count", [30, 2000])
+async def test_a_burst_of_quick_lines_is_published_complete(
+    monkeypatch: pytest.MonkeyPatch, count: int
+) -> None:
+    lines = "".join(f"-rw-r--r--  1 user staff  {n:6d} file{n}.txt\n" for n in range(count))
+    frames = await _published(lines.encode(), monkeypatch)
+    assert "".join(frame["text"] for frame in frames) == lines
+    assert all(len(frame["text"]) <= 2048 and frame["text"].endswith("\n") for frame in frames)
+    assert len(frames) <= 255 and not any("truncated" in frame["text"] for frame in frames)
+    if count == 30:
+        assert len(frames) == 1  # one frame, not 30 paced messages
+
+
+async def test_output_past_the_real_caps_is_capped_and_flagged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    progress = overlay_module("progress")
+    frames = await _published((b"z" * 199 + b"\n") * 2000, monkeypatch)  # 400 KB
+    assert frames[-1]["text"] == progress.TRUNCATED  # a frame of its own (companion flag)
+    assert sum(len(frame["text"].encode()) for frame in frames) <= progress.MAX_BYTES
+    assert all(len(frame["text"]) <= 2048 for frame in frames) and len(frames) <= 255
+
+
+async def test_streams_are_never_mixed_in_one_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    progress = overlay_module("progress")
+    monkeypatch.setattr(progress, "PUBLISH_SECONDS", 0)
+    frames: list[tuple[str, str]] = []
+
+    class Context:
+        async def report_progress(self, sequence: float, *, message: str) -> None:
+            import json
+
+            value = json.loads(message)
+            frames.append((value["stream"], value["text"]))
+
+    output = progress.AsyncOutput(Context())
+    for stream, text in (
+        ("stdout", "a\n"),
+        ("stdout", "b\n"),
+        ("stderr", "e\n"),
+        ("stdout", "c\n"),
+    ):
+        output.output(stream, text)
+    output.output("stdout", progress.SUPPRESSED)
+    output.output("stdout", "d\n")
+    output.finished.set()
+    await output.publish()
+    assert frames == [
+        ("stdout", "a\nb\n"),
+        ("stderr", "e\n"),
+        ("stdout", "c\n"),
+        ("stdout", progress.SUPPRESSED),
+        ("stdout", "d\n"),
+    ]

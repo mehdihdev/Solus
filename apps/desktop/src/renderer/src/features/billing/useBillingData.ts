@@ -8,24 +8,35 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../../lib/api/envelope.types'
 import {
-  createBillingPortal,
   createPackCheckout,
   createSubscriptionCheckout,
   getCreditPacks,
   getCredits,
-  getSubscription,
   type CheckoutInterval,
   type CreditPack,
-  type PlanType,
-  type Subscription
+  type PlanType
 } from '../../lib/api/resources'
+import {
+  createBillingPortalFlow,
+  getBillingSubscription,
+  getBillingSummary,
+  type BillingSubscription,
+  type BillingSummary,
+  type PortalFlow
+} from '../../lib/api/resources.billing'
+import { billingBridge, type CheckoutStatus } from './billingBridge'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 export type BillingStatus = 'loading' | 'ready' | 'offline'
 
 export interface BillingData {
   status: BillingStatus
-  subscription: Subscription | null
+  subscription: BillingSubscription | null
+  /** GET /billing/summary; null when it failed (the page then degrades to
+   *  "Stripe unavailable" locally — the page itself stays online). */
+  summary: BillingSummary | null
+  /** When the snapshot was taken (ms); the clock for read-time trial expiry. */
+  asOf: number
   /** Credit balance, or null before it has loaded. */
   credits: number | null
   unlimited: boolean
@@ -41,19 +52,9 @@ export interface BillingData {
   buyPack: (priceId: string) => Promise<void>
   /** Open the Stripe billing portal (manage payment method / cancel). */
   openPortal: () => Promise<void>
+  /** Open the portal, deep-linked to plan change (`update`) or cancel (`cancel`). */
+  openPortalFlow: (flow?: PortalFlow) => Promise<void>
   refresh: () => Promise<void>
-}
-
-/** How the in-app checkout window ended (preload bridge, SOLUSDEV-114). */
-type CheckoutStatus = 'success' | 'cancel' | 'return' | 'closed' | 'blocked' | 'busy'
-
-interface BillingBridge {
-  openExternal?: (u: string) => Promise<{ ok: boolean }>
-  openCheckout?: (u: string) => Promise<{ status: CheckoutStatus }>
-}
-
-function billingBridge(): BillingBridge | undefined {
-  return (window as unknown as { solus?: { billing?: BillingBridge } }).solus?.billing
 }
 
 /** Dispatched after a checkout completes so the shell bell refetches and shows
@@ -66,6 +67,9 @@ const POST_CHECKOUT_REFRESH_DELAYS_MS = [1500, 4000, 10000] as const
 
 const SUCCESS_NOTICE = 'Payment received — your plan and credits are updating now.'
 const CANCELED_NOTICE = 'Checkout canceled — you haven’t been charged.'
+
+/** Which action failed, so the generic copy names it (wireflow §Actions). */
+type ActionKind = 'checkout' | 'portal'
 
 /** Open a Stripe URL in the system browser: the preload bridge if present
  *  (Electron), else window.open (which the main process also routes external). */
@@ -84,56 +88,73 @@ async function openExternal(url: string): Promise<void> {
   }
 }
 
-function messageFor(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === 'billing_unconfigured')
-      return 'Billing isn’t configured yet — add your Stripe keys and prices to enable checkout.'
-    if (error.code === 'no_billing_customer')
-      return 'Start a subscription first to open the billing portal.'
-    if (error.code === 'already_subscribed')
-      return 'You already have an active subscription — use “Manage billing” to change plans.'
-    if (error.code === 'plan_not_checkoutable')
-      return 'That plan isn’t available for self-serve checkout.'
-  }
-  return 'Something went wrong reaching Stripe. Please try again.'
+const UNAVAILABLE_NOTICE =
+  'Billing is temporarily unavailable — your plan is unchanged. Try again in a few minutes.'
+
+const CODE_NOTICES: Record<string, string> = {
+  billing_unconfigured:
+    'Billing isn’t configured yet — add your Stripe keys and prices to enable checkout.',
+  no_billing_customer: 'Start a subscription first to open the billing portal.',
+  no_active_subscription: 'This plan can’t be changed right now — use Manage billing.',
+  cancel_already_scheduled: 'Your plan is already scheduled to end.',
+  already_subscribed:
+    'You already have an active subscription — use “Manage billing” to change plans.',
+  plan_not_checkoutable: 'That plan isn’t available for self-serve checkout.'
 }
 
-/** Load subscription (404 → null), credit balance, and packs. Credits/packs are
- *  best-effort so a hiccup there never flips the screen offline. */
-async function fetchSnapshot(): Promise<{
-  subscription: Subscription | null
+function messageFor(error: unknown, kind: ActionKind): string {
+  if (error instanceof ApiError) {
+    const byCode = CODE_NOTICES[error.code]
+    if (byCode) return byCode
+    if (error.status === 502 || error.status === 503) return UNAVAILABLE_NOTICE
+  }
+  return kind === 'checkout'
+    ? 'Couldn’t open checkout — try again.'
+    : 'Couldn’t open billing — try again.'
+}
+
+interface Snapshot {
+  subscription: BillingSubscription | null
+  summary: BillingSummary | null
   credits: number | null
   unlimited: boolean
   packs: CreditPack[]
-}> {
-  let subscription: Subscription | null = null
+}
+
+/** Resolve to `fallback` instead of throwing: every read except the screen's
+ *  own offline gate is best-effort so a hiccup never flips the page offline. */
+async function orElse<T>(read: Promise<T>, fallback: T): Promise<T> {
   try {
-    subscription = await getSubscription()
+    return await read
   } catch {
-    subscription = null
+    return fallback
   }
-  let unlimited = false
-  let credits: number | null = null
-  try {
-    const balance = await getCredits()
-    credits = balance.balance
-    unlimited = balance.unlimited === true
-  } catch {
-    credits = null
+}
+
+/** Load subscription (404 → null), summary (failure → null = degraded), credit
+ *  balance, and packs, concurrently. */
+async function fetchSnapshot(): Promise<Snapshot> {
+  const [subscription, summary, balance, packs] = await Promise.all([
+    orElse(getBillingSubscription(), null),
+    orElse(getBillingSummary(), null),
+    orElse(getCredits(), null),
+    orElse(getCreditPacks(), [])
+  ])
+  return {
+    subscription,
+    summary,
+    credits: balance ? balance.balance : null,
+    unlimited: balance?.unlimited === true,
+    packs
   }
-  let packs: CreditPack[] = []
-  try {
-    packs = await getCreditPacks()
-  } catch {
-    packs = []
-  }
-  return { subscription, credits, unlimited, packs }
 }
 
 export function useBillingData(): BillingData {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const [status, setStatus] = useState<BillingStatus>(fetchEnabled ? 'loading' : 'offline')
-  const [subscription, setSubscription] = useState<Subscription | null>(null)
+  const [subscription, setSubscription] = useState<BillingSubscription | null>(null)
+  const [asOf, setAsOf] = useState(0)
+  const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [credits, setCredits] = useState<number | null>(null)
   const [unlimited, setUnlimited] = useState(false)
   const [packs, setPacks] = useState<CreditPack[]>([])
@@ -149,15 +170,17 @@ export function useBillingData(): BillingData {
     const snap = await fetchSnapshot()
     setUnlimited(snap.unlimited)
     setSubscription(snap.subscription)
+    setSummary(snap.summary)
+    setAsOf(Date.now())
     if (snap.credits !== null) setCredits(snap.credits)
     setPacks(snap.packs)
     setStatus('ready')
   }, [fetchEnabled])
 
-  const finishCheckout = useCheckoutCompletion(load, setNotice)
+  const { finishCheckout, scheduleRefetch } = useCheckoutCompletion(load, setNotice)
 
   const runAction = useCallback(
-    async (getUrl: () => Promise<string>): Promise<void> => {
+    async (kind: ActionKind, getUrl: () => Promise<string>): Promise<void> => {
       setBusy(true)
       setNotice(null)
       try {
@@ -165,37 +188,43 @@ export function useBillingData(): BillingData {
         const openCheckout = billingBridge()?.openCheckout
         if (openCheckout) {
           // Self-contained: a sandboxed in-app window; busy until it closes.
-          finishCheckout((await openCheckout(url)).status)
+          finishCheckout((await openCheckout(url)).status, kind)
         } else {
           await openExternal(url)
+          scheduleRefetch()
         }
       } catch (error) {
-        setNotice(messageFor(error))
+        setNotice(messageFor(error, kind))
+        if (error instanceof ApiError && error.code === 'cancel_already_scheduled') void load()
       } finally {
         setBusy(false)
       }
     },
-    [finishCheckout]
+    [finishCheckout, scheduleRefetch, load]
   )
 
   const startCheckout = useCallback(
     (plan: PlanType, interval: CheckoutInterval): Promise<void> =>
-      runAction(async () => (await createSubscriptionCheckout(plan, interval)).url),
+      runAction('checkout', async () => (await createSubscriptionCheckout(plan, interval)).url),
     [runAction]
   )
   const buyPack = useCallback(
     (priceId: string): Promise<void> =>
-      runAction(async () => (await createPackCheckout(priceId)).url),
+      runAction('checkout', async () => (await createPackCheckout(priceId)).url),
     [runAction]
   )
-  const openPortal = useCallback(
-    (): Promise<void> => runAction(async () => (await createBillingPortal()).url),
+  const openPortalFlow = useCallback(
+    (flow?: PortalFlow): Promise<void> =>
+      runAction('portal', async () => (await createBillingPortalFlow(flow)).url),
     [runAction]
   )
+  const openPortal = useCallback((): Promise<void> => openPortalFlow(), [openPortalFlow])
 
   return {
     status,
     subscription,
+    summary,
+    asOf,
     credits,
     unlimited,
     packs,
@@ -205,14 +234,21 @@ export function useBillingData(): BillingData {
     startCheckout,
     buyPack,
     openPortal,
+    openPortalFlow,
     refresh: load
   }
+}
+
+interface CheckoutCompletion {
+  finishCheckout: (status: CheckoutStatus, kind: ActionKind) => void
+  /** Refetch now-ish and again at 1.5/4/10 s (webhook lag) after any open. */
+  scheduleRefetch: () => void
 }
 
 function useCheckoutCompletion(
   load: () => Promise<void>,
   setNotice: (notice: string | null) => void
-): (status: CheckoutStatus) => void {
+): CheckoutCompletion {
   useEffect(() => {
     void load()
   }, [load])
@@ -228,8 +264,8 @@ function useCheckoutCompletion(
   // Follow-up refetch timers (post-checkout webhook lag); cleared on unmount.
   const refreshTimersRef = useRef<number[]>([])
   useEffect(() => {
-    const timers = refreshTimersRef.current
-    return () => timers.forEach((id) => window.clearTimeout(id))
+    const timers = refreshTimersRef
+    return () => timers.current.forEach((id) => window.clearTimeout(id))
   }, [])
 
   const refetchEverything = useCallback((): void => {
@@ -239,9 +275,20 @@ function useCheckoutCompletion(
     window.dispatchEvent(new Event(NOTIFICATIONS_REFRESH_EVENT))
   }, [load])
 
+  const scheduleRefetch = useCallback((): void => {
+    for (const delay of POST_CHECKOUT_REFRESH_DELAYS_MS) {
+      const id = window.setTimeout(() => {
+        // Prune fired timers so the list doesn't grow for the app's lifetime.
+        refreshTimersRef.current = refreshTimersRef.current.filter((t) => t !== id)
+        refetchEverything()
+      }, delay)
+      refreshTimersRef.current.push(id)
+    }
+  }, [refetchEverything])
+
   /** Apply the outcome of the in-app checkout window (SOLUSDEV-114). */
   const finishCheckout = useCallback(
-    (status: CheckoutStatus): void => {
+    (status: CheckoutStatus, kind: ActionKind): void => {
       if (status === 'cancel' || status === 'closed') {
         setNotice(CANCELED_NOTICE)
         return
@@ -251,22 +298,15 @@ function useCheckoutCompletion(
         return
       }
       if (status === 'blocked') {
-        setNotice(messageFor(null))
+        setNotice(messageFor(null, kind))
         return
       }
       if (status === 'success') setNotice(SUCCESS_NOTICE)
       refetchEverything()
-      for (const delay of POST_CHECKOUT_REFRESH_DELAYS_MS) {
-        const id = window.setTimeout(() => {
-          // Prune fired timers so the list doesn't grow for the app's lifetime.
-          refreshTimersRef.current = refreshTimersRef.current.filter((t) => t !== id)
-          refetchEverything()
-        }, delay)
-        refreshTimersRef.current.push(id)
-      }
+      scheduleRefetch()
     },
-    [refetchEverything, setNotice]
+    [refetchEverything, scheduleRefetch, setNotice]
   )
 
-  return finishCheckout
+  return { finishCheckout, scheduleRefetch }
 }

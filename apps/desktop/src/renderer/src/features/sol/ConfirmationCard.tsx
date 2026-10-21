@@ -16,11 +16,18 @@
 //
 // The card owns FAILURE only. On success its host removes it; keeping a
 // "done" state here would be dead code that hides whether anything ran.
-import { useCallback, useState } from 'react'
+//
+// SOLUSDEV-317: command cards add a presentation-only header (program, risk
+// badges, sandboxed — read from the verbatim rows) and accept Cmd/Ctrl+Enter
+// from the surrounding SOL surface. A running command's output is rendered by
+// the host from the store (CommandOutput), so it outlives this card.
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import type { ConfirmationRow, PendingConfirmation } from '../../lib/api/solStream'
 import './ConfirmationCard.css'
-import { CommandOutput } from './CommandOutput'
+import { commandHeader, type CommandHeader } from './commandCard'
+import { approveShortcut, useRegisterCommandApproval } from './commandHotkey'
+import { usePreviewInView } from './previewInView'
 
 /** Mono uppercases by default; a value being approved must render exactly as it
  *  will execute. */
@@ -29,7 +36,6 @@ const VERBATIM = { textTransform: 'none' } as const
 export type ConfirmationDecision = 'approve' | 'reject'
 
 export interface ConfirmationCardProps {
-  readonly projectId?: string
   readonly pending: PendingConfirmation
   /** Resolves once the decision is recorded. Rejection is a decision too. */
   readonly onDecide: (decision: ConfirmationDecision) => Promise<void>
@@ -71,20 +77,31 @@ function DiffRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
   )
 }
 
-function CompletePreview({ rows }: { rows: readonly ConfirmationRow[] }): React.JSX.Element {
+function CompletePreview({
+  rows,
+  expanded,
+  regionRef
+}: {
+  rows: readonly ConfirmationRow[]
+  /** Command cards always open their (bounded, scrollable) preview. */
+  expanded: boolean
+  regionRef: (element: HTMLElement | null) => void
+}): React.JSX.Element {
   const brief =
-    rows.length <= 2 &&
-    rows.every((row) =>
-      [row.label, row.before, row.after].every(
-        (value) => value === null || (value.length <= 160 && !value.includes('\n'))
-      )
-    )
+    expanded ||
+    (rows.length <= 2 &&
+      rows.every((row) =>
+        [row.label, row.before, row.after].every(
+          (value) => value === null || (value.length <= 160 && !value.includes('\n'))
+        )
+      ))
   return (
     <details className="confirmation-card__preview" open={brief}>
       <summary>
         {rows.length === 1 ? 'Review 1 change' : `Review all ${rows.length} changes`}
       </summary>
       <div
+        ref={regionRef}
         className="confirmation-card__scroll"
         role="region"
         aria-label="Complete proposed changes"
@@ -97,6 +114,15 @@ function CompletePreview({ rows }: { rows: readonly ConfirmationRow[] }): React.
         </ul>
       </div>
     </details>
+  )
+}
+
+function CardPreview(props: Parameters<typeof CompletePreview>[0]): React.JSX.Element {
+  if (props.rows.length > 0) return <CompletePreview {...props} />
+  return (
+    <Mono style={{ color: 'var(--mut)' }}>
+      This tool could not describe its change — review the action above before approving.
+    </Mono>
   )
 }
 
@@ -131,32 +157,49 @@ function approvalStatus(closed: boolean, busy: boolean): string {
   return busy ? 'Recording decision…' : 'Awaiting approval'
 }
 
-function ActiveCommandOutput({
-  busy,
-  projectId,
-  pending
-}: {
-  busy: ConfirmationDecision | null
-  projectId: string | undefined
-  pending: PendingConfirmation
-}): React.JSX.Element | null {
-  if (busy !== 'approve' || !projectId || !['code.run', 'code.test'].includes(pending.tool))
-    return null
+/** Presentation only: what the verbatim rows below already say, at a glance. */
+function CommandHeaderView({ header }: { header: CommandHeader }): React.JSX.Element {
   return (
-    <CommandOutput
-      key={pending.confirmationId}
-      projectId={projectId}
-      confirmationId={pending.confirmationId}
-    />
+    <div className="confirmation-card__command" role="group" aria-label="Command">
+      {header.program !== null && (
+        <code className="confirmation-card__program">{header.program}</code>
+      )}
+      {header.risks.map((risk) => (
+        <span key={risk} className="confirmation-card__badge" data-risk={risk}>
+          {risk}
+        </span>
+      ))}
+      {header.sandboxed && (
+        <span className="confirmation-card__badge" data-sandboxed="true">
+          sandboxed
+        </span>
+      )}
+    </div>
   )
 }
 
-export function ConfirmationCard({
-  pending,
-  onDecide,
-  projectId
-}: ConfirmationCardProps): React.JSX.Element {
+export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): React.JSX.Element {
   const { busy, failed, decide } = useConfirmationDecision(onDecide)
+  const header = commandHeader(pending)
+  const isCommand = header !== null
+  const shortcut = isCommand ? approveShortcut() : null
+  const spent = busy !== null || failed?.terminal === true
+  // Cmd/Ctrl+Enter is the same approval as the click; a busy or spent card
+  // refuses it so the surface does not swallow the key.
+  const keyboardApprove = useMemo(
+    () =>
+      !isCommand
+        ? null
+        : (): boolean => {
+            if (spent) return false
+            void decide('approve')
+            return true
+          },
+    [isCommand, spent, decide]
+  )
+  useRegisterCommandApproval(pending.confirmationId, keyboardApprove)
+  // SOLUSDEV-317 M1: the arming clock starts once the open preview is on screen.
+  const previewRef = usePreviewInView(pending.confirmationId, isCommand)
 
   return (
     <section aria-label="Action needs your approval" className="confirmation-card">
@@ -167,6 +210,8 @@ export function ConfirmationCard({
         </span>
       </header>
 
+      {header && <CommandHeaderView header={header} />}
+
       <p className="confirmation-card__summary">{pending.summary}</p>
 
       <div className="confirmation-card__actions">
@@ -174,26 +219,22 @@ export function ConfirmationCard({
           className="confirmation-card__approve"
           type="button"
           onClick={() => void decide('approve')}
-          disabled={busy !== null || failed?.terminal === true}
+          disabled={spent}
+          aria-keyshortcuts={shortcut?.aria}
         >
           {busy === 'approve' ? 'Applying…' : 'Approve'}
+          {shortcut && (
+            <kbd className="confirmation-card__hint" aria-hidden="true">
+              {shortcut.hint}
+            </kbd>
+          )}
         </button>
-        <button
-          type="button"
-          onClick={() => void decide('reject')}
-          disabled={busy !== null || failed?.terminal === true}
-        >
+        <button type="button" onClick={() => void decide('reject')} disabled={spent}>
           Reject
         </button>
       </div>
 
-      {pending.preview.length > 0 ? (
-        <CompletePreview rows={pending.preview} />
-      ) : (
-        <Mono style={{ color: 'var(--mut)' }}>
-          This tool could not describe its change — review the action above before approving.
-        </Mono>
-      )}
+      <CardPreview rows={pending.preview} expanded={isCommand} regionRef={previewRef} />
 
       <ConfirmationDetails pending={pending} />
 
@@ -202,7 +243,6 @@ export function ConfirmationCard({
           <DecisionFailure failed={failed} />
         </div>
       )}
-      <ActiveCommandOutput busy={busy} projectId={projectId} pending={pending} />
     </section>
   )
 }
@@ -225,18 +265,36 @@ function ConfirmationDetails({ pending }: { pending: PendingConfirmation }): Rea
   )
 }
 
-function useConfirmationDecision(onDecide: ConfirmationCardProps['onDecide']): {
+/** The host's latest onDecide behind a stable identity, so a host that passes
+ *  a fresh closure each render does not re-register the keyboard approver. */
+function useLatestDecide(
+  onDecide: ConfirmationCardProps['onDecide']
+): ConfirmationCardProps['onDecide'] {
+  const latest = useRef(onDecide)
+  useEffect(() => {
+    latest.current = onDecide
+  }, [onDecide])
+  return useCallback((decision: ConfirmationDecision) => latest.current(decision), [])
+}
+
+function useConfirmationDecision(hostDecide: ConfirmationCardProps['onDecide']): {
   busy: ConfirmationDecision | null
   failed: { message: string; terminal: boolean } | null
   decide: (decision: ConfirmationDecision) => Promise<void>
 } {
+  const onDecide = useLatestDecide(hostDecide)
   const [busy, setBusy] = useState<ConfirmationDecision | null>(null)
   const [failed, setFailed] = useState<{ message: string; terminal: boolean } | null>(null)
+  // A second gesture before React re-renders (a double click, a held
+  // Cmd/Ctrl+Enter) must not send a second decision.
+  const inFlight = useRef(false)
 
   // useCallback so react-hooks can see this is an event handler rather than
   // effect-adjacent state writing.
   const decide = useCallback(
     async (decision: ConfirmationDecision): Promise<void> => {
+      if (inFlight.current) return
+      inFlight.current = true
       setBusy(decision)
       setFailed(null)
       try {
@@ -263,6 +321,7 @@ function useConfirmationDecision(onDecide: ConfirmationCardProps['onDecide']): {
           terminal: error instanceof Error && error.name === 'ConfirmationRefused'
         })
       } finally {
+        inFlight.current = false
         setBusy(null)
       }
     },

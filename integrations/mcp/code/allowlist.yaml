@@ -78,3 +78,39 @@ tools:
     files_errors: true
     timeout_seconds: 150
     reason: uploads one immutable application build to an explicitly identified USB device after complete human approval, with verification and no automatic retry
+  # SOLUSDEV-317 (ADR-031 amendment 2026-10-18; entries human-approved in-chat 2026-10-18).
+  # Contract: docs/api/code-command-execution.md. Every executing tool is OS-sandboxed.
+  - name: exec
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 630
+    reason: executes a model-proposed argument list (never a shell) in the linked folder inside the OS sandbox — arbitrary code on the customer machine
+  - name: process_start
+    requires_confirmation: true
+    timeout_seconds: 30
+    reason: starts a long-running sandboxed process in the linked folder that keeps running after the call — arbitrary code on the customer machine
+  - name: process_stop
+    requires_confirmation: true
+    timeout_seconds: 30
+    reason: stops a process SOL started on this machine (SIGTERM, then SIGKILL)
+  - name: process_status
+    requires_confirmation: false
+    timeout_seconds: 15
+    reason: read-only state and bounded output of processes SOL started on this machine
+  - name: profile_capture
+    requires_confirmation: true
+    timeout_seconds: 60
+    reason: sources a named setup file with a fixed Solus script inside the sandbox and stores the filtered environment in ~/.solus
+  - name: profile_list
+    requires_confirmation: false
+    timeout_seconds: 15
+    reason: read-only list of stored environment profiles (names and variable names, never values)
+  - name: profile_delete
+    requires_confirmation: true
+    timeout_seconds: 15
+    reason: deletes a stored environment profile from ~/.solus
+  # SOLUSDEV-317 interactive processes (ADR-031 amendment 2026-10-19; entry human-approved in-chat 2026-10-19).
+  - name: process_input
+    requires_confirmation: true
+    timeout_seconds: 15
+    reason: sends bounded text or Enter to an interactive process SOL started on this machine

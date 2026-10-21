@@ -27,6 +27,9 @@ import {
   type SelectableItem
 } from '../../lib/api/resources'
 import { getDesktopOAuthBridge } from '../../lib/desktopBridge'
+import { githubOrgErrorCode } from '../../lib/api/resources.teamGithub'
+import { useSettingsStore } from '../../store/settingsStore'
+import { teamBindErrorMessage } from './teamRepoSection'
 import { accessChoiceStep } from './accessChoiceStep'
 import { runAccountConnect, type AccountConnectResult } from './accountConnect'
 import { addOnStep } from './addOnStep'
@@ -73,6 +76,10 @@ export interface OAuthConnectStartOptions {
   /** SOLUSDEV-241: an account the user already linked on Home. Present, the
    *  project is bound to it and no browser handshake runs. */
   linkedConnection?: { id: string; login: string | null } | null
+  /** SOLUSDEV-216: a repository picked from the team's GitHub installation. Present,
+   *  the project binds through the installation with that repo — no sign-in, no
+   *  account — and the configure step is already answered. */
+  teamRepo?: SelectableItem | null
 }
 
 export interface UseOAuthConnect {
@@ -169,8 +176,14 @@ function useOAuthInputs() {
   }, [])
 
   useEffect(() => {
+    // Cancel on a session change: signed out, or a different user. NOT on a
+    // routine token refresh — Supabase rotates the token (hourly, and on
+    // refocus after the browser sign-in), and cancelling then left the picker
+    // on screen with nothing listening, so Track did nothing.
     const unsubscribe = useAuthStore.subscribe((state, previous) => {
-      if (state.accessToken !== previous.accessToken) cancel()
+      const signedOut = !state.accessToken && Boolean(previous.accessToken)
+      const otherUser = state.user?.email !== previous.user?.email
+      if (signedOut || otherUser) cancel()
     })
     return () => {
       unsubscribe()
@@ -212,18 +225,14 @@ function projectConnect(inputs: ReturnType<typeof useOAuthInputs>): UseOAuthConn
       if (!attempt.cancelled && currentAttempt.current === attempt) setConnection(provider, state)
     }
 
-    const configure: ConfigureStep = options.selection
-      ? selectionConfigureStep({
-          selection: options.selection,
-          listSelectable,
-          onProgress,
-          onSelect: () => awaitChoice(selectChoice, attempt, currentAttempt)
-        })
-      : fieldsConfigureStep({
-          fields: options.configFields ?? [],
-          onProgress,
-          onSubmitConfig: () => awaitChoice(configSubmit, attempt, currentAttempt)
-        })
+    const route = bindRoute(options, onProgress)
+
+    const configure: ConfigureStep =
+      route.configure ??
+      configureFromShape(options, onProgress, {
+        select: () => awaitChoice(selectChoice, attempt, currentAttempt),
+        submitConfig: () => awaitChoice(configSubmit, attempt, currentAttempt)
+      })
 
     const chooseAccess = accessChoiceStep({
       accessModes: options.accessModes,
@@ -240,15 +249,119 @@ function projectConnect(inputs: ReturnType<typeof useOAuthInputs>): UseOAuthConn
     })
 
     return runOAuthConnect(
-      { api: oauthApi, bridge, onProgress, configure, chooseAccess, addOn },
+      {
+        api: route.api,
+        bridge,
+        onProgress: route.onProgress,
+        configure,
+        chooseAccess,
+        addOn
+      },
       projectId,
       provider,
       {
         redirectUri,
         displayName: options.displayName,
-        ...(options.linkedConnection ? { linkedConnection: options.linkedConnection } : {})
+        ...route.link
       }
     )
+  }
+}
+
+/** Which configure step a connector's declared shape implies. */
+function configureFromShape(
+  options: OAuthConnectStartOptions,
+  onProgress: (state: ConnectionState) => void,
+  waits: {
+    select: () => Promise<SelectableItem[] | null>
+    submitConfig: () => Promise<Record<string, string> | null>
+  }
+): ConfigureStep {
+  return options.selection
+    ? selectionConfigureStep({
+        selection: options.selection,
+        listSelectable,
+        onProgress,
+        onSelect: waits.select
+      })
+    : fieldsConfigureStep({
+        fields: options.configFields ?? [],
+        onProgress,
+        onSubmitConfig: waits.submitConfig
+      })
+}
+
+/** Marks "bind without a handshake" for the orchestration; the team api below
+ *  swaps the account credential for the installation. */
+const TEAM_BIND = { id: 'team-installation', login: null } as const
+
+/** Rewrites the orchestration's account-bind copy for the team installation. */
+const TEAM_LINK_LABEL = "Linking your team's GitHub organization…"
+
+/**
+ * SOLUSDEV-216: the team-installation bind, expressed as three injected pieces
+ * so the unchanged orchestration (link → configure → index) runs it: an api
+ * whose source creation sends `installation: true` and the picked repo, a
+ * configure step that is already answered, and progress copy that names the
+ * organization. Org failures surface as named, SOL-mode-aware errors.
+ */
+function teamRepoBind(
+  repo: SelectableItem,
+  onProgress: (state: ConnectionState) => void
+): Pick<BindRoute, 'api' | 'onProgress' | 'configure'> {
+  const config = repo.config ?? { repo: repo.id }
+  return {
+    api: {
+      ...oauthApi,
+      createSource: async (projectId, input) => {
+        try {
+          return await createSource(projectId, {
+            type: input.type,
+            name: input.name,
+            installation: true,
+            config
+          })
+        } catch (error) {
+          const code = githubOrgErrorCode(error)
+          const named = code && teamBindErrorMessage(code, useSettingsStore.getState().solMode)
+          throw named ? new Error(named) : error
+        }
+      }
+    },
+    configure: async () => ({ config, label: repo.name }),
+    onProgress: (state) =>
+      onProgress(
+        state.phase === 'busy' && state.stage === 'link'
+          ? { ...state, label: TEAM_LINK_LABEL }
+          : state
+      )
+  }
+}
+
+interface BindRoute {
+  api: OAuthConnectApi
+  onProgress: (state: ConnectionState) => void
+  /** Present only when the configure step is already answered (team repo). */
+  configure: ConfigureStep | null
+  /** The orchestration's `linkedConnection` option. */
+  link: { linkedConnection?: { id: string; login: string | null } }
+}
+
+/** How this start binds the project: through the team installation, a linked
+ *  account, or (neither) the browser sign-in. */
+function bindRoute(
+  options: OAuthConnectStartOptions,
+  onProgress: (state: ConnectionState) => void
+): BindRoute {
+  if (options.teamRepo) {
+    return { ...teamRepoBind(options.teamRepo, onProgress), link: { linkedConnection: TEAM_BIND } }
+  }
+  const linked = options.linkedConnection
+  return {
+    api: oauthApi,
+    onProgress,
+    configure: null,
+    link: linked ? { linkedConnection: linked } : {}
   }
 }
 

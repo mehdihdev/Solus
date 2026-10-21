@@ -37,14 +37,33 @@ function props(overrides: Partial<TeamStripProps> = {}): TeamStripProps {
 }
 
 describe('TeamStrip', () => {
-  it('always names the active team; the switcher only with more than one team', () => {
+  it('always names the active team; the name is the switcher only with more than one team', () => {
     const { unmount } = render(<TeamStrip {...props()} />)
     expect(screen.getByTestId('team-name')).toHaveTextContent('Strider')
     expect(screen.getByText('3 members')).toBeInTheDocument()
-    expect(screen.getByLabelText('Switch team')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /switch team/i })).toHaveTextContent('Strider')
+    expect(screen.queryByRole('combobox')).toBeNull()
     unmount()
     render(<TeamStrip {...props({ teams: [TEAM] })} />)
-    expect(screen.queryByLabelText('Switch team')).toBeNull()
+    expect(screen.getByTestId('team-name')).toHaveTextContent('Strider')
+    expect(screen.queryByRole('button', { name: /switch team/i })).toBeNull()
+  })
+
+  it('switches team from the title’s menu, marking the active one', async () => {
+    const p = props()
+    render(<TeamStrip {...p} />)
+    await userEvent.click(screen.getByRole('button', { name: /switch team/i }))
+    const items = screen.getAllByRole('menuitemradio')
+    expect(items.find((i) => i.getAttribute('aria-checked') === 'true')).toHaveTextContent(
+      'Strider'
+    )
+    await userEvent.click(
+      items.find((i) => i.getAttribute('aria-checked') === 'false') as HTMLElement
+    )
+    expect(p.onSwitch).toHaveBeenCalledWith(
+      p.teams.find((t) => t.team_id !== p.team?.team_id)?.team_id
+    )
+    expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0)
   })
 
   it('marks the personal workspace and never offers leave or delete on it', async () => {
@@ -56,6 +75,9 @@ describe('TeamStrip', () => {
     expect(screen.queryByRole('menuitem', { name: 'Delete team' })).toBeNull()
   })
 
+})
+
+describe('TeamStrip (continued)', () => {
   it('gates the menu by role: owner deletes, admin renames, member only leaves', async () => {
     const owner = props()
     const first = render(<TeamStrip {...owner} />)
@@ -73,19 +95,23 @@ describe('TeamStrip', () => {
 
     const member = props({ myRole: 'member' })
     render(<TeamStrip {...member} />)
-    expect(screen.queryByRole('button', { name: /invite teammate/i })).toBeNull()
     await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+    expect(screen.queryByRole('menuitem', { name: /invite teammate/i })).toBeNull()
     expect(screen.queryByRole('menuitem', { name: 'Rename team' })).toBeNull()
     await userEvent.click(screen.getByRole('menuitem', { name: 'Leave team' }))
     expect(member.onLeave).toHaveBeenCalled()
   })
 
-  it('shows Invite only to managers and routes Join / New team', async () => {
+  it('offers Invite (managers), Join and New team from the team menu', async () => {
     const p = props()
     render(<TeamStrip {...p} />)
-    await userEvent.click(screen.getByRole('button', { name: /invite teammate/i }))
-    await userEvent.click(screen.getByRole('button', { name: /join team/i }))
-    await userEvent.click(screen.getByRole('button', { name: /new team/i }))
+    const pick = async (name: RegExp): Promise<void> => {
+      await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+      await userEvent.click(screen.getByRole('menuitem', { name }))
+    }
+    await pick(/invite teammate/i)
+    await pick(/join team/i)
+    await pick(/new team/i)
     expect(p.onInvite).toHaveBeenCalled()
     expect(p.onJoin).toHaveBeenCalled()
     expect(p.onNewTeam).toHaveBeenCalled()
@@ -106,5 +132,13 @@ describe('TeamStrip', () => {
     expect(teamLimitText({ current: 5, max: null, atLimit: false })).toBeNull()
     render(<TeamStrip {...props({ teamLimit: null })} />)
     expect(screen.queryByTestId('team-limit')).toBeNull()
+  })
+
+  it('opens the team menu leftward from the ⋯ so it stays inside the sidebar', async () => {
+    render(<TeamStrip {...props()} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Team menu' }))
+    const menu = screen.getByRole('menu')
+    expect(menu).toHaveStyle({ right: '0px' })
+    expect(menu.style.left).toBe('')
   })
 })

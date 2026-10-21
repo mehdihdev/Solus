@@ -27,7 +27,7 @@ delay the block itself.
 
 Errors are orchestration-native (no HTTP coupling); the future route layer
 maps FrequencyCapExceededError → 429 and TrialCapReachedError /
-InsufficientCreditsError → 402.
+TrialExpiredError / InsufficientCreditsError → 402.
 """
 
 from __future__ import annotations
@@ -36,12 +36,20 @@ import logging
 import math
 import time
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import select
 
 from solus_api.billing.development import session_development_unlimited
-from solus_api.models import Subscription, SubscriptionStatus, User
+from solus_api.billing.entitlements import is_local_trial_expired
+from solus_api.models import (
+    CreditLedger,
+    CreditTxnType,
+    Subscription,
+    SubscriptionStatus,
+    User,
+)
 from solus_api.orchestration.cost import account_spend, has_sufficient_credits
 from solus_api.services.events import emit_event
 
@@ -90,6 +98,16 @@ class TrialCapReachedError(RuntimeError):
             f"Free trial usage limit reached ({spend}/{cap} credits) — "
             f"upgrade to continue: {UPGRADE_URL}"
         )
+
+
+class TrialExpiredError(RuntimeError):
+    """A local trial ran past its end date (SOLUSDEV-236) — choosing a plan is the
+    way forward. Mapped to 402 `trial_expired` by the route layer."""
+
+    def __init__(self, ends_at: datetime | None) -> None:
+        self.ends_at = ends_at
+        self.upgrade_url = UPGRADE_URL
+        super().__init__(f"Free trial ended — choose a plan to continue: {UPGRADE_URL}")
 
 
 class InsufficientCreditsError(RuntimeError):
@@ -178,6 +196,7 @@ async def assert_can_spend(
         )
     )
     if sub is not None and sub.status == SubscriptionStatus.TRIALING:
+        await _assert_trial_not_expired(sub, user_id, session)
         spend = await account_spend(user_id, session=session)
         if spend >= limits.trial_credit_cap:
             logger.info(
@@ -198,6 +217,33 @@ async def assert_can_spend(
         logger.info("insufficient credits blocked user_id=%s", user_id)
         await _emit_block_event(session, user_id, reason="insufficient_credits", detail={})
         raise InsufficientCreditsError()
+
+
+async def _assert_trial_not_expired(
+    sub: Subscription, user_id: uuid.UUID, session: AsyncSession
+) -> None:
+    """SOLUSDEV-236 / ADR-024: an expired LOCAL trial refuses metered calls, unless the
+    user's own ledger holds a PURCHASE and the balance covers one credit (the
+    proposed purchased-credit unlock). A purchase with an empty balance is still
+    `trial_expired`, not `insufficient_credits`: the account remains an expired trial."""
+    if not is_local_trial_expired(sub):
+        return
+    purchased = await session.scalar(
+        select(CreditLedger.id)
+        .where(CreditLedger.user_id == user_id, CreditLedger.type == CreditTxnType.PURCHASE)
+        .limit(1)
+    )
+    if purchased is not None and await has_sufficient_credits(user_id, 1, session=session):
+        return
+    ends_at = sub.expires_at
+    logger.info("trial expired blocked user_id=%s ends_at=%s", user_id, ends_at)
+    await _emit_block_event(
+        session,
+        user_id,
+        reason="trial_expired",
+        detail={"ends_at": ends_at.isoformat() if ends_at else None},
+    )
+    raise TrialExpiredError(ends_at)
 
 
 async def _emit_block_event(

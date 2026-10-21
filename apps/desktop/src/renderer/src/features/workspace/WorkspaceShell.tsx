@@ -1,6 +1,6 @@
 // Workspace shell: title row (project pill), menu row (Solus · View · Robot ·
 // Help + bridge / search / bell / sign out), icon rail, notifications popover,
-// toast, and the workspace screens plus the alert detail view and
+// toast, the ⌘K command palette (SOLUSDEV-317), and the workspace screens plus the alert detail view and
 // the installed extensions' page views (rail entries AFTER the Store, behind a
 // separator, pinned ones first — EXT-14 as amended by SOLUSDEV-246 STORE ST3).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
@@ -36,6 +36,7 @@ import { useNotifications } from './useNotifications'
 import { useAccountEvents } from '../live/useAccountEvents'
 import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
 import { TitleBar } from './TitleBar'
+import { PaletteHost } from '../palette/PaletteHost'
 import { MenuBar } from './MenuBar'
 import { useShellStore, routeKey, type MainScreen, type ShellRoute } from './shellStore'
 import { ErrorBoundary } from '../../components/errors/ErrorBoundary'
@@ -253,6 +254,7 @@ export function WorkspaceShell(): React.JSX.Element {
         </div>
       </div>
       <ToastView onView={nav.viewToast} />
+      <PaletteHost go={go} openExtensionPage={nav.openExtensionPage} extensions={rail.entries} />
     </div>
   )
 }

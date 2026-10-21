@@ -9,12 +9,16 @@
 //   never partially delivered;
 // - `tool_call` args are discarded at the parse boundary — the trace renders
 //   tool name + ok/error only, so raw argument values never reach the UI;
+// - a `tool_result` carries no tool value, except a Build-mode auto-run
+//   code.exec's bounded output row (SOLUSDEV-317 §10.1), plain text only;
 // - `citations` must be a string array (SOL-02: the structured provenance
 //   surface — a frame that can't prove that shape is malformed).
 
 import {
+  toAutoRun,
   toPendingConfirmation,
   toSolArtifact,
+  type AutoRun,
   type PendingConfirmation,
   type SolArtifact
 } from '../../lib/api/solStream'
@@ -36,7 +40,14 @@ export type SolStreamEvent =
   | { type: 'token'; text: string }
   | ({ type: 'context_used' } & ContextUsedInfo)
   | { type: 'tool_call'; callId: string; tool: string }
-  | { type: 'tool_result'; callId: string; ok: boolean; errorCode: string | null }
+  | {
+      type: 'tool_result'
+      callId: string
+      ok: boolean
+      errorCode: string | null
+      /** SOLUSDEV-317 §10.1: present only for a Build-mode auto-run code.exec. */
+      autoRun?: AutoRun
+    }
   | { type: 'tool_confirmation'; pending: PendingConfirmation }
   | { type: 'artifact'; artifact: SolArtifact }
   | { type: 'message'; role: string; content: string; citations: string[] }
@@ -92,7 +103,14 @@ const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
     if (!str(d.call_id) || typeof d.ok !== 'boolean') return null
     const error = d.error as Fields | undefined
     const errorCode = !d.ok && error && str(error.code) ? error.code : null
-    return { type: 'tool_result', callId: d.call_id, ok: d.ok, errorCode }
+    const autoRun = toAutoRun(d)
+    return {
+      type: 'tool_result',
+      callId: d.call_id,
+      ok: d.ok,
+      errorCode,
+      ...(autoRun ? { autoRun } : {})
+    }
   },
   // CTR-03: the parked destructive action. Shape-validated by the SAME reader
   // the pre-orb surface used, so there is exactly one definition of what a

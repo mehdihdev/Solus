@@ -93,6 +93,56 @@ async def test_registration_happens_once_and_is_cached(monkeypatch: pytest.Monke
     assert calls[0]["json"]["redirect_uris"] == [REDIRECT]
 
 
+async def test_registration_is_a_public_pkce_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Onshape's auth host supports only `none` and `private_key_jwt` at the
+    token endpoint; `client_secret_post` is not offered. PKCE carries the proof."""
+    seen: dict[str, Any] = {}
+
+    def handler(url: str, kwargs: dict[str, Any]) -> httpx.Response:
+        seen.update({"url": url, **kwargs["json"]})
+        return _json_response(201, {"client_id": "cid", "scope": "OAuth2Read OAuth2Write"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))
+    client = await ensure_client(InMemorySecretStore(), FS_MCP, redirect_uri=REDIRECT)
+    assert seen["url"] == FS_MCP.register_url
+    assert seen["token_endpoint_auth_method"] == "none"
+    assert client == HostedClient(client_id="cid", client_secret=None)
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        {"client_id": "old", "client_secret": None},
+        {
+            "client_id": "old",
+            "client_secret": None,
+            "register_url": "https://gone.example/register",
+        },
+    ],
+    ids=["legacy-record-without-origin", "registered-at-another-endpoint"],
+)
+async def test_a_client_registered_elsewhere_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, stored: dict[str, Any]
+) -> None:
+    """A DCR client id only means something to the server that issued it. When
+    the pinned register endpoint moves, the cached id is dead (the old host's
+    `/authorize` 404s), so it is re-registered rather than sent to the new host."""
+    calls: list[str] = []
+
+    def handler(url: str, _kwargs: dict[str, Any]) -> httpx.Response:
+        calls.append(url)
+        return _json_response(201, {"client_id": "new", "scope": "OAuth2Read OAuth2Write"})
+
+    monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))
+    store = InMemorySecretStore()
+    await store.put(client_secret_ref(FS_MCP.name), json.dumps(stored))
+    client = await ensure_client(store, FS_MCP, redirect_uri=REDIRECT)
+    assert client.client_id == "new"
+    assert calls == [FS_MCP.register_url]
+    again = await ensure_client(store, FS_MCP, redirect_uri=REDIRECT)
+    assert again.client_id == "new" and len(calls) == 1, "the replacement is cached"
+
+
 async def test_registration_refuses_a_wider_grant_than_we_pinned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -121,9 +171,10 @@ def test_authorize_url_pins_scope_and_carries_pkce() -> None:
     verifier, challenge = new_pkce()
     assert 43 <= len(verifier) <= 128
     url = authorize_url(FS_MCP, CLIENT, state="st", code_challenge=challenge, redirect_uri=REDIRECT)
-    assert url.startswith("https://fs-mcp.labs.onshape.app/authorize?")
+    assert url.startswith("https://mcp-auth.labs.onshape.app/authorize?")
     assert "code_challenge_method=S256" in url
     assert "scope=OAuth2Read+OAuth2Write" in url
+    assert "resource=https%3A%2F%2Ffs-mcp.labs.onshape.app" in url
     assert "OAuth2Delete" not in url and "OAuth2ReadPII" not in url
 
 
@@ -152,6 +203,7 @@ async def test_exchange_sends_the_verifier_and_stores_an_expiry(
     assert seen["url"] == FS_MCP.token_url
     assert seen["code_verifier"] == "v"
     assert seen["client_secret"] == "csecret"
+    assert seen["resource"] == FS_MCP.resource
     assert token == HostedToken(access_token="at", refresh_token="rt", expires_at=4599.0)
 
 
@@ -187,6 +239,7 @@ async def test_refresh_explicitly_requests_only_pinned_scopes(
 ) -> None:
     def handler(_url: str, kwargs: dict[str, Any]) -> httpx.Response:
         assert kwargs["data"]["scope"] == "OAuth2Read OAuth2Write"
+        assert kwargs["data"]["resource"] == FS_MCP.resource
         return _json_response(200, {"access_token": "at2", "expires_in": 3599})
 
     monkeypatch.setattr(httpx, "AsyncClient", _transport(handler))

@@ -28,7 +28,11 @@ async def _owner_count(session: SessionDep, team_id: uuid.UUID) -> int:
     count = await session.scalar(
         select(func.count())
         .select_from(Membership)
-        .where(Membership.team_id == team_id, Membership.role == Role.OWNER)
+        .where(
+            Membership.team_id == team_id,
+            Membership.role == Role.OWNER,
+            Membership.deleted_at.is_(None),
+        )
     )
     return count or 0
 
@@ -38,7 +42,7 @@ async def list_members(ctx: TeamCtx, session: SessionDep) -> dict[str, Any]:
     rows = await session.execute(
         select(Membership, User)
         .join(User, User.id == Membership.user_id)
-        .where(Membership.team_id == ctx.team.id)
+        .where(Membership.team_id == ctx.team.id, Membership.deleted_at.is_(None))
         .order_by(Membership.created_at)
     )
     return envelope([serialize_member(m, u) for m, u in rows.all()])

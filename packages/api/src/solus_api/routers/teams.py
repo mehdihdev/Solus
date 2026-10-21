@@ -29,7 +29,9 @@ router = APIRouter(prefix="/api/v1/teams")
 
 async def _member_count(session: SessionDep, team_id: Any) -> int:
     count = await session.scalar(
-        select(func.count()).select_from(Membership).where(Membership.team_id == team_id)
+        select(func.count())
+        .select_from(Membership)
+        .where(Membership.team_id == team_id, Membership.deleted_at.is_(None))
     )
     return count or 0
 
@@ -39,7 +41,11 @@ async def list_teams(user: CurrentUser, session: SessionDep) -> dict[str, Any]:
     rows = await session.execute(
         select(Team, Membership.role)
         .join(Membership, Membership.team_id == Team.id)
-        .where(Membership.user_id == user.id)
+        .where(
+            Membership.user_id == user.id,
+            Membership.deleted_at.is_(None),
+            Team.deleted_at.is_(None),
+        )
         .order_by(Team.created_at)
     )
     data = [

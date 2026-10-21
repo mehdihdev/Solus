@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { LOGO_ALIASES, integrationLogo, logoMapFrom } from './integrationLogos'
+import { LOGO_ALIASES, integrationLogo, logoMapFrom, logoClass } from './integrationLogos'
 
 describe('logoMapFrom', () => {
   it('maps a bundled asset to its lowercase provider id', () => {
@@ -43,5 +43,18 @@ describe('integrationLogo', () => {
     expect(LOGO_ALIASES['mcap-replay']).toBe('mcap')
     expect(integrationLogo('mcap-replay')).toBe(integrationLogo('mcap'))
     expect(integrationLogo('mcap-replay')).toMatch(/\.svg$|^data:image\/svg\+xml/)
+  })
+})
+
+// SOLUSDEV-317: a single-colour dark mark (GitHub's Invertocat) is unreadable on
+// a dark theme, so it carries a class the stylesheet inverts there. Coloured
+// marks keep their brand colours.
+describe('logoClass', () => {
+  it('marks monochrome logos, case-insensitively, and nothing else', () => {
+    expect(logoClass('github')).toBe('logo-mono')
+    expect(logoClass('GitHub')).toBe('logo-mono')
+    expect(logoClass('kicad')).toBeUndefined()
+    expect(logoClass('onshape')).toBeUndefined()
+    expect(logoClass('unknown')).toBeUndefined()
   })
 })

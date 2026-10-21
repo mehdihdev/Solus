@@ -8,17 +8,23 @@ import uuid
 from datetime import timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.connectors.integration_cache import IntegrationCache
+from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     CurrentUser,
+    IntegrationCacheDep,
     RequireVerified,
     SessionDep,
     SettingsDep,
+    SupabaseAdminDep,
+    TeamContext,
     TeamCtx,
     live_membership,
     require_role,
@@ -36,11 +42,27 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.routers.team_github_members import _check_rate as check_roster_rate
 from solus_api.schemas import InviteCreate, serialize_invite
 from solus_api.services.activity import record_activity
 from solus_api.services.events import emit_event
+from solus_api.services.github_identity import github_ids_for_team_members, verified_github_id
+from solus_api.services.github_roster import ORGANIZATION, require_org_member
 from solus_api.services.limits import check_can_accept_team_invite, check_can_create_team
 from solus_api.services.notifications import notify_user
+from solus_api.services.team_installations import get_live_installation, require_active_installation
+
+
+def _invite_payload(invite: Invite) -> dict[str, Any]:
+    """The invite's target for activity rows and notifications: email or GitHub identity."""
+    if invite.github_user_id is not None:
+        return {"github_user_id": invite.github_user_id, "github_login": invite.github_login}
+    return {"email": invite.email}
+
+
+def _invitee_label(invite: Invite) -> str:
+    return invite.email or f"@{invite.github_login}"
+
 
 team_router = APIRouter(prefix="/api/v1/teams/{team_id}/invites")
 accept_router = APIRouter(prefix="/api/v1/invites")
@@ -68,13 +90,22 @@ async def list_invites(
 
 @team_router.post("", status_code=201)
 async def create_invite(
+    request: Request,
     body: InviteCreate,
     ctx: TeamCtx,
     session: SessionDep,
     settings: SettingsDep,
+    cache: IntegrationCacheDep,
     _verified: RequireVerified,
 ) -> dict[str, Any]:
     require_role(ctx, Role.ADMIN)
+    if body.github_user_id is not None and body.github_login is not None:
+        # The members budget guards every roster read, and an invite may refresh the roster.
+        check_roster_rate(request, ctx.user.id)
+        return await _create_github_invite(
+            ctx, session, settings, cache, body.github_user_id, body.role
+        )
+    assert body.email is not None  # InviteCreate guarantees exactly one target
     email = body.email.lower()
 
     # Personal teams stay solo-only (ADR-032). To collaborate, spin up a COLLABORATIVE team
@@ -96,7 +127,11 @@ async def create_invite(
     existing_member = await session.scalar(
         select(Membership)
         .join(User, User.id == Membership.user_id)
-        .where(Membership.team_id == target_team.id, User.email == email)
+        .where(
+            Membership.team_id == target_team.id,
+            Membership.deleted_at.is_(None),
+            User.email == email,
+        )
     )
     if existing_member is not None:
         raise APIError(409, "already_member", "That user is already on the team")
@@ -152,6 +187,69 @@ async def create_invite(
     return envelope(serialize_invite(invite, include_token=True))
 
 
+async def _create_github_invite(
+    ctx: TeamContext,
+    session: AsyncSession,
+    settings: Settings,
+    cache: IntegrationCache,
+    github_user_id: int,
+    role: str,
+) -> dict[str, Any]:
+    """Invite an org member of the team's linked GitHub organization (ADR-039 section 6).
+
+    The personal-team spawn does not apply: the team must already be collaborative and hold
+    a live Organization installation. The id (never the login) must be on the org roster, and
+    the login stored is the ROSTER's, never the client's. The invitee still has to PROVE that
+    id at accept time."""
+    team = ctx.team
+    inst = await get_live_installation(session, team.id)
+    if inst is None or inst.account_type != ORGANIZATION:
+        raise APIError(
+            400, "not_an_org_member", "Link a GitHub organization to this team to invite from it"
+        )
+    await require_active_installation(session, team.id)
+    if github_user_id in await github_ids_for_team_members(session, team.id):
+        raise APIError(409, "already_member", "That user is already on the team")
+    pending = await session.scalar(
+        select(Invite.id).where(
+            Invite.team_id == team.id,
+            Invite.github_user_id == github_user_id,
+            Invite.status == InviteStatus.PENDING,
+        )
+    )
+    if pending is not None:
+        raise APIError(409, "invite_pending", "An invite for that GitHub user is already pending")
+    member = await require_org_member(cache, inst, github_user_id)
+    github_login = member.github_login
+
+    invite = Invite(
+        team_id=team.id,
+        github_user_id=github_user_id,
+        github_login=github_login,
+        role=Role(role),
+        invited_by=ctx.user.id,
+        expires_at=utcnow() + timedelta(days=settings.invite_ttl_days),
+    )
+    session.add(invite)
+    record_activity(
+        session,
+        team_id=team.id,
+        activity_type="invite.created",
+        actor_id=ctx.user.id,
+        payload={"github_user_id": github_user_id, "github_login": github_login, "role": role},
+    )
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="github_org.invite_suggested",
+        team_id=team.id,
+        payload={"role": role},
+    )
+    await session.commit()
+    await session.refresh(invite)
+    return envelope(serialize_invite(invite, include_token=True))
+
+
 @team_router.delete("/{invite_id}", status_code=204)
 async def revoke_invite(invite_id: uuid.UUID, ctx: TeamCtx, session: SessionDep) -> Response:
     require_role(ctx, Role.ADMIN)
@@ -166,7 +264,7 @@ async def revoke_invite(invite_id: uuid.UUID, ctx: TeamCtx, session: SessionDep)
         team_id=ctx.team.id,
         activity_type="invite.revoked",
         actor_id=ctx.user.id,
-        payload={"email": invite.email},
+        payload=_invite_payload(invite),
     )
     await session.commit()
     return Response(status_code=204)
@@ -174,7 +272,7 @@ async def revoke_invite(invite_id: uuid.UUID, ctx: TeamCtx, session: SessionDep)
 
 @accept_router.post("/{invite_token}/accept")
 async def accept_invite(
-    invite_token: str, user: CurrentUser, session: SessionDep
+    invite_token: str, user: CurrentUser, session: SessionDep, admin: SupabaseAdminDep
 ) -> dict[str, Any]:
     invite = await session.scalar(select(Invite).where(Invite.token == invite_token))
     if invite is None:
@@ -185,7 +283,16 @@ async def accept_invite(
         raise APIError(409, "invite_already_accepted", "This invite was already used")
     if ensure_utc(invite.expires_at) < utcnow():
         raise APIError(410, "invite_expired", "This invite has expired")
-    if user.email.lower() != invite.email:
+    if invite.github_user_id is not None:
+        # The invitee must PROVE the GitHub id: a connected GitHub account or the Supabase
+        # admin identity. Never a JWT claim, never the login or the email address.
+        if await verified_github_id(session, user, admin=admin) != invite.github_user_id:
+            raise APIError(
+                403,
+                "github_identity_mismatch",
+                "This invite was issued to a different GitHub account. Connect that account first.",
+            )
+    elif invite.email is None or user.email.lower() != invite.email:
         raise APIError(403, "forbidden", "This invite was issued to a different email")
     if await live_membership(session, invite.team_id, user.id) is not None:
         raise APIError(409, "already_member", "You are already on this team")
@@ -226,7 +333,7 @@ async def accept_invite(
         team_id=invite.team_id,
         activity_type="invite.accepted",
         actor_id=user.id,
-        payload={"email": invite.email},
+        payload=_invite_payload(invite),
     )
     emit_event(session, user=user, event_type="invite.accepted", team_id=invite.team_id)
     if invite.invited_by is not None and invite.invited_by != user.id:
@@ -234,8 +341,8 @@ async def accept_invite(
             session,
             user_id=invite.invited_by,
             notification_type="invite.accepted",
-            title=f"{invite.email} accepted your invite",
-            attrs={"team_id": str(invite.team_id), "email": invite.email},
+            title=f"{_invitee_label(invite)} accepted your invite",
+            attrs={"team_id": str(invite.team_id), **_invite_payload(invite)},
         )
     await session.commit()
     return envelope({"team_id": invite.team_id, "role": invite.role.value})

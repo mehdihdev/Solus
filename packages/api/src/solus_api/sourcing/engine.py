@@ -27,6 +27,7 @@ from solus_api.orchestration.gates import (
     FrequencyCapExceededError,
     InsufficientCreditsError,
     TrialCapReachedError,
+    TrialExpiredError,
 )
 from solus_api.orchestration.gateway import complete
 from solus_api.orchestration.providers import ProviderAdapter
@@ -207,6 +208,11 @@ async def run_request(
         except InsufficientCreditsError:
             request.status = JobStatus.FAILED
             request.error = _error("insufficient_credits", "Not enough credits to run sourcing.")
+        except TrialExpiredError:
+            request.status = JobStatus.FAILED
+            request.error = _error(
+                "trial_expired", "Your trial ended; choose a plan to run sourcing."
+            )
         except (FrequencyCapExceededError, TrialCapReachedError):
             request.status = JobStatus.FAILED
             request.error = _error("rate_limited", "Sourcing is rate-limited right now; try later.")

@@ -100,6 +100,58 @@ export function toSolArtifact(event: SolEvent): SolArtifact | null {
   }
 }
 
+/** A Build-mode `code.exec` that ran without a card (code-command-execution.md
+ *  §10.1), as the transcript shows it. Untrusted machine text — plain text only. */
+export interface AutoRun {
+  readonly callId: string
+  /** The program's basename. */
+  readonly program: string
+  /** `exited N`, `timed out`, … as the cloud words it. */
+  readonly status: string
+  /** stdout then stderr tails. */
+  readonly output: string
+}
+
+/** Per-tail ceiling: above the code server's 16 KiB tail window. */
+export const AUTO_RUN_TAIL_CHARS = 32_768
+const AUTO_RUN_PROGRAM_CHARS = 256
+const AUTO_RUN_STATUS_CHARS = 200
+
+/** Join stdout and stderr tails as one plain-text block (stdout first). */
+export function joinTails(stdout: string, stderr: string): string {
+  if (!stdout || !stderr) return stdout + stderr
+  return stdout.endsWith('\n') ? stdout + stderr : `${stdout}\n${stderr}`
+}
+
+/** An optional tail: absent reads as empty, anything but a string is junk. */
+function tailOf(value: unknown): string | null {
+  if (value === undefined || value === null) return ''
+  return typeof value === 'string' ? value.slice(-AUTO_RUN_TAIL_CHARS) : null
+}
+
+function basename(program: string): string {
+  return program.split(/[\\/]/).filter(Boolean).pop() ?? ''
+}
+
+/** Read an auto-run row from a `tool_result` payload `{call_id, tool, auto:
+ *  true, program, status, stdout_tail, stderr_tail}`, or null — any unknown or
+ *  missing field means no row. */
+export function toAutoRun(data: Record<string, unknown>): AutoRun | null {
+  const { call_id: callId, tool, auto, program, status } = data
+  if (auto !== true || tool !== 'code.exec' || typeof callId !== 'string') return null
+  if (typeof program !== 'string' || typeof status !== 'string' || !status) return null
+  const name = basename(program).slice(0, AUTO_RUN_PROGRAM_CHARS)
+  const stdout = tailOf(data.stdout_tail)
+  const stderr = tailOf(data.stderr_tail)
+  if (!name || stdout === null || stderr === null) return null
+  return {
+    callId,
+    program: name,
+    status: status.slice(0, AUTO_RUN_STATUS_CHARS),
+    output: joinTails(stdout, stderr)
+  }
+}
+
 /**
  * Split an SSE buffer into complete frames plus the unconsumed remainder.
  *

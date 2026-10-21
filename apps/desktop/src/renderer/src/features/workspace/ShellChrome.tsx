@@ -1,4 +1,4 @@
-// Shell chrome pieces: the search box and bell (hosted by MenuBar since
+// Shell chrome pieces: the search box (opens the ⌘K palette) and bell (hosted by MenuBar since
 // SOLUSDEV-235 moved the topbar into a title row + menu row), the live
 // notifications popover, the honest offline popover, and the toast.
 // SOLUSDEV-152 removed the demo-alert popover.
@@ -9,11 +9,23 @@ import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
 import type { NotificationApi } from '../../lib/api/resources'
 import { useShellStore } from './shellStore'
+import { usePaletteStore } from '../palette/paletteStore'
+import { paletteShortcutHint } from '../palette/paletteHotkey'
+import { isMac } from '../sol/commandHotkey'
 import { useOfflineReason } from './workspaceOnline'
 
+/** Opens the ⌘K command palette (SOLUSDEV-317, command-palette.md). */
 export function SearchBox(): React.JSX.Element {
+  const mac = isMac()
   return (
-    <div
+    <button
+      type="button"
+      className="interactive"
+      aria-keyshortcuts={mac ? 'Meta+K' : 'Control+K'}
+      onClick={(e) => {
+        e.stopPropagation()
+        usePaletteStore.getState().setOpen(true)
+      }}
       style={{
         width: 280,
         background: 'var(--sur)',
@@ -23,16 +35,18 @@ export function SearchBox(): React.JSX.Element {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        color: 'var(--mut)'
+        color: 'var(--mut)',
+        cursor: 'pointer',
+        fontFamily: 'var(--font-ui)'
       }}
     >
       <span style={{ fontSize: 12, display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-        <Icons.search size={12} /> Search nodes, nets, files…
+        <Icons.search size={12} /> Search pages, projects, nodes…
       </span>
       <Mono size={9.5} style={{ textTransform: 'none' }}>
-        ⌘K
+        {paletteShortcutHint(mac)}
       </Mono>
-    </div>
+    </button>
   )
 }
 

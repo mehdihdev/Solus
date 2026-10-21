@@ -13,7 +13,14 @@ import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
 import type { AddOnStep } from './addOnStep'
 import type { ConnectionState, ConnectStage } from './onboardingStore'
-import { pollAcceptedSync, indexedSyncDetail, type SyncJobApi } from './sourceSync'
+import {
+  isSettledJob,
+  jobFailure,
+  pollAcceptedSync,
+  indexedSyncDetail,
+  STILL_INDEXING_RESULT,
+  type SyncJobApi
+} from './sourceSync'
 
 /** The slice of the typed API surface this orchestration depends on. */
 export interface OAuthConnectApi extends SyncJobApi {
@@ -230,6 +237,9 @@ async function authorize(
   return { state: start.state, code: callback.code, sourceId }
 }
 
+const withNote = (result: string, note: string | null): string =>
+  note ? `${result} · ${note}` : result
+
 /** Write the chosen config onto the source, sync, poll, and report the result. */
 async function indexSource(
   deps: OAuthConnectDeps,
@@ -244,14 +254,15 @@ async function indexSource(
   const accepted = await deps.api.triggerSync(projectId, sourceId)
 
   const job = await pollAcceptedSync(deps.api, projectId, accepted.job_id, deps.sleep)
-  if (!job) {
-    const error = 'Sync timed out.'
-    deps.onProgress({ phase: 'error', error, sourceId })
-    return { ok: false, error, sourceId }
+  if (job && !isSettledJob(job)) {
+    // Long exports (Onshape STEP) outlast the wait. The source is connected and
+    // its sync is running; the source row reports how it ends.
+    const result = withNote(STILL_INDEXING_RESULT, addOnNote)
+    deps.onProgress({ phase: 'done', sourceId, result })
+    return { ok: true, sourceId, result }
   }
-  if (job.status !== 'succeeded') {
-    const error =
-      job.error?.message ?? (job.status === 'cancelled' ? 'Sync cancelled.' : 'Sync failed.')
+  const error = jobFailure(job)
+  if (error) {
     deps.onProgress({ phase: 'error', error, sourceId })
     return { ok: false, error, sourceId }
   }
@@ -261,7 +272,7 @@ async function indexSource(
   // The add-on note rides the REAL result string rather than replacing it: a
   // connect that indexed nothing has not become a success because an extra
   // turned on, and the entity count is what the person came for.
-  const result = `Connected — ${detail}${addOnNote ? ` · ${addOnNote}` : ''}`
+  const result = withNote(`Connected — ${detail}`, addOnNote)
   deps.onProgress({ phase: 'done', sourceId, result })
   return { ok: true, sourceId, result }
 }

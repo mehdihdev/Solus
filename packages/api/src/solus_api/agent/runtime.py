@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent import prompt, reason, screen
+from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, model_result, stream_view
 from solus_api.agent.context import Context, build_context
 from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.interfaces import GraphScope, SolSystems
@@ -522,12 +523,12 @@ def _register_bridge_tools(
         registry.register(owned_tool)
 
     for tool in tools:
-        registered = _owned_machine_tool(tool)
-        registry.register(
-            with_environment_recording(
-                registered, environments, session_factory, project_id, user_id
-            )
+        registered = with_environment_recording(
+            _owned_machine_tool(tool), environments, session_factory, project_id, user_id
         )
+        # §10.1: marks the plan-snapshot `code.exec` only; every other tool is a no-op.
+        register_owned_routine(registered, family="command")
+        registry.register(registered)
     return environments
 
 
@@ -1196,13 +1197,20 @@ class LlmRunner:
                 # A failure it can correct (NOT_FOUND for a hallucinated tool,
                 # INVALID_ARGS, TIMEOUT) it corrects; a park it is told to leave
                 # alone and work around. See the note below the loop.
-                yield AgentEvent.tool_result(result)
+                # §10.1: an auto-run command streams its own row for the desktop
+                # and reaches the model as its outcome clause, in this same turn.
+                auto = call.tool == AUTO_COMMAND_TOOL and call.call_id in ctx.executed_build_calls
+                yield AgentEvent.tool_result(
+                    result, command=stream_view(result, call.args.get("argv")) if auto else None
+                )
                 artifact = AgentEvent.artifact_from_result(call.tool, result)
                 if artifact is not None:
                     yield artifact  # a reference the renderer can view/file; never bytes
                 outcomes.append(
                     prompt.contain_result(
-                        call, result, cap=descriptor.result_cap if descriptor else None
+                        call,
+                        model_result(result) if auto else result,
+                        cap=descriptor.result_cap if descriptor else None,
                     )
                 )
 

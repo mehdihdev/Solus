@@ -86,7 +86,7 @@ async def test_subscription_checkout_sets_trial_metadata_and_ref(captured: dict[
         user_id="u1",
         success_url="https://ok",
         cancel_url="https://no",
-        trial_days=14,
+        trial_end=1_900_000_000,
     )
     assert url == "https://checkout.stripe.com/c/cs_1"
     p = captured["checkout"]
@@ -94,7 +94,7 @@ async def test_subscription_checkout_sets_trial_metadata_and_ref(captured: dict[
     assert p["line_items"] == [{"price": "price_bm", "quantity": 1}]
     assert p["client_reference_id"] == "u1"
     assert p["metadata"] == {"solus_user_id": "u1", "price_id": "price_bm"}
-    assert p["subscription_data"] == {"trial_period_days": 14}
+    assert p["subscription_data"] == {"trial_end": 1_900_000_000}
     assert p["success_url"] == "https://ok"
     assert p["api_key"] == "sk_test_x"
 
@@ -108,18 +108,159 @@ async def test_payment_checkout_has_no_subscription_data(captured: dict[str, Any
         user_id="u1",
         success_url="https://ok",
         cancel_url="https://no",
-        trial_days=None,
+        trial_end=None,
     )
     assert "subscription_data" not in captured["checkout"]
 
 
 async def test_portal_session_returns_url(captured: dict[str, Any]) -> None:
     gw = StripeGateway(_FakeStore("sk_test_x"))
-    url = await gw.create_portal_session(customer="cus_1", return_url="https://back")
+    url = await gw.create_portal_session(
+        customer="cus_1", return_url="https://back", configuration="bpc_1"
+    )
     assert url == "https://billing.stripe.com/p/bps_1"
     assert captured["portal"]["customer"] == "cus_1"
     assert captured["portal"]["return_url"] == "https://back"
+    assert captured["portal"]["configuration"] == "bpc_1"
     assert captured["portal"]["api_key"] == "sk_test_x"
+    assert "flow_data" not in captured["portal"]
+
+
+@pytest.mark.parametrize(
+    ("flow", "type_", "key"),
+    [
+        ("update", "subscription_update", "subscription_update"),
+        ("cancel", "subscription_cancel", "subscription_cancel"),
+    ],
+)
+async def test_portal_session_flow_data_shape(
+    captured: dict[str, Any], flow: Any, type_: str, key: str
+) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    await gw.create_portal_session(
+        customer="cus_1",
+        return_url="https://back",
+        configuration="bpc_1",
+        flow=flow,
+        subscription_id="sub_9",
+    )
+    assert captured["portal"]["flow_data"] == {
+        "type": type_,
+        key: {"subscription": "sub_9"},
+        "after_completion": {"type": "redirect", "redirect": {"return_url": "https://back"}},
+    }
+
+
+async def test_portal_session_flow_requires_valid_subscription_id(
+    captured: dict[str, Any],
+) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    for bad in (None, "cus_1", "sub_x y"):
+        with pytest.raises(ValueError):
+            await gw.create_portal_session(
+                customer="cus_1",
+                return_url="https://back",
+                configuration="bpc_1",
+                flow="cancel",
+                subscription_id=bad,
+            )
+    assert "portal" not in captured
+
+
+async def test_portal_session_rejects_bad_configuration_id(captured: dict[str, Any]) -> None:
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    with pytest.raises(ValueError):
+        await gw.create_portal_session(
+            customer="cus_1", return_url="https://back", configuration="nope"
+        )
+
+
+async def test_list_portal_configurations_active_and_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [
+        _Obj(data=[{"id": "bpc_1"}], has_more=True),
+        _Obj(data=[{"id": "bpc_2"}], has_more=False),
+    ]
+    seen: list[dict[str, Any]] = []
+
+    async def fake_list(**params: Any) -> _Obj:
+        seen.append(params)
+        return pages[len(seen) - 1]
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    got = await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert [c["id"] for c in got] == ["bpc_1", "bpc_2"]
+    assert seen[0]["active"] is True
+    assert seen[1]["starting_after"] == "bpc_1"
+
+
+async def test_list_portal_configurations_returns_plain_dicts_from_real_sdk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression (live QA 2026-10-21): SDK 15 StripeObjects are not Mappings and have no
+    # .get(), so the matcher crashed on real responses. The gateway must hand back dicts.
+    page = stripe.StripeObject.construct_from(
+        {
+            "data": [{"id": "bpc_1", "metadata": {"solus_portal_config": "v1"}}],
+            "has_more": False,
+        },
+        "sk_test_x",
+    )
+
+    async def fake_list(**params: Any) -> stripe.StripeObject:
+        return page
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    got = await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert got == [{"id": "bpc_1", "metadata": {"solus_portal_config": "v1"}}]
+    assert all(type(c) is dict and type(c["metadata"]) is dict for c in got)
+
+
+async def test_list_portal_configurations_pagination_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def fake_list(**params: Any) -> _Obj:
+        nonlocal calls
+        calls += 1
+        return _Obj(data=[{"id": f"bpc_{calls}"}], has_more=True)
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "list_async", fake_list)
+    await StripeGateway(_FakeStore("sk_test_x")).list_portal_configurations()
+    assert calls == 10
+
+
+async def test_create_portal_configuration_uses_hash_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_create(**params: Any) -> _Obj:
+        seen.update(params)
+        return _Obj(id="bpc_new")
+
+    monkeypatch.setattr(stripe.billing_portal.Configuration, "create_async", fake_create)
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    cid = await gw.create_portal_configuration({"features": {}}, key_hash="abc123")
+    assert cid == "bpc_new"
+    assert seen["idempotency_key"] == "solus-portal-config-abc123"
+    assert seen["features"] == {}
+    with pytest.raises(ValueError):
+        await gw.create_portal_configuration({}, key_hash="bad hash!")
+
+
+async def test_price_products_maps_price_to_product(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_retrieve(price_id: str, **params: Any) -> _Obj:
+        return _Obj(id=price_id, product={"price_a": "prod_1"}.get(price_id, _Obj(id="prod_2")))
+
+    monkeypatch.setattr(stripe.Price, "retrieve_async", fake_retrieve)
+    gw = StripeGateway(_FakeStore("sk_test_x"))
+    got = await gw.price_products(["price_a", "price_b"])
+    assert got == {"price_a": "prod_1", "price_b": "prod_2"}
+    with pytest.raises(ValueError):
+        await gw.price_products(["bad"])
 
 
 async def test_missing_key_raises_billing_unconfigured() -> None:
@@ -127,7 +268,9 @@ async def test_missing_key_raises_billing_unconfigured() -> None:
     with pytest.raises(BillingUnconfiguredError):
         await gw.get_or_create_customer(existing=None, email="a@b.co", user_id="u1")
     with pytest.raises(BillingUnconfiguredError):
-        await gw.create_portal_session(customer="cus_1", return_url="https://back")
+        await gw.create_portal_session(
+            customer="cus_1", return_url="https://back", configuration="bpc_1"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +369,7 @@ def st(monkeypatch: pytest.MonkeyPatch) -> _Stripe:
         "sub.modify": (stripe.Subscription, "modify_async", _sub(price="price_new")),
         "sub.cancel": (stripe.Subscription, "cancel_async", _sub(status="canceled")),
         "cus.modify": (stripe.Customer, "modify_async", {"id": "cus_1"}),
+        "customer.retrieve": (stripe.Customer, "retrieve_async", {"id": "cus_1"}),
         "coupon.create": (stripe.Coupon, "create_async", {"id": "x"}),
         "sched.create": (stripe.SubscriptionSchedule, "create_async", sched),
         "sched.modify": (stripe.SubscriptionSchedule, "modify_async", sched),
@@ -286,6 +430,22 @@ async def test_retrieve_subscription_projects_stable_fields(st: _Stripe) -> None
     _, params = st.one("sub.retrieve")
     assert params["api_key"] == KEY
     assert "idempotency_key" not in params
+
+
+async def test_snapshot_exposes_trial_end_and_interval(st: _Stripe) -> None:
+    raw = _sub()
+    raw["trial_end"] = 1_700_000_000
+    raw["items"]["data"][0]["price"]["recurring"] = {"interval": "year"}
+    st.results["sub.retrieve"] = raw
+    snap = await gw().retrieve_subscription("sub_1")
+    assert snap.trial_end == 1_700_000_000
+    assert snap.interval == "year"
+
+
+async def test_snapshot_trial_end_and_interval_default_to_none(st: _Stripe) -> None:
+    snap = await gw().retrieve_subscription("sub_1")
+    assert snap.trial_end is None
+    assert snap.interval is None
 
 
 async def test_retrieve_handles_source_coupon_and_unexpanded_discount(st: _Stripe) -> None:
@@ -962,3 +1122,195 @@ async def test_redact_customer_is_bounded_by_a_retryable_timeout(
     with pytest.raises(StripeOperationError) as err:
         await gw().redact_customer("cus_1", audit_action_id="a")
     assert err.value.retryable is True and err.value.code == "timeout"
+
+
+# ---- SOLUSDEV-236 T3: reconciliation read methods ---------------------------- #
+
+
+async def test_retrieve_subscription_raw_returns_a_plain_dict(st: _Stripe) -> None:
+    st.results["sub.retrieve"] = _sub()
+    raw = await gw().retrieve_subscription_raw("sub_1")
+    assert raw["status"] == "active" and raw["items"]["data"][0]["price"]["id"] == "price_old"
+    _, params = st.one("sub.retrieve")
+    assert params["api_key"] == KEY and "idempotency_key" not in params
+
+
+async def test_retrieve_subscription_raw_uses_to_dict_when_available(st: _Stripe) -> None:
+    class _Sdk:
+        def to_dict(self) -> dict[str, Any]:
+            return {"id": "sub_1", "status": "trialing"}
+
+    st.results["sub.retrieve"] = _Sdk()
+    assert await gw().retrieve_subscription_raw("sub_1") == {"id": "sub_1", "status": "trialing"}
+
+
+async def test_retrieve_subscription_raw_missing_and_bad_id(st: _Stripe) -> None:
+    st.errors["sub.retrieve"] = [_invalid("resource_missing")]
+    with pytest.raises(StripeResourceMissingError):
+        await gw().retrieve_subscription_raw("sub_1")
+    with pytest.raises(ValueError):
+        await gw().retrieve_subscription_raw("not-an-id")
+
+
+async def test_customer_exists_true_false_and_deleted_stub(st: _Stripe) -> None:
+    st.results["customer.retrieve"] = {"id": "cus_1"}
+    assert await gw().customer_exists("cus_1") is True
+    st.results["customer.retrieve"] = {"id": "cus_1", "deleted": True}
+    assert await gw().customer_exists("cus_1") is False
+    st.errors["customer.retrieve"] = [_invalid("resource_missing")]
+    assert await gw().customer_exists("cus_1") is False
+
+
+async def test_customer_exists_propagates_other_errors(st: _Stripe) -> None:
+    st.errors["customer.retrieve"] = [stripe.APIConnectionError("boom")]  # type: ignore[no-untyped-call]
+    with pytest.raises(StripeOperationError):
+        await gw().customer_exists("cus_1")
+
+
+async def test_ensure_configured_raises_without_a_key() -> None:
+    await StripeGateway(_FakeStore("sk_test_x")).ensure_configured()
+    with pytest.raises(BillingUnconfiguredError):
+        await StripeGateway(_FakeStore(None)).ensure_configured()
+
+
+# ---- SOLUSDEV-236 T5: billing summary reads ------------------------------- #
+
+_PREVIEW_AT = 1_900_000_000
+
+
+def _patch_reads(st: _Stripe, monkeypatch: pytest.MonkeyPatch, **defaults: Any) -> None:
+    for name, cls, attr in (
+        ("invoice.preview", stripe.Invoice, "create_preview_async"),
+        ("price.retrieve", stripe.Price, "retrieve_async"),
+        ("sub.retrieve", stripe.Subscription, "retrieve_async"),
+        ("customer.retrieve", stripe.Customer, "retrieve_async"),
+    ):
+        monkeypatch.setattr(cls, attr, st.make(name, defaults.get(name)))
+
+
+_CARD = {"id": "pm_secret", "type": "card", "card": {"brand": "visa", "last4": "4242"}}
+
+
+async def test_upcoming_invoice_shape_and_params(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["invoice.preview"] = {
+        "id": "in_x",
+        "amount_due": 2500,
+        "currency": "usd",
+        "next_payment_attempt": _PREVIEW_AT,
+        "period_end": 1,
+    }
+    out = await gw().upcoming_invoice("cus_1", "sub_1")
+    assert out is not None
+    assert (out.amount_cents, out.currency) == (2500, "usd")
+    assert int(out.date.timestamp()) == _PREVIEW_AT
+    _, params = st.one("invoice.preview")
+    assert params["customer"] == "cus_1" and params["subscription"] == "sub_1"
+    assert "in_x" not in repr(out)
+
+
+async def test_upcoming_invoice_falls_back_to_period_end(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["invoice.preview"] = {
+        "amount_due": 1,
+        "currency": "usd",
+        "next_payment_attempt": None,
+        "period_end": _PREVIEW_AT,
+    }
+    out = await gw().upcoming_invoice("cus_1", "sub_1")
+    assert out is not None and int(out.date.timestamp()) == _PREVIEW_AT
+
+
+async def test_upcoming_invoice_none_when_stripe_has_none(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.errors["invoice.preview"] = [_invalid("invoice_upcoming_none")]
+    assert await gw().upcoming_invoice("cus_1", "sub_1") is None
+
+
+async def test_upcoming_invoice_other_errors_propagate_and_ids_validated(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.errors["invoice.preview"] = [stripe.APIConnectionError("boom")]  # type: ignore[no-untyped-call]
+    with pytest.raises(StripeOperationError):
+        await gw().upcoming_invoice("cus_1", "sub_1")
+    with pytest.raises(ValueError):
+        await gw().upcoming_invoice("bad", "sub_1")
+    with pytest.raises(ValueError):
+        await gw().upcoming_invoice("cus_1", "bad")
+
+
+async def test_default_payment_method_prefers_subscription_and_hides_id(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"id": "sub_1", "default_payment_method": _CARD}
+    out = await gw().default_payment_method("cus_1", "sub_1")
+    assert out is not None and (out.brand, out.last4) == ("visa", "4242")
+    assert "pm_secret" not in repr(out)
+    assert st.of("customer.retrieve") == []
+    assert st.one("sub.retrieve")[1]["expand"] == ["default_payment_method"]
+
+
+async def test_default_payment_method_falls_back_to_customer(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"id": "sub_1", "default_payment_method": None}
+    st.results["customer.retrieve"] = {
+        "id": "cus_1",
+        "invoice_settings": {"default_payment_method": _CARD},
+    }
+    out = await gw().default_payment_method("cus_1", "sub_1")
+    assert out is not None and out.last4 == "4242"
+    assert st.one("customer.retrieve")[1]["expand"] == ["invoice_settings.default_payment_method"]
+
+
+async def test_default_payment_method_none_cases(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["sub.retrieve"] = {"default_payment_method": {"id": "pm_1", "type": "sepa_debit"}}
+    st.results["customer.retrieve"] = {"invoice_settings": {"default_payment_method": None}}
+    assert await gw().default_payment_method("cus_1", "sub_1") is None
+    with pytest.raises(ValueError):
+        await gw().default_payment_method("bad", "sub_1")
+
+
+async def test_price_amounts_shape_and_validation(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["price.retrieve"] = {
+        "id": "price_a",
+        "unit_amount": 2500,
+        "currency": "usd",
+        "recurring": {"interval": "month"},
+    }
+    out = await gw().price_amounts(["price_a"])
+    assert out["price_a"].amount_cents == 2500
+    assert (out["price_a"].currency, out["price_a"].interval) == ("usd", "month")
+    with pytest.raises(ValueError):
+        await gw().price_amounts(["nope"])
+
+
+async def test_price_amounts_rejects_priceless_or_non_recurring(
+    st: _Stripe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_reads(st, monkeypatch)
+    st.results["price.retrieve"] = {
+        "unit_amount": None,
+        "currency": "usd",
+        "recurring": {"interval": "month"},
+    }
+    with pytest.raises(StripeOperationError):
+        await gw().price_amounts(["price_a"])
+    st.results["price.retrieve"] = {"unit_amount": 5, "currency": "usd", "recurring": None}
+    with pytest.raises(StripeOperationError):
+        await gw().price_amounts(["price_a"])

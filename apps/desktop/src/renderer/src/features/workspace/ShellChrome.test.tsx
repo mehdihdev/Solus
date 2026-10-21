@@ -3,11 +3,26 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { OfflineNotifPopover, NotificationsPopover, ToastView } from './ShellChrome'
+import { OfflineNotifPopover, NotificationsPopover, SearchBox, ToastView } from './ShellChrome'
 import { useShellStore } from './shellStore'
+import { usePaletteStore } from '../palette/paletteStore'
 import type { NotificationApi } from '../../lib/api/resources'
 
-beforeEach(() => useShellStore.getState().reset())
+beforeEach(() => {
+  useShellStore.getState().reset()
+  usePaletteStore.getState().reset()
+})
+
+describe('SearchBox', () => {
+  it('is a real button that opens the ⌘K palette and names its shortcut', async () => {
+    render(<SearchBox />)
+    const button = screen.getByRole('button', { name: /Search pages, projects, nodes/ })
+    expect(button).toHaveAttribute('aria-keyshortcuts')
+    expect(button).toHaveTextContent(/⌘K|Ctrl K/)
+    await userEvent.click(button)
+    expect(usePaletteStore.getState().open).toBe(true)
+  })
+})
 
 describe('OfflineNotifPopover', () => {
   it('shows an honest sign-in message instead of demo alerts', async () => {

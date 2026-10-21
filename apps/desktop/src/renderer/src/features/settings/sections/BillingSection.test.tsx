@@ -65,4 +65,12 @@ describe('BillingSection', () => {
     render(<BillingSection data={data({ ...SUB, status: 'active', expires_at: null })} now={NOW} />)
     expect(screen.queryByText(/days/)).not.toBeInTheDocument()
   })
+
+  it('shows "Trial ended {date}" once the trial has expired (never "today")', () => {
+    render(<BillingSection data={data({ ...SUB, expires_at: '2026-07-01T00:00:00Z' })} now={NOW} />)
+    expect(screen.getByText('Trial ended')).toBeInTheDocument()
+    expect(screen.getByText('July 1, 2026')).toBeInTheDocument()
+    expect(screen.queryByText('today')).not.toBeInTheDocument()
+    expect(screen.queryByText('Trial ends')).not.toBeInTheDocument()
+  })
 })

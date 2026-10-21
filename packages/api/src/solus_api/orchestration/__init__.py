@@ -44,6 +44,7 @@ from solus_api.orchestration.gates import (
     FrequencyCapExceededError,
     InsufficientCreditsError,
     TrialCapReachedError,
+    TrialExpiredError,
     assert_can_spend,
     check_frequency_cap,
 )
@@ -129,6 +130,7 @@ __all__ = [
     "RECONCILE_JOB_NAME",
     "ResolvedRouting",
     "TrialCapReachedError",
+    "TrialExpiredError",
     "TypeEstimatorConfig",
     "ModelCatalogEntry",
     "ModelChoice",

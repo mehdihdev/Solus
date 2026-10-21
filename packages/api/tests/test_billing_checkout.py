@@ -7,12 +7,14 @@ plan/pack validation, customer reuse/persistence, mode selection, auth, and the
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 import stripe
 from conftest import ALICE, BOB, TEST_AUDIENCE, TEST_DATABASE_URL, TEST_JWT_SECRET, bearer, me
 from httpx import ASGITransport, AsyncClient
+from solus_api.billing.portal_config import reset_portal_config_cache
 from solus_api.billing.stripe_gateway import BillingUnconfiguredError
 from solus_api.core.config import Settings
 from solus_api.deps import get_stripe_gateway
@@ -49,6 +51,18 @@ class FakeGateway:
         self.checkout_calls.append(kwargs)
         return "https://checkout.stripe.com/c/test"
 
+    async def price_products(self, price_ids: list[str]) -> dict[str, str]:
+        self._guard()
+        return {p: "prod_1" for p in price_ids}
+
+    async def list_portal_configurations(self) -> list[Any]:
+        self._guard()
+        return []
+
+    async def create_portal_configuration(self, params: dict[str, Any], *, key_hash: str) -> str:
+        self._guard()
+        return "bpc_test"
+
     async def create_portal_session(self, **kwargs: Any) -> str:
         self._guard()
         self.portal_calls.append(kwargs)
@@ -69,6 +83,11 @@ def _settings() -> Settings:
         stripe_pack_usd={"price_pack10": 10},  # pack25 deliberately unmapped
         stripe_trial_days=14,
     )
+
+
+@pytest.fixture(autouse=True)
+def _fresh_portal_cache() -> None:
+    reset_portal_config_cache()
 
 
 @pytest.fixture
@@ -100,7 +119,8 @@ async def test_subscription_checkout_returns_url_and_uses_subscription_mode(
     call = gateway.checkout_calls[-1]
     assert call["mode"] == "subscription"
     assert call["price_id"] == "price_bm"
-    assert call["trial_days"] == 14
+    assert "trial_days" not in call
+    assert call["trial_end"] is not None  # fresh 14-day local trial carries over
 
 
 async def test_subscription_checkout_persists_stripe_customer_id(
@@ -165,7 +185,7 @@ async def test_pack_checkout_uses_payment_mode(bclient: AsyncClient, gateway: Fa
     assert resp.status_code == 200, resp.text
     call = gateway.checkout_calls[-1]
     assert call["mode"] == "payment"
-    assert call["trial_days"] is None
+    assert call["trial_end"] is None
 
 
 async def test_unknown_pack_is_rejected(bclient: AsyncClient) -> None:
@@ -212,7 +232,9 @@ async def test_portal_409_without_customer(bclient: AsyncClient) -> None:
     assert resp.json()["error"]["code"] == "no_billing_customer"
 
 
-async def test_portal_returns_url_after_checkout(bclient: AsyncClient) -> None:
+async def test_portal_returns_url_after_checkout(
+    bclient: AsyncClient, gateway: FakeGateway
+) -> None:
     headers = bearer(ALICE["sub"], ALICE["email"])
     await me(bclient, headers)
     await bclient.post(
@@ -223,6 +245,7 @@ async def test_portal_returns_url_after_checkout(bclient: AsyncClient) -> None:
     resp = await bclient.post("/api/v1/billing/portal-session", headers=headers)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["url"] == "https://billing.stripe.com/p/test"
+    assert gateway.portal_calls[-1]["configuration"] == "bpc_test"
 
 
 async def test_list_credit_packs_returns_configured_packs(bclient: AsyncClient) -> None:
@@ -335,3 +358,84 @@ async def test_customer_id_is_per_user(bclient: AsyncClient) -> None:
     assert b_sub["stripe_customer_id"] == f"cus_{b['id']}"
     assert a_sub["stripe_customer_id"] != b_sub["stripe_customer_id"]
     assert uuid.UUID(a["id"]) != uuid.UUID(b["id"])
+
+
+# --- SOLUSDEV-236: checkout trial carry-over (wireflow billing.md Decisions 1) ---
+
+
+async def _set_trial(
+    db: AsyncSession,
+    user_id: str,
+    *,
+    expires_at: datetime | None,
+    status: SubscriptionStatus = SubscriptionStatus.TRIALING,
+) -> None:
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uuid.UUID(user_id)))
+    assert sub is not None
+    sub.expires_at = expires_at
+    sub.status = status
+    await db.commit()
+
+
+async def _subscribe(bclient: AsyncClient) -> None:
+    resp = await bclient.post(
+        "/api/v1/billing/checkout-session",
+        json={"kind": "subscription", "plan": "basic", "interval": "month"},
+        headers=bearer(ALICE["sub"], ALICE["email"]),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_live_local_trial_carries_remaining_days_to_stripe_trial_end(
+    bclient: AsyncClient, gateway: FakeGateway, db: AsyncSession
+) -> None:
+    user = await me(bclient, bearer(ALICE["sub"], ALICE["email"]))
+    ends = datetime.now(UTC) + timedelta(days=10)
+    await _set_trial(db, user["id"], expires_at=ends)
+    await _subscribe(bclient)
+    call = gateway.checkout_calls[-1]
+    assert call["trial_end"] == int(ends.timestamp())
+    assert "trial_days" not in call
+
+
+async def test_local_trial_with_under_48h_left_sends_no_trial(
+    bclient: AsyncClient, gateway: FakeGateway, db: AsyncSession
+) -> None:
+    """Stripe rejects a `trial_end` less than ~48h away, so a nearly-finished trial
+    checks out with no trial at all."""
+    user = await me(bclient, bearer(ALICE["sub"], ALICE["email"]))
+    await _set_trial(db, user["id"], expires_at=datetime.now(UTC) + timedelta(hours=47))
+    await _subscribe(bclient)
+    assert gateway.checkout_calls[-1]["trial_end"] is None
+
+
+async def test_expired_local_trial_sends_no_trial(
+    bclient: AsyncClient, gateway: FakeGateway, db: AsyncSession
+) -> None:
+    user = await me(bclient, bearer(ALICE["sub"], ALICE["email"]))
+    await _set_trial(db, user["id"], expires_at=datetime.now(UTC) - timedelta(days=1))
+    await _subscribe(bclient)
+    assert gateway.checkout_calls[-1]["trial_end"] is None
+
+
+async def test_local_trial_without_expiry_sends_no_trial(
+    bclient: AsyncClient, gateway: FakeGateway, db: AsyncSession
+) -> None:
+    user = await me(bclient, bearer(ALICE["sub"], ALICE["email"]))
+    await _set_trial(db, user["id"], expires_at=None)
+    await _subscribe(bclient)
+    assert gateway.checkout_calls[-1]["trial_end"] is None
+
+
+async def test_pack_checkout_never_sends_a_trial_even_on_live_trial(
+    bclient: AsyncClient, gateway: FakeGateway, db: AsyncSession
+) -> None:
+    user = await me(bclient, bearer(ALICE["sub"], ALICE["email"]))
+    await _set_trial(db, user["id"], expires_at=datetime.now(UTC) + timedelta(days=10))
+    resp = await bclient.post(
+        "/api/v1/billing/checkout-session",
+        json={"kind": "pack", "price_id": "price_pack10"},
+        headers=bearer(ALICE["sub"], ALICE["email"]),
+    )
+    assert resp.status_code == 200, resp.text
+    assert gateway.checkout_calls[-1]["trial_end"] is None

@@ -10,9 +10,12 @@ from typing import Any
 import pytest
 
 from code_paths import overlay_module  # isort: skip
+from sandbox_fixture import pinned_sandbox_probe, test_writable_roots  # noqa: F401  # isort: skip
+from sandbox_fixture import FAKE_KIND  # isort: skip
 from venv_fixture import fake_venv  # isort: skip
 
 plan = overlay_module("plan")
+sandbox = overlay_module("sandbox")
 
 UV_ONLY = {"uv": "/opt/homebrew/bin/uv"}
 PY311_ONLY = {"python3.11": "/usr/local/bin/python3.11"}
@@ -47,7 +50,20 @@ def test_create_prefers_uv(ws: Path) -> None:
     result = _plan(ws, "create_environment", {"path": "env2", "python": "3.11"}, UV_ONLY)
     assert result.ok and result.argv == ["uv", "venv", "--python", "3.11", "env2"]
     assert result.path == "env2" and result.environment == "env2"
-    assert result.answer() == {"argv": result.argv, "cwd": ".", "ok": True, "reason": None}
+    assert result.answer() == {
+        "argv": result.argv,
+        "cwd": ".",
+        "ok": True,
+        "reason": None,
+        "sandbox": {
+            "kind": FAKE_KIND,
+            "writable": list(sandbox.WRITABLE_LABELS),
+            "limitations": sandbox.limitations(FAKE_KIND),
+        },
+        "profile": None,
+        "environment": "env2",
+        "program_scope": "system",
+    }
     assert not (ws / "env2").exists(), "plan must be pure"
 
 
@@ -330,3 +346,48 @@ def test_a_directory_with_a_planted_interpreter_is_not_a_venv(tmp_path: Path) ->
     # A venv whose interpreter links outside the workspace is accepted.
     fake_venv(tmp_path, "real")
     assert plan.venv_python(tmp_path, "real") == "real/bin/python"
+
+
+# --- §9.4: HOME is never the workspace -----------------------------------------------
+
+ALL_ACTION_ARGS: dict[str, dict[str, Any]] = {
+    "create_environment": {"path": "env2"},
+    "install": {"packages": ["six"]},
+    "run": {"script": "policy/train.py"},
+    "test": {},
+    "exec": {"argv": ["ls"]},
+    "process_start": {"argv": ["ls"]},
+    "profile_capture": {"name": "ros", "setup_file": "setup.bash"},
+}
+
+
+@pytest.mark.parametrize("relation", ["home", "parent", "dot_solus", "inside_dot_solus"])
+@pytest.mark.parametrize("action", sorted(ALL_ACTION_ARGS))
+def test_every_executing_action_refuses_a_workspace_that_holds_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relation: str, action: str
+) -> None:
+    home = tmp_path / "users" / "me"
+    home.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    root = {
+        "home": home,
+        "parent": tmp_path / "users",
+        "dot_solus": home / ".solus",
+        "inside_dot_solus": home / ".solus" / "code-profiles",
+    }[relation]
+    root.mkdir(parents=True, exist_ok=True)
+    _venv(root)
+    (root / "policy").mkdir()
+    (root / "policy" / "train.py").write_text("print(1)\n")
+    (root / "tests").mkdir()
+    (root / "setup.bash").write_text("export A=1\n")
+    result = _plan(root, action, ALL_ACTION_ARGS[action], {**UV_ONLY, "ls": "/bin/ls"})
+    assert result.ok is False and "home folder" in (result.reason or "")
+
+
+def test_a_project_inside_home_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "me"
+    monkeypatch.setenv("HOME", str(home))
+    project = home / "robot"
+    project.mkdir(parents=True)
+    assert _plan(project, "create_environment", {"path": "env2"}, UV_ONLY).ok is True

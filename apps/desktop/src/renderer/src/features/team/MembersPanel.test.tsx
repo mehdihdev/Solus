@@ -1,25 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { LiveMembers, InviteModal, EMAIL_PATTERN, MEMBER_FAILURE } from './MembersPanel'
-import type { InviteApi, TeamMemberApi } from '../../lib/api/resources'
+import { InviteModal, EMAIL_PATTERN } from './MembersPanel'
 import type { InviteOutcome } from '../workspace/useHomeTeam'
-
-const MEMBERS: TeamMemberApi[] = [
-  { user_id: 'u1', email: 'maya@example.dev', name: 'Maya K', role: 'owner', joined_at: '' },
-  { user_id: 'u2', email: 'noor@example.dev', name: 'Noor A', role: 'member', joined_at: '' }
-]
-const INVITES: InviteApi[] = [
-  {
-    id: 'i1',
-    team_id: 't1',
-    email: 'new@example.dev',
-    role: 'member',
-    status: 'pending',
-    created_at: '',
-    expires_at: ''
-  }
-]
 
 const sent = (token: string | null, movedToTeamId: string | null = null): InviteOutcome => ({
   ok: true,
@@ -34,138 +17,12 @@ describe('EMAIL_PATTERN', () => {
   })
 })
 
-describe('LiveMembers', () => {
-  memberRosterAndRolesTests()
-  membershipRemovalConfirmationTests()
-})
-
 describe('InviteModal', () => {
   inviteTokenLifecycleTests()
   inviteFailuresAndTeamTransitionTests()
 })
 
 type InviteFnType = (email: string) => Promise<InviteOutcome>
-
-function memberRosterAndRolesTests(): void {
-  it('renders the roster with each role', () => {
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={[]}
-        myRole="owner"
-        canManage={false}
-        onChangeRole={vi.fn()}
-        onRemove={vi.fn()}
-        onRevoke={vi.fn()}
-      />
-    )
-    expect(screen.getByText('Maya K')).toBeInTheDocument()
-    expect(screen.getByText('noor@example.dev')).toBeInTheDocument()
-    expect(screen.getByText('● OWNER')).toBeInTheDocument()
-    expect(screen.getByText('● MEMBER')).toBeInTheDocument()
-  })
-
-  it('shows role/remove controls to a manager but never for the owner row', () => {
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={[]}
-        myRole="owner"
-        canManage
-        onChangeRole={vi.fn()}
-        onRemove={vi.fn()}
-        onRevoke={vi.fn()}
-      />
-    )
-    // Owner row stays static; the member gets a role selector + remove button.
-    expect(screen.getByLabelText('Role for noor@example.dev')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Role for maya@example.dev')).not.toBeInTheDocument()
-  })
-
-  it('changes a role through the callback and names a refusal inline', async () => {
-    const onChangeRole = vi.fn(async () => ({ ok: false as const, reason: 'forbidden' as const }))
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={[]}
-        myRole="owner"
-        canManage
-        onChangeRole={onChangeRole}
-        onRemove={vi.fn()}
-        onRevoke={vi.fn()}
-      />
-    )
-    await userEvent.selectOptions(screen.getByLabelText('Role for noor@example.dev'), 'admin')
-    expect(onChangeRole).toHaveBeenCalledWith('u2', 'admin')
-    expect(await screen.findByRole('alert')).toHaveTextContent(MEMBER_FAILURE.forbidden)
-  })
-}
-
-function membershipRemovalConfirmationTests(): void {
-  it('removing a member is confirmed with the person named; cancel calls nothing', async () => {
-    const onRemove = vi.fn(async () => ({ ok: true as const }))
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={[]}
-        myRole="owner"
-        canManage
-        onChangeRole={vi.fn()}
-        onRemove={onRemove}
-        onRevoke={vi.fn()}
-      />
-    )
-    await userEvent.click(screen.getByLabelText('Remove noor@example.dev'))
-    expect(screen.getByText(/lose access to every project/)).toBeInTheDocument()
-    expect(screen.getAllByText('noor@example.dev').length).toBeGreaterThan(1)
-    expect(onRemove).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(onRemove).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByLabelText('Remove noor@example.dev'))
-    await userEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    await waitFor(() => expect(onRemove).toHaveBeenCalledWith('u2'))
-  })
-
-  it('a refused removal keeps the confirm open with the reason', async () => {
-    const onRemove = vi.fn(async () => ({ ok: false as const, reason: 'last_owner' as const }))
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={[]}
-        myRole="owner"
-        canManage
-        onChangeRole={vi.fn()}
-        onRemove={onRemove}
-        onRevoke={vi.fn()}
-      />
-    )
-    await userEvent.click(screen.getByLabelText('Remove noor@example.dev'))
-    await userEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    expect(await screen.findByText(MEMBER_FAILURE.last_owner)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
-  })
-
-  it('renders pending invites and revokes them only after confirmation', async () => {
-    const onRevoke = vi.fn(async () => ({ ok: true as const }))
-    render(
-      <LiveMembers
-        members={MEMBERS}
-        invites={INVITES}
-        myRole="owner"
-        canManage
-        onChangeRole={vi.fn()}
-        onRemove={vi.fn()}
-        onRevoke={onRevoke}
-      />
-    )
-    expect(screen.getByText('INVITE PENDING · MEMBER')).toBeInTheDocument()
-    await userEvent.click(screen.getByLabelText('Revoke invite for new@example.dev'))
-    expect(screen.getByText(/Its token stops working/)).toBeInTheDocument()
-    expect(onRevoke).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByRole('button', { name: 'Revoke' }))
-    await waitFor(() => expect(onRevoke).toHaveBeenCalledWith('i1'))
-  })
-}
 
 function inviteTokenLifecycleTests(): void {
   it('rejects an invalid email inline', async () => {

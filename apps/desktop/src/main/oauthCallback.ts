@@ -53,9 +53,21 @@ export function isValidAuthorizeUrl(authorizeUrl: string): boolean {
   }
 }
 
+/** What GitHub reports about a GitHub App install redirect (SOLUSDEV-216). */
+export type SetupAction = 'install' | 'update' | 'request'
+const SETUP_ACTIONS: readonly SetupAction[] = ['install', 'update', 'request']
+
+function isSetupAction(value: string): value is SetupAction {
+  return (SETUP_ACTIONS as readonly string[]).includes(value)
+}
+
 export interface OAuthCallbackResult {
   code?: string
   error?: string
+  /** GitHub App install only: numeric installation id (absent on `request`). */
+  installationId?: number
+  /** GitHub App install only. */
+  setupAction?: SetupAction
 }
 
 /** Which query param carries the nonce: our own for sign-in, the provider's
@@ -83,11 +95,41 @@ export function parseOAuthCallback(
   if (url.pathname !== OAUTH_CALLBACK_PATH) return null
   if (url.searchParams.get(stateParam) !== expectedState) return null
 
-  const error = url.searchParams.get('error_description') ?? url.searchParams.get('error')
+  return callbackResult(url.searchParams)
+}
+
+function callbackResult(params: URLSearchParams): OAuthCallbackResult {
+  const error = params.get('error_description') ?? params.get('error')
   if (error) return { error }
 
-  const code = url.searchParams.get('code')
-  if (code) return { code }
+  const install = parseInstallParams(params)
+  if ('error' in install) return install
+  const code = params.get('code')
+  if (code) return { code, ...install }
+  // GitHub omits the code when a non-owner only *requested* the install.
+  if (install.setupAction === 'request') return install
 
   return { error: 'No authorization code in callback' }
+}
+
+/** Optional GitHub App install params. Untrusted: a numeric id and a closed
+ *  action set, or an error; absent params are simply omitted. */
+function parseInstallParams(
+  params: URLSearchParams
+): { installationId?: number; setupAction?: SetupAction } | { error: string } {
+  const out: { installationId?: number; setupAction?: SetupAction } = {}
+  const rawId = params.get('installation_id')
+  if (rawId !== null) {
+    const id = Number(rawId)
+    if (!/^[0-9]+$/.test(rawId) || !Number.isSafeInteger(id) || id <= 0) {
+      return { error: 'Invalid installation_id in callback' }
+    }
+    out.installationId = id
+  }
+  const rawAction = params.get('setup_action')
+  if (rawAction !== null) {
+    if (!isSetupAction(rawAction)) return { error: 'Invalid setup_action in callback' }
+    out.setupAction = rawAction
+  }
+  return out
 }

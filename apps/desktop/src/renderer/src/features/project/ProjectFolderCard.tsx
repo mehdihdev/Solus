@@ -1,4 +1,4 @@
-// Local folder card — on Home's side column for the current project
+// Local folder card — on Home's project pane for the current project
 // (SOLUSDEV-244; it began life on the Project Overview hub, SOLUSDEV-164).
 // Links a project to a working copy on THIS machine: select an existing directory, or
 // clone a repo (URL prefilled from a connected GitHub source; cloned by the
@@ -33,6 +33,13 @@ export interface ProjectFolderCardProps {
   projectId: string
   /** Repo URL to prefill the clone dialog (from a connected GitHub source). */
   suggestedRepoUrl?: string
+  /** Home's Overview (SOLUSDEV-317): Change folder and Unlink move behind
+   *  More, and the detected-project list stays on the Sources tab. */
+  compact?: boolean
+  /** A label printed inside the card, above its content. */
+  heading?: string
+  /** No card chrome (border, fill): the content sits inside another list. */
+  bare?: boolean
 }
 
 export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Element {
@@ -41,7 +48,10 @@ export function ProjectFolderCard(props: ProjectFolderCardProps): React.JSX.Elem
 
 function ProjectFolderCardContent({
   projectId,
-  suggestedRepoUrl
+  suggestedRepoUrl,
+  compact = false,
+  heading,
+  bare = false
 }: ProjectFolderCardProps): React.JSX.Element {
   const {
     bridge,
@@ -57,17 +67,19 @@ function ProjectFolderCardContent({
     selectFolder,
     runClone
   } = useProjectFolderSelection(projectId)
+  const inset = bare ? BARE_INSET : '16px'
 
   return (
-    <Card pad={0}>
+    <FolderShell bare={bare}>
+      <FolderHeading heading={heading} />
       {!bridge ? (
-        <div style={{ padding: '16px', fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-          Linking a local folder is available in the Solus desktop app.
-        </div>
+        <NoBridgeNote inset={inset} />
       ) : link ? (
         <LinkedFolder
           link={link}
           folder={folder}
+          compact={compact}
+          inset={bare ? BARE_INSET : '14px 16px'}
           selecting={selecting}
           onChangeFolder={() => void selectFolder()}
           onOpenFolder={() => void bridge.reveal(link.path)}
@@ -81,25 +93,12 @@ function ProjectFolderCardContent({
           }}
         />
       ) : (
-        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-            Choose a project folder, then confirm “Select this folder” in the picker to link and
-            scan it.
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Button kind="ghost" size="sm" disabled={selecting} onClick={() => void selectFolder()}>
-              <Icons.box size={13} /> Select folder
-            </Button>
-            <Button
-              kind="ghost"
-              size="sm"
-              disabled={selecting}
-              onClick={() => setCloning(projectId)}
-            >
-              <Icons.github size={13} /> Clone a repo
-            </Button>
-          </div>
-        </div>
+        <UnlinkedFolder
+          inset={inset}
+          selecting={selecting}
+          onSelect={() => void selectFolder()}
+          onClone={() => setCloning(projectId)}
+        />
       )}
       {selectionError && (
         <div role="alert" style={{ padding: '12px 16px', color: 'var(--err)', fontSize: 12 }}>
@@ -113,13 +112,79 @@ function ProjectFolderCardContent({
           onClone={runClone}
         />
       )}
-    </Card>
+    </FolderShell>
   )
+}
+
+function FolderHeading({ heading }: { heading?: string }): React.JSX.Element | null {
+  if (!heading) return null
+  return (
+    <div style={{ padding: '14px 16px 0' }}>
+      <Mono size={9.5} color="var(--mut)" style={{ letterSpacing: '0.08em' }}>
+        {heading}
+      </Mono>
+    </div>
+  )
+}
+
+/** Outside the desktop app there is no bridge to link a folder through. */
+function NoBridgeNote({ inset }: { inset: string }): React.JSX.Element {
+  return (
+    <div style={{ padding: inset, fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+      Linking a local folder is available in the Solus desktop app.
+    </div>
+  )
+}
+
+/** No folder linked yet: pick one, or clone a repo into one. */
+function UnlinkedFolder({
+  inset,
+  selecting,
+  onSelect,
+  onClone
+}: {
+  inset: string
+  selecting: boolean
+  onSelect: () => void
+  onClone: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ padding: inset, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+        Choose a project folder, then confirm “Select this folder” in the picker to link and scan
+        it.
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onSelect}>
+          <Icons.box size={13} /> Select folder
+        </Button>
+        <Button kind="ghost" size="sm" disabled={selecting} onClick={onClone}>
+          <Icons.github size={13} /> Clone a repo
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** Bare mode sits flush with the list it is in: no side padding of its own. */
+const BARE_INSET = '10px 0 6px'
+
+/** The card's frame: a Card, or a plain block inside another list. */
+function FolderShell({
+  bare,
+  children
+}: {
+  bare: boolean
+  children: React.ReactNode
+}): React.JSX.Element {
+  return bare ? <div>{children}</div> : <Card pad={0}>{children}</Card>
 }
 
 function LinkedFolder({
   link,
   folder,
+  compact,
+  inset,
   selecting,
   onChangeFolder,
   onOpenFolder,
@@ -127,6 +192,9 @@ function LinkedFolder({
 }: {
   link: { path: string; repoUrl?: string }
   folder: LocalFolderController
+  compact: boolean
+  /** The block's padding: card-style, or flush when bare. */
+  inset: string
   selecting: boolean
   onChangeFolder: () => void
   onOpenFolder: () => void
@@ -139,7 +207,7 @@ function LinkedFolder({
     <div
       data-testid="linked-folder"
       style={{
-        padding: '14px 16px',
+        padding: inset,
         display: 'flex',
         flexDirection: 'column',
         gap: 10,
@@ -148,42 +216,202 @@ function LinkedFolder({
       }}
     >
       <LinkedFolderHeader link={link} view={view} status={status} />
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <Button
-          kind="ghost"
-          size="sm"
-          data-testid="open-root-editor"
-          disabled={editorReason !== null}
-          title={editorReason ?? undefined}
-          onClick={() => rootEntityId && void folder.open(rootEntityId, 'vscode')}
-        >
-          {OPEN_LABEL.vscode}
-        </Button>
+      <FolderActions
+        compact={compact}
+        selecting={selecting}
+        editorReason={editorReason}
+        onEditor={() => rootEntityId && void folder.open(rootEntityId, 'vscode')}
+        onChangeFolder={onChangeFolder}
+        onOpenFolder={onOpenFolder}
+        onUnlink={onUnlink}
+      />
+      <FolderNotes
+        machineAvailable={folder.machineAvailable}
+        bridgeOffline={bridgeOffline}
+        editorReason={editorReason}
+      />
+      {!compact && (
+        <DetectedProjectList
+          projects={detectedProjects(view)}
+          scanned={scanned}
+          disabledReason={rowsReason}
+          onOpen={folder.open}
+        />
+      )}
+    </div>
+  )
+}
+
+/** Open in editor, then Change folder / Show in file manager / Unlink — the
+ *  last two behind More ▾ in compact mode. */
+function FolderActions({
+  compact,
+  selecting,
+  editorReason,
+  onEditor,
+  onChangeFolder,
+  onOpenFolder,
+  onUnlink
+}: {
+  compact: boolean
+  selecting: boolean
+  editorReason: string | null
+  onEditor: () => void
+  onChangeFolder: () => void
+  onOpenFolder: () => void
+  onUnlink: () => void
+}): React.JSX.Element {
+  return (
+    <div style={{ display: 'flex', gap: compact ? 2 : 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <Button
+        kind="ghost"
+        size="sm"
+        data-testid="open-root-editor"
+        disabled={editorReason !== null}
+        title={editorReason ?? undefined}
+        onClick={onEditor}
+      >
+        {OPEN_LABEL.vscode}
+      </Button>
+      {!compact && (
         <Button kind="ghost" size="sm" disabled={selecting} onClick={onChangeFolder}>
           Change folder
         </Button>
-        <Button kind="ghost" size="sm" onClick={onOpenFolder}>
-          Show in file manager
-        </Button>
+      )}
+      <Button
+        kind={compact ? 'bare' : 'ghost'}
+        size="sm"
+        style={compact ? COMPACT_BARE : undefined}
+        onClick={onOpenFolder}
+      >
+        Show in file manager
+      </Button>
+      {compact ? (
+        <MoreFolderActions
+          selecting={selecting}
+          onChangeFolder={onChangeFolder}
+          onUnlink={onUnlink}
+        />
+      ) : (
         <Button kind="ghost" size="sm" onClick={onUnlink}>
           Unlink
         </Button>
-      </div>
-      {!folder.machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
+      )}
+    </div>
+  )
+}
+
+/** Why something above is unavailable, in words — never only a tooltip. */
+function FolderNotes({
+  machineAvailable,
+  bridgeOffline,
+  editorReason
+}: {
+  machineAvailable: boolean
+  bridgeOffline: boolean
+  editorReason: string | null
+}): React.JSX.Element {
+  return (
+    <>
+      {!machineAvailable && <Note>{MACHINE_UNAVAILABLE_NOTE}</Note>}
       {bridgeOffline && <Note>{COMPANION_OFFLINE_NOTE}</Note>}
       {/* A greyed "Open in editor" says why in words, not only in a hover
           tooltip (SOLUSDEV-253) — the offline notes above already cover theirs. */}
-      {editorReason !== null && !bridgeOffline && folder.machineAvailable && (
-        <Note>{editorReason}</Note>
+      {editorReason !== null && !bridgeOffline && machineAvailable && <Note>{editorReason}</Note>}
+    </>
+  )
+}
+
+/** Compact mode's More ▾: the folder actions that change or drop the link. */
+function MoreFolderActions({
+  selecting,
+  onChangeFolder,
+  onUnlink
+}: {
+  selecting: boolean
+  onChangeFolder: () => void
+  onUnlink: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const pick = (action: () => void): void => {
+    setOpen(false)
+    action()
+  }
+  return (
+    <div
+      style={{ position: 'relative' }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') setOpen(false)
+      }}
+    >
+      <Button
+        kind="bare"
+        size="sm"
+        style={COMPACT_BARE}
+        aria-label="More folder actions"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        More ▾
+      </Button>
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="popover-in" style={MORE_MENU}>
+            <button
+              type="button"
+              role="menuitem"
+              className="interactive"
+              disabled={selecting}
+              onClick={() => pick(onChangeFolder)}
+              style={MORE_ITEM}
+            >
+              Change folder
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="interactive"
+              onClick={() => pick(onUnlink)}
+              style={MORE_ITEM}
+            >
+              Unlink
+            </button>
+          </div>
+        </>
       )}
-      <DetectedProjectList
-        projects={detectedProjects(view)}
-        scanned={scanned}
-        disabledReason={rowsReason}
-        onOpen={folder.open}
-      />
     </div>
   )
+}
+
+/** Compact mode's text buttons drop their side padding so the three actions
+ *  share one row in a third of the pane. */
+const COMPACT_BARE: React.CSSProperties = { paddingLeft: 6, paddingRight: 6 }
+
+const MORE_MENU: React.CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: '100%',
+  zIndex: 61,
+  minWidth: 150,
+  background: 'var(--sur)',
+  border: '1px solid var(--bd)',
+  borderRadius: 4,
+  boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
+  overflow: 'hidden'
+}
+
+const MORE_ITEM: React.CSSProperties = {
+  display: 'block',
+  width: '100%',
+  textAlign: 'left',
+  background: 'transparent',
+  border: 'none',
+  color: 'var(--tx)',
+  cursor: 'pointer',
+  fontFamily: 'var(--font-ui)',
+  fontSize: 12.5,
+  padding: '9px 12px'
 }
 
 function LinkedFolderHeader({

@@ -19,6 +19,7 @@ from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.allowlist import load_allowlist
 from solus_api.bridge.registry import InMemoryBridgeSessionRegistry
 from solus_api.bridge.service import ConnectRateLimiter
+from solus_api.connectors.github_app import configure_github_app
 from solus_api.connectors.httpcache import InMemoryCacheStore, RedisCacheStore
 from solus_api.connectors.local_acquire import BridgeFolderAcquirer
 from solus_api.connectors.mcp_acquire import BridgeExportAcquirer
@@ -63,6 +64,7 @@ from solus_api.routers import (
     billing,
     bridge,
     code_environment,
+    code_processes,
     connections,
     entities,
     events,
@@ -84,9 +86,13 @@ from solus_api.routers import (
     solus_config,
     sources,
     sourcing,
+    team_github,
+    team_github_members,
+    team_github_repos,
     teams,
     users,
     webhooks,
+    webhooks_github_app,
     widgets,
     workspace_layout,
 )
@@ -368,6 +374,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         cache=app.state.integration_cache,
     )
     app.state.secret_store = build_secret_store(resolved_settings, app.state.sessionmaker)
+    configure_github_app(resolved_settings, app.state.sessionmaker)
     # Supabase admin (service-role) for account-lifecycle actions (SOLUSDEV-82).
     app.state.supabase_admin = build_supabase_admin(resolved_settings)
     # JWKS client for verifying Supabase's asymmetric (ES256) access tokens
@@ -496,6 +503,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # bucket (core/ratelimit sees the LB's IP), so it gets its own rather
             # than eating the shared budget every panel load.
             "/api/v1/panel/pair/start": resolved_settings.panel_pair_rate_limit_per_minute,
+            # SOLUSDEV-216: GitHub's delivery volume must never share (or drain) the
+            # global unauthenticated write bucket.
+            "/api/v1/webhooks/github/app": (
+                resolved_settings.github_app_webhook_rate_limit_per_minute
+            ),
         },
     )
     app.add_middleware(
@@ -528,6 +540,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(sources.router)
     app.include_router(local_folder.router)
     app.include_router(code_environment.router)
+    app.include_router(code_processes.router)
     app.include_router(hosted.router)
     app.include_router(account_hosted.router)
     app.include_router(artifacts.router)
@@ -541,6 +554,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     app.include_router(isaac_connection.router)
     app.include_router(sol.router)
+    from solus_api.routers import sol_confirmations
+
+    app.include_router(sol_confirmations.router)
     from solus_api.livebench.stream import router as bench_stream_router
 
     app.include_router(bench_stream_router)
@@ -553,6 +569,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(toolkb.router)
     app.include_router(corpus_router.router)
     app.include_router(webhooks.router)
+    # SOLUSDEV-216 (ADR-039): team-owned GitHub App installations (link, repos, members, webhook).
+    app.include_router(team_github.router)
+    app.include_router(team_github_repos.router)
+    app.include_router(team_github_members.router)
+    app.include_router(webhooks_github_app.router)
     app.include_router(live.router)
     app.include_router(live.account_router)
     # SOLUSDEV-235: the extensions aggregator (catalog, publishing, installs,

@@ -76,3 +76,61 @@ def test_invite_email_validated() -> None:
 def test_team_name_not_blank() -> None:
     with pytest.raises(ValidationError):
         TeamCreate(name="   ")
+
+
+# SOLUSDEV-317 — Home marks a local folder that is a clone of the project's
+# GitHub/GitLab repo, so a local source exposes its NORMALISED remote (the sync
+# cursor's `remote`/`host`, never the raw URL) and nothing else of the cursor.
+def test_local_source_exposes_its_normalised_remote_only() -> None:
+    from solus_api.models import Source, SourceStatus, SourceType
+    from solus_api.schemas import serialize_source
+
+    source = Source(
+        type=SourceType.LOCAL,
+        status=SourceStatus.CONNECTED,
+        name="mehdi-mbp",
+        config={"machine_name": "mehdi-mbp", "folder_name": "lerobot"},
+        cursor={
+            "remote": "mehdihdev/lerobot-arm",
+            "host": "github",
+            "branch": "main",
+            "digest": "abc",
+            "detected": [{"entity_key": "kicad:hw"}],
+        },
+    )
+    data = serialize_source(source)
+    assert data["remote"] == {"repo": "mehdihdev/lerobot-arm", "host": "github"}
+    assert "cursor" not in data
+    assert "digest" not in str(data)
+
+
+@pytest.mark.parametrize(
+    "cursor",
+    [{}, {"remote": None, "host": None}, {"remote": "", "host": "github"}, {"remote": 3}],
+)
+def test_local_source_without_a_usable_remote_says_nothing(cursor: dict[str, object]) -> None:
+    from solus_api.models import Source, SourceStatus, SourceType
+    from solus_api.schemas import serialize_source
+
+    source = Source(
+        type=SourceType.LOCAL,
+        status=SourceStatus.CONNECTED,
+        name="m",
+        config={},
+        cursor=cursor,
+    )
+    assert "remote" not in serialize_source(source)
+
+
+def test_non_local_sources_never_carry_a_remote() -> None:
+    from solus_api.models import Source, SourceStatus, SourceType
+    from solus_api.schemas import serialize_source
+
+    source = Source(
+        type=SourceType.GITHUB,
+        status=SourceStatus.CONNECTED,
+        name="fw",
+        config={"repo": "org/fw"},
+        cursor={"remote": "org/fw", "host": "github"},
+    )
+    assert "remote" not in serialize_source(source)

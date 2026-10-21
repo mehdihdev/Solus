@@ -18,15 +18,14 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, StrictBool, field_validator
+from pydantic import Field, StrictBool, ValidationError, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.command_gate import completion_events
 from solus_api.agent.confirmations import (
     ParkedCall,
     _feed_back_outcome,
-    command_outcome_text,
-    decide_confirmation,
     request_confirmation,
 )
 from solus_api.agent.conversation import (
@@ -58,13 +57,14 @@ from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.agent.turn_limits import turn_limits
+from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
     AgentRunnerDep,
+    BridgeSessionsDep,
     ProjectCtx,
-    RequireVerified,
     SecretStoreDep,
     SessionDep,
     SessionMakerDep,
@@ -92,10 +92,26 @@ from solus_api.orchestration.gates import (
     FrequencyCapExceededError,
     InsufficientCreditsError,
     TrialCapReachedError,
+    TrialExpiredError,
     check_frequency_cap,
 )
 from solus_api.orchestration.providers import ProviderTransientError
-from solus_api.schemas import ConfirmationDecision, StrictModel
+from solus_api.routers.sol_confirmations import sync_enqueuer
+from solus_api.routers.sol_resume import (
+    ResumeTicket,
+    check_resume,
+    claim_resume,
+    resume_prompt,
+)
+from solus_api.routers.sol_wake import (
+    ProcessPrompt,
+    WakeTicket,
+    admit_wake,
+    check_wake,
+    continuation_attrs,
+    wake_prompt,
+)
+from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
 
@@ -107,6 +123,9 @@ logger = logging.getLogger("solus.sol")
 _ORCHESTRATION_LIMITS = load_orchestration_config().limits
 
 _LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now."
+#: SOLUSDEV-236: wireflow billing.md Expert copy (the policy table is static; the date
+#: and the Guide variant are rendered by the client from `trial_expired`).
+_TRIAL_EXPIRED_MESSAGE = "Trial ended. Model features paused — choose a plan in Billing."
 #: SOLUSDEV-252, live: a turn that parked a gated call then hit the account's own
 #: 10k-TPM window ("Please try again in 39.456s") reported `internal` — an outage,
 #: as far as the person could tell, from a limit no retry inside the request can
@@ -116,6 +135,7 @@ _LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now.
 _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
     FrequencyCapExceededError: ("frequency_cap", _LIMIT_MESSAGE),
     TrialCapReachedError: ("trial_cap", _LIMIT_MESSAGE),
+    TrialExpiredError: ("trial_expired", _TRIAL_EXPIRED_MESSAGE),
     InsufficientCreditsError: ("insufficient_credits", _LIMIT_MESSAGE),
     ProviderTransientError: (
         "provider_unavailable",
@@ -224,7 +244,15 @@ class ScreenshotIn(StrictModel):
 
 
 class MessageCreate(StrictModel):
-    content: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
+    #: Required unless `resume_confirmation_id` is set (SOLUSDEV-317 §5.5).
+    content: str | None = Field(default=None, min_length=1, max_length=MAX_MESSAGE_CHARS)
+    #: SOLUSDEV-317 §5.5: continue after a decided command card. Mutually
+    #: exclusive with `content` and `screenshot` — a resume carries no words or
+    #: pixels from the person, and no user turn is stored.
+    resume_confirmation_id: uuid.UUID | None = None
+    #: SOLUSDEV-317 §11.2: wake SOL for a waiting interactive process. Mutually
+    #: exclusive with `content`, `screenshot` and `resume_confirmation_id`.
+    process_prompt: ProcessPrompt | None = None
     #: SOLX-01: how SOL may act on this message — guide (explain + point) or do
     #: (operate the tool). Guide is the safe default; per-action resolution
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
@@ -260,6 +288,29 @@ class MessageCreate(StrictModel):
     #: SOLUSDEV-252 S3: at most one screenshot per turn. Pixels live for this
     #: turn only — the transcript keeps `{width, height, app}`.
     screenshot: ScreenshotIn | None = None
+
+    @model_validator(mode="after")
+    def _content_or_resume(self) -> "MessageCreate":
+        if self.process_prompt is not None:
+            if (
+                self.content is not None
+                or self.screenshot is not None
+                or self.resume_confirmation_id is not None
+            ):
+                raise ValueError("a wake carries no content, screenshot or resume")
+            return self
+        if self.resume_confirmation_id is None and self.content is None:
+            # Reported as the field's own `missing` error (the API.md shape a
+            # required `content` always had); the error handler redacts `input`.
+            raise ValidationError.from_exception_data(
+                type(self).__name__,
+                [{"type": "missing", "loc": ("content",), "input": {}}],
+            )
+        if self.resume_confirmation_id is not None and (
+            self.content is not None or self.screenshot is not None
+        ):
+            raise ValueError("a resume carries no content or screenshot")
+        return self
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -455,33 +506,6 @@ def _refusal_result(call_id: str, message: str) -> ToolResult:
     )
 
 
-def _decision_summary(decision: str, result: ToolResult) -> str:
-    """What the decision did, in the words the next turn's model reads.
-
-    Deliberately distinguishes the three outcomes a person can produce from the
-    one the gate produces: a rejection is not a failure, and a STALE refusal is
-    not a rejection — it means the world moved and NOTHING was applied, which is
-    the one the model most needs to understand before it tries again.
-    """
-    if result.ok:
-        outcome = command_outcome_text(result.value) if isinstance(result.value, dict) else None
-        if outcome is not None:
-            return "approved by you" + outcome
-        sync = result.value.get("graph_sync") if isinstance(result.value, dict) else None
-        sync_note = ""
-        if isinstance(sync, dict):
-            sync_note = (
-                "; graph sync queued"
-                if sync.get("status") == "queued"
-                else "; graph sync unavailable — retry source sync, not the CAD change"
-            )
-        return "approved by you and applied ok" + (outcome or "") + sync_note
-    if decision != "approve":
-        return "rejected by you; nothing was applied"
-    code = result.error.code.value if result.error is not None else "error"
-    return f"not applied ({code}) — ask again to see the current change"
-
-
 async def _persist_turn(
     *,
     sessionmaker: async_sessionmaker[Any],
@@ -495,6 +519,7 @@ async def _persist_turn(
     final_text: str,
     aborted: str | None,
     parked_tools: frozenset[str] = frozenset(),
+    assistant_attrs: dict[str, Any] | None = None,
 ) -> uuid.UUID:
     """Persist the completed turn (tool turns + the assistant turn) in a FRESH session and
     log the interaction. Returns the assistant turn id for the `done` marker."""
@@ -526,6 +551,7 @@ async def _persist_turn(
                 "action_mode": action_mode,
                 "tool_calls": len(tool_turns),
                 "aborted": aborted,
+                **(assistant_attrs or {}),
             },
         )
         user = await session.get(User, user_id)
@@ -642,6 +668,7 @@ async def _run_and_persist(
     action_mode: str,
     parked: list[ParkedCall],
     turn_sync: OnshapeTurnSync | None = None,
+    assistant_attrs: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream the runner's events and, once the turn completes, persist the tool and
     assistant turns in a FRESH session (the request session is gone by the time the
@@ -708,6 +735,7 @@ async def _run_and_persist(
             final_text=final_text,
             aborted=aborted,
             parked_tools=frozenset(p.tool for p in parked if p.confirmation_id is not None),
+            assistant_attrs=assistant_attrs,
         )
         if aborted is not None:
             yield format_sse(_abort_event(aborted, abort_error))
@@ -758,19 +786,6 @@ async def _record_build_outcome(
     if turn_sync is not None:
         result = turn_sync.outcome(call, result)
     if result.ok and turn_sync is None:
-        from solus_api.routers.sources import enqueue_sync
-
-        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
-            return await enqueue_sync(
-                sync_session,
-                ctx,
-                source,
-                request,
-                background_tasks,
-                settings.model_copy(update={"sync_inline": False}),
-                Response(),
-            )
-
         graph_sync = await schedule_onshape_write_sync(
             sessionmaker,
             project_id=ctx.project.id,
@@ -778,7 +793,7 @@ async def _record_build_outcome(
             tool_name=call.tool,
             args=call.args,
             store=getattr(request.app.state, "integration_store", None),
-            enqueue=enqueue_after_write,
+            enqueue=sync_enqueuer(request, background_tasks, settings, ctx),
         )
         if graph_sync is not None and result.value is not None:
             result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
@@ -792,6 +807,19 @@ async def _record_build_outcome(
                 team_id=ctx.team.id,
                 project_id=ctx.project.id,
             )
+            # §10.1: an auto-run command reports like an approved one, `auto: true`.
+            value = result.value if result.ok and isinstance(result.value, dict) else None
+            for event_type, payload in (
+                completion_events(call.tool, call.args, value, auto=True) if value else []
+            ):
+                emit_event(
+                    recording,
+                    user=ctx.user,
+                    event_type=event_type,
+                    team_id=ctx.team.id,
+                    project_id=ctx.project.id,
+                    payload=payload,
+                )
             emit_event(
                 recording,
                 user=ctx.user,
@@ -811,69 +839,81 @@ async def _record_build_outcome(
     return result
 
 
-@router.post("/conversations/{conversation_id}/messages")
-async def post_message(
-    request: Request,
-    background_tasks: BackgroundTasks,
+async def _resume_ticket(
+    session: AsyncSession, ctx: ProjectCtx, conversation_id: uuid.UUID, body: MessageCreate
+) -> ResumeTicket | None:
+    if body.resume_confirmation_id is None:
+        return None
+    return await check_resume(
+        session,
+        confirmation_id=body.resume_confirmation_id,
+        conversation_id=conversation_id,
+        project_id=ctx.project.id,
+        team_id=ctx.team.id,
+        user_id=ctx.user.id,
+    )
+
+
+async def _turn_prompt(
+    session: AsyncSession,
+    ctx: ProjectCtx,
     conversation_id: uuid.UUID,
     body: MessageCreate,
-    ctx: ProjectCtx,
-    session: SessionDep,
-    sessionmaker: SessionMakerDep,
-    systems: SolSystemsDep,
-    runner: AgentRunnerDep,
-    settings: SettingsDep,
-    secret_store: SecretStoreDep,
-    registry: SolRegistryDep,
-    # SOLUSDEV-235 (extensions.md §9): `X-Solus-Extension` resolved as a
-    # dependency, so an unauthorized header is 403 `scope_denied` BEFORE admission.
-    attribution: ExtensionAttribution,
-) -> StreamingResponse:
-    """Append the user's message and stream SOL's reply as Server-Sent Events. The user
-    turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
-    turns are persisted as the stream completes."""
-    require_role(ctx, Role.MEMBER)
-    content = body.content.strip()
-    if not content:
+    bridge: BridgeSessionRegistry,
+    call_cap_bytes: int,
+) -> tuple[str, ResumeTicket | None, WakeTicket | None]:
+    """The turn's prompt: the person's words, or the Solus-authored instruction
+    of a resume (§5.5) or a wake (§11.2), each admitted by its own checks."""
+    continuing = body.resume_confirmation_id is not None or body.process_prompt is not None
+    content = "" if continuing else (body.content or "").strip()
+    if not continuing and not content:
         raise APIError(422, "validation_error", "Message content must not be blank")
     await _owned_or_404(ctx, session, conversation_id)
-    # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
-    screenshot = body.screenshot.decode() if body.screenshot is not None else None
-
-    await _validate_mentions(session, ctx.project.id, body.mentions)
-
-    # BUDGET GATE (SOLUS-RUN-01). `track_cost` needs NO wiring here — the gateway
-    # fires it per model call from inside CompletionStream._finalize, which is the
-    # point of that chokepoint. What belongs here is the PRE-FLIGHT, and its value
-    # is a correct status code rather than enforcement: `assert_can_spend` already
-    # runs per call inside the gateway, but it runs mid-stream, after the SSE
-    # response has opened, so a user out of credits would get an error frame
-    # instead of a 402 (CLAUDE.md §7; ADR-019/024).
-    estimate = SOL_TURN_CREDIT_ESTIMATE + (SCREENSHOT_EXTRA_CREDITS if screenshot else 0)
-    if not await has_sufficient_credits(ctx.user.id, estimate, session=session):
-        raise APIError(402, "insufficient_credits", "Not enough credits for a SOL turn")
-    # SEC-H3 (SOL-02 review): the context pull fires graph + pgvector work
-    # BEFORE the first model round reaches the gateway's cap, so turn admission
-    # is frequency-gated here too. This records the turn as one admission (the
-    # gateway still records each model round — deliberate, both consume real
-    # capacity); with no Redis deployed the cap fails open by policy and that
-    # remains the flagged pre-GA infra blocker.
-    try:
-        await check_frequency_cap(
-            ctx.user.id,
-            redis=getattr(request.app.state, "redis", None),
-            limits=_ORCHESTRATION_LIMITS,
-            session=session,
+    ticket = await _resume_ticket(session, ctx, conversation_id, body)
+    if ticket is not None:
+        return resume_prompt(ticket), ticket, None
+    if body.process_prompt is not None:
+        wake = await check_wake(
+            session,
+            bridge,
+            ctx,
+            conversation_id,
+            body.process_prompt,
+            call_cap_bytes=call_cap_bytes,
         )
-    except FrequencyCapExceededError as exc:
-        raise APIError(429, "frequency_cap", "Too many SOL turns right now; slow down.") from exc
-    prior = await SERVICE.history(
-        session, conversation_id=conversation_id, project_id=ctx.project.id
+        return wake_prompt(wake), None, wake
+    return content, None, None
+
+
+async def _admit_resume(
+    session: AsyncSession, ctx: ProjectCtx, conversation_id: uuid.UUID, ticket: ResumeTicket
+) -> None:
+    """SOLUSDEV-317 §5.5: claim the resume (after the budget pre-flight, so a
+    402/429 never consumes it) and log it. No user turn is stored."""
+    await claim_resume(session, ticket, conversation_id=conversation_id, project_id=ctx.project.id)
+    emit_event(
+        session,
+        user=ctx.user,
+        event_type="sol.turn_resumed",
+        team_id=ctx.team.id,
+        project_id=ctx.project.id,
+        payload={
+            "confirmation_id": str(ticket.confirmation_id),
+            "tool": ticket.tool,
+            "chain": ticket.chain,
+        },
     )
-    history = tuple(
-        TurnView(role=role, content=content)
-        for role, content in enrich_history([(t.role.value, t.content, t.attrs) for t in prior])
-    )
+
+
+async def _record_user_message(
+    session: AsyncSession,
+    ctx: ProjectCtx,
+    conversation_id: uuid.UUID,
+    content: str,
+    body: MessageCreate,
+    attribution: Any,
+    screenshot: ScreenshotBlock | None,
+) -> None:
     # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
     # on `attrs`; the Solus-authored framing exists only in model input. S3: a
     # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
@@ -910,6 +950,80 @@ async def post_message(
             "screenshot": screenshot is not None,
         },
     )
+
+
+@router.post("/conversations/{conversation_id}/messages")
+async def post_message(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    conversation_id: uuid.UUID,
+    body: MessageCreate,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    sessionmaker: SessionMakerDep,
+    systems: SolSystemsDep,
+    runner: AgentRunnerDep,
+    settings: SettingsDep,
+    secret_store: SecretStoreDep,
+    registry: SolRegistryDep,
+    # SOLUSDEV-235 (extensions.md §9): `X-Solus-Extension` resolved as a
+    # dependency, so an unauthorized header is 403 `scope_denied` BEFORE admission.
+    attribution: ExtensionAttribution,
+    bridge: BridgeSessionsDep,
+) -> StreamingResponse:
+    """Append the user's message and stream SOL's reply as Server-Sent Events. The user
+    turn is persisted (and the interaction logged) BEFORE streaming; the assistant/tool
+    turns are persisted as the stream completes."""
+    require_role(ctx, Role.MEMBER)
+    content, ticket, wake = await _turn_prompt(
+        session, ctx, conversation_id, body, bridge, settings.bridge_tool_call_max_bytes
+    )
+    # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
+    screenshot = body.screenshot.decode() if body.screenshot is not None else None
+
+    await _validate_mentions(session, ctx.project.id, body.mentions)
+
+    # BUDGET GATE (SOLUS-RUN-01). `track_cost` needs NO wiring here — the gateway
+    # fires it per model call from inside CompletionStream._finalize, which is the
+    # point of that chokepoint. What belongs here is the PRE-FLIGHT, and its value
+    # is a correct status code rather than enforcement: `assert_can_spend` already
+    # runs per call inside the gateway, but it runs mid-stream, after the SSE
+    # response has opened, so a user out of credits would get an error frame
+    # instead of a 402 (CLAUDE.md §7; ADR-019/024).
+    estimate = SOL_TURN_CREDIT_ESTIMATE + (SCREENSHOT_EXTRA_CREDITS if screenshot else 0)
+    if not await has_sufficient_credits(ctx.user.id, estimate, session=session):
+        raise APIError(402, "insufficient_credits", "Not enough credits for a SOL turn")
+    # SEC-H3 (SOL-02 review): the context pull fires graph + pgvector work
+    # BEFORE the first model round reaches the gateway's cap, so turn admission
+    # is frequency-gated here too. This records the turn as one admission (the
+    # gateway still records each model round — deliberate, both consume real
+    # capacity); with no Redis deployed the cap fails open by policy and that
+    # remains the flagged pre-GA infra blocker.
+    try:
+        await check_frequency_cap(
+            ctx.user.id,
+            redis=getattr(request.app.state, "redis", None),
+            limits=_ORCHESTRATION_LIMITS,
+            session=session,
+        )
+    except FrequencyCapExceededError as exc:
+        raise APIError(429, "frequency_cap", "Too many SOL turns right now; slow down.") from exc
+    if wake is not None:
+        # §11.2: BEFORE the history read, so the tail is this turn's fenced evidence.
+        await admit_wake(session, ctx, conversation_id, wake)
+    prior = await SERVICE.history(
+        session, conversation_id=conversation_id, project_id=ctx.project.id
+    )
+    history = tuple(
+        TurnView(role=role, content=content)
+        for role, content in enrich_history([(t.role.value, t.content, t.attrs) for t in prior])
+    )
+    if ticket is not None:
+        await _admit_resume(session, ctx, conversation_id, ticket)
+    elif wake is None:
+        await _record_user_message(
+            session, ctx, conversation_id, content, body, attribution, screenshot
+        )
     await session.commit()
 
     # Scope is bound by Solus code, before the runner sees any user content (§7) —
@@ -1039,6 +1153,7 @@ async def post_message(
         user_id=ctx.user.id,
         sol_mode=ctx.user.sol_mode.value,
         action_mode=body.action_mode.value,
+        assistant_attrs=continuation_attrs(ticket, wake),
     )
     from solus_api.graph.read_scope import current_scope, scoped_stream
 
@@ -1047,161 +1162,6 @@ async def post_message(
         media_type="text/event-stream",
         headers=_SSE_HEADERS,
     )
-
-
-@router.get("/confirmations/{confirmation_id}/output")
-async def confirmation_output(
-    confirmation_id: uuid.UUID,
-    ctx: ProjectCtx,
-    session: SessionDep,
-    cursor: Annotated[int, Query(ge=0, le=256)] = 0,
-) -> dict[str, Any]:
-    from solus_api.agent.command_output import output_store
-
-    owned = await session.scalar(
-        select(ToolConfirmation.id).where(
-            ToolConfirmation.id == confirmation_id,
-            ToolConfirmation.project_id == ctx.project.id,
-            ToolConfirmation.user_id == ctx.user.id,
-        )
-    )
-    if owned is None:
-        raise APIError(404, "not_found", "No such action.")
-    return {"data": output_store.read((ctx.project.id, ctx.user.id, confirmation_id), cursor)}
-
-
-@router.post("/confirmations/{confirmation_id}")
-async def decide_tool_confirmation(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    confirmation_id: uuid.UUID,
-    body: ConfirmationDecision,
-    ctx: ProjectCtx,
-    session: SessionDep,
-    registry: SolRegistryDep,
-    settings: SettingsDep,
-    _verified: RequireVerified,
-) -> dict[str, Any]:
-    """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
-
-    The turn that proposed it has long since ended — a one-shot SSE stream cannot
-    block for a click — so the tool runs HERE, with the registry rebuilt under
-    the deciding user's own scope and the ARGUMENTS TAKEN FROM THE STORED ROW.
-    The request body carries a decision and nothing else, so what the user
-    approved is what executes (CLAUDE.md §7).
-    """
-    require_role(ctx, Role.MEMBER)
-    # SEC (SOLX-04 review): the decide endpoint is a destructive EXECUTION
-    # point — REST source creation requires a verified account (ADR-009), so
-    # executing the identical mutation from chat must too; and it gets the
-    # same admission gate as the message route.
-    try:
-        await check_frequency_cap(
-            ctx.user.id,
-            redis=getattr(request.app.state, "redis", None),
-            limits=_ORCHESTRATION_LIMITS,
-            session=session,
-        )
-    except FrequencyCapExceededError as exc:
-        raise APIError(429, "frequency_cap", "Too many decisions right now; slow down.") from exc
-    result = await decide_confirmation(
-        session,
-        registry,
-        confirmation_id,
-        approve=body.decision == "approve",
-        project_id=ctx.project.id,
-        user_id=ctx.user.id,
-    )
-    # SCOPED, like `decide_confirmation`'s own read. `session.get` by id alone
-    # would let another project's confirmation name a tool in this project's
-    # event stream — the same no-existence-oracle rule, applied to the audit path.
-    decided = (
-        await session.execute(
-            select(
-                ToolConfirmation.tool, ToolConfirmation.conversation_id, ToolConfirmation.args
-            ).where(
-                ToolConfirmation.id == confirmation_id,
-                ToolConfirmation.project_id == ctx.project.id,
-                ToolConfirmation.user_id == ctx.user.id,
-            )
-        )
-    ).first()
-    tool_name = decided.tool if decided is not None else None
-
-    if body.decision == "approve" and result.ok and decided is not None:
-        from solus_api.routers.sources import enqueue_sync
-
-        async def enqueue_after_write(sync_session: AsyncSession, source: Source) -> uuid.UUID:
-            return await enqueue_sync(
-                sync_session,
-                ctx,
-                source,
-                request,
-                background_tasks,
-                settings.model_copy(update={"sync_inline": False}),
-                Response(),
-            )
-
-        graph_sync = await schedule_onshape_write_sync(
-            request.app.state.sessionmaker,
-            project_id=ctx.project.id,
-            team_id=ctx.team.id,
-            tool_name=decided.tool,
-            args=decided.args,
-            store=getattr(request.app.state, "integration_store", None),
-            enqueue=enqueue_after_write,
-        )
-        if graph_sync is not None and isinstance(result.value, dict):
-            result = result.model_copy(update={"value": {**result.value, "graph_sync": graph_sync}})
-
-    # THE OTHER HALF OF THE HISTORY FIX. The turn that proposed this recorded it
-    # as "parked, awaiting your approval" and then ended. Without a second turn
-    # recording what the decision actually did, the transcript stops at "parked"
-    # forever — so the next message shows SOL a change it proposed, never learned
-    # the fate of, and will helpfully propose again.
-    if decided is not None and decided.conversation_id is not None and tool_name is not None:
-        await SERVICE.append_turn(
-            session,
-            conversation_id=decided.conversation_id,
-            project_id=ctx.project.id,
-            role=TurnRole.TOOL,
-            content=f"{tool_name} → {_decision_summary(body.decision, result)}",
-            attrs=redact_value(
-                {
-                    "confirmation_id": str(confirmation_id),
-                    "call": {
-                        "tool": decided.tool,
-                        "args": {
-                            key: value
-                            for key, value in decided.args.items()
-                            if key in {"path", "schematic_path"}
-                            and isinstance(value, str)
-                            and value in call_display_paths(decided.tool, decided.args)
-                        },
-                    },
-                    "result": result.model_dump(mode="json"),
-                },
-                allowed_paths=call_display_paths(decided.tool, decided.args),
-            ),
-        )
-
-    emit_event(
-        session,
-        user=ctx.user,
-        event_type="sol.tool_confirmation_decided",
-        team_id=ctx.team.id,
-        project_id=ctx.project.id,
-        # SEC-L3: abuse detection must answer "which destructive tool was
-        # approved" from the event stream alone.
-        payload={
-            "decision": body.decision,
-            "ok": result.ok,
-            "confirmation_id": str(confirmation_id),
-            "tool": tool_name,
-        },
-    )
-    await session.commit()
-    return envelope(result.model_dump(mode="json"))
 
 
 def create_scene_enqueue(

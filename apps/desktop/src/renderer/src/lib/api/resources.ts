@@ -72,6 +72,8 @@ export interface Source {
   last_synced_at: string | null
   last_error: SourceError | null
   entity_count?: number
+  /** SOLUSDEV-317: a `local` source's normalised git origin (docs/api/local-folder.md §2). */
+  remote?: { repo: string; host: string }
   created_at: string
   updated_at: string
 }
@@ -211,6 +213,8 @@ export interface SelectableItem {
   id: string
   name: string
   subtitle?: string
+  /** ISO time the item was last edited at the provider, when the connector knows. */
+  modified_at?: string
   config?: Record<string, unknown>
 }
 
@@ -827,6 +831,9 @@ export function createSource(
     name: string
     config?: Record<string, unknown>
     connection_id?: string
+    /** Bind through the team's GitHub App installation (SOLUSDEV-216). Mutually
+     *  exclusive with `connection_id` and a token. */
+    installation?: true
   },
   client: ApiClient = api
 ): Promise<Source> {
@@ -951,12 +958,22 @@ export interface TeamDetail {
   role: TeamRole
 }
 
+/** The GitHub account a teammate is linked to (SOLUSDEV-317, display only). */
+export interface TeamMemberGithub {
+  github_id: number
+  github_login: string
+  avatar_url: string | null
+  source: 'verified' | 'admin'
+}
+
 export interface TeamMemberApi {
   user_id: string
   email: string
   name: string | null
   role: TeamRole
   joined_at: string
+  /** Optional so pre-317 fixtures keep compiling; the API always sends it. */
+  github?: TeamMemberGithub | null
 }
 
 export type InviteStatus = 'pending' | 'accepted' | 'revoked'
@@ -964,7 +981,11 @@ export type InviteStatus = 'pending' | 'accepted' | 'revoked'
 export interface InviteApi {
   id: string
   team_id: string
-  email: string
+  /** Null for a GitHub-suggested invite (SOLUSDEV-216). */
+  email: string | null
+  /** Optional so pre-216 fixtures keep compiling; the API always sends them. */
+  github_user_id?: number | null
+  github_login?: string | null
   role: TeamRole
   status: InviteStatus
   created_at: string
@@ -1048,9 +1069,17 @@ export function listInvites(teamId: string, client: ApiClient = api): Promise<In
   return client.request<InviteApi[]>(`/teams/${teamId}/invites`)
 }
 
+type InviteRole = Exclude<TeamRole, 'owner'>
+
+/** Exactly one target: an email, or a GitHub org member by numeric id
+ *  (`github_login` is display-only; the server matches on the id). */
+export type CreateInviteInput =
+  | { email: string; role?: InviteRole }
+  | { github_user_id: number; github_login: string; role?: InviteRole }
+
 export function createInvite(
   teamId: string,
-  input: { email: string; role?: Exclude<TeamRole, 'owner'> },
+  input: CreateInviteInput,
   client: ApiClient = api
 ): Promise<InviteApi> {
   return client.request<InviteApi>(`/teams/${teamId}/invites`, { method: 'POST', body: input })
@@ -1244,6 +1273,9 @@ export interface ConfirmationOutcome {
    *  ok:false — refusing to run is its success — so callers must branch on the
    *  decision, not on this flag alone. */
   readonly ok?: boolean
+  /** The tool's own result on success (a command's `exit_code`, `timed_out`,
+   *  `reason`, …). Untrusted machine data — read defensively, render as text. */
+  readonly value?: Readonly<Record<string, unknown>> | null
   readonly error?: { readonly code?: string; readonly message?: string }
 }
 

@@ -22,8 +22,27 @@ def test_i3_actions_opt_into_the_single_error_recorder() -> None:
         "arduino_prepare",
         "arduino_compile",
         "arduino_upload",
+        # SOLUSDEV-317 (human-approved allowlist entries, 2026-10-18).
+        "exec",
+        "process_start",
+        "process_stop",
+        "profile_capture",
+        "profile_delete",
+        # SOLUSDEV-317 interactive processes (human-approved 2026-10-19).
+        "process_input",
     }
-    assert all(tool.get("files_errors") is True for tool in actions)
+    # Every command that RUNS to an exit code files its failure; starting or
+    # stopping a process and managing profiles do not produce one.
+    no_exit_code = {
+        "process_start",
+        "process_stop",
+        "profile_capture",
+        "profile_delete",
+        "process_input",
+    }
+    assert all(
+        tool.get("files_errors") is True for tool in actions if tool["name"] not in no_exit_code
+    )
 
 
 def test_i3_failure_retains_both_redacted_output_tails() -> None:

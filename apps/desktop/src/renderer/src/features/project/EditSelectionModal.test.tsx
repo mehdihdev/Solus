@@ -59,7 +59,7 @@ describe('EditSelectionModal', () => {
     await waitFor(() => expect(screen.getByLabelText('Rover chassis')).toBeInTheDocument())
 
     await userEvent.click(screen.getByLabelText('Rover chassis'))
-    await userEvent.click(screen.getByRole('button', { name: /track 1/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
       expect(resources.updateSource).toHaveBeenCalledWith('p1', 's1', {
@@ -68,7 +68,19 @@ describe('EditSelectionModal', () => {
     )
     // Re-sync so newly tracked items are ingested and dropped ones reconciled.
     expect(resources.triggerSync).toHaveBeenCalledWith('p1', 's1')
-    expect(onSaved).toHaveBeenCalled()
+    // The source row reports what changed.
+    expect(onSaved).toHaveBeenCalledWith({ added: 1, removed: 0 })
+  })
+
+  it('counts only still-listed documents in the reported change', async () => {
+    const onSaved = vi.fn()
+    renderModal(['docB', 'deleted-at-source'], onSaved)
+    await waitFor(() => expect(screen.getByLabelText('Arm')).toBeChecked())
+
+    await userEvent.click(screen.getByLabelText('Rover chassis'))
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ added: 1, removed: 0 }))
   })
 
   it('can clear the selection entirely — connected, tracking nothing', async () => {
@@ -77,13 +89,30 @@ describe('EditSelectionModal', () => {
 
     await userEvent.click(screen.getByLabelText('Rover chassis'))
     await userEvent.click(screen.getByLabelText('Arm'))
-    await userEvent.click(screen.getByRole('button', { name: /track none/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() =>
       expect(resources.updateSource).toHaveBeenCalledWith('p1', 's1', {
         config: { documents: [] }
       })
     )
+  })
+
+  it('names the job and the source while it lists', async () => {
+    vi.mocked(resources.listSelectable).mockReturnValue(new Promise(() => undefined))
+    renderModal(['docB'])
+    expect(screen.getByRole('heading', { name: 'Edit tracked documents' })).toBeInTheDocument()
+    expect(screen.getByText(/Onshape · 1 tracked/i)).toBeInTheDocument()
+    expect(screen.getByText(/loading documents/i)).toBeInTheDocument()
+  })
+
+  it('cancels from the picker without saving', async () => {
+    const onClose = vi.fn()
+    renderModal(['docB'], vi.fn(), onClose)
+    await screen.findByLabelText('Arm')
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onClose).toHaveBeenCalled()
+    expect(resources.updateSource).not.toHaveBeenCalled()
   })
 
   it('reports an honest error when the account cannot be listed', async () => {
@@ -101,7 +130,7 @@ describe('EditSelectionModal', () => {
     await waitFor(() => expect(screen.getByLabelText('Arm')).toBeInTheDocument())
 
     await userEvent.click(screen.getByLabelText('Arm'))
-    await userEvent.click(screen.getByRole('button', { name: /track 1/i }))
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     expect(await screen.findByText(/Could not save the selection/i)).toBeInTheDocument()
     expect(onSaved).not.toHaveBeenCalled()
@@ -115,7 +144,7 @@ it('explicitly refreshes the scoped source without saving or syncing', async () 
     .mockResolvedValueOnce([...DOCS, fresh])
   renderModal(['docB'])
   await screen.findByLabelText('Arm')
-  await userEvent.click(screen.getByRole('button', { name: /refresh/i }))
+  await userEvent.click(screen.getByRole('button', { name: 'Refresh documents' }))
   expect(await screen.findByLabelText(fresh.name)).toBeInTheDocument()
   expect(resources.listSelectable).toHaveBeenLastCalledWith('p1', 's1', undefined, {
     refresh: true

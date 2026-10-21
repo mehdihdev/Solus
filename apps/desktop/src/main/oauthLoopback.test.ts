@@ -319,3 +319,50 @@ function registerOAuthDualStackAndStateTests(): void {
     SOCKET_TEST_TIMEOUT_MS
   )
 }
+
+// SOLUSDEV-216: a GitHub App install can wait on an org owner for minutes, so
+// the flow takes a per-call timeout; the connector default is unchanged.
+describe('install flow options', () => {
+  it('keeps the connector default at five minutes and the install timeout at ten or more', () => {
+    expect(oauth.DEFAULT_OAUTH_TIMEOUT_MS).toBe(5 * 60 * 1000)
+    expect(oauth.INSTALL_OAUTH_TIMEOUT_MS).toBeGreaterThanOrEqual(10 * 60 * 1000)
+  })
+
+  it(
+    'honours a per-call timeoutMs',
+    async () => {
+      const result = await oauth.awaitOAuthCallback(AUTHORIZE, 'slow-state', PORT, {
+        timeoutMs: 100
+      })
+      expect(result).toEqual({ error: 'Sign-in timed out.' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it(
+    'does not time out early when a longer timeoutMs is given',
+    async () => {
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'long-state', PORT, {
+        timeoutMs: oauth.INSTALL_OAUTH_TIMEOUT_MS
+      })
+      await hitCallback(`${base()}?state=wrong`)
+      await new Promise((r) => setTimeout(r, 300))
+      const status = await hitCallback(
+        `${base()}?state=long-state&code=c&installation_id=42&setup_action=install`
+      )
+      expect(status).toBe(200)
+      expect(await pending).toEqual({ code: 'c', installationId: 42, setupAction: 'install' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+
+  it(
+    'surfaces an invalid installation_id as an error result',
+    async () => {
+      const pending = oauth.awaitOAuthCallback(AUTHORIZE, 'bad-id', PORT)
+      await hitCallback(`${base()}?state=bad-id&code=c&installation_id=abc&setup_action=install`)
+      expect(await pending).toEqual({ error: 'Invalid installation_id in callback' })
+    },
+    SOCKET_TEST_TIMEOUT_MS
+  )
+})

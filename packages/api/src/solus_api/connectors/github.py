@@ -21,7 +21,7 @@ from __future__ import annotations
 import base64
 import re
 from typing import Any, ClassVar, Final
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
 import httpx
 
@@ -46,6 +46,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.connectors.github_app import next_page_url
 from solus_api.widgets.solus_config import SOLUS_CONFIG_PATH
 
 GITHUB_API: Final = "https://api.github.com"
@@ -58,6 +59,13 @@ GITHUB_OAUTH: Final = "https://github.com/login/oauth"
 #: one.
 ETAG_KEY: Final = "commit_etag"
 REQUEST_TIMEOUT: Final = 30.0
+#: Repo listing follows the `Link` header at most this many pages (100 repos each), so a
+#: hostile or runaway listing cannot hold a request open or exhaust the rate limit.
+MAX_REPO_PAGES: Final = 20
+REPOS_PER_PAGE: Final = 100
+#: `Credentials.metadata["kind"]` of an installation token (SOLUSDEV-216, ADR-039). The
+#: token then has no user behind it, so identity and listing use installation endpoints.
+INSTALLATION_KIND: Final = "github_app_installation"
 
 
 # `repo` and `branch` are user-controlled and interpolated into GitHub API URL
@@ -85,6 +93,25 @@ def _safe_branch(branch: str) -> str:
     ):
         raise ConnectorError("invalid_branch", "branch name contains illegal characters")
     return branch
+
+
+def _is_installation(creds: Credentials) -> bool:
+    return creds.metadata.get("kind") == INSTALLATION_KIND
+
+
+def _api_base(creds: Credentials | None) -> str:
+    """The REST base for these credentials. Only an installation names its own, and it
+    comes from GitHub's installation record via the minter, never from request input.
+    It must be https: the bearer token is never sent in clear or to another scheme."""
+    if creds is None or not _is_installation(creds):
+        return GITHUB_API
+    base = creds.metadata.get("api_base")
+    if base is None:
+        return GITHUB_API
+    parts = urlsplit(str(base))
+    if parts.scheme != "https" or not parts.hostname:
+        raise ConnectorError("invalid_api_base", "The installation API base must be https.")
+    return str(base).rstrip("/")
 
 
 class GitHubConnector(OAuthConnector):
@@ -160,8 +187,10 @@ class GitHubConnector(OAuthConnector):
     # ----------------------------------------------------- identity & picker
 
     async def validate_credentials(self, creds: Credentials) -> AccountInfo:
+        if _is_installation(creds):
+            return await self._validate_installation(creds)
         async with self._http(creds) as client:
-            response = await client.get(f"{GITHUB_API}/user")
+            response = await client.get(f"{_api_base(creds)}/user")
         if response.status_code == httpx.codes.UNAUTHORIZED:
             raise ConnectorError("invalid_credentials", "GitHub rejected the access token.")
         body = self._ok_json(response)
@@ -173,24 +202,69 @@ class GitHubConnector(OAuthConnector):
             name=body.get("name"),
         )
 
-    async def list_repositories(self, creds: Credentials) -> list[dict[str, Any]]:
+    async def _validate_installation(self, creds: Credentials) -> AccountInfo:
+        """An installation token proves itself by listing one page of its repos; there is
+        no `/user` for an App installation. The identity is the installation, not a person."""
         async with self._http(creds) as client:
             response = await client.get(
-                f"{GITHUB_API}/user/repos",
-                params={"per_page": 100, "sort": "updated"},
+                f"{_api_base(creds)}/installation/repositories", params={"per_page": 1}
             )
-        body = self._ok_json(response)
-        if not isinstance(body, list):
-            raise ConnectorError("github_error", "Unexpected response shape for /user/repos.")
+        if response.status_code == httpx.codes.UNAUTHORIZED:
+            raise ConnectorError("invalid_credentials", "GitHub rejected the installation token.")
+        self._ok_json(response)
+        meta = creds.metadata
+        return AccountInfo(
+            external_id=f"installation:{meta.get('installation_id')}",
+            login=str(meta.get("account_login") or "github"),
+        )
+
+    async def list_repositories(self, creds: Credentials) -> list[dict[str, Any]]:
+        base = _api_base(creds)
+        if _is_installation(creds):
+            path, key, params = "/installation/repositories", "repositories", {}
+        else:
+            path, key, params = "/user/repos", None, {"sort": "updated"}
+        raw = await self._paginate(creds, f"{base}{path}", base, key=key, params=params)
         return [
             {
                 "full_name": repo.get("full_name"),
                 "default_branch": repo.get("default_branch"),
                 "private": repo.get("private"),
             }
-            for repo in body
-            if isinstance(repo, dict)
+            for repo in raw
         ]
+
+    async def _paginate(
+        self,
+        creds: Credentials,
+        url: str,
+        base: str,
+        *,
+        key: str | None,
+        params: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Collect up to `MAX_REPO_PAGES` pages. The next URL is followed only when it
+        stays on the API's own origin (`next_page_url`), so the bearer token is never
+        sent where a response's `Link` header points it. `key` names the wrapper field of
+        an object-shaped page (`/installation/repositories`); None means a bare list."""
+        collected: list[dict[str, Any]] = []
+        next_url: str | None = url
+        query: dict[str, Any] | None = {"per_page": REPOS_PER_PAGE, **params}
+        async with self._http(creds) as client:
+            for _ in range(MAX_REPO_PAGES):
+                if next_url is None:
+                    break
+                response = await client.get(next_url, params=query)
+                body = self._ok_json(response)
+                page = body.get(key) if isinstance(body, dict) and key else body
+                if (key is not None and not isinstance(body, dict)) or not isinstance(page, list):
+                    raise ConnectorError(
+                        "github_error", f"Unexpected response shape for {urlsplit(url).path}."
+                    )
+                collected.extend(item for item in page if isinstance(item, dict))
+                next_url = next_page_url(response.headers.get("link"), base)
+                query = None  # the next URL already carries its query
+        return collected
 
     async def list_selectable(self, creds: Credentials) -> list[dict[str, Any]]:
         """The generic picker capability: repositories, in the shape every
@@ -282,9 +356,7 @@ class GitHubConnector(OAuthConnector):
     ) -> bool:
         """True when GitHub answers 304 — a free "nothing changed"."""
         ref = quote(branch, safe="")
-        response = await client.get(
-            f"{GITHUB_API}/repos/{repo}/commits/{ref}", headers={"If-None-Match": etag}
-        )
+        response = await client.get(f"/repos/{repo}/commits/{ref}", headers={"If-None-Match": etag})
         self._raise_for_error(response)
         return response.status_code == 304
 
@@ -305,7 +377,7 @@ class GitHubConnector(OAuthConnector):
             ]
         try:
             blob_sha = quote(str(item["sha"]), safe="")
-            response = await client.get(f"{GITHUB_API}/repos/{repo}/git/blobs/{blob_sha}")
+            response = await client.get(f"/repos/{repo}/git/blobs/{blob_sha}")
             body = self._repo_json(response)
             raw = base64.b64decode(str(body.get("content", "")), validate=False)
             return raw.decode("utf-8"), []
@@ -384,7 +456,7 @@ class GitHubConnector(OAuthConnector):
     # ------------------------------------------------------- GitHub requests
 
     async def _default_branch(self, client: httpx.AsyncClient, repo: str) -> str:
-        response = await client.get(f"{GITHUB_API}/repos/{repo}")
+        response = await client.get(f"/repos/{repo}")
         body = self._repo_json(response)
         return str(body["default_branch"])
 
@@ -396,7 +468,7 @@ class GitHubConnector(OAuthConnector):
         self, client: httpx.AsyncClient, repo: str, branch: str
     ) -> tuple[str, str | None]:
         ref = quote(branch, safe="")
-        response = await client.get(f"{GITHUB_API}/repos/{repo}/commits/{ref}")
+        response = await client.get(f"/repos/{repo}/commits/{ref}")
         body = self._repo_json(response)
         return str(body["sha"]), response.headers.get("etag")
 
@@ -404,7 +476,7 @@ class GitHubConnector(OAuthConnector):
         self, client: httpx.AsyncClient, repo: str, sha: str
     ) -> tuple[list[dict[str, Any]], bool]:
         response = await client.get(
-            f"{GITHUB_API}/repos/{repo}/git/trees/{sha}",
+            f"/repos/{repo}/git/trees/{sha}",
             params={"recursive": 1},
         )
         body = self._repo_json(response)
@@ -415,10 +487,14 @@ class GitHubConnector(OAuthConnector):
     # -------------------------------------------------------------- helpers
 
     def _http(self, creds: Credentials | None = None) -> httpx.AsyncClient:
+        """A client whose relative paths resolve against the credentials' API base
+        (api.github.com unless an installation names its own, e.g. GHES)."""
         headers = {"Accept": "application/vnd.github+json"}
         if creds is not None:
             headers["Authorization"] = f"Bearer {creds.token}"
-        return httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers)
+        return httpx.AsyncClient(
+            timeout=REQUEST_TIMEOUT, headers=headers, base_url=_api_base(creds)
+        )
 
     @staticmethod
     def _json(response: httpx.Response) -> dict[str, Any]:

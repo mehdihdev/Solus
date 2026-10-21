@@ -12,15 +12,18 @@ never a guess. Pure otherwise; nothing here raises.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
-import shlex
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
 
-from solus_api.agent.tools.shapes import ToolErrorCode
-from solus_api.agent.tools.tool import ToolException
+from solus_api.bridge.command_previews import (
+    capture_rows,
+    command_rows,
+    existing_profiles,
+    legacy_rows,
+    parse_plan,
+)
+from solus_api.bridge.process_input_preview import INPUT_TOOL, STATUS_TOOL, input_rows
 
 logger = logging.getLogger("solus.bridge.previews")
 
@@ -102,21 +105,36 @@ def _kicad_symbol_property(read: BridgeReader) -> PreviewBuilder:
 
 
 CODE_PLAN_TOOL: Final = "code.plan"
+#: §9 item 6: the capture card says whether it replaces an existing profile.
+PROFILE_LIST_TOOL: Final = "code.profile_list"
 CODE_ACTIONS: Final = ("create_environment", "install", "run", "test")
+#: SOLUSDEV-317 executing tools whose card rows come from `bridge/command_previews.py`.
+COMMAND_ACTIONS: Final = ("exec", "process_start", "profile_capture")
+
+
+async def _read(read: BridgeReader, tool: str, args: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return await read(tool, args)
+    except Exception:  # noqa: BLE001 — the caller refuses on a missing answer
+        logger.warning("code preview read failed for %s", tool)
+        return None
 
 
 def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
     """SOLUSDEV-250: the approval card shows the EXACT argv the `code` server will
     run — read back from the server's own `plan` (one source of truth), never
-    re-assembled cloud-side. A declined plan renders its refusal reason."""
+    re-assembled cloud-side. A declined plan refuses with its reason
+    (`PreviewRefusal`, SOLUSDEV-317) instead of parking argument rows."""
 
     def factory(read: BridgeReader) -> PreviewBuilder:
         async def build(args: dict[str, Any]) -> list[dict[str, Any]]:
-            try:
-                plan = await read(CODE_PLAN_TOOL, {"action": action, "args": dict(args)})
-            except Exception:  # noqa: BLE001 — a preview never blocks the park
-                logger.warning("code preview plan failed for %s", action)
-                plan = None
+            plan = await _read(read, CODE_PLAN_TOOL, {"action": action, "args": dict(args)})
+            if action == "profile_capture":
+                parse_plan(plan)  # a refused plan's reason wins over the listing read
+                listing = await _read(read, PROFILE_LIST_TOOL, {})
+                return capture_rows(plan, args, existing_profiles(listing))
+            if action in ("exec", "process_start"):
+                return command_rows(plan, args, process=action == "process_start")
             return code_plan_rows(plan)
 
         return build
@@ -126,51 +144,28 @@ def _code_action(action: str) -> Callable[[BridgeReader], PreviewBuilder]:
 
 def code_plan_rows(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
     """One lossless, bounded presentation; a plan that cannot fit cannot execute."""
-    if not isinstance(plan, dict) or plan.get("ok") is not True:
-        raise ToolException(
-            "I3 could not produce an executable plan; no command was run.",
-            code=ToolErrorCode.INVALID_ARGS,
+    return legacy_rows(plan)
+
+
+def _process_input(read: BridgeReader) -> PreviewBuilder:
+    """§11.2: the card reads the process's live status (prompt and sequence)."""
+
+    async def build(args: dict[str, Any]) -> list[dict[str, Any]]:
+        process_id = args.get("process_id")
+        status = (
+            await _read(read, STATUS_TOOL, {"process_id": process_id})
+            if isinstance(process_id, str)
+            else None
         )
-    argv, cwd = plan.get("argv"), plan.get("cwd")
-    if (
-        not isinstance(argv, list)
-        or not argv
-        or not all(isinstance(arg, str) for arg in argv)
-        or not isinstance(cwd, str)
-    ):
-        raise ToolException("I3 returned an invalid command plan.", code=ToolErrorCode.INVALID_ARGS)
-    command = shlex.join(argv)
-    if len(command) > 18000 or len(cwd) > 500 or any(not ch.isprintable() for ch in command + cwd):
-        raise ToolException(
-            "The command plan cannot fit the approval card; split the action.",
-            code=ToolErrorCode.INVALID_ARGS,
-        )
-    # Chunk before the confirmation layer's 500-character/50-row bounds. A
-    # digest captures even whitespace and quoting changes normalized by that UI.
-    chunks = [command[start : start + 400] for start in range(0, len(command), 400)]
-    digest = hashlib.sha256(
-        json.dumps({"argv": argv, "cwd": cwd}, sort_keys=True).encode()
-    ).hexdigest()
-    return [
-        {
-            "label": "command" if len(chunks) == 1 else f"command {index + 1}/{len(chunks)}",
-            "before": None,
-            "after": chunk,
-        }
-        for index, chunk in enumerate(chunks)
-    ] + [
-        {"label": "cwd", "before": None, "after": cwd},
-        {
-            "label": "plan fingerprint",
-            "before": None,
-            "after": ":".join(digest[start : start + 16] for start in range(0, 64, 16)),
-        },
-    ]
+        return input_rows(status, args)
+
+    return build
 
 
 PREVIEWABLE_TOOLS: Final[dict[str, Callable[[BridgeReader], PreviewBuilder]]] = {
     "kicad.set_symbol_property": _kicad_symbol_property,
-    **{f"code.{action}": _code_action(action) for action in CODE_ACTIONS},
+    INPUT_TOOL: _process_input,
+    **{f"code.{action}": _code_action(action) for action in CODE_ACTIONS + COMMAND_ACTIONS},
 }
 
 

@@ -218,12 +218,17 @@ async def ensure_client(
     ref = client_secret_ref(spec.name)
     try:
         stored = json.loads(await store.get(ref))
-        return HostedClient(
-            client_id=str(stored["client_id"]), client_secret=stored.get("client_secret")
-        )
+        # A DCR client id only means something to the server that issued it, so
+        # a client registered at any other endpoint (or before the endpoint was
+        # recorded) is dead and is replaced rather than sent to the new host.
+        if stored.get("register_url") == spec.register_url:
+            return HostedClient(
+                client_id=str(stored["client_id"]), client_secret=stored.get("client_secret")
+            )
+        logger.info("stored DCR client for %r was issued elsewhere; re-registering", spec.name)
     except SecretNotFoundError:
         pass
-    except (ValueError, KeyError):
+    except (ValueError, KeyError, AttributeError):
         logger.warning("stored DCR client for %r is unreadable; re-registering", spec.name)
 
     try:
@@ -235,7 +240,9 @@ async def ensure_client(
                     "redirect_uris": [redirect_uri],
                     "grant_types": ["authorization_code", "refresh_token"],
                     "response_types": ["code"],
-                    "token_endpoint_auth_method": "client_secret_post",
+                    # Public client: PKCE is the proof. Onshape's auth host
+                    # offers only `none` and `private_key_jwt`.
+                    "token_endpoint_auth_method": "none",
                     # Pinned. Never derived from what the server advertises.
                     "scope": " ".join(spec.scopes),
                 },
@@ -262,7 +269,14 @@ async def ensure_client(
         client_id=client_id, client_secret=secret if isinstance(secret, str) else None
     )
     await store.put(
-        ref, json.dumps({"client_id": record.client_id, "client_secret": record.client_secret})
+        ref,
+        json.dumps(
+            {
+                "client_id": record.client_id,
+                "client_secret": record.client_secret,
+                "register_url": spec.register_url,
+            }
+        ),
     )
     logger.info("registered Solus as a DCR client with hosted server %r", spec.name)
     return record
@@ -297,6 +311,7 @@ def authorize_url(
             "code_challenge": code_challenge,
             "code_challenge_method": "S256",
             "scope": " ".join(spec.scopes),
+            **_resource_form(spec),
         }
     )
 
@@ -319,6 +334,11 @@ def _token_from(data: dict[str, Any], spec: RemoteMCPSpec, *, now: float) -> Hos
         refresh_token=refresh if isinstance(refresh, str) and refresh else None,
         expires_at=now + lifetime,
     )
+
+
+def _resource_form(spec: RemoteMCPSpec) -> dict[str, str]:
+    """RFC 8707: name the server the token is for, when the spec pins one."""
+    return {"resource": spec.resource} if spec.resource else {}
 
 
 def _client_form(client: HostedClient) -> dict[str, str]:
@@ -344,6 +364,7 @@ async def exchange_code(
             "code": code,
             "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
+            **_resource_form(spec),
             **_client_form(client),
         },
         code="token_unreachable",
@@ -376,6 +397,7 @@ async def refresh_token(
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
             "scope": " ".join(spec.scopes),
+            **_resource_form(spec),
             **_client_form(client),
         },
         code="token_unreachable",

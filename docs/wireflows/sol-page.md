@@ -156,3 +156,59 @@ output region. Poll the owner-scoped output endpoint only during execution;
 append incremental stdout/stderr, label truncation, and retain final completion
 or failure state. Never interpret terminal text as HTML or instructions. No modal
 or second approval screen is introduced.
+
+## Command execution — SOLUSDEV-317
+
+Governing spec: `docs/api/code-command-execution.md`. Applies identically to the SOL window.
+
+- **Command card.** For `code.exec`, `code.process_start`, `code.run`, `code.test`,
+  `code.install`, `code.create_environment` and `code.profile_capture`, the compact card's
+  header shows the program basename and one badge per value of the `risk` row (`network`,
+  `install`, `destructive`, `hardware`, `remote`, `runs_shell`, `project_scripts`), plus a `sandboxed` badge
+  read from the `sandbox` row. The badges are presentation only. The renderer does not
+  classify anything; the verbatim rows (program, command, cwd, environment, profile,
+  sandbox, risk, fingerprint) are unchanged in the expandable preview.
+- **Cmd/Ctrl+Enter approves.** While focus is inside a SOL chat surface (page or window,
+  composer included), Cmd+Enter (macOS) / Ctrl+Enter (Linux) approves the newest pending
+  **command** card in that surface. The shortcut is never registered globally.
+  - A card is approvable by shortcut only after it has been rendered and the newest command card
+    for at least 700 ms. A newer card restarts that clock, so an auto-resumed card cannot be
+    approved by a press meant for the previous one.
+  - Key auto-repeat is ignored. After a shortcut approval, the next one needs a fresh keydown
+    (any keyup, or the window losing focus).
+  - Ignored when the card is busy or permanently failed, during IME composition, with Alt/Shift
+    held, or when no command card is pending. With a command card pending, a blocked press is
+    consumed and never submits the composer. With none pending, Cmd/Ctrl+Enter behaves as before.
+  - The Approve button shows `⌘↵` / `Ctrl↵` (hidden from screen readers; `aria-keyshortcuts`
+    set). Non-command cards still need a click.
+- **Command preview is open.** Command cards render their verbatim preview expanded (bounded,
+  scrollable) rather than collapsed, so the resolved program, full argv, cwd, profile, sandbox and
+  risk rows are on screen before Approve. The Cmd/Ctrl+Enter arming clock starts only once the
+  preview region has been in view (IntersectionObserver) for 700 ms.
+- **Composer drafts win.** Cmd/Ctrl+Enter pressed in the composer while it holds a non-empty draft
+  never approves a card: the key is consumed and nothing happens (the user is typing, possibly "no,
+  don't run that"). With an empty composer the shortcut approves as above.
+- **Output stays.** The output region is shown while an approved command runs, and the final
+  output stays under the resulting "Approval recorded" message with the exit status
+  (`exited 0`, `exited 2`, `timed out`, `refused: …`) until the conversation is closed.
+- **SOL continues.** After an approved command card finishes, the client starts a resume turn
+  (`resume_confirmation_id`) without adding a user bubble. SOL reads the result and either
+  proposes the next step (which is another card) or answers. A `resume_limit` answer shows
+  "SOL paused — reply to continue". Rejecting a card does not resume.
+- **Running processes strip.** Above the composer, when this machine has processes started by
+  SOL for the open project: one row per process (name or program, state, elapsed time) with
+  **Output** (expands a bounded, keyboard-scrollable plain-text region, polled while open) and
+  **Stop** (a direct user action, no card). The strip polls every 2 s while any process is
+  running and every 15 s otherwise, and is hidden when there are no processes or the bridge
+  is offline.
+- **Refusals.** A denied command (shell, inline code, sudo) never produces a card. SOL gets
+  the refusal and proposes a direct command instead. A missing sandbox shows up as the card's
+  refusal text, `sandbox unavailable: …`.
+
+### SOLUSDEV-317 follow-up — auto-run and output blocks (2026-10-19)
+
+Build mode runs no-risk commands without a card (`docs/api/code-command-execution.md` §10).
+They appear as a compact command row (program, status, `auto`) with a code-block output
+region. Risky commands, workspace programs and shell scripts still show the card. Command output
+and SOL's markdown code blocks share one code-block surface, and each block has a top-right
+Copy button. The truncation label appears only when output was actually truncated.

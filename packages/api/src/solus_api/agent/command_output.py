@@ -5,12 +5,14 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from time import monotonic
-from typing import Any, Literal, Protocol
+from typing import Any, Final, Literal, Protocol
 from uuid import UUID
 
 from solus_api.agent.tools.untrusted import redact_text
 
 Stream = Literal["stdout", "stderr"]
+#: Tools whose approved execution streams incremental output (SOLUSDEV-261/317).
+STREAMING_TOOLS: Final = frozenset({"code.run", "code.test", "code.exec"})
 
 
 class OutputSink(Protocol):

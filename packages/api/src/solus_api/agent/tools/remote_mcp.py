@@ -125,6 +125,9 @@ class RemoteMCPSpec:
     authorize_url: str = ""
     token_url: str = ""
     register_url: str = ""
+    #: RFC 8707 resource indicator sent on authorize, exchange and refresh, as
+    #: the server's protected-resource metadata names it. Pinned like the rest.
+    resource: str = ""
     #: Exactly what we ask for and exactly what we accept back. A grant that
     #: comes back wider than this is an escalation and is REFUSED, not stored.
     scopes: tuple[str, ...] = ()
@@ -172,12 +175,16 @@ FS_MCP = RemoteMCPSpec(
     url="https://fs-mcp.labs.onshape.app/mcp",
     display_name="FeatureScript",
     source_type=SourceType.ONSHAPE,
-    authorize_url="https://fs-mcp.labs.onshape.app/authorize",
+    # Onshape moved fs-mcp's authorization server onto its own host (the
+    # resource metadata names it; fs-mcp's own `/authorize` now 404s). Still
+    # pinned here from a reviewed live check, never discovered at runtime.
+    authorize_url="https://mcp-auth.labs.onshape.app/authorize",
     # noqa on the next line: S106 sees "token" in the NAME and assumes a
     # credential. This is the OAuth token ENDPOINT — a public URL from the
     # server's own discovery document. No secret appears in this file.
-    token_url="https://fs-mcp.labs.onshape.app/token",  # noqa: S106
-    register_url="https://fs-mcp.labs.onshape.app/register",
+    token_url="https://mcp-auth.labs.onshape.app/token",  # noqa: S106
+    register_url="https://mcp-auth.labs.onshape.app/register",
+    resource="https://fs-mcp.labs.onshape.app",
     # Read + Write only. `OAuth2Delete` and `OAuth2ReadPII` are forbidden on the
     # record; the live spike confirmed the server issues a token without them.
     scopes=("OAuth2Read", "OAuth2Write"),

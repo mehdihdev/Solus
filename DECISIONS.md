@@ -197,13 +197,14 @@ Concretely: outbound provider calls are counted per **provider account** (not pe
 
 ## ADR-024: Credits — per-user, packs, ledger + cached balance, cost-capped trial
 
-**Status:** Accepted — 2026-07-04, SOLUSDEV-72; **amended 2026-07-04 (W0-03)** — margin default + debit-failure policy locked; **amended 2026-08-08 (SOLUSDEV-102, founder-approved in-chat)** — plan starting-credit grants added (see Decision). Refines ADR-018; carries forward the per-user credit model from ADR-017's 2026-07-03 amendment.
+**Status:** Accepted — 2026-07-04, SOLUSDEV-72; **amended 2026-07-04 (W0-03)** — margin default + debit-failure policy locked; **amended 2026-08-08 (SOLUSDEV-102, founder-approved in-chat)** — plan starting-credit grants added (see Decision); **amended 2026-10-19 (SOLUSDEV-236, approved in-chat)** — 14-day trial length and trial-expiry policy (see Decision). Refines ADR-018; carries forward the per-user credit model from ADR-017's 2026-07-03 amendment.
 **Context:** Credits meter model-backed usage (ADR-018). We need per-user attribution, a purchasable top-up path, an auditable balance, and a trial that cannot run up an unbounded bill — all before we have real cost-per-operation data.
 **Decision:**
 
 - Credits are **per-user, with NO pooling** — regardless of whether the user is solo or in a team.
 - **Purchase packs:** $10 / $25 / $50 / $100, each displayed with an **estimated** query count. Estimates are **provisional** (no real cost-per-operation data yet): ship conservative, calibrate post-pilot.
-- **One-month free trial**, which must be **cost-capped** — a bounded credit grant, never unlimited.
+- **One-month free trial**, which must be **cost-capped** — a bounded credit grant, never unlimited. _(Length amended 2026-10-19 to 14 days — see Trial expiry below.)_
+- **Trial expiry (2026-10-19, SOLUSDEV-236; approved in-chat):** The free trial is **14 days** (`stripe_trial_days` and the account-creation trial both read one config value). This replaces the "one-month" wording above. When a trial that isn't backed by Stripe (`status = trialing`, no Stripe subscription) passes `expires_at`, it is **expired**. This is checked when a request comes in, the way staff comps are; there's no new status value and no cleanup job. An expired trial blocks **model-backed (metered) usage** with `trial_expired` until the user subscribes. Purchased pack credits still unlock spending. Projects, data, sync and unmetered features are never blocked. Stripe-backed trials follow Stripe's own status and are never blocked by this rule. Each block emits `orchestration.blocked{reason: "trial_expired"}`.
 - **Development exception (2026-09-12, SOLUSDEV-261; explicitly approved in-chat):** Explicitly allowlisted development accounts may bypass credit and trial limits only in development environments. Cost logging, production limits, and tool approvals remain enforced.
 - **Plan starting credits (2026-08-08):** each paid plan carries a **one-time** credit grant applied when the plan first becomes live for a user — **BASIC 2,500**, **PRO 10,000** (4×) — sized so BASIC comfortably covers two projects of normal SOL usage. Idempotent per (user, plan): renewals never re-grant; upgrading BASIC→PRO grants PRO's amount once. Amounts are **CONFIG** (calibratable like the trial grant), never hardcoded in enforcement. Ongoing top-ups are the purchase packs — buying credits never requires a plan upgrade.
 - **Accounting:** an immutable, append-only **`credit_ledger`** is the source of truth, plus a cached per-user **`credit_balance`**. The **token→credit conversion rate embeds the margin and is CONFIG** (calibratable), never hardcoded. Per-call debits are written by the post-call cost hook (ADR-026).
@@ -497,6 +498,53 @@ assembled by Solus code from validated arguments (never a shell string), is conf
 with the exact argv shown on the approval card, is confined to the linked workspace and its
 venv/conda environment, and is bounded (timeout, output caps). These act on the user's
 environment, never on Solus's.
+
+**Amendment (2026-10-18, SOLUSDEV-317 — approved in-session by Mehdi per ADR-032 tier 2):** The
+Solus-authored `code` server MAY execute a model-proposed argument list in the user's linked
+workspace (`code.exec`, and companion-owned long-running `code.process_*`), superseding the "no
+generic command executor" statements in local-machine-actions.md and code-environment.md, only
+when: (1) argv only, never a shell string; shells, inline-code interpreter flags (-c/-e) and
+privilege elevation are refused by a cloud-side CommandPolicy AND again by the server; (2) every
+invocation is human-confirmed on the central approval card showing resolved absolute program
+path, full argv, cwd, profile, sandbox state and risk class — no Build-mode auto-execution; a
+keyboard shortcut is an approval, not a bypass; (3) execution is OS-sandboxed with writes
+confined to the workspace, its environment, temp and declared tool caches; if the sandbox is
+unavailable the command is refused; (4) environment profiles are captured only by a gated,
+Solus-authored fixed script sourcing a user-named setup file, filtered of secret-shaped
+variables, stored machine-private (ADR-034); (5) long-running processes are bounded in
+count/output, killed on companion exit or project unlink, never auto-restarted; (6) output is
+untrusted, redacted at ingress and fed to the model as framed data. Pattern 2 (telemetry) is
+unchanged. Mechanism choices approved in the same session: macOS uses `sandbox-exec`, Linux uses
+Landlock (refused on kernels without it); sandboxed commands keep network access, with
+network-class commands flagged on the card; the sandbox applies to every `code` execution tool
+(`create_environment`, `install`, `run`, `test`, `exec`, `process_*`), not only the new ones.
+
+**Amendment (2026-10-19, SOLUSDEV-317 follow-up — approved in-session by Mehdi per ADR-032 tier
+2):** Narrows clause (2) of the 2026-10-18 amendment. In Build mode, a `code.exec` call that
+CommandPolicy does not deny and classifies with NO risk (none of network, install, destructive,
+hardware, remote, runs_shell, project_scripts) executes without an approval card. It is still
+OS-sandboxed, re-planned against a complete preview, single-use, and audited
+(`sol.command.completed` with `auto: true`). Its output reaches SOL like any approved command.
+Guide mode never executes. Every other command keeps the card: risk-flagged exec,
+process_start/stop, profile_capture/delete, create_environment, install, run and test. "Confirm
+every change" (force_confirmation) restores the card for all of them. Clause (1) is relaxed only
+for `bash` and `sh` running a workspace script file: `bash|sh <workspace-relative .sh/.bash file>
+[args]`, with no options (-c, -s, -i, --rcfile, etc.) and no stdin, always behind a card with a
+`runs_shell` badge. Inline shell strings remain refused.
+
+**Amendment (2026-10-19, SOLUSDEV-317 interactive processes — approved in-session by Mehdi per
+ADR-032 tier 2):** `code.process_start` may start an interactive process (`interactive: true`)
+attached to a Solus-owned pseudo-terminal inside the same OS sandbox, approved on a card like every
+process start. REPLs and bare shells (an interpreter or shell with no script or module argument)
+are refused in interactive mode. The code server reports `awaiting_input` with a bounded, redacted
+output tail when an interactive process goes quiet at a prompt-like line. Input reaches the process
+only (a) from the person's own input box or Enter button (a direct user action, no card), or (b)
+through `code.process_input`, where a bare Enter needs no card and any other text needs a card that
+shows the prompt tail and the exact text. Input is bounded printable text plus newline; control
+sequences are refused. Terminal output is stripped of control sequences before it leaves the
+machine. When a process starts waiting, SOL may be woken for one turn per new prompt under the
+existing continuation cap and budget gates. This relaxes the 2026-10-19 "no stdin" rule only for
+interactive processes; one-shot `code.exec` and shell scripts keep stdin closed.
 
 ---
 
@@ -970,7 +1018,6 @@ human reviewer at the MR — the model is never the reviewer.
 2. Changing a decision: set the old entry's Status to **Superseded by ADR-XXX**, add the new entry referencing what it replaces and why. Never delete history.
 3. Humans own decisions; agents may edit this file only under ADR-032 tier-2 (concrete change approved in-chat first, dedicated commit). An agent that believes a decision needs revisiting raises it in its design-review critique or completion report.
 
-
 ---
 
 ## ADR-019 / ADR-035 amendment: Onshape transport and reconciliation
@@ -1108,3 +1155,49 @@ verification), annual allowance 2,500, quiet period 90 s.
 5. **Durable scope:** only STEP exports and immutable reads over 256 KiB are
    stored durably; replaced objects are deleted. Writes always resolve the
    target workspace live.
+
+## ADR-039: Team-owned provider installations — GitHub App linked to a team
+
+**Status:** Accepted (2026-10-17, SOLUSDEV-315 design; approved in-chat against the concrete text below). Implementation: SOLUSDEV-216.
+
+**Context:**
+
+- GitHub access today is a user-owned OAuth App grant (ADR-035 amendment 2026-09-12), so a team has no GitHub identity of its own.
+- Each member must authorize separately, and only the grant owner can bind it.
+- Sources break when that member leaves.
+- Orgs that restrict third-party OAuth Apps expose no repos at all.
+- ADR-030's signature-verified GitHub webhooks were never built.
+
+**Decision:**
+
+1. A new ownership class: a **team installation**.
+   - A GitHub App installation on an org (or user account) is bound to exactly one COLLABORATIVE team. `installation_id` is unique.
+   - PERSONAL teams cannot hold one.
+   - The user-owned OAuth App / PAT path (ADR-035) is unchanged and coexists with it.
+2. **Linking requires team admin+ and proof of access.** The install callback must present a single-use, 10-minute server state bound to (user, team), and the user's user-to-server token must list the installation (`GET /user/installations`). Unlinking requires admin+.
+3. **Installation tokens are never stored.**
+   - They are minted on demand from the app JWT. The app private key lives in Secrets Manager.
+   - They are cached for at most 55 minutes and never logged, persisted or returned.
+   - Sources bound to an installation carry the reserved `secret_ref` `github-app/installation/{id}`, which the runtime resolver dispatches to the minter. The connector contract does not change.
+4. **Binding is a team right.** Any member+ of the owning team may bind the installation's repos to that team's projects. A project of another team never resolves the installation; routing is installation → team → project.
+5. **The app webhook is the freshness channel.**
+   - One endpoint verifies `X-Hub-Signature-256` with constant-time HMAC before parsing, caps the body, and de-dupes on `X-GitHub-Delivery`.
+   - It routes only through a bound installation. Unknown installations are dropped and logged.
+   - Payload content is untrusted data (CLAUDE.md §7).
+   - The hourly ETag sweep stays as the backstop.
+6. **GitHub org membership never grants Solus access.**
+   - The org roster suggests invites only. An invite may target a GitHub numeric id that is resolved from the accepter's GitHub identity at accept time.
+   - Org removal notifies admins and never auto-removes.
+   - ADR-023 invitee limits and the verified-email gate still apply.
+7. **Revocation.** Unlink, uninstall or suspend disables every bound Source and drops the cached token. Removing a repo from the installation disables only that repo's Sources.
+8. **Plan accounting.** A link counts as one integration against the linking admin's `max_integrations`. Binding repos from it is free.
+9. **App permissions are read-only and minimal:** `contents:read`, `metadata:read`, `members:read`. Any write permission needs a new ADR.
+10. **Configurable endpoints.** API and web base URLs are stored per installation, so GitHub Enterprise Server is not foreclosed (ADR-015).
+
+**Consequences:**
+
+- A second GitHub credential type to operate: an app private key, a webhook secret, and app registration per environment.
+- Team sources survive member churn.
+- ADR-030 GitHub webhooks become real.
+- Existing OAuth-bound sources are not migrated automatically.
+- GitLab groups would follow this pattern under their own ADR.

@@ -74,6 +74,12 @@ from solus_api.services.connections import (
     sweep_after_commit,
 )
 from solus_api.services.events import emit_event
+from solus_api.services.installation_sources import (
+    BOUND_CONFIG_KEYS,
+    bind_installation_source,
+    bound_config,
+    recheck_bound_repo,
+)
 from solus_api.services.limits import check_can_add_integration
 
 if TYPE_CHECKING:
@@ -210,6 +216,7 @@ async def list_sources(
 @router.post("", status_code=201)
 async def connect_source(
     body: SourceCreate,
+    request: Request,
     ctx: ProjectCtx,
     session: SessionDep,
     registry: RegistryDep,
@@ -219,6 +226,8 @@ async def connect_source(
     require_role(ctx, Role.MEMBER)
     provider = body.type
     _refuse_local(provider)
+    if body.installation:
+        return await _connect_installation(body, request, ctx, session)
     connector = _resolve_connector(registry, provider)
     if body.connection_id and body.token:
         raise APIError(400, "validation_error", "Pass a connection_id or a token, not both")
@@ -256,22 +265,7 @@ async def connect_source(
         # A reused legacy/PAT row retires its own token family (SOLUSDEV-242 MEDIUM-1).
         bind_to_account(source, connection, preserve_state=reused)
     elif body.token:
-        if not connector.supports_token_connect:
-            raise APIError(
-                400,
-                "token_connect_unsupported",
-                f"'{provider}' must be connected via OAuth, not a token",
-            )
-        try:
-            account = await connector.validate_credentials(Credentials(token=body.token))
-        except ConnectorError as exc:
-            raise APIError(400, exc.code, exc.message) from exc
-        secret_ref = f"source/{source.id}/{provider}"
-        await secret_store.put(secret_ref, body.token)
-        source.secret_ref = secret_ref
-        source.status = SourceStatus.CONNECTED
-        source.account_login = account.login
-        source.account_external_id = account.external_id
+        await _attach_token(connector, source, body.token, secret_store)
     elif connector.auth_kind is AuthKind.NONE:
         # Committed-export connectors (EDA family, SOLUSDEV-100/102) carry no
         # tool credential — nothing to authenticate, so the source is connected
@@ -300,6 +294,54 @@ async def connect_source(
     )
     await session.commit()
     await _sweep_if_bound(connection, session, secret_store, ctx.user)
+    await session.refresh(source)
+    return envelope(serialize_source(source))
+
+
+async def _attach_token(
+    connector: Any, source: Source, token: str, secret_store: SecretStoreDep
+) -> None:
+    """Validate a directly supplied token and park it in the secret store."""
+    provider = source.type.value
+    if not connector.supports_token_connect:
+        raise APIError(
+            400,
+            "token_connect_unsupported",
+            f"'{provider}' must be connected via OAuth, not a token",
+        )
+    try:
+        account = await connector.validate_credentials(Credentials(token=token))
+    except ConnectorError as exc:
+        raise APIError(400, exc.code, exc.message) from exc
+    secret_ref = f"source/{source.id}/{provider}"
+    await secret_store.put(secret_ref, token)
+    source.secret_ref = secret_ref
+    source.status = SourceStatus.CONNECTED
+    source.account_login = account.login
+    source.account_external_id = account.external_id
+
+
+async def _connect_installation(
+    body: SourceCreate, request: Request, ctx: ProjectCtx, session: SessionDep
+) -> dict[str, Any]:
+    """ADR-039: bind a repo of the project's TEAM installation (member+, already gated by
+    the caller). Free of plan accounting; the first sync is requested like any other
+    connected source, via `POST .../{id}/sync`."""
+    if body.token or body.connection_id:
+        raise APIError(
+            400, "credential_conflict", "An installation binding takes no token or connection_id"
+        )
+    if body.type != SourceType.GITHUB.value:
+        raise APIError(400, "unsupported", "Only GitHub sources can use an installation")
+    source = await bind_installation_source(
+        session,
+        project=ctx.project,
+        user=ctx.user,
+        config=body.config,
+        app_state=request.app.state,
+        name=body.name,
+    )
+    await session.commit()
     await session.refresh(source)
     return envelope(serialize_source(source))
 
@@ -347,7 +389,7 @@ async def get_source(source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep)
 
 @router.patch("/{source_id}")
 async def update_source(
-    body: SourceUpdate, source_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep
+    body: SourceUpdate, source_id: uuid.UUID, request: Request, ctx: ProjectCtx, session: SessionDep
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
     source = await _scoped_source(session, ctx, source_id, lock=True)
@@ -361,9 +403,22 @@ async def update_source(
         merged = {**source.config}
         # `access` is a GRANT fact, mirrored from the connection at bind time —
         # never a setting a member may patch in (security review M4).
-        merged.update(
-            {k: v for k, v in data["config"].items() if not k.startswith("_") and k != "access"}
-        )
+        incoming = {
+            k: v for k, v in data["config"].items() if not k.startswith("_") and k != "access"
+        }
+        if source.installation_id is not None:
+            # ADR-039: the credential linkage is never patchable, not even via config. Only
+            # the bound keys (repo, branch) are accepted: any other key is dropped, and the
+            # survivors are validated exactly as they were at bind time. A repo change is
+            # re-checked against what the installation can see.
+            incoming = {k: v for k, v in incoming.items() if k in BOUND_CONFIG_KEYS}
+            merged = bound_config({**source.config, **incoming})
+            if "repo" in incoming and incoming["repo"] != source.config.get("repo"):
+                await recheck_bound_repo(
+                    session, source=source, repo=incoming["repo"], app_state=request.app.state
+                )
+        else:
+            merged.update(incoming)
         source.config = merged
     await session.commit()
     await session.refresh(source)

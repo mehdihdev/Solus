@@ -275,26 +275,59 @@ function registerConnectorReadinessTests(): void {
     expect(github).toMatchObject({ error: expect.stringMatching(/unreachable/i) })
   })
 
-  it('renders a picker in the wizard when a busy state carries selectable items', async () => {
+  it('renders a picker in the wizard when its own flow reaches a selection', async () => {
     const selectable: SelectableItem[] = [
       { id: 'a/one', name: 'a/one' },
       { id: 'a/two', name: 'a/two' }
     ]
+    vi.spyOn(bridgeModule, 'getDesktopOAuthBridge').mockReturnValue({
+      getRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb?solus_cb=x'),
+      awaitGithub: vi.fn(async () => ({ code: 'cd' })),
+      getConnectorRedirectUrl: vi.fn(async () => 'http://127.0.0.1:9/cb'),
+      awaitOAuth: vi.fn(async () => ({ code: 'cd' }))
+    })
+    mockedEnsure.mockResolvedValue({ linked: true, teamId: 't1', project: { id: 'p1', name: 'X' } })
+    // The flow parks at its selection step, as a real connect does.
+    mockedRun.mockImplementation(
+      (deps) =>
+        new Promise(() => {
+          deps.onProgress({
+            phase: 'busy',
+            stage: 'configure',
+            label: 'Choose repositories to track…',
+            sourceId: 's1',
+            selectable,
+            selectionMode: 'single'
+          })
+        })
+    )
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    await vi.waitFor(() => expect(useWorkspaceStore.getState().linked).toBe(true))
+    await userEvent.click(screen.getByText('GitHub'))
+    await userEvent.click(screen.getByRole('button', { name: 'Connect GitHub' }))
+    const picker = await screen.findByLabelText('Choose an item to track')
+    expect(picker).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
+  })
+
+  it('never reopens on a picker no live flow is waiting on', async () => {
+    // A busy picker left in the store by another surface's abandoned flow has
+    // no resolver here: showing it would render a Track button that does nothing.
     useOnboardingStore.getState().setConnection('github', {
       phase: 'busy',
       stage: 'configure',
       label: 'Choose repositories to track…',
       sourceId: 's1',
-      selectable,
+      selectable: [{ id: 'a/one', name: 'a/one' }],
       selectionMode: 'single'
     })
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
-    // The picker lives in the wizard now — opening the tile surfaces it.
     await userEvent.click(screen.getByText('GitHub'))
-    const picker = await screen.findByLabelText('Choose an item to track')
-    expect(picker).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: 'a/two' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('Choose an item to track')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
   })
 }

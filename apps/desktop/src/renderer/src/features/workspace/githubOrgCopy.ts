@@ -1,0 +1,277 @@
+// SOLUSDEV-216 / ADR-039: every string the GitHub organization card and its
+// roster show, in Guide and Expert variants (ADR-016 — SOL mode is universal).
+// Guide explains what an org link does and why the owner approves on GitHub;
+// Expert is terse. Placeholders: `{n}` (a count) and, for linked_by, `{by}`,
+// `{when}`, `{scope}`.
+import type { GithubOrgErrorCode } from '../../lib/api/resources.teamGithub'
+import type { SolMode } from '../../store/settingsStore'
+
+interface Variants {
+  Guide: string
+  Expert: string
+}
+
+const COPY = {
+  unlinked_admin: {
+    Guide:
+      'Link your GitHub organization so everyone on the team can add its repos — no personal sign-in. An organization owner approves the install on GitHub, so Solus only ever sees what they grant.',
+    Expert: 'Link the GitHub org: team-wide repo access, no personal tokens.'
+  },
+  unlinked_member: {
+    Guide:
+      'No GitHub organization is linked to this team yet. Ask a team admin to link one; once they do, you can add its repos without signing in to GitHub yourself.',
+    Expert: 'No GitHub organization linked — ask a team admin.'
+  },
+  unconfigured: {
+    Guide:
+      "GitHub organizations aren't set up on this server, so there is nothing to link here. Personal GitHub sign-in still works.",
+    Expert: "GitHub organizations aren't set up on this server."
+  },
+  linking: {
+    Guide:
+      'Finish in your browser: the organization owner approves Solus on GitHub. If you are not an owner, GitHub asks one for you. This can take a few minutes.',
+    Expert: 'Waiting for GitHub approval in the browser…'
+  },
+  requested: {
+    Guide:
+      'Waiting for an org owner to approve Solus on GitHub. Nothing is linked yet — link again once they have approved.',
+    Expert: 'Waiting for an org owner to approve Solus on GitHub — link again once they do.'
+  },
+  suspended: {
+    Guide:
+      'Suspended on GitHub — syncs are paused until an org owner unsuspends Solus. Nothing is lost; sources resume on their own.',
+    Expert: 'Suspended on GitHub — syncs paused until an org owner unsuspends Solus.'
+  },
+  cancelled: {
+    Guide: 'The GitHub install was cancelled, so nothing was linked. You can try again any time.',
+    Expert: 'Install cancelled — nothing linked.'
+  },
+  failed: {
+    Guide: "Couldn't finish linking the organization. Check your connection and try again.",
+    Expert: 'Link failed. Retry.'
+  },
+  no_bridge: {
+    Guide: 'Linking a GitHub organization needs the Solus desktop app, which opens your browser.',
+    Expert: 'Linking needs the desktop app.'
+  },
+  linked_by: {
+    Guide: 'Linked by {by}, {when}. Solus can read {scope} in this organization.',
+    Expert: 'Linked by {by} · {when} · {scope}'
+  },
+  offline_note: {
+    Guide: "Couldn't load this team's GitHub organization. Check your connection and try again.",
+    Expert: "Couldn't load."
+  },
+  roster_token_missing: {
+    Guide:
+      "The invite was created, but the server didn't return its token, so there is nothing to share. Revoke this invite and send a new one.",
+    Expert: 'Token not returned. Revoke the invite and resend.'
+  },
+  roster_copy_failed: {
+    Guide:
+      "Copying didn't work here. Select the token above and copy it by hand before you close this.",
+    Expert: 'Copy failed — select and copy manually.'
+  },
+  roster_wont_see_again: {
+    Guide:
+      "You won't see this token again. Copy it first, or click Done once more to close without it.",
+    Expert: 'Token not shown again. Done again to discard.'
+  },
+  former_member: { Guide: 'a former member', Expert: 'a former member' },
+  scope_all: { Guide: 'all repositories', Expert: 'all repos' },
+  scope_selected: { Guide: 'selected repositories', Expert: 'selected repos' },
+  unlink_confirm: {
+    Guide:
+      'Unlinking disconnects every project source that reads through this organization. Your repositories and the GitHub App itself are untouched, and you can relink later.',
+    Expert: 'Unlink: disconnects every project source using this org.'
+  },
+  unlink_confirm_count: {
+    Guide:
+      'Unlinking disconnects {n} project sources that read through this organization. Your repositories and the GitHub App itself are untouched, and you can relink later.',
+    Expert: 'Unlink: disconnects {n} project sources using this org.'
+  },
+  unlink_done: {
+    Guide:
+      'Unlinked — {n} project sources were disconnected. To fully remove Solus from the organization, uninstall the app on GitHub too.',
+    Expert: 'Unlinked, {n} sources disconnected. Uninstall on GitHub to finish.'
+  },
+  unlink_failed: {
+    Guide: "Couldn't unlink the organization. Please try again.",
+    Expert: 'Unlink failed.'
+  },
+  roster_intro: {
+    Guide:
+      'These are the organization members on GitHub. Inviting someone creates a one-time join token you share with them; they join Solus themselves and nobody is added automatically.',
+    Expert: 'Org members. Invite creates a one-time token; no auto-join.'
+  },
+  roster_empty: {
+    Guide: 'GitHub reports no members for this organization.',
+    Expert: 'No members.'
+  },
+  roster_failed: {
+    Guide: "Couldn't load the organization's members. Please try again.",
+    Expert: 'Roster failed to load.'
+  },
+  invite_shown: {
+    Guide:
+      "Share this one-time join token with them — it's shown only now. When they accept, Solus checks that their GitHub identity matches.",
+    Expert: 'One-time token, shown once. GitHub identity is checked on accept.'
+  },
+  invite_shown_email: {
+    Guide:
+      "Share this one-time join token with them — it's shown only now. They paste it under Join team.",
+    Expert: 'One-time token, shown once.'
+  },
+  not_an_org_member: {
+    Guide:
+      'That person is no longer a member of the GitHub organization, so they cannot be invited.',
+    Expert: 'Not an org member any more.'
+  },
+  invite_failed: {
+    Guide: "Couldn't create that invite. Please try again.",
+    Expert: 'Invite failed.'
+  },
+  plan_limit_reached: {
+    Guide: 'Your plan has reached its limit, so this organization cannot be linked yet.',
+    Expert: 'Plan limit reached.'
+  },
+  already_linked: {
+    Guide: 'This team already has a GitHub organization linked. Unlink it first to link another.',
+    Expert: 'A GitHub organization is already linked.'
+  },
+  installation_linked_elsewhere: {
+    Guide:
+      'This organization is linked to another Solus team — unlink it there first, then link it here.',
+    Expert: 'Linked to another Solus team — unlink it there first.'
+  },
+  installation_not_accessible: {
+    Guide:
+      "Solus couldn't see that installation with your GitHub account. Make sure you finished the install in the organization you meant, then try again.",
+    Expert: 'Installation not accessible to your GitHub account.'
+  },
+  installation_admin_required: {
+    Guide:
+      'Only an owner of this organization on GitHub can link it to Solus. Ask an org owner to link it from this team — your access to some of its repositories is not enough.',
+    Expert: 'Org owner required to link.'
+  },
+  install_state_invalid: {
+    Guide: 'That install attempt expired or was already used. Start the link again.',
+    Expert: 'Install state expired — restart.'
+  },
+  // SOLUSDEV-317: assigning org members to teammates (ADR-039 amendment 2026-10-19).
+  // Placeholders: {team}, {n}, {m}, {login}, {name}, {other}, {by}, {when}.
+  link_target: {
+    Guide: 'Link a GitHub organization to {team}',
+    Expert: 'Link an org to {team}'
+  },
+  assign_intro: {
+    Guide:
+      'Match each GitHub organization member to the teammate they are, so the roster and GitHub activity show the right person. An assignment is only a label: it never gives anyone Solus access or changes a role, and people still join through an invite.',
+    Expert: 'Assignments are labels for attribution — no access, no role change.'
+  },
+  roster_count: {
+    Guide: '{n} organization members · {m} on this team',
+    Expert: '{n} org members · {m} on team'
+  },
+  verified_hint: {
+    Guide: 'They linked this GitHub account themselves, so it cannot be reassigned here.',
+    Expert: 'Self-linked — read-only.'
+  },
+  assigned_by: {
+    Guide: 'assigned by {by} {when}',
+    Expert: 'by {by} · {when}'
+  },
+  assign_done: {
+    Guide: '@{login} is now shown as {name}. Their access did not change.',
+    Expert: '@{login} → {name}'
+  },
+  unassign_done: {
+    Guide: '@{login} is no longer shown as a teammate. Nobody’s access changed.',
+    Expert: '@{login} unassigned.'
+  },
+  unassign_confirm: {
+    Guide: 'Remove the label linking @{login} to {name}? Their Solus access stays the same.',
+    Expert: 'Unassign @{login} from {name}?'
+  },
+  not_a_team_member: {
+    Guide: "That person isn't on this team anymore — the member list has been refreshed.",
+    Expert: 'Not on this team anymore — refreshed.'
+  },
+  assign_not_org_member: {
+    Guide: 'That account has left the GitHub organization — the list has been refreshed.',
+    Expert: 'No longer an org member — refreshed.'
+  },
+  github_identity_verified: {
+    Guide:
+      'A teammate linked @{login} themselves, so it cannot be assigned to anyone else. The list has been refreshed.',
+    Expert: '@{login} is verified to its owner — cannot reassign.'
+  },
+  member_has_verified_github: {
+    Guide:
+      '{name} already linked @{other} themselves, so they cannot be assigned a different GitHub account.',
+    Expert: '{name} already linked @{other}.'
+  },
+  member_already_assigned: {
+    Guide: '{name} is already assigned to @{other}. Unassign them there first, then try again.',
+    Expert: '{name} is already @{other} — unassign there first.'
+  },
+  assign_failed: {
+    Guide: "Couldn't save that assignment. Check your connection and try again.",
+    Expert: 'Assignment failed. Retry.'
+  },
+  filter_empty: {
+    Guide: 'No organization members match this view.',
+    Expert: 'No matches.'
+  },
+  teammates_all_linked: {
+    Guide: 'Every teammate already has a GitHub account linked.',
+    Expert: 'All teammates linked.'
+  },
+  no_teammates_left: {
+    Guide: 'Every teammate is already linked to a GitHub account.',
+    Expert: 'No unlinked teammates.'
+  },
+  no_org_members_left: {
+    Guide: 'Every organization member you have loaded is already linked to someone.',
+    Expert: 'No unlinked org members loaded.'
+  },
+  teammate_pick_hint: {
+    Guide: 'Pick the GitHub account that belongs to {name}.',
+    Expert: 'GitHub account for {name}:'
+  }
+} satisfies Record<string, Variants>
+
+export type GithubCopyKey = keyof typeof COPY
+
+export const GITHUB_COPY_KEYS = Object.keys(COPY) as readonly GithubCopyKey[]
+
+/** The copy for `key` in the user's SOL mode, with `{name}` placeholders filled. */
+export function githubText(
+  key: GithubCopyKey,
+  mode: SolMode,
+  vars: Readonly<Record<string, string | number>> = {}
+): string {
+  const text: string = COPY[key][mode]
+  // One pass, so a value that itself contains `{x}` (a login is user-supplied)
+  // is never re-expanded.
+  return text.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    Object.hasOwn(vars, name) ? String(vars[name]) : whole
+  )
+}
+
+const REFUSAL_KEYS: ReadonlySet<string> = new Set([
+  'plan_limit_reached',
+  'already_linked',
+  'installation_linked_elsewhere',
+  'installation_not_accessible',
+  'installation_admin_required',
+  'install_state_invalid'
+])
+
+/** The copy key naming an install refusal, or null for a code with no inline copy.
+ *  `install/start` can answer 503 `github_app_unconfigured` even though
+ *  `GET /installation` read fine (an API started before the App keys were set). */
+export function refusalCopyKey(code: GithubOrgErrorCode): GithubCopyKey | null {
+  if (code === 'github_app_unconfigured') return 'unconfigured'
+  return REFUSAL_KEYS.has(code) ? (code as GithubCopyKey) : null
+}

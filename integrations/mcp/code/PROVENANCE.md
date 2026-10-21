@@ -9,7 +9,10 @@
 
 - **Server name:** `code` — equals this directory's name and the `server:` field of
   `allowlist.yaml` (`^[a-z][a-z0-9_]{0,31}$`). Composed tool names: `code.probe_environment`,
-  `code.plan`, `code.create_environment`, `code.install`, `code.run`, `code.test`.
+  `code.plan`, `code.create_environment`, `code.install`, `code.run`, `code.test`, the `code.git_*`
+  and `code.arduino_*` tools, and (SOLUSDEV-317) `code.exec`, `code.process_start`,
+  `code.process_stop`, `code.process_status`, `code.profile_capture`, `code.profile_list`,
+  `code.profile_delete`.
 - **Spec location:** none — like `local`, the server is not in `MCP_SERVER_CATALOG`
   (`packages/api/src/solus_api/agent/tools/mcp_servers.py`); the cloud reaches it through the
   bridge's `code.*` dispatch (`docs/api/code-environment.md` §4/§5).
@@ -41,7 +44,7 @@ No `upstream/` exists, so there are no in-tree edits to log. Solus-authored file
 
 | Date | File(s) | What & why | Author |
 | ---- | ------- | ---------- | ------ |
-|      |         |            |        |
+| 2026-10-18 | `solus/` (new: `command_deny.py`, `command_plan.py`, `sandbox.py`, `git_guard.py`, `landlock_exec.py`, `profiles.py`, `processes.py`, `process_os.py`; changed: `plan.py`, `execute.py`, `server.py`, `roster.py`), `allowlist.yaml` (human-approved entries) | SOLUSDEV-317: sandboxed, confirmed command execution, long-running processes and environment profiles. Solus-authored (no upstream); recorded because it voids the sign-offs below. | agent (SOLUSDEV-317) |
 
 Install-time note: `bin/launch` execs the fork-private interpreter
 `integrations/mcp/code/.venv/bin/python3`. That virtualenv is NOT committed —
@@ -54,11 +57,12 @@ performs LATER, on confirmation, act on the USER's workspace venv (ADR-031 amend
 
 - **Allowlist:** `./allowlist.yaml` — authoritative; per-tool `requires_confirmation` lives THERE.
   DRAFT until human-ratified at the MR (integrations/mcp/CLAUDE.md rule 2).
-- **Exposed / upstream total:** `14 / 14` — there is no upstream surface to trim; the server
-  registers exactly the fourteen allowlisted tools (`solus/roster.py`, pinned by
+- **Exposed / upstream total:** `22 / 22` — there is no upstream surface to trim; the server
+  registers exactly the twenty-two allowlisted tools (`solus/roster.py`, pinned by
   `tests/test_code_allowlist_shape.py` and `tests/test_code_server.py`).
 - **Destructive tools:** `create_environment`, `install`, `run`, `test`, `git_commit`, `git_push`,
-  `arduino_prepare`, `arduino_compile` (all
+  `arduino_prepare`, `arduino_compile`, `arduino_upload`, `exec`, `process_start`, `process_stop`,
+  `profile_capture`, `profile_delete` (all
   `requires_confirmation: true` — they write to, download into, or execute code on the customer
   machine; `run`/`test` are declared interpreter tools per the security template §5).
   `probe_environment`, `plan`, `git_status`, `git_log`, `git_diff` and `arduino_probe` are read-only
@@ -67,6 +71,10 @@ performs LATER, on confirmation, act on the USER's workspace venv (ADR-031 amend
   `docs/api/code-arduino-development.md` governs the pinned, sandboxed Uno compiler
   and dependency preparation, with complete previews and no device access. Human
   shipping sign-offs below remain outstanding and are not supplied by agent tests.
+  `docs/api/code-command-execution.md` (SOLUSDEV-317, ADR-031 amendment 2026-10-18) governs
+  `exec`, the long-running `process_*` tools and environment `profile_*` tools; every
+  executing tool now runs in the OS sandbox (`solus/sandbox.py`, `solus/landlock_exec.py`)
+  or is refused. `process_status` and `profile_list` are read-only.
 
 ## Update / rebase policy
 
@@ -100,7 +108,9 @@ Both lines required before the server ships, and again after any re-review trigg
 - Any allowlist **addition**, or any `requires_confirmation` flip **true→false**. (Removals and
   false→true shrink surface: one reviewer suffices.)
 - Any change to the declared env allowlist (`solus/env_allowlist.py`, `solus/env.allow`), the
-  pinned binary search roots (`solus/execute.py::SEARCH_ROOTS`), or the declared sandbox posture.
+  pinned binary search roots (`solus/execute.py::SEARCH_ROOTS`), or the declared sandbox posture
+  (including `solus/sandbox.py::HOME_CACHES`, the macOS profile, `solus/landlock_exec.py`, the
+  `solus/command_deny.py` tables, `solus/profiles.py::CAPTURE_SCRIPT` and its filters).
 - Any dependency added or version-changed in the lockfile.
 - A published CVE in any dependency at a version the lockfile pins.
 - Shipping a Windows launcher (`bin/launch.cmd`) — a new entrypoint is a new review.

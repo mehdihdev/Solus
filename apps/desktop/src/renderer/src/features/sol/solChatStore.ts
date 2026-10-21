@@ -22,12 +22,11 @@ import {
   listSolConfirmations,
   streamSolMessage,
   type SolActionMode,
-  type SolScreenshot,
-  type SolTurn
+  type SolScreenshot
 } from './solApi'
 import { preferencesForTurn } from '../preferences/preferencesStore'
 import type { ContextUsedInfo, SolStreamEvent } from './solStream'
-import type { PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
+import type { AutoRun, PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
 import {
   purgeAllCachedChats,
   readCachedChat,
@@ -36,6 +35,20 @@ import {
 } from './solCache'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { createTokenBatcher, type TokenBatcher } from './tokenBatcher'
+import { commandExitStatus, hasCommandOutput, isCommandTool } from './commandCard'
+import { finalOutputOf, type CommandRun } from './commandRuns'
+import { createRunTracker, refusalStatus } from './commandRunTracker'
+import { processIdOf, rememberProcessOwner, resetProcessOwners } from './processOwners'
+import type { WakeStart } from './processWake'
+import {
+  MAX_TURN_CHARS,
+  appendContent,
+  applyEvent,
+  blankItem,
+  turnFailureText,
+  turnToItem,
+  type Patch
+} from './solChatItems'
 
 export interface TraceEntry {
   callId: string
@@ -74,6 +87,13 @@ export interface ChatItem {
   /** SOLUSDEV-252 S3: this user turn carried a screen capture. A flag only —
    *  pixels live in memory for one send and never enter an item. */
   hasScreenshot?: boolean
+  /** SOLUSDEV-317: approved commands' output, kept (bounded, plain text) with
+   *  the exit status under this message until the conversation is closed.
+   *  Runtime only — never cached (solCache keeps role + content). */
+  commandRuns?: readonly CommandRun[]
+  /** SOLUSDEV-317 §10.1: Build-mode commands that ran without a card, as
+   *  compact rows. Runtime only, like commandRuns. */
+  autoRuns?: readonly AutoRun[]
 }
 
 export type ChatStatus = 'loading' | 'ready' | 'offline'
@@ -115,8 +135,7 @@ const turnTokens = new Map<string, object>()
 // S2-A: token text coalesces here and lands as ONE store commit per frame.
 const batchers = new Map<string, TokenBatcher>()
 
-/** Per-turn rendered-content ceiling (SEC-H3). Far above any real reply. */
-export const MAX_TURN_CHARS = 200_000
+export { MAX_TURN_CHARS }
 /** Client-side ceiling on concurrent background turns across projects — the
  *  server's frequency cap and budgets still gate each one (ADR-019). */
 export const MAX_CONCURRENT_TURNS = 3
@@ -136,6 +155,11 @@ function patchSession(projectId: string, fn: (session: SolSession) => SolSession
     }
   }))
 }
+
+// SOLUSDEV-317: approved commands' output pollers (runtime only).
+const runs = createRunTracker((projectId, fn) =>
+  patchSession(projectId, (session) => ({ ...session, items: fn(session.items) }))
+)
 
 export function setForceConfirmation(projectId: string, forceConfirmation: boolean): void {
   patchSession(projectId, (session) => ({ ...session, forceConfirmation }))
@@ -170,110 +194,13 @@ export function resetSolChatSessions(): void {
   decidedApprovals.clear()
   for (const controller of controllers.values()) controller.abort()
   for (const batcher of batchers.values()) batcher.dispose()
+  runs.stopAll()
+  resetProcessOwners()
   controllers.clear()
   batchers.clear()
   turnTokens.clear()
   useSolChatStore.setState({ sessions: {} })
   refreshStreaming()
-}
-
-function turnToItem(turn: SolTurn): ChatItem {
-  return {
-    id: turn.id,
-    role: turn.role,
-    content: turn.content,
-    citations: [],
-    trace: [],
-    pending: false,
-    error: null,
-    confirmations: [],
-    artifacts: [],
-    // The server persists `attrs.screenshot = { width, height, app }` — never pixels.
-    ...(turn.attrs.screenshot !== undefined ? { hasScreenshot: true } : {})
-  }
-}
-
-function blankItem(id: string, role: ChatItem['role'], content: string, pending = false): ChatItem {
-  return {
-    id,
-    role,
-    content,
-    citations: [],
-    trace: [],
-    pending,
-    error: null,
-    confirmations: [],
-    artifacts: []
-  }
-}
-
-/** Author-safe failure text for a rejected/failed turn — never the raw error. */
-function turnFailureText(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.status === 402) return "You're out of SOL credits — top up to keep going."
-    if (error.status === 429) return 'Too many SOL turns right now — give it a few seconds.'
-  }
-  return 'SOL is unreachable right now.'
-}
-
-type Patch = (fn: (item: ChatItem) => ChatItem) => void
-
-/** Append streamed text. SEC-H3: bound per-turn accumulation. */
-function appendContent(patch: Patch, text: string): void {
-  patch((m) => ({
-    ...m,
-    content:
-      m.content.length >= MAX_TURN_CHARS ? m.content : (m.content + text).slice(0, MAX_TURN_CHARS)
-  }))
-}
-
-function applyEvent(patch: Patch, event: SolStreamEvent): void {
-  switch (event.type) {
-    case 'token':
-      appendContent(patch, event.text)
-      return
-    case 'tool_call':
-      patch((m) => ({
-        ...m,
-        trace: [...m.trace, { callId: event.callId, tool: event.tool, ok: null, errorCode: null }]
-      }))
-      return
-    case 'tool_result':
-      patch((m) => ({
-        ...m,
-        trace: m.trace.map((t) =>
-          t.callId === event.callId ? { ...t, ok: event.ok, errorCode: event.errorCode } : t
-        )
-      }))
-      return
-    case 'tool_confirmation':
-      // Append, never replace. The backend dedupes by concrete action, so a
-      // re-proposal arrives as the SAME confirmationId rather than a duplicate
-      // card — matching on the id here keeps that true in the UI.
-      patch((m) =>
-        m.confirmations.some((c) => c.confirmationId === event.pending.confirmationId)
-          ? m
-          : { ...m, confirmations: [...m.confirmations, event.pending] }
-      )
-      return
-    case 'artifact':
-      // Keyed on the id: a re-sent frame is the same bytes, not a second card.
-      patch((m) =>
-        (m.artifacts ?? []).some((a) => a.artifactId === event.artifact.artifactId)
-          ? m
-          : { ...m, artifacts: [...(m.artifacts ?? []), { ...event.artifact, filedTo: null }] }
-      )
-      return
-    case 'message':
-      patch((m) => ({ ...m, content: event.content, citations: event.citations, pending: false }))
-      return
-    case 'error':
-      patch((m) => ({ ...m, pending: false, error: event.message }))
-      return
-    case 'context_used':
-    case 'done':
-      return
-  }
 }
 
 /** True when the user is looking at THIS project's SOL page right now. */
@@ -433,6 +360,83 @@ export async function sendMessage(
 ): Promise<boolean> {
   const text = content.trim()
   if (!text || !admitTurn(projectId)) return false
+  const userItem = {
+    ...blankItem(nextItemId(), 'user', text),
+    ...(screenshot ? { hasScreenshot: true } : {})
+  }
+  return runTurn(projectId, text, userItem, {
+    projectId,
+    content: text,
+    actionMode,
+    mentions,
+    thinkHarder,
+    ...confirmationOptions(options),
+    // The circled region rides THIS send only (sol-window.md §8); the caller
+    // drops it from memory once handed over.
+    ...(screenshot ? { screenshot } : {})
+  })
+}
+
+/** SOLUSDEV-317 (§5.5): after an approved command card, continue SOL's turn so
+ *  it reads the result. No user bubble; same streaming path and admission. */
+const RESUME_PAUSED = 'SOL paused — reply to continue'
+const RESUME_PROMPT = 'your approved command'
+
+async function resumeTurn(
+  projectId: string,
+  confirmationId: string,
+  actionMode: SolActionMode
+): Promise<void> {
+  const session = selectSession(useSolChatStore.getState(), projectId)
+  if (session.conversationId === null || !admitTurn(projectId)) return
+  await runTurn(projectId, RESUME_PROMPT, null, {
+    projectId,
+    content: '',
+    actionMode,
+    resumeConfirmationId: confirmationId,
+    ...confirmationOptions({ forceConfirmation: session.forceConfirmation })
+  })
+}
+
+/** SOLUSDEV-317 §11.3: an interactive process SOL started is asking for input.
+ *  Continue SOL in the conversation that started it — no user bubble, the same
+ *  streaming path as a resume. Never while a turn streams, never into another
+ *  conversation than the one open in this project's session. */
+export function wakeTurn(
+  projectId: string,
+  conversationId: string,
+  processPrompt: NonNullable<TurnInput['processPrompt']>,
+  actionMode: SolActionMode
+): WakeStart {
+  const session = selectSession(useSolChatStore.getState(), projectId)
+  if (session.conversationId !== conversationId) return 'elsewhere'
+  if (session.streaming || controllers.has(projectId)) return 'busy'
+  if (controllers.size >= MAX_CONCURRENT_TURNS) return 'busy'
+  void runTurn(projectId, WAKE_PROMPT, null, {
+    projectId,
+    content: '',
+    actionMode,
+    processPrompt,
+    ...confirmationOptions({ forceConfirmation: session.forceConfirmation })
+  })
+  return 'started'
+}
+
+const WAKE_PROMPT = 'a waiting process'
+
+type TurnInput = Omit<
+  Parameters<typeof streamSolMessage>[0],
+  'conversationId' | 'onEvent' | 'signal' | 'preferences'
+>
+
+/** One streamed turn: optional user bubble, a pending assistant item, the
+ *  stream, and end-of-turn bookkeeping. Shared by sends and resumes. */
+async function runTurn(
+  projectId: string,
+  prompt: string,
+  userItem: ChatItem | null,
+  input: TurnInput
+): Promise<boolean> {
   const turnToken = {}
   turnTokens.set(projectId, turnToken)
   const assistantId = nextItemId()
@@ -448,39 +452,31 @@ export async function sendMessage(
     streaming: true,
     items: [
       ...s.items,
-      { ...blankItem(nextItemId(), 'user', text), ...(screenshot ? { hasScreenshot: true } : {}) },
+      ...(userItem ? [userItem] : []),
       blankItem(assistantId, 'assistant', '', true)
     ]
   }))
   refreshStreaming()
   let failed = false
   try {
-    const activeId = await resolveConversationId(projectId, text)
+    const activeId = await resolveConversationId(projectId, prompt)
     const controller = new AbortController()
     controllers.set(projectId, controller)
     batchers.set(projectId, batcher)
     await streamSolMessage({
-      projectId,
+      ...input,
       conversationId: activeId,
-      content: text,
-      actionMode,
-      mentions,
-      thinkHarder,
-      ...confirmationOptions(options),
       // SOLUSDEV-244: the user's engineering conventions ride along with every
       // turn (null when nothing is written or outside the desktop app).
       preferences: await preferencesForTurn(),
-      // The circled region rides THIS send only (sol-window.md §8); the caller
-      // drops it from memory once handed over.
-      ...(screenshot ? { screenshot } : {}),
       signal: controller.signal,
       onEvent: (event) => {
         if (handleTurnEvent(projectId, patch, batcher, event)) failed = true
       }
     })
   } catch (error: unknown) {
-    failed = true
-    failTurn(projectId, patch, batcher, error)
+    failed = !resumeRefusal(projectId, assistantId, patch, error)
+    if (failed) failTurn(projectId, patch, batcher, error)
   } finally {
     // Text still buffered when the stream ends lands before the turn settles
     // (a cancelled turn's batcher is already disposed, so this is inert).
@@ -488,9 +484,28 @@ export async function sendMessage(
     if (batchers.get(projectId) === batcher) batchers.delete(projectId)
     // Only the send that still owns the turn cleans up — a cancelled turn
     // settling late must not clobber a newer send's state.
-    if (turnTokens.get(projectId) === turnToken) settleTurn(projectId, text, failed)
+    if (turnTokens.get(projectId) === turnToken) settleTurn(projectId, prompt, failed)
   }
   return !failed
+}
+
+/** A resume or wake the server declined on purpose (§5.5, §11.2):
+ *  `resume_limit` pauses SOL until the person replies; `already_resumed` /
+ *  `already_woken` is someone else's continuation and vanishes silently. */
+function resumeRefusal(
+  projectId: string,
+  assistantId: string,
+  patch: Patch,
+  error: unknown
+): boolean {
+  if (!(error instanceof ApiError) || error.status !== 409) return false
+  if (error.code === 'resume_limit') {
+    patch((m) => ({ ...m, pending: false, content: RESUME_PAUSED }))
+    return true
+  }
+  if (error.code !== 'already_resumed' && error.code !== 'already_woken') return false
+  patchSession(projectId, (s) => ({ ...s, items: s.items.filter((m) => m.id !== assistantId) }))
+  return true
 }
 
 /** One live turn per project, MAX_CONCURRENT_TURNS overall; the refusal is
@@ -550,15 +565,28 @@ function settleTurn(projectId: string, prompt: string, failed: boolean): void {
   notifyAway(projectId, prompt, failed)
 }
 
-export async function decideConfirmation(
+/** The message text after a decision: a restored approvals item says what
+ *  happened; a chat message gains an "Approval update" line. */
+function decidedContent(
+  m: ChatItem,
+  confirmationId: string,
+  decision: 'approve' | 'reject'
+): string {
+  const approved = decision === 'approve'
+  if (!m.id.startsWith('approvals-')) {
+    const tool = m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'
+    return `${m.content}\n\nApproval update: ${tool} ${approved ? 'approval recorded' : 'was rejected'}.`
+  }
+  if (m.confirmations.length !== 1) return m.content
+  return approved ? 'Approval recorded.' : 'Action rejected.'
+}
+
+/** Drop the decided card from whichever message carries it. */
+function markDecided(
   projectId: string,
   confirmationId: string,
   decision: 'approve' | 'reject'
-): Promise<void> {
-  // Clear ONLY on success — ConfirmationCard owns the failure state (CTR-03).
-  const generation = identityGeneration
-  await decideSolConfirmation(projectId, confirmationId, decision)
-  if (generation !== identityGeneration) return
+): void {
   decidedApprovals.add(`${projectId}:${confirmationId}`)
   patchSession(projectId, (s) => ({
     ...s,
@@ -566,18 +594,87 @@ export async function decideConfirmation(
       m.confirmations.some((c) => c.confirmationId === confirmationId)
         ? {
             ...m,
-            content: m.id.startsWith('approvals-')
-              ? m.confirmations.length === 1
-                ? decision === 'approve'
-                  ? 'Approval recorded.'
-                  : 'Action rejected.'
-                : m.content
-              : `${m.content}\n\nApproval update: ${m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'} ${decision === 'approve' ? 'approval recorded' : 'was rejected'}.`,
+            content: decidedContent(m, confirmationId, decision),
             confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
           }
         : m
     )
   }))
+}
+
+/** POST the decision, closing the tracked command run with its exit status or
+ *  its refusal. Rethrows so ConfirmationCard owns the failure state. */
+async function postDecision(
+  projectId: string,
+  confirmationId: string,
+  decision: 'approve' | 'reject',
+  tracked: boolean,
+  generation: number
+): Promise<Awaited<ReturnType<typeof decideSolConfirmation>> | null> {
+  try {
+    const outcome = await decideSolConfirmation(projectId, confirmationId, decision)
+    if (generation !== identityGeneration) return null
+    if (tracked) {
+      runs.end(projectId, confirmationId, commandExitStatus(outcome), finalOutputOf(outcome.value))
+    }
+    return outcome
+  } catch (error: unknown) {
+    if (tracked && generation === identityGeneration) {
+      runs.end(projectId, confirmationId, refusalStatus(error))
+    }
+    throw error
+  }
+}
+
+export async function decideConfirmation(
+  projectId: string,
+  confirmationId: string,
+  decision: 'approve' | 'reject',
+  options?: { actionMode?: SolActionMode }
+): Promise<void> {
+  // Clear ONLY on success — ConfirmationCard owns the failure state (CTR-03).
+  const generation = identityGeneration
+  const tool = findConfirmation(projectId, confirmationId)?.tool ?? null
+  const approving = decision === 'approve' && tool !== null
+  const tracked = approving && hasCommandOutput(tool)
+  if (tracked) runs.begin(projectId, confirmationId, tool)
+  const outcome = await postDecision(projectId, confirmationId, decision, tracked, generation)
+  if (outcome === null) return
+  markDecided(projectId, confirmationId, decision)
+  if (!approving) return
+  if (tool === 'code.process_start') recordProcessOwner(projectId, outcome.value)
+  resumeAfterCommand(projectId, confirmationId, tool, options?.actionMode)
+}
+
+/** SOLUSDEV-317 §5.5: SOL continues after an approved command. Never after a
+ *  rejection (the caller only calls on approve), and never for a non-command card. */
+function resumeAfterCommand(
+  projectId: string,
+  confirmationId: string,
+  tool: string,
+  actionMode: SolActionMode | undefined
+): void {
+  if (isCommandTool(tool) && actionMode) void resumeTurn(projectId, confirmationId, actionMode)
+}
+
+/** §11.3: remember which conversation started this process, for its wakes. */
+function recordProcessOwner(
+  projectId: string,
+  value: Readonly<Record<string, unknown>> | null | undefined
+): void {
+  const processId = processIdOf(value)
+  const conversationId = selectSession(useSolChatStore.getState(), projectId).conversationId
+  if (processId !== null && conversationId !== null) {
+    rememberProcessOwner(projectId, processId, conversationId)
+  }
+}
+
+function findConfirmation(projectId: string, confirmationId: string): PendingConfirmation | null {
+  for (const item of selectSession(useSolChatStore.getState(), projectId).items) {
+    const found = item.confirmations.find((c) => c.confirmationId === confirmationId)
+    if (found) return found
+  }
+  return null
 }
 
 /** SOLUSDEV-252 S5: file a turn's artifact into a `.solus` section. Idempotent —

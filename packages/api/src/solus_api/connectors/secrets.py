@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import functools
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,8 +34,50 @@ class SecretNotFoundError(KeyError):
     """No secret stored under the given ref."""
 
 
+#: Refs under this prefix are never SecretStore keys (SOLUSDEV-216, ADR-039 §3): the
+#: GitHub App installation ref `github-app/installation/{id}` names a token that is minted
+#: on demand and held in process memory only. Refusing it here, for every backend, means a
+#: missed call site fails loudly instead of writing, reading or deleting a "secret".
+RESERVED_REF_PREFIX = "github-app/"
+_GUARDED_METHODS = ("put", "get", "delete")
+
+
+class ReservedSecretRefError(ValueError):
+    """A SecretStore call named a reserved ref (`github-app/...`). A programming error."""
+
+
+def _refuse_reserved(ref: str) -> None:
+    if isinstance(ref, str) and ref.startswith(RESERVED_REF_PREFIX):
+        raise ReservedSecretRefError("reserved secret ref is not a SecretStore key")
+
+
+def _guarded(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+    @functools.wraps(method)
+    async def wrapper(self: Any, ref: str, *args: Any, **kwargs: Any) -> Any:
+        _refuse_reserved(ref)
+        return await method(self, ref, *args, **kwargs)
+
+    wrapper.__reserved_guard__ = True  # type: ignore[attr-defined]
+    return wrapper
+
+
 class SecretStore(abc.ABC):
-    """Opaque ref → secret value. Implementations encrypt at rest."""
+    """Opaque ref → secret value. Implementations encrypt at rest.
+
+    Every concrete backend, including third-party and test subclasses, has `put`, `get`
+    and `delete` wrapped at class creation so the reserved prefix is refused once, here,
+    before the backend sees the ref."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for name in _GUARDED_METHODS:
+            method = cls.__dict__.get(name)
+            if (
+                callable(method)
+                and not getattr(method, "__isabstractmethod__", False)
+                and not getattr(method, "__reserved_guard__", False)
+            ):
+                setattr(cls, name, _guarded(method))
 
     @abc.abstractmethod
     async def put(self, ref: str, value: str) -> None: ...

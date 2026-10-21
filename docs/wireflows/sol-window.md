@@ -97,3 +97,10 @@ native surfaces offer explicit overlay handoff with side-panel fallback. A missi
 match remains uncertain, with no fabricated arrow. Existing explicit capture may provide the
 screenshot context for fallback. Switching mode/project/account/task dismisses prior guidance.
 Build keeps its normal chat/tool path and actual approval cards. No new modal is introduced.
+
+## SOLUSDEV-317 command execution
+
+The SOL window uses the same command card, Cmd/Ctrl+Enter approval, retained output,
+automatic resume and Running processes strip specified in `sol-page.md` ("Command execution
+— SOLUSDEV-317"). The global shortcuts above are unchanged. Cmd/Ctrl+Enter is handled only
+inside the focused SOL surface and is never registered globally.

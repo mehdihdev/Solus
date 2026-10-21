@@ -8,6 +8,7 @@ import logging
 from copy import deepcopy
 from typing import Any
 
+from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, AUTO_TOOLS, SYSTEM_SCOPE, auto_judge
 from solus_api.agent.confirmations import _build_preview, validate_tool_arguments
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.tools.registry import ToolRegistry
@@ -63,12 +64,17 @@ def register_owned_routine(tool: Tool, *, family: str) -> None:
     from solus_api.agent.tools.machine_writes import MachineWriteTool
     from solus_api.bridge.tool import BridgeTool
     from solus_api.connectors.onshape_confirmation import ConfirmedOnshapeTool
+    from solus_api.services.code_environment_adapter import PlannedTool
 
     name = tool.descriptor.name
     eligible = (
         (family == "onshape" and type(tool) is ConfirmedOnshapeTool and name in _ONSHAPE)
         or (family == "isaac" and type(tool) is IsaacTool and name in _ISAAC)
         or (family == "machine" and type(tool) is MachineWriteTool and name == "machine.write_file")
+        # §10.1/§11.2: the plan-snapshot `code.exec` and `code.process_input`
+        # ONLY, never as a blanket routine — `prepare` re-judges every call
+        # (`auto_judge`; program_scope for exec, a waiting process for input).
+        or (family == "command" and type(tool) is PlannedTool and name in AUTO_TOOLS)
     )
     if family == "bridge" and type(tool) is BridgeTool and name in _BRIDGE_SCHEMAS:
         digest = hashlib.sha256(_canonical(tool.descriptor.params).encode()).hexdigest()
@@ -89,6 +95,13 @@ def _refuse(
     return ToolResult.failure(call.call_id, ToolError(code=code, message=message, retryable=False))
 
 
+def _program_scope(tool: Tool, args: dict[str, Any]) -> str | None:
+    """The plan-snapshot's `program_scope` for `args` (PlannedTool), else None."""
+    reader = getattr(tool, "program_scope", None)
+    scope = reader(args) if callable(reader) else None
+    return scope if isinstance(scope, str) else None
+
+
 class BuildExecutionPolicy:
     """One turn's authorizations; consuming before await prevents parallel replay."""
 
@@ -100,42 +113,32 @@ class BuildExecutionPolicy:
         self._force_confirmation = force_confirmation
         self._consumed: set[str] = set()
         self._consumed_ids: set[str] = set()
+        #: Command keys whose plan kept the card (§10.1): later identical calls
+        #: go straight to the gate, never to "already attempted".
+        self._deferred: set[str] = set()
         self.executed_calls: set[str] = set()
 
     async def prepare(self, call: ToolCall) -> bool | ToolResult:
         # Review-only requests retain the normal central confirmation gate,
         # including for tools otherwise eligible for automatic Build execution.
-        if self._force_confirmation:
+        tool = None if self._force_confirmation else self._owned(call)
+        if tool is None:
             return False
-        tool = next(
-            (tool for tool in self.registry.tools() if tool.descriptor.name == call.tool), None
-        )
-        if self.mode is not ActionMode.DO or tool is None:
+        command = call.tool == AUTO_COMMAND_TOOL
+        # §10.1/§11.2: judged per call BEFORE anything is planned; a risky,
+        # denied, text-carrying or oddly shaped call goes to the card.
+        if call.tool in AUTO_TOOLS and not auto_judge(call.tool, call.args):
             return False
-        authority = getattr(tool, "_build_authority", None)
-        if authority != (_AUTHORITY, _canonical(tool.descriptor.model_dump())):
-            return False
-        invalid = validate_tool_arguments(tool.descriptor, call.args)
-        if invalid:
-            return _refuse(call, "Invalid routine arguments.", ToolErrorCode.INVALID_ARGS)
-        try:
-            key = _canonical({"tool": call.tool, "args": call.args})
-        except (TypeError, ValueError):
-            return _refuse(call, "Invalid routine arguments.", ToolErrorCode.INVALID_ARGS)
-        if key in self._consumed or call.call_id in self._consumed_ids:
-            return _refuse(
-                call,
-                "This Build action was already attempted. "
-                "Inspect its outcome; do not retry automatically.",
-            )
-        self._consumed.add(key)
-        self._consumed_ids.add(call.call_id)
+        claimed = self._claim(tool, call)
+        if not isinstance(claimed, str):
+            return claimed
         # Same-task previews preserve scoped adapter ContextVar bindings. The
         # second observation must match the first; invoke checks native state too.
         quota_failures: list[str] = []
         before = await _build_preview(
             tool, deepcopy(call.args), force_complete=True, quota_failures=quota_failures
         )
+        scopes = [_program_scope(tool, call.args)]
         if not before:
             return _refuse(
                 call,
@@ -147,6 +150,7 @@ class BuildExecutionPolicy:
         after = await _build_preview(
             tool, deepcopy(call.args), force_complete=True, quota_failures=quota_failures
         )
+        scopes.append(_program_scope(tool, call.args))
         if quota_failures:
             return _refuse(call, quota_failures[0], ToolErrorCode.UNAVAILABLE)
         if not after or before != after:
@@ -155,7 +159,44 @@ class BuildExecutionPolicy:
                 "The routine changed during validation. "
                 "Nothing was executed; inspect current state.",
             )
+        if command and scopes != [SYSTEM_SCOPE, SYSTEM_SCOPE]:
+            # A workspace (or unknown) program is project code: it keeps its card.
+            self._deferred.add(claimed)
+            return False
         return True
+
+    def _owned(self, call: ToolCall) -> Tool | None:
+        tool = next(
+            (tool for tool in self.registry.tools() if tool.descriptor.name == call.tool), None
+        )
+        if self.mode is not ActionMode.DO or tool is None:
+            return None
+        authority = getattr(tool, "_build_authority", None)
+        if authority != (_AUTHORITY, _canonical(tool.descriptor.model_dump())):
+            return None
+        return tool
+
+    def _claim(self, tool: Tool, call: ToolCall) -> str | bool | ToolResult:
+        """Validate and consume the call BEFORE any await; the consumed key, or
+        False (back to the gate) / a refusal."""
+        invalid = validate_tool_arguments(tool.descriptor, call.args)
+        if invalid:
+            return _refuse(call, "Invalid routine arguments.", ToolErrorCode.INVALID_ARGS)
+        try:
+            key = _canonical({"tool": call.tool, "args": call.args})
+        except (TypeError, ValueError):
+            return _refuse(call, "Invalid routine arguments.", ToolErrorCode.INVALID_ARGS)
+        if key in self._deferred:
+            return False  # already sent to the card once; the gate dedups it
+        if key in self._consumed or call.call_id in self._consumed_ids:
+            return _refuse(
+                call,
+                "This Build action was already attempted. "
+                "Inspect its outcome; do not retry automatically.",
+            )
+        self._consumed.add(key)
+        self._consumed_ids.add(call.call_id)
+        return key
 
     def execution_started(self, call: ToolCall) -> None:
         self.executed_calls.add(call.call_id)

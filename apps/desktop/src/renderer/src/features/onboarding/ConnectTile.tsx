@@ -7,7 +7,7 @@ import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import type { Integration } from './integrations.constants'
-import { integrationLogo } from './integrationLogos'
+import { integrationLogo, logoClass } from './integrationLogos'
 import type { ConnectionState } from './onboardingStore'
 
 interface ConnectTileProps {
@@ -73,7 +73,12 @@ function TileMark({ integration }: { integration: Integration }): React.JSX.Elem
       }}
     >
       {logo ? (
-        <img src={logo} alt="" style={{ width: 26, height: 26, objectFit: 'contain' }} />
+        <img
+          src={logo}
+          alt=""
+          className={logoClass(integration.id)}
+          style={{ width: 26, height: 26, objectFit: 'contain' }}
+        />
       ) : (
         integration.mark
       )}
