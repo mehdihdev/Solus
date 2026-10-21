@@ -8,7 +8,9 @@ import type { Source, Sync } from '../../lib/api/resources'
 import { NO_FILES_ERROR, type EdaExportFile, type EdaExportFiles } from './kicadFiles'
 import type { ConnectionState } from './onboardingStore'
 import {
+  isSettledJob,
   pollAcceptedSync,
+  STILL_INDEXING_RESULT,
   indexedSyncDetail,
   type SyncJobApi,
   type SyncPollApi
@@ -113,6 +115,10 @@ export async function runEdaConnect(
     const accepted = await deps.api.triggerSync(projectId, source.id)
 
     const job = await pollAcceptedSync(deps.api, projectId, accepted.job_id, deps.sleep)
+    if (job && !isSettledJob(job)) {
+      deps.onProgress({ phase: 'done', sourceId: source.id, result: STILL_INDEXING_RESULT })
+      return { ok: true, sourceId: source.id, result: STILL_INDEXING_RESULT }
+    }
     if (!job) {
       const error = 'Sync timed out.'
       deps.onProgress({ phase: 'error', error, sourceId: source.id })

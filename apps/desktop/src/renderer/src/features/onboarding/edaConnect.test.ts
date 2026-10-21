@@ -262,7 +262,7 @@ function registerExportBoundsTests(): void {
 }
 
 function registerExportSyncFailuresTests(): void {
-  it('reports a timeout when the sync never reaches a terminal state', async () => {
+  it('a sync still running when polling ends finishes as connected, indexing in the background', async () => {
     const api = stubApi({
       getJob: vi.fn(async () => ({
         id: 'j1',
@@ -277,8 +277,8 @@ function registerExportSyncFailuresTests(): void {
       netlist: XML_FILE
     })
 
-    expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/timed out/i)
+    expect(result.ok).toBe(true)
+    expect(result.result).toMatch(/still indexing in the background/i)
   })
 
   it('resolves to an error instead of throwing when the API rejects', async () => {

@@ -319,7 +319,9 @@ function registerOAuthFallbacksTests(): void {
     expect(states[states.length - 1]).toMatchObject({ phase: 'error', error: 'exchange 500' })
   })
 
-  it('times out when the sync never reaches a terminal state', async () => {
+  it('a sync still running when polling ends finishes as connected, indexing in the background', async () => {
+    // Onshape exports routinely outlast the poll budget. The source IS connected
+    // and its sync is accepted and running; the source row reports the result.
     const api = stubApi({
       getJob: vi.fn(async () => ({
         id: 'j1',
@@ -328,10 +330,12 @@ function registerOAuthFallbacksTests(): void {
         error: null
       }))
     })
-    const { deps } = makeDeps(api, stubBridge({ code: 'cd' }))
+    const { deps, states } = makeDeps(api, stubBridge({ code: 'cd' }))
     const result = await runOAuthConnect(deps, 'p1', PROVIDER, OPTS)
-    expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/timed out/i)
+    expect(result.ok).toBe(true)
+    expect(result.result).toMatch(/still indexing in the background/i)
+    expect(states[states.length - 1]).toMatchObject({ phase: 'done', sourceId: expect.any(String) })
+    expect(api.getSource).not.toHaveBeenCalled()
   })
 
   it('falls back to entities_created when the source omits entity_count', async () => {

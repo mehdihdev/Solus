@@ -13,7 +13,13 @@ import type { OAuthBridge } from '../auth/githubOAuth'
 import type { AccessChoiceStep } from './accessChoiceStep'
 import type { AddOnStep } from './addOnStep'
 import type { ConnectionState, ConnectStage } from './onboardingStore'
-import { pollAcceptedSync, indexedSyncDetail, type SyncJobApi } from './sourceSync'
+import {
+  isSettledJob,
+  pollAcceptedSync,
+  indexedSyncDetail,
+  STILL_INDEXING_RESULT,
+  type SyncJobApi
+} from './sourceSync'
 
 /** The slice of the typed API surface this orchestration depends on. */
 export interface OAuthConnectApi extends SyncJobApi {
@@ -244,6 +250,13 @@ async function indexSource(
   const accepted = await deps.api.triggerSync(projectId, sourceId)
 
   const job = await pollAcceptedSync(deps.api, projectId, accepted.job_id, deps.sleep)
+  if (job && !isSettledJob(job)) {
+    // Long exports (Onshape STEP) outlast the wait. The source is connected and
+    // its sync is running; the source row reports how it ends.
+    const result = addOnNote ? `${STILL_INDEXING_RESULT} · ${addOnNote}` : STILL_INDEXING_RESULT
+    deps.onProgress({ phase: 'done', sourceId, result })
+    return { ok: true, sourceId, result }
+  }
   if (!job) {
     const error = 'Sync timed out.'
     deps.onProgress({ phase: 'error', error, sourceId })

@@ -104,7 +104,11 @@ describe('accepted sync job', () => {
       status: 'running' as const,
       error: null
     }))
-    expect(await pollAcceptedSync({ getJob: pending }, 'p1', 'j1', noSleep)).toBeUndefined()
+    // Out of tries on a live job: hand back the job as last seen, so the
+    // caller can tell "still running" from a failure.
+    expect((await pollAcceptedSync({ getJob: pending }, 'p1', 'j1', noSleep))?.status).toBe(
+      'running'
+    )
   })
 })
 

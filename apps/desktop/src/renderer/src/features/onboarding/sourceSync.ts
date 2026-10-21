@@ -55,23 +55,36 @@ export interface SyncJobApi {
   getJob: (jobId: string) => Promise<SyncJob>
 }
 
+/** Said when a connect hands a still-running sync to the source row. */
+export const STILL_INDEXING_RESULT = 'Connected — still indexing in the background'
+
+/** A job that has stopped: succeeded, failed or cancelled. */
+export function isSettledJob(job: SyncJob): boolean {
+  return job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled'
+}
+
+/**
+ * Poll the accepted job until it settles or the budget runs out. Out of tries,
+ * the job comes back as last seen (still queued or running): a long sync is not
+ * a failed one, and the caller hands it to the source row.
+ */
 export async function pollAcceptedSync(
   api: SyncJobApi,
   projectId: string,
   jobId: string,
   sleep: (ms: number) => Promise<void> = defaultSleep
 ): Promise<SyncJob | undefined> {
+  let last: SyncJob | undefined
   for (let attempt = 0; attempt < POLL_MAX_TRIES; attempt += 1) {
     const job = await api.getJob(jobId)
     if (job.id !== jobId || job.project_id !== projectId) {
       throw new Error('The import job does not match this project and request.')
     }
-    if (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled') {
-      return job
-    }
+    if (isSettledJob(job)) return job
+    last = job
     await sleep(POLL_INTERVAL_MS)
   }
-  return undefined
+  return last
 }
 
 /** Prefer the current source count; history is only an optional fallback. */
