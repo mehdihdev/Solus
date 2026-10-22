@@ -1,0 +1,112 @@
+/* Settings motion + layout (SOLUSDEV-318) — the Home house pattern
+   (home.css): short, eased, tokens only, and off entirely under
+   prefers-reduced-motion. `.settings-reveal` additionally animates
+   grid-template-rows, the one way to ease a card's height in and out. */
+@keyframes settings-fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes settings-expand {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes settings-collapse {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
+/* A section (re)appearing — first paint, or back from a filter. */
+.settings-section-in {
+  animation: settings-fade-rise 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+/* A list row; its delay comes from settingsStagger(). */
+.settings-row-in {
+  animation: settings-fade-rise 0.26s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+
+/* Expand in / collapse out: Needs-attention cards, Edit team. */
+.settings-reveal {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: settings-expand 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.settings-reveal > * {
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-reveal[data-leaving] {
+  animation: settings-collapse 0.22s ease both;
+  pointer-events: none;
+}
+
+/* Sidebar entries ease to the section in view. */
+.settings-nav-item {
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+.settings-nav-item[aria-current='true'] {
+  background: var(--sur2) !important;
+  color: var(--tx) !important;
+}
+
+/* Theme tiles and swatches: selection eases, a press gives. */
+.settings-tile {
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.12s ease;
+}
+.settings-tile:active {
+  transform: scale(0.98);
+}
+
+/* The page measures itself: the sidebar pins only when it is beside the
+   page, never when it has wrapped above it. */
+.settings-page {
+  container: settings / inline-size;
+}
+@container settings (min-width: 800px) {
+  .settings-sidebar {
+    position: sticky;
+    top: 22px;
+    max-height: calc(100vh - 44px);
+    overflow-y: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-section-in,
+  .settings-row-in,
+  .settings-reveal,
+  .settings-reveal[data-leaving] {
+    animation: none;
+  }
+  .settings-nav-item,
+  .settings-tile {
+    transition: none;
+  }
+}
