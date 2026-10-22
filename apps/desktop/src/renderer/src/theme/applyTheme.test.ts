@@ -39,15 +39,10 @@ describe('applyTheme', () => {
     expect(root.style.getPropertyValue('--acc')).toBe(SOLUS_ACCENTS.amber.c)
   })
 
-  it('sets data-theme and data-density attributes', () => {
-    applyTheme('light', 'blue', 'compact')
+  it('sets data-theme and no density attribute (SOLUSDEV-318)', () => {
+    applyTheme('light', 'blue')
     expect(document.documentElement.getAttribute('data-theme')).toBe('light')
-    expect(document.documentElement.getAttribute('data-density')).toBe('compact')
-  })
-
-  it('defaults density to regular', () => {
-    applyTheme('dark', 'amber')
-    expect(document.documentElement.getAttribute('data-density')).toBe('regular')
+    expect(document.documentElement.hasAttribute('data-density')).toBe(false)
   })
 
   it('sets the body background, varying per theme', () => {

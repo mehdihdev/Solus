@@ -4,7 +4,6 @@
 
 export type ThemeId = 'dark' | 'light' | 'dkplus' | 'monokai' | 'solarized'
 export type AccentId = 'amber' | 'teal' | 'blue' | 'violet'
-export type DensityId = 'compact' | 'regular'
 export type DomainId = 'sw' | 'ee' | 'me' | 'rt'
 
 export interface ThemePreset {

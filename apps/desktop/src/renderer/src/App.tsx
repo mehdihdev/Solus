@@ -9,7 +9,6 @@ import { appErrorReporter, errorConsent } from './lib/errors/appErrorReporter'
 function App(): React.JSX.Element {
   const theme = useSettingsStore((s) => s.theme)
   const accent = useSettingsStore((s) => s.accent)
-  const density = useSettingsStore((s) => s.density)
   const bootstrap = useAuthStore((s) => s.bootstrap)
   const teardown = useAuthStore((s) => s.teardown)
   const status = useAuthStore((s) => s.status)
@@ -17,8 +16,8 @@ function App(): React.JSX.Element {
 
   // Re-skin whenever theme settings change (ADR-008 / prototype theme.js).
   useEffect(() => {
-    applyTheme(theme, accent, density)
-  }, [theme, accent, density])
+    applyTheme(theme, accent)
+  }, [theme, accent])
 
   // Resolve the Supabase session (or dev bypass) on launch; detach the auth
   // listener on unmount so it never accumulates (StrictMode / HMR).
