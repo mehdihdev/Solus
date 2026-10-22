@@ -480,8 +480,17 @@ Solo team (only its owner, no pending invite), the state a new team starts in:
 - **Gone**: a stored team that no longer exists (deleted, or the user was
   removed — a 404, `useHomeData` status `gone`) reads "This team is no longer
   available…" with `Go to my personal workspace` — never "restart the backend".
-- Settings keeps its Team section (rename, notify-on-new-project, the owner
-  danger zone); its Members section is retired in favour of Home.
+- Settings keeps a Team summary (team, your role, member count, `Open team
+page →` which lands on this Members view); rename, notify-on-new-project
+  and the owner danger zone sit behind its `Edit team` disclosure
+  (SOLUSDEV-318, `docs/wireflows/settings.md`). Its Members section is
+  retired in favour of Home.
+- **Onshape panel pairing** (SOLUSDEV-318, moved from Settings): on the
+  Connected accounts view's Mechanical tab, under the card — enter the code
+  the Onshape panel shows, `Link panel`; linked panels list with `Revoke`.
+- **Deep links from Settings** (SOLUSDEV-318): Settings asks the shell for a
+  first pane (`useShellStore.requestHomeView`) — `members` or `accounts` —
+  and Home opens on it once, then clears the request.
 
 ## Project list (SOLUSDEV-317 redesign; replaces the project grid)
 
