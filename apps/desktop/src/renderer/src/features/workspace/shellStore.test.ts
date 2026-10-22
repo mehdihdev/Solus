@@ -28,6 +28,22 @@ describe('lastMain', () => {
   })
 })
 
+describe('homeView (SOLUSDEV-318: Settings deep links into Home)', () => {
+  it('holds the requested Home pane until it is cleared', () => {
+    expect(useShellStore.getState().homeView).toBeNull()
+    useShellStore.getState().requestHomeView('accounts')
+    expect(useShellStore.getState().homeView).toBe('accounts')
+    useShellStore.getState().clearHomeView()
+    expect(useShellStore.getState().homeView).toBeNull()
+  })
+
+  it('is cleared by reset', () => {
+    useShellStore.getState().requestHomeView('members')
+    useShellStore.getState().reset()
+    expect(useShellStore.getState().homeView).toBeNull()
+  })
+})
+
 describe('routeKey', () => {
   it('keys main screens by name, alerts by id and extension pages by slug', () => {
     expect(routeKey({ name: 'bench' })).toBe('bench')

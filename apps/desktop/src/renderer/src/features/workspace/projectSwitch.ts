@@ -49,7 +49,14 @@ import { useFocusStore } from './focusStore'
 import { useShellStore } from './shellStore'
 
 /** Where the switch came from — recorded on the data event (ADR-011). */
-export type SwitchSurface = 'home' | 'topbar' | 'team' | 'validation' | 'onboarding' | 'palette'
+export type SwitchSurface =
+  | 'home'
+  | 'topbar'
+  | 'team'
+  | 'validation'
+  | 'onboarding'
+  | 'palette'
+  | 'settings'
 
 /** Data-collection event, best effort: consent is gated server-side and a
  *  failed post never disturbs the switch. Skipped for the dev bypass — its
