@@ -319,12 +319,15 @@ function VerifyEmailBanner(): React.JSX.Element | null {
   )
 }
 
-/** Screens that take no props, keyed by name (keeps ScreenView's branching low). */
-const SIMPLE_SCREENS: Readonly<Record<string, () => React.JSX.Element>> = {
-  store: StoreScreen,
-  sol: SolScreen,
-  billing: BillingScreen,
-  settings: SettingsScreen
+/** Screens that need at most shell navigation, keyed by name (keeps
+ *  ScreenView's branching low). Settings links out to Billing and Home. */
+const SIMPLE_SCREENS: Readonly<
+  Record<string, (navigate: (screen: MainScreen) => void) => React.JSX.Element>
+> = {
+  store: () => <StoreScreen />,
+  sol: () => <SolScreen />,
+  billing: () => <BillingScreen />,
+  settings: (navigate) => <SettingsScreen onNavigate={navigate} />
 }
 
 /** The `ext-page` route, by what the rail knows about the slug (STORE ST3/ST4):
@@ -456,8 +459,8 @@ function ScreenView({
           />
         )
       default: {
-        const Screen = SIMPLE_SCREENS[route.name]
-        return Screen ? <Screen /> : null
+        const renderScreen = SIMPLE_SCREENS[route.name]
+        return renderScreen ? renderScreen(navigate) : null
       }
     }
   })()

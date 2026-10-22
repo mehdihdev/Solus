@@ -3,8 +3,29 @@ import {
   MAC_ACCESSIBILITY_URL,
   MAC_SCREEN_RECORDING_URL,
   detectPlatformBasics,
+  isSystemSettingsUrl,
   staticCapabilities
 } from './capabilities'
+
+describe('isSystemSettingsUrl (SOLUSDEV-318)', () => {
+  it('accepts exactly the two macOS privacy panes Solus links to', () => {
+    expect(isSystemSettingsUrl(MAC_SCREEN_RECORDING_URL)).toBe(true)
+    expect(isSystemSettingsUrl(MAC_ACCESSIBILITY_URL)).toBe(true)
+  })
+
+  it('refuses anything else, including look-alike settings URLs', () => {
+    for (const url of [
+      undefined,
+      '',
+      'https://solusforge.com',
+      'x-apple.systempreferences:com.apple.preference.security',
+      `${MAC_SCREEN_RECORDING_URL}&x=1`,
+      'file:///Applications/Calculator.app'
+    ]) {
+      expect(isSystemSettingsUrl(url)).toBe(false)
+    }
+  })
+})
 
 describe('detectPlatformBasics', () => {
   it('reads the Linux session type from XDG_SESSION_TYPE or WAYLAND_DISPLAY', () => {

@@ -58,6 +58,12 @@ A new row under SOL:
 Default off. Turning it on shows the platform note once (permission needed / unavailable) and, on macOS,
 a button that opens the Screen Recording pane.
 
+**SOLUSDEV-318:** the note is no longer plain text under the row. While the setting is on and capture is
+not available, the row carries a `PERMISSION NEEDED` tag with `How to fix`, and the fix is a card at the
+top of Settings (Needs attention): the platform message, the System Settings path in mono, and
+`Open Screen Recording settings` (macOS only — main opens its own URL) · `Recheck` · `Turn off screen
+capture`. See `docs/wireflows/settings.md`.
+
 ## E. Tray
 
 Icon: the Solus mark; with a small dot overlay while screen intelligence is on. Tooltip:

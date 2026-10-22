@@ -3,6 +3,7 @@
 // prototype alert-resolution / bench-anomaly / SOL-chat state together with
 // the fabricated demo data.
 import { create } from 'zustand'
+import type { HomePaneView } from './HomeAccountNav'
 
 export interface ShellToast {
   kind?: 'ok' | 'warn'
@@ -44,16 +45,22 @@ export function routeKey(route: ShellRoute): string {
 export interface ShellState {
   toast: ShellToast | null
   lastMain: MainScreen
+  /** SOLUSDEV-318: the Home pane the next Home mount opens on (a Settings
+   *  "Open team page" / "Manage connected accounts" link). Home clears it. */
+  homeView: HomePaneView | null
 
   setToast: (toast: ShellToast) => void
   clearToast: () => void
   setLastMain: (screen: MainScreen) => void
+  requestHomeView: (view: HomePaneView) => void
+  clearHomeView: () => void
   reset: () => void
 }
 
 const INITIAL = {
   toast: null as ShellToast | null,
-  lastMain: 'home' as MainScreen
+  lastMain: 'home' as MainScreen,
+  homeView: null as HomePaneView | null
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -62,5 +69,7 @@ export const useShellStore = create<ShellState>((set) => ({
   setToast: (toast) => set({ toast }),
   clearToast: () => set({ toast: null }),
   setLastMain: (screen) => set({ lastMain: screen }),
+  requestHomeView: (homeView) => set({ homeView }),
+  clearHomeView: () => set({ homeView: null }),
   reset: () => set({ ...INITIAL })
 }))

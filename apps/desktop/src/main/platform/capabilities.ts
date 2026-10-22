@@ -38,6 +38,11 @@ export const MAC_ACCESSIBILITY_URL =
 export const MAC_SCREEN_RECORDING_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
 
+/** SOLUSDEV-318: the only URLs the "open settings" path may hand to the OS. */
+export function isSystemSettingsUrl(url: string | undefined): boolean {
+  return url === MAC_SCREEN_RECORDING_URL || url === MAC_ACCESSIBILITY_URL
+}
+
 export function detectPlatformBasics(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,

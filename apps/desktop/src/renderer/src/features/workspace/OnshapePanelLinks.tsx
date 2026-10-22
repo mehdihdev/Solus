@@ -1,4 +1,6 @@
 // Onshape panel links (SOLUS-A7-01). The approval half of the pairing flow.
+// SOLUSDEV-318 moved it from Settings to Home › Connected accounts, under
+// Onshape's domain tab — a panel link belongs with the Onshape account.
 //
 // Why this screen is the security boundary: the panel runs inside an Onshape
 // iframe and starts with nothing. It shows a code; typing that code HERE, in a
@@ -6,12 +8,15 @@
 // Onshape user id Onshape hands the panel is never accepted as identity — it is
 // visible to anyone sharing a document, so it can only ever be a label.
 import { useCallback, useEffect, useState } from 'react'
-import { Button } from '../../../components/ui/Button'
-import { Mono } from '../../../components/ui/Mono'
-import { listPanelLinks, approvePanelLink, revokePanelLink } from '../../../lib/api/resources'
-import type { PanelLink } from '../../../lib/api/resources'
-import { ApiError } from '../../../lib/api/envelope.types'
-import { Section, Row, InlineError } from '../settingsUi'
+import { Button } from '../../components/ui/Button'
+import { Mono } from '../../components/ui/Mono'
+import { listPanelLinks, approvePanelLink, revokePanelLink } from '../../lib/api/resources'
+import type { PanelLink } from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
+import { Section, Row, InlineError } from '../settings/settingsUi'
+
+/** The catalog id whose domain tab hosts the pairing (accountDomains.ts). */
+export const ONSHAPE_PROVIDER = 'onshape'
 
 function approveError(err: unknown): string {
   if (err instanceof ApiError && err.code === 'invalid_pairing') {
@@ -34,7 +39,7 @@ function used(link: PanelLink): string {
   return `last used ${new Date(link.last_used_at).toLocaleDateString()}`
 }
 
-export function PanelLinksSection(): React.JSX.Element {
+export function OnshapePanelLinks(): React.JSX.Element {
   const [links, setLinks] = useState<PanelLink[]>([])
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)

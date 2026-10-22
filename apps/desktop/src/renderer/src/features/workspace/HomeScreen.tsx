@@ -79,6 +79,12 @@ export function HomeScreen({ onOpenProject, onNavigate }: HomeScreenProps): Reac
   const me = useMe()
   const home = useHomeData()
   const greeting = `Welcome back, ${displayName(me.name, me.email)}`
+  // A Settings deep link (SOLUSDEV-318) is consumed by LiveHome; if Home
+  // settles offline or gone instead, drop it so a later visit isn't hijacked.
+  const settled = home.status !== 'loading' && home.status !== 'ready'
+  useEffect(() => {
+    if (settled) useShellStore.getState().clearHomeView()
+  }, [settled])
 
   if (home.status === 'loading') {
     return (
@@ -364,7 +370,12 @@ function LiveHome({
   const team = useHomeTeam(home.team, home.me, home.actions.refresh)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modal, setModal] = useState<HomeTeamModal>(null)
-  const [view, setView] = useState<HomePaneView>('project')
+  // A Settings deep link (SOLUSDEV-318) picks the first pane; read here, cleared
+  // in an effect so a StrictMode double-render still sees it.
+  const [view, setView] = useState<HomePaneView>(
+    () => useShellStore.getState().homeView ?? 'project'
+  )
+  useEffect(() => useShellStore.getState().clearHomeView(), [])
   const [backToProject, setBackToProject] = useState(false)
   // Any navigation clears the way back; only "Add additional sources" sets it.
   const show = (next: HomePaneView): void => {

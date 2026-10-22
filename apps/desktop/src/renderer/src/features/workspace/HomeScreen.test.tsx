@@ -261,6 +261,16 @@ describe('HomeScreen — connected accounts view', () => {
     expect(within(pane()).queryByTestId('connected-accounts')).toBeNull()
   })
 
+  it('opens on the pane Settings asked for, once (SOLUSDEV-318)', () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    useShellStore.getState().requestHomeView('accounts')
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(within(pane()).getByTestId('connected-accounts')).toBeInTheDocument()
+    // Consumed: the next visit to Home opens on its usual pane.
+    expect(useShellStore.getState().homeView).toBeNull()
+  })
+
   it('has no back button when opened from the sidebar', async () => {
     mockHome()
     useWorkspaceStore.setState({ project: ROVER })
@@ -389,6 +399,13 @@ describe('HomeScreen — teams and states', () => {
     render(<HomeScreen onOpenProject={vi.fn()} />)
     expect(screen.getByText(/sign in to solus/i)).toBeInTheDocument()
     expect(screen.queryByTestId('project-list')).toBeNull()
+  })
+
+  it('drops a Settings deep link when Home settles offline (SOLUSDEV-318)', () => {
+    useShellStore.getState().requestHomeView('members')
+    mockHome({ status: 'offline', teams: [], team: null, projects: [], activityByProject: {} })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(useShellStore.getState().homeView).toBeNull()
   })
 
   it('renders a spinner while loading', () => {

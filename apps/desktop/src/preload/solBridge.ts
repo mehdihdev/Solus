@@ -25,6 +25,8 @@ export interface SolBridge {
   setAlwaysOnTop(on: boolean): Promise<SolState | null>
   /** Open (or focus) the SOL window. */
   open(): Promise<SolState | null>
+  /** Open the OS pane that grants screen capture (macOS Screen Recording). */
+  openCaptureSettings(): Promise<SolState | null>
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
 }
@@ -102,6 +104,7 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     setHotkeys: (on) => call(c.setHotkeys, on),
     setAlwaysOnTop: (on) => call(c.setAlwaysOnTop, on),
     open: () => call(c.open),
+    openCaptureSettings: () => call(c.openCaptureSettings),
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
   }

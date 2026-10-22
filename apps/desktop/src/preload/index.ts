@@ -150,6 +150,10 @@ const api = {
     // Enterprise "Contact sales" (SOLUSDEV-236): main opens a fixed mailto.
     contactSales: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('billing:contact-sales')
   },
+  app: {
+    // Settings › About (SOLUSDEV-318): the running app's version.
+    version: (): Promise<string | null> => ipcRenderer.invoke('app:version')
+  },
   solChat: {
     // Machine-local SOL chat cache under ~/.solus (ADR-034 Layer 1 —
     // SOLUSDEV-233). The server stays the source of truth; this makes

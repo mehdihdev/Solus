@@ -3,12 +3,12 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { PanelLinksSection } from './PanelLinksSection'
-import * as resources from '../../../lib/api/resources'
-import { ApiError } from '../../../lib/api/envelope.types'
+import { OnshapePanelLinks } from './OnshapePanelLinks'
+import * as resources from '../../lib/api/resources'
+import { ApiError } from '../../lib/api/envelope.types'
 
-vi.mock('../../../lib/api/resources', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../lib/api/resources')>()
+vi.mock('../../lib/api/resources', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/api/resources')>()
   return {
     ...actual,
     listPanelLinks: vi.fn(),
@@ -25,7 +25,7 @@ const LINK: resources.PanelLink = {
   expires_at: '2026-11-01T00:00:00Z'
 }
 
-describe('PanelLinksSection', () => {
+describe('OnshapePanelLinks', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(resources.listPanelLinks).mockResolvedValue([])
@@ -33,7 +33,7 @@ describe('PanelLinksSection', () => {
 
   it('approves the code the panel is showing, normalised', async () => {
     vi.mocked(resources.approvePanelLink).mockResolvedValue({ status: 'approved' })
-    render(<PanelLinksSection />)
+    render(<OnshapePanelLinks />)
 
     await userEvent.type(screen.getByLabelText('Pairing code'), ' abcd-efgh ')
     await userEvent.click(screen.getByText('Link panel'))
@@ -47,7 +47,7 @@ describe('PanelLinksSection', () => {
     vi.mocked(resources.approvePanelLink).mockRejectedValue(
       new ApiError(404, 'invalid_pairing', 'nope')
     )
-    render(<PanelLinksSection />)
+    render(<OnshapePanelLinks />)
 
     await userEvent.type(screen.getByLabelText('Pairing code'), 'ABCD-EFGH')
     await userEvent.click(screen.getByText('Link panel'))
@@ -58,7 +58,7 @@ describe('PanelLinksSection', () => {
   it('lists a live link and revokes it', async () => {
     vi.mocked(resources.listPanelLinks).mockResolvedValue([LINK])
     vi.mocked(resources.revokePanelLink).mockResolvedValue(undefined)
-    render(<PanelLinksSection />)
+    render(<OnshapePanelLinks />)
 
     await userEvent.click(await screen.findByText('Revoke'))
 
@@ -68,7 +68,7 @@ describe('PanelLinksSection', () => {
   })
 
   it('cannot submit an obviously incomplete code', async () => {
-    render(<PanelLinksSection />)
+    render(<OnshapePanelLinks />)
 
     await userEvent.type(screen.getByLabelText('Pairing code'), 'AB')
 

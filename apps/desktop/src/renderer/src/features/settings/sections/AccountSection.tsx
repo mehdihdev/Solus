@@ -1,12 +1,13 @@
 // Account danger zone (SOLUSDEV-82): permanent account deletion. Surfaces the
 // 409 ownership-transfer block; on success tears down the session like sign-out.
+// SOLUSDEV-318: a row inside Privacy & data rather than a card of its own.
 import { useState } from 'react'
 import { Button } from '../../../components/ui/Button'
 import { deleteMe } from '../../../lib/api/resources'
 import { ApiError } from '../../../lib/api/envelope.types'
 import { useAuthStore } from '../../../store/authStore'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
-import { Section, Row, InlineError } from '../settingsUi'
+import { Row, InlineError } from '../settingsUi'
 
 function deleteAccountError(err: unknown): string {
   if (err instanceof ApiError && err.code === 'ownership_transfer_required') {
@@ -19,7 +20,8 @@ function deleteAccountError(err: unknown): string {
   return 'Could not delete your account. Please try again.'
 }
 
-export function AccountSection(): React.JSX.Element {
+/** The delete-account row, rendered inside Privacy & data (SOLUSDEV-318). */
+export function DeleteAccountRow(): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -41,8 +43,11 @@ export function AccountSection(): React.JSX.Element {
   }
 
   return (
-    <Section title="Account" sub="Permanently delete your account and personal data.">
-      <Row label="Danger zone">
+    <>
+      <Row
+        label={<span style={{ color: 'var(--err)' }}>Danger zone</span>}
+        description="Permanently delete your account and personal data. Teams you solely own must be handed over first."
+      >
         {!confirming ? (
           <Button kind="danger" size="sm" onClick={() => setConfirming(true)}>
             Delete account
@@ -69,6 +74,6 @@ export function AccountSection(): React.JSX.Element {
         )}
       </Row>
       <InlineError message={error} />
-    </Section>
+    </>
   )
 }

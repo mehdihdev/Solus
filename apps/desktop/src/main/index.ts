@@ -64,7 +64,11 @@ import {
 import { createSolSettings } from './solSettings'
 import { createScreenCapture, realScreenCaptureDeps, type Rect } from './capture/screenCapture'
 import { createTray, paintDot, type SolTray } from './tray'
-import { detectPlatformBasics, staticCapabilities } from './platform/capabilities'
+import {
+  detectPlatformBasics,
+  isSystemSettingsUrl,
+  staticCapabilities
+} from './platform/capabilities'
 import { enableShortcutPortal } from './hotkeys/globalHotkeys'
 import { startHotkeys, type HotkeysHandle, type HotkeyStatus, type KeyHookLoad } from './hotkeys'
 import { realExtensionFs } from './extensions/extensionFs'
@@ -338,6 +342,14 @@ const HOTKEYS_OFF: KeyHookLoad = {
  * degrades with a plain-language message rather than throwing: the app must
  * boot on a box with no hook, no indicator host and no capture.
  */
+/** SOLUSDEV-318: open a capability's own OS settings pane — allowlisted, never a renderer URL. */
+function openSystemSettingsPane(url: string | undefined): void {
+  if (!url || !isSystemSettingsUrl(url)) return
+  shell.openExternal(url).catch((err: unknown) => {
+    console.warn('[sol] could not open the system settings pane', err)
+  })
+}
+
 let guideScopeGeneration = 0
 let guideSignedIn = false
 let guideProject: string | null = null
@@ -394,7 +406,8 @@ function startSol(): void {
             .getAllDisplays()
             .map((display) => ({ id: String(display.id), bounds: display.bounds })),
           read: readNativeWindowProperty
-        })
+        }),
+      openCaptureSettings: () => openSystemSettingsPane(capture.capability().settingsUrl)
     },
     isSolSender
   )
@@ -550,6 +563,7 @@ if (!app.requestSingleInstanceLock()) {
     registerExtensionHandlers()
 
     registerBillingHandlers()
+    registerAppInfoHandlers()
 
     // The SOL window, tray and hotkeys (SOLUSDEV-252 S3); the window is the
     // CTR-06 host — the orb↔overlay wire is attached to it at creation.
@@ -694,6 +708,11 @@ function registerProjectFolderHandlers(): void {
     }
   })
   ipcMain.handle('git:clone', (_event, input: CloneInput) => cloneRepo(input, cloneDeps))
+}
+
+/** Settings › About (SOLUSDEV-318): the app version. No arguments, no secrets. */
+function registerAppInfoHandlers(): void {
+  ipcMain.handle('app:version', (event) => (isMainRendererSender(event) ? app.getVersion() : null))
 }
 
 function registerBillingHandlers(): void {
