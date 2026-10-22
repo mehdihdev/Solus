@@ -215,7 +215,8 @@ function registerWith(allowed: () => boolean): {
         setScreenIntelligence: (b) => void calls.push(`si:${b}`),
         setHotkeys: (b) => void calls.push(`hk:${b}`)
       },
-      state: () => STATE
+      state: () => STATE,
+      openCaptureSettings: () => void calls.push('capture-settings')
     },
     allowed
   )
@@ -223,7 +224,14 @@ function registerWith(allowed: () => boolean): {
 }
 
 describe('IPC registration', () => {
-  it('registers the seven invokes on the shared constants and returns the state', () => {
+  it('opens the capture settings pane with no renderer argument (SOLUSDEV-318)', () => {
+    const { handlers, calls } = registerWith(() => true)
+    const c = SOL_WINDOW_CHANNELS
+    expect(handlers.get(c.openCaptureSettings)?.(EVENT, 'https://evil.example')).toEqual(STATE)
+    expect(calls).toEqual(['capture-settings'])
+  })
+
+  it('registers the eight invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
@@ -234,7 +242,8 @@ describe('IPC registration', () => {
         c.setMode,
         c.setScreenIntelligence,
         c.setAlwaysOnTop,
-        c.setHotkeys
+        c.setHotkeys,
+        c.openCaptureSettings
       ].sort()
     )
     expect(handlers.get(c.getState)?.(EVENT)).toEqual(STATE) // marks the sender ready

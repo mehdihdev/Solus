@@ -69,7 +69,18 @@ interface SolusWindow {
     hosted?: HostedBridge
     sol?: SolBridge
     diagnostics?: DiagnosticsBridge
+    app?: AppInfoBridge
   }
+}
+
+/** The running app's identity (SOLUSDEV-318: Settings › About). */
+export interface AppInfoBridge {
+  version: () => Promise<string | null>
+}
+
+/** Null outside Electron (the browser preview has no app version to show). */
+export function getDesktopAppInfoBridge(): AppInfoBridge | null {
+  return (window as unknown as SolusWindow).solus?.app ?? null
 }
 
 export function getDesktopOAuthBridge(): OAuthBridge | null {

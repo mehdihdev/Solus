@@ -65,6 +65,7 @@ describe('invokes', () => {
     await b.setAlwaysOnTop(false)
     await b.setHotkeys(false)
     await b.open()
+    await b.openCaptureSettings()
     const c = SOL_WINDOW_CHANNELS
     expect(f.invoked).toEqual([
       { channel: c.getState, args: [] },
@@ -72,7 +73,8 @@ describe('invokes', () => {
       { channel: c.setScreenIntelligence, args: [true] },
       { channel: c.setAlwaysOnTop, args: [false] },
       { channel: c.setHotkeys, args: [false] },
-      { channel: c.open, args: [] }
+      { channel: c.open, args: [] },
+      { channel: c.openCaptureSettings, args: [] }
     ])
   })
 })

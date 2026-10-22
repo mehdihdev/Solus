@@ -11,6 +11,9 @@ export const SOL_WINDOW_CHANNELS = {
   setScreenIntelligence: 'sol:set-screen-intelligence',
   setAlwaysOnTop: 'sol:set-always-on-top',
   setHotkeys: 'sol:set-hotkeys',
+  /** SOLUSDEV-318: open the OS pane the capture capability names. No argument —
+   *  main opens its own capability's settingsUrl, never a renderer-supplied one. */
+  openCaptureSettings: 'sol:open-capture-settings',
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */

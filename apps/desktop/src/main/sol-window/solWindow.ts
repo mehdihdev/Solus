@@ -248,6 +248,8 @@ export interface SolIpcDeps {
   state(): SolState
   guideTarget?(): Promise<ToolWindowRef | null>
   guideScope?(): number | null
+  /** Open the capture capability's own settings pane (SOLUSDEV-318). */
+  openCaptureSettings?(): void
 }
 
 /** Wire the five invokes (channel constants only — see the ratchet). Every
@@ -305,6 +307,11 @@ export function registerSolIpcHandlers(
     gated((on) => {
       if (typeof on === 'boolean') deps.settings.setHotkeys(on)
     })
+  )
+  // Any renderer argument is ignored: main opens its own capability's URL.
+  ipc.handle(
+    c.openCaptureSettings,
+    gated(() => deps.openCaptureSettings?.())
   )
 }
 
