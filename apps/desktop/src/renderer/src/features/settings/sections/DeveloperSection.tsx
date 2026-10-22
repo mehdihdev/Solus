@@ -242,7 +242,7 @@ export function DeveloperSection(): React.JSX.Element | null {
   if (!hasBridge) return null
   const slugs = Object.keys(entries).sort()
   return (
-    <Section title="Developer" sub={SUB}>
+    <Section id="developer" title="Developer" sub={SUB}>
       <Button kind="soft" size="sm" onClick={() => void onPick()} disabled={busy}>
         Load unpacked extension…
       </Button>

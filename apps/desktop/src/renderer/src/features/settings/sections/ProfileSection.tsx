@@ -32,7 +32,7 @@ export function ProfileSection({ data }: { data: SettingsData }): React.JSX.Elem
   }
 
   return (
-    <Section title="Profile" sub="Your identity across the team's shared graph.">
+    <Section id="profile" title="Profile" sub="Your identity across the team's shared graph.">
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: 14 }}>
         <Avatar name={displayName(name, email)} size={42} />
         <div>

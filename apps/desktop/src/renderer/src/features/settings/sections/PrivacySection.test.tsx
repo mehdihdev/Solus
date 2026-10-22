@@ -2,53 +2,49 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { PrivacySection } from './PrivacySection'
-import type { SettingsData } from '../useSettingsData'
+import { settingsData } from '../settings.fixtures'
+import { PRIVACY_POLICY_URL } from '../legalLinks.constants'
 
-function data(overrides: Partial<SettingsData> = {}): SettingsData {
-  return {
-    status: 'ready',
-    profile: null,
-    consent: true,
-    subscription: null,
-    errors: { sol_mode: null, consent: null, name: null },
-    actions: {
-      setSolMode: vi.fn(async () => true),
-      setConsent: vi.fn(async () => true),
-      updateName: vi.fn(async () => true),
-      refresh: vi.fn(async () => undefined)
-    },
-    ...overrides
-  }
-}
+vi.mock('./AccountSection', () => ({ DeleteAccountRow: () => <div>delete-account-row</div> }))
 
 describe('PrivacySection', () => {
   it('reflects the current consent state', () => {
-    render(<PrivacySection data={data({ consent: true })} />)
-    expect(screen.getByLabelText('Data collection')).toHaveTextContent('On')
+    render(<PrivacySection data={settingsData({ consent: true })} />)
+    expect(screen.getByRole('switch', { name: 'Usage data' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
   })
 
   it('opts out through the action', async () => {
-    const setConsent = vi.fn(async () => true)
-    render(<PrivacySection data={data({ actions: { ...data().actions, setConsent } })} />)
-    await userEvent.click(screen.getByText('Off'))
-    expect(setConsent).toHaveBeenCalledWith(false)
+    const data = settingsData({ consent: true })
+    render(<PrivacySection data={data} />)
+    await userEvent.click(screen.getByRole('switch', { name: 'Usage data' }))
+    expect(data.actions.setConsent).toHaveBeenCalledWith(false)
   })
 
   it('opts back in through the action', async () => {
-    const setConsent = vi.fn(async () => true)
-    render(
-      <PrivacySection data={data({ consent: false, actions: { ...data().actions, setConsent } })} />
-    )
-    await userEvent.click(screen.getByText('On'))
-    expect(setConsent).toHaveBeenCalledWith(true)
+    const data = settingsData({ consent: false })
+    render(<PrivacySection data={data} />)
+    await userEvent.click(screen.getByRole('switch', { name: 'Usage data' }))
+    expect(data.actions.setConsent).toHaveBeenCalledWith(true)
   })
 
   it('surfaces the consent error inline', () => {
     render(
       <PrivacySection
-        data={data({ errors: { sol_mode: null, consent: 'save failed', name: null } })}
+        data={settingsData({ errors: { sol_mode: null, consent: 'save failed', name: null } })}
       />
     )
     expect(screen.getByRole('alert')).toHaveTextContent('save failed')
+  })
+
+  it('links the Privacy Policy and holds the delete-account danger row', () => {
+    render(<PrivacySection data={settingsData()} />)
+    expect(screen.getByRole('link', { name: /Privacy Policy/ })).toHaveAttribute(
+      'href',
+      PRIVACY_POLICY_URL
+    )
+    expect(screen.getByText('delete-account-row')).toBeInTheDocument()
   })
 })
