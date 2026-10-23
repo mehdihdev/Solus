@@ -133,7 +133,8 @@ def _check_editor_lock(directory: int, name: str) -> None:
             os.stat(lock_name, dir_fd=directory, follow_symlinks=False)
         except FileNotFoundError:
             continue
-        raise DevelopmentError("stale_plan")
+        # KiCad holds this sheet open; it would clobber (and never reload) our write.
+        raise DevelopmentError("open_in_editor")
 
 
 def _verify_parent(root: Path, relative: str, opened: int) -> None:

@@ -54,3 +54,9 @@ def test_every_write_tool_reason_has_an_explanation() -> None:
     raised |= set(re.findall(r'^REASON_[A-Z_]+ = "([a-z_]+)"', source, re.M))
     assert raised
     assert raised <= set(REFUSAL_EXPLANATIONS)
+
+
+def test_editor_lock_explanation_tells_sol_to_ask_the_user_to_close_it() -> None:
+    message = refusal_message("open_in_editor")
+    assert message.startswith("open_in_editor: ")
+    assert "close" in message and "KiCad" in message

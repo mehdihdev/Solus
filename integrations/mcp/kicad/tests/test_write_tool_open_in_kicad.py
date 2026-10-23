@@ -1,5 +1,6 @@
 """Open-in-KiCad conflict: a write must never clobber, or be clobbered by, a
-schematic the user is editing in the KiCad GUI (stable `stale_plan` refusal)."""
+schematic the user is editing in the KiCad GUI. A changed file is `stale_plan`;
+an editor lock held by KiCad is `open_in_editor` (the user must close it)."""
 # mypy: disable-error-code="import-not-found,no-untyped-def"
 
 import shutil
@@ -49,7 +50,7 @@ def test_write_refused_while_kicad_holds_the_editor_lock(
     target = _copy(monkeypatch, tmp_path)
     before = target.read_bytes()
     (target.parent / lock.format(name=target.name)).write_text("user@host")
-    with pytest.raises(DevelopmentError, match="stale_plan"):
+    with pytest.raises(DevelopmentError, match="open_in_editor"):
         _edit(target, fingerprint(before))
     assert target.read_bytes() == before
 

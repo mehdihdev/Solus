@@ -481,3 +481,26 @@ def test_symbol_refuses_embedded_string_differing_only_in_escape_form(
             0,
         )
     assert path.read_bytes() == original
+
+
+def test_symbol_refused_while_schematic_is_open_in_kicad(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_symbols(tmp_path, monkeypatch)
+    path = tmp_path / "wire.kicad_sch"
+    (tmp_path / "~wire.kicad_sch.lck").write_text("user@host")
+    original = path.read_bytes()
+    definition = get_symbol_definition("Device:R")
+    args: dict[str, Any] = dict(
+        schematic_path="wire.kicad_sch",
+        expected_fingerprint=fingerprint(original),
+        library_id="Device:R",
+        library_fingerprint=definition["library_fingerprint"],
+        reference="R3",
+        value="1k",
+        at={"x_mm": 60, "y_mm": 20},
+        rotation_deg=0,
+    )
+    with pytest.raises(DevelopmentError, match="open_in_editor"):
+        add_symbol(**args)
+    assert path.read_bytes() == original

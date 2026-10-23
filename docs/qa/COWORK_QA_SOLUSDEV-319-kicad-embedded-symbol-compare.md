@@ -33,6 +33,13 @@
 | 6   | Ask SOL to create a schematic at a path outside the linked folder (e.g. `../other.kicad_sch`).                           | Refused; SOL says the path is outside the linked project workspace.                                                                                             | [ ]       |
 | 7   | After flows 4–6, inspect `data_events` rows of type `agent.tool_invoked` for the failed calls.                           | `ok: false`, `error_code: "tool_error"`, `reason` = the code (`stale_plan`, `library_unavailable`, `path_escapes_workspace`); no paths or message text present. | [ ]       |
 
+Additional flow — schematic open in KiCad:
+
+| #   | Steps                                                                          | Expected                                                                                                     | Pass/Fail |
+| --- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | --------- |
+| 8   | Keep the schematic open in KiCad's Schematic Editor and ask SOL to add a part. | Refused; SOL asks you to close the schematic window in KiCad (project window may stay open). File unchanged. | [ ]       |
+| 9   | Close only the Schematic Editor window and ask SOL to retry.                   | Placement succeeds; reopening the schematic shows the new part.                                              | [ ]       |
+
 ## Edge cases
 
 | #   | Case                                                                                                        | Expected                                                     | Pass/Fail |

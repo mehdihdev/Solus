@@ -16,6 +16,9 @@ REFUSAL_EXPLANATIONS = {
     "invalid_geometry": "the coordinates or wire route are not valid for placement",
     "library_unavailable": "that symbol was not found in the installed KiCad libraries",
     "mutation_unverified": "the written file did not match the planned change; it was rolled back",
+    "open_in_editor": "the schematic is open in KiCad's Schematic Editor, which would overwrite "
+    "this change on its next save; ask the user to close that schematic window in KiCad (the "
+    "project window can stay open), then retry",
     "not_found": "the referenced symbol, pin, or wire was not found in the schematic",
     "path_escapes_workspace": "the path is outside the linked project workspace",
     "property_not_found": "the symbol has no property with that name",

@@ -216,14 +216,17 @@ MCP `isError`, which the companion maps to a failed ToolResult with no successfu
 fingerprint. Confinement refusals use the same error path. Examples:
 `path_escapes_workspace`, `file_too_large`, `stale_plan`, `already_exists`,
 `library_unavailable`, `unsupported_symbol`, `ambiguous_target`, `invalid_geometry`,
-`guard_failed`, `cli_unavailable`. No content or host path in exception text.
+`guard_failed`, `cli_unavailable`, `open_in_editor`. The exception text is
+`<code>: <fixed explanation>` (`solus/refusals.py`, SOLUSDEV-319) so SOL can relay
+the cause; explanations are fixed strings — no content or host path.
 
-Open-in-KiCad conflict: `stale_plan` is also the refusal when the schematic is
-open in the KiCad GUI. A write is refused if the file's bytes differ from the
-fingerprint Solus read (the user saved from KiCad since), or if KiCad's
-`~<name>.lck` / `<name>.lck` editor lock exists beside it. Either way nothing
-is written and the file is untouched; the user is told to save/close in KiCad
-and re-read. Pinned by `tests/test_write_tool_open_in_kicad.py`.
+Open-in-KiCad conflict: a write is refused with `stale_plan` if the file's bytes
+differ from the fingerprint Solus read (the user saved from KiCad since), and with
+`open_in_editor` if KiCad's `~<name>.lck` / `<name>.lck` editor lock exists beside
+it — KiCad would overwrite the change on its next save and does not reload it.
+Either way nothing is written and the file is untouched; for `open_in_editor`
+SOL asks the user to close that schematic window in KiCad, then retries.
+Pinned by `tests/test_write_tool_open_in_kicad.py`.
 
 Planner output fingerprints original bytes, exact proposed bytes, arguments,
 resolved entities, selected library bytes and generated UUIDs. UUIDs derive from a

@@ -594,3 +594,56 @@ admin/user-writable on some systems (same-user risk only; no privilege boundary 
 ### Sign-off
 
 No new sign-off line added here; the 2026-10-06 lines in PROVENANCE.md cite this section.
+
+## 2026-10-23 — Refusal explanations, embedded-symbol comparison, `open_in_editor` (SOLUSDEV-319)
+
+### What changed
+
+- **`add_symbol` embedded-definition check** (`solus/development/schematic.py`): the schematic's
+  embedded `lib_symbols` copy is compared to the installed library by decoded token stream
+  (`(kind, value)` pairs) instead of raw bytes. KiCad re-indents that copy on every save, so the
+  byte check refused every symbol already present in a KiCad-saved schematic. STRING vs ATOM stays
+  distinct and every token value must match; only whitespace is ignored. On a match the original
+  embedded bytes are kept as-is (never rewritten); on a mismatch the file is untouched.
+- **Refusal text** (`solus/refusals.py`): every strict refusal raised to FastMCP now reads
+  `<code>: <fixed explanation>`. Explanations are Solus-authored constants; no paths, argument
+  values or design contents. Unknown codes pass through bare. Applied at the development-tool
+  guard, the H2 confinement refusal (`trimming.py`), the strict-argument adapter
+  (`strict_tool.py`) and `set_symbol_property`.
+- **Editor-lock refusal split out:** a write while KiCad's `~<name>.lck` / `<name>.lck` editor
+  lock exists now refuses with `open_in_editor` (was `stale_plan`), whose explanation tells SOL to
+  ask the user to close that schematic window in KiCad. The guard itself is unchanged — same lock
+  names, same check point inside `commit_plan`, same no-write outcome. `stale_plan` remains the
+  refusal for a fingerprint mismatch.
+
+### Security assessment
+
+- Token comparison cannot let a crafted embedded definition through with different pins,
+  geometry or properties: any token-level difference still refuses. Residual (LOW, cosmetic):
+  `_decode_escapes` keeps unrecognized escapes literally, so two byte-different strings can decode
+  equal; affects displayed text only, never connectivity.
+- Refusal explanations are fixed strings and cannot carry attacker-controlled text into the model
+  context; the companion/API still cap and treat tool error text as untrusted.
+- `open_in_editor` narrows behaviour only (a more specific code for an existing refusal); no new
+  write path, no new tool, no allowlist or confirmation change.
+
+### What did NOT change (re-review triggers checked)
+
+`upstream/` and `vendor/` untouched (tree hashes recomputed equal to PROVENANCE: upstream
+`56f30452214d88aa6b84807d6df7a6e903c48e52`, vendor `844e1a1183e90a0a3b0c89dbcffe561b6fc9b944`).
+No `allowlist.yaml`, `bin/launch`, declared env-allowlist or lockfile change.
+
+### Evidence
+
+`tests/test_development_operations.py` (KiCad-reformatted embedded definition accepted; content
+or escape-variant mismatch refused; add refused with `open_in_editor` while the lock exists, file
+untouched), `tests/test_write_tool_open_in_kicad.py` (lock → `open_in_editor`, changed file →
+`stale_plan`), `tests/test_refusals.py` (code + explanation at the guard and confinement layers;
+every raised write-tool reason has an explanation). Real run on macOS/KiCad 10: `Device:R` and
+`Device:LED` placements in a KiCad-saved schematic now plan successfully; a write with the
+schematic open in Eeschema refuses as `open_in_editor`. Fork suite 462 passed. Phase 4 code and
+security reviews: PASS, no CRITICAL/HIGH.
+
+### Sign-off
+
+No new sign-off line added here; no re-review trigger was hit.
