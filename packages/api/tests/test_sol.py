@@ -1210,6 +1210,7 @@ class _FailingToolRunner:
         ("stale_plan: read it again", "stale_plan"),
         ("stale_plan", None),
         ("hunter2abc: leaked", None),
+        ("a_" + "b" * 40 + ": overlong word", None),
         ("Free-form failure text from some tool", None),
     ],
 )

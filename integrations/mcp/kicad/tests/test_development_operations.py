@@ -458,3 +458,26 @@ def test_symbol_refuses_embedded_definition_with_different_content(
             0,
         )
     assert path.read_bytes() == original
+
+
+def test_symbol_refuses_embedded_string_differing_only_in_escape_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_symbols(tmp_path, monkeypatch)
+    path = tmp_path / "wire.kicad_sch"
+    _reindent_embedded(path)
+    path.write_bytes(path.read_bytes().replace(b'(name "A")', b'(name "\\A")', 1))
+    original = path.read_bytes()
+    definition = get_symbol_definition("Device:R")
+    with pytest.raises(DevelopmentError, match="unsupported_symbol"):
+        add_symbol(
+            "wire.kicad_sch",
+            fingerprint(original),
+            "Device:R",
+            definition["library_fingerprint"],
+            "R3",
+            "1k",
+            {"x_mm": 60, "y_mm": 20},
+            0,
+        )
+    assert path.read_bytes() == original
