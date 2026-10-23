@@ -5,6 +5,7 @@ from functools import wraps
 from typing import Any
 
 from solus.development.models import DevelopmentError
+from solus.refusals import refusal_message
 from solus.trimming import SupportsToolDecorator
 
 DESCRIPTIONS = {
@@ -42,9 +43,9 @@ def _guard(function: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, A
         except DevelopmentError as exc:
             # FastMCP turns exceptions into isError, which the companion maps to
             # a failed ToolResult. A plain refusal dict would look successful.
-            raise ValueError(exc.reason) from None
+            raise ValueError(refusal_message(exc.reason)) from None
         except (OSError, RecursionError):
-            raise ValueError("guard_failed") from None
+            raise ValueError(refusal_message("guard_failed")) from None
 
     guarded_metadata: Any = guarded
     guarded_metadata._solus_strict_refusals = True

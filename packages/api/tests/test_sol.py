@@ -1187,3 +1187,57 @@ async def test_scoped_prior_tool_payload_reaches_next_turn_without_replaying_act
     assert "observed-leader-axis" in text
     assert "foreign-private-axis" not in text
     assert "never-replay" not in text
+
+
+class _FailingToolRunner:
+    """Streams one refused tool call, the way a bridge refusal arrives."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    async def run(self, ctx: Any) -> AsyncIterator[AgentEvent]:
+        from solus_api.agent.tools.shapes import ToolError, ToolErrorCode, ToolResult
+
+        yield AgentEvent.tool_call(ToolCall(call_id="c1", tool="kicad.add_symbol", args={}))
+        error = ToolError(code=ToolErrorCode.TOOL_ERROR, message=self.message)
+        yield AgentEvent.tool_result(ToolResult.failure("c1", error))
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ("unsupported_symbol: the symbol uses a construct R1 at /home/x", "unsupported_symbol"),
+        ("stale_plan", "stale_plan"),
+        ("Free-form failure text from some tool", None),
+    ],
+)
+async def test_tool_invoked_event_records_failure_code_not_message(
+    app: Any,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    db: AsyncSession,
+    message: str,
+    reason: str | None,
+) -> None:
+    from solus_api.models import DataEvent
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _FailingToolRunner(message)
+    await client.patch(
+        "/api/v1/users/me/settings", json={"data_collection_consent": True}, headers=alice_headers
+    )
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "place a resistor"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    event = (
+        await db.scalars(select(DataEvent).where(DataEvent.event_type == "agent.tool_invoked"))
+    ).one()
+    assert event.payload["ok"] is False
+    assert event.payload["error_code"] == "tool_error"
+    assert event.payload.get("reason") == reason
+    assert "/home/x" not in json.dumps(event.payload)

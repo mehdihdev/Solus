@@ -397,3 +397,64 @@ def test_symbol_fields_are_legible_and_metadata_is_hidden(
     for name in ("Footprint", "Datasheet"):
         assert value(children(props[name], "hide")[0]) == "yes"
     assert value(props["Datasheet"], 2) == "https://example.com/resistor.pdf"
+
+
+def _reindent_embedded(path: Path) -> bytes:
+    """Re-serialize the embedded `Device:R` the way KiCad's own save does:
+    tab-indented, one node per line — same tokens, different bytes."""
+    data = path.read_bytes()
+    start = data.index(b'(symbol "Device:R"')
+    depth, end = 0, start
+    for end in range(start, len(data)):
+        depth += {40: 1, 41: -1}.get(data[end], 0)
+        if depth == 0:
+            break
+    block = data[start : end + 1].replace(b" (", b"\n\t\t\t(").replace(b")(", b")\n\t\t\t(")
+    path.write_bytes(data[:start] + block + data[end + 1 :])
+    return block
+
+
+def test_symbol_reuses_kicad_reformatted_embedded_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_symbols(tmp_path, monkeypatch)
+    path = tmp_path / "wire.kicad_sch"
+    block = _reindent_embedded(path)
+    definition = get_symbol_definition("Device:R")
+    add_symbol(
+        "wire.kicad_sch",
+        fingerprint(path.read_bytes()),
+        "Device:R",
+        definition["library_fingerprint"],
+        "R3",
+        "1k",
+        {"x_mm": 60, "y_mm": 20},
+        0,
+    )
+    raw = path.read_bytes()
+    assert raw.count(b'(symbol "Device:R"') == 1
+    assert block in raw
+    assert raw.count(b'(lib_id "Device:R")') == 3
+
+
+def test_symbol_refuses_embedded_definition_with_different_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _two_symbols(tmp_path, monkeypatch)
+    path = tmp_path / "wire.kicad_sch"
+    _reindent_embedded(path)
+    path.write_bytes(path.read_bytes().replace(b'(number "2")', b'(number "9")', 1))
+    original = path.read_bytes()
+    definition = get_symbol_definition("Device:R")
+    with pytest.raises(DevelopmentError, match="unsupported_symbol"):
+        add_symbol(
+            "wire.kicad_sch",
+            fingerprint(original),
+            "Device:R",
+            definition["library_fingerprint"],
+            "R3",
+            "1k",
+            {"x_mm": 60, "y_mm": 20},
+            0,
+        )
+    assert path.read_bytes() == original

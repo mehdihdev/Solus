@@ -11,6 +11,7 @@ resolvable project. The streaming turn (SSE) runs the reasoning loop behind the
 import asyncio
 import json
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
@@ -142,6 +143,25 @@ _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
         "The reasoning service is busy right now. Try that again in a moment.",
     ),
 }
+
+
+#: A tool refusal's stable code prefix (`stale_plan: …`) — an identifier, never content.
+_REASON_PREFIX = re.compile(r"([a-z][a-z0-9_]{0,63})(?::|$)")
+
+
+def _failure_fields(result: dict[str, Any]) -> dict[str, Any]:
+    """`agent.tool_invoked` failure detail: the ToolErrorCode and, when the tool's
+    message leads with a stable reason code, that code — never the message text,
+    which can carry untrusted tool output (paths, design contents)."""
+    error = result.get("error")
+    if result.get("ok") is not False or not isinstance(error, dict):
+        return {}
+    fields: dict[str, Any] = {"error_code": error.get("code")}
+    message = error.get("message")
+    match = _REASON_PREFIX.match(message) if isinstance(message, str) else None
+    if match:
+        fields["reason"] = match.group(1)
+    return fields
 
 
 def _turn_failure_sse(exc: Exception, conversation_id: uuid.UUID) -> str:
@@ -571,6 +591,7 @@ async def _persist_turn(
                         "call_id": call.get("call_id"),
                         "action_mode": action_mode,
                         "ok": result.get("ok"),
+                        **_failure_fields(result),
                     },
                 )
             emit_event(

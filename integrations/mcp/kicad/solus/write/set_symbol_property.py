@@ -5,6 +5,7 @@ from typing import Any
 from solus.development.common import finish, original_for
 from solus.development.models import DevelopmentError
 from solus.development.plan import MutationPlan
+from solus.refusals import refusal_message
 from solus.trimming import SupportsToolDecorator
 from solus.write.errors import REASON_GUARD_FAILED, REASON_UNSUPPORTED_VALUE, RefusalError
 from solus.write.escaping import encode_kicad_string
@@ -113,7 +114,7 @@ def register_write_tools(mcp: SupportsToolDecorator) -> None:
             # honest bucket is that we could not safely verify/complete the
             # operation — the same bucket a splice-guard failure gets.
             reason = REASON_GUARD_FAILED
-        raise ValueError(reason)
+        raise ValueError(refusal_message(reason))
 
     strict: Any = set_symbol_property
     strict._solus_strict_refusals = True
