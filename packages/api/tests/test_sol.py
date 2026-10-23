@@ -1207,7 +1207,9 @@ class _FailingToolRunner:
     ("message", "reason"),
     [
         ("unsupported_symbol: the symbol uses a construct R1 at /home/x", "unsupported_symbol"),
-        ("stale_plan", "stale_plan"),
+        ("stale_plan: read it again", "stale_plan"),
+        ("stale_plan", None),
+        ("hunter2abc: leaked", None),
         ("Free-form failure text from some tool", None),
     ],
 )

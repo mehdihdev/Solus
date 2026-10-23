@@ -145,8 +145,10 @@ _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
 }
 
 
-#: A tool refusal's stable code prefix (`stale_plan: …`) — an identifier, never content.
-_REASON_PREFIX = re.compile(r"([a-z][a-z0-9_]{0,63})(?::|$)")
+#: A structured refusal's code prefix (`stale_plan: <explanation>`) — snake_case
+#: words only, and only in that `<code>: ` form, so a bare one-token message
+#: (which could be any value a tool echoed) is never recorded.
+_REASON_PREFIX = re.compile(r"([a-z]+(?:_[a-z]+){1,5}): ")
 
 
 def _failure_fields(result: dict[str, Any]) -> dict[str, Any]:
