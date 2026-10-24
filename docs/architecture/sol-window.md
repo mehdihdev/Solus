@@ -162,3 +162,26 @@ Electron GlobalShortcuts portal when supported; missing portal/permission still
 degrades to the clickable path. The header has no mode selector; Settings and the
 composer retain their controls. An already-open SOL window follows main-window
 workspace selection changes.
+
+## SOLUSDEV-319 Ember Pill
+
+Wireflow: `docs/wireflows/sol-window.md` "SOLUSDEV-319 Ember Pill". Changes to the module map:
+
+- `main/sol-window/pillGeometry.ts` (new, pure): `placePill(cursor, workArea, size)` and
+  `growPill(anchor, current, height, workArea)` — summon placement and bottom-anchored growth with the
+  shift-aside rule. Replaces `placeSolWindow`; geometry is no longer persisted (the `window` field in
+  `solSettings` is left readable and is no longer written).
+- `main/sol-window/solWindow.ts`: the window is frameless, transparent, always on top, non-resizable,
+  hidden from the taskbar. The manager gains `toggle()` (double-tap Ctrl), keeps a hidden window alive
+  between summons (`show` re-places it at the cursor), hides on `blur` unless the renderer reported busy,
+  and applies renderer resize requests through `growPill`.
+- Three new invokes on `SOL_WINDOW_CHANNELS`, accepted only from the SOL window's own webContents:
+  `sol:resize` (a finite number, clamped 80–620), `sol:set-busy` (boolean), `sol:hide` (no argument).
+- renderer `features/sol/SolWindow.tsx`: the pill layout (panel above, bar below), a ResizeObserver
+  that reports its content height, Esc to hide, and the busy signal (streaming, a parked approval, or a
+  running plan). `features/sol/Composer.tsx` (moved out of `SolChat.tsx`) gains the `pill` variant;
+  `features/sol/PlanCard.tsx` is new.
+
+Security posture is unchanged: the same isolated webPreferences, navigation and window-open guards.
+`transparent: true` has no isolation effect. The plan card is a presentation of the existing
+per-confirmation approvals and adds no new approval path.

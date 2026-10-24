@@ -110,3 +110,44 @@ The SOL window uses the same command card, Cmd/Ctrl+Enter approval, retained out
 automatic resume and Running processes strip specified in `sol-page.md` ("Command execution
 — SOLUSDEV-317"). The global shortcuts above are unchanged. Cmd/Ctrl+Enter is handled only
 inside the focused SOL surface and is never registered globally.
+
+## SOLUSDEV-319 Ember Pill (supersedes §A placement and §B frame)
+
+Design: canvas "SOL Quick Summon", variant A. The SOL window becomes a floating pill.
+
+**Summon.** Double-tap Ctrl toggles the pill: hidden → shown next to the cursor and focused (24 px
+below-left of the pointer, flipped above it when the pointer is near the bottom of the work area,
+clamped to the display under the cursor); shown → hidden. The other spawn paths (tray, page button,
+Cmd/Ctrl+Shift+Space, the circle gesture) always show and focus. No geometry is remembered.
+
+**Frame.** Frameless, transparent, always on top, not resizable by hand, 560 px wide. Collapsed it is
+the bar alone:
+
+- Bar (54 px): SOL orb · message input ("Ask SOL, or tell it what to do…") · Guide | Build segmented
+  control (Ctrl+Space still toggles) · amber send arrow.
+- Footer (30 px): the attached-region chip when present · "sees your screen" dot when on · Think harder
+  and Confirm every change as compact toggles · `⌃Space mode` · `⌃⌃ hide`. Degraded-status lines
+  (§B list) render in the footer area, one per line.
+
+**Grows upward.** Once there is anything to show — messages, Guide tasks, running processes, the region
+card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
+never past the work-area top; the thread scrolls inside). If growing would cover the point the pointer
+was at when summoned, the pill shifts right of that point when there is room. Panel header: `SOL ·
+GUIDE|BUILD` label, New chat, Open in Solus (the full SOL page), collapse.
+
+**Dismiss.** Clicking another app hides the pill; the conversation is kept and returns on the next
+summon. It does NOT hide while SOL is streaming, while an approval is waiting, or while a plan runs.
+Esc hides it (closes the mention list first when that is open).
+
+**Plan card.** When one SOL reply parks two or more non-command approvals, they render as one plan:
+`PLAN · N STEPS`, each step numbered with its summary and its concrete before → after rows (nothing
+hidden — CLAUDE.md §7). Buttons: **Run N steps** (Enter) · **Show me how instead** (rejects the parked
+steps and switches to Guide) · Esc cancels nothing (closes the pill only when idle). Run approves the steps
+ONE AT A TIME, in order, each through the normal decision call and its own staleness re-check; the first
+failure stops the run and the remaining steps stay parked as ordinary cards. A single approval, and every
+command card (SOLUSDEV-317), keeps its own card.
+
+**Running.** While a plan runs the panel shows a status strip: `APPLYING · STEP k OF N`, the current
+step's summary, an N-segment progress bar and **Stop** (Esc) — Stop lets the in-flight step finish and
+leaves the rest parked. SOL never moves the user's pointer in this ticket; free-form "SOL drives the
+app" is a separate ticket that needs its own ADR (ADR-040 §2 limits synthetic input to KiCad save/revert).
