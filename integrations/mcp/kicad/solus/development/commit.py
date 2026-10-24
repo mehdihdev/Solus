@@ -16,6 +16,7 @@ from solus.development.models import (
     schematic_path,
 )
 from solus.development.plan import MutationPlan
+from solus.write.sexpr import SExprSyntaxError, tokenize
 
 _LOCK = threading.RLock()
 
@@ -62,7 +63,10 @@ def read_schematic(root: Path, relative: str) -> bytes:
         return data
 
 
-def commit_plan(root: Path, plan: MutationPlan) -> str:
+def commit_plan(root: Path, plan: MutationPlan, *, editor_saved: bool = False) -> str:
+    """Publish `plan.proposed`. `editor_saved` (ADR-040) means KiCad holds the
+    sheet open and has just saved it: its lock is expected, and a re-save that
+    only changed formatting (same tokens) still matches the plan."""
     with (
         _LOCK,
         parent_directory(root, plan.path) as (directory, name),
@@ -71,11 +75,11 @@ def commit_plan(root: Path, plan: MutationPlan) -> str:
         temp = ".solus-" + secrets.token_hex(12) + ".tmp"
         published = False
         try:
-            _check_editor_lock(directory, name)
+            _check_editor_lock(directory, name, expected=editor_saved)
             current = read_at(directory, name)
             if plan.original is None and current is not None:
                 raise DevelopmentError("already_exists")
-            if current != plan.original:
+            if not _matches(current, plan.original, editor_saved):
                 raise DevelopmentError("stale_plan")
             mode = (
                 0o600
@@ -90,8 +94,8 @@ def commit_plan(root: Path, plan: MutationPlan) -> str:
                 handle.flush()
                 os.fsync(handle.fileno())
             _verify_parent(root, plan.path, directory)
-            _check_editor_lock(directory, name)
-            if read_at(directory, name) != plan.original:
+            _check_editor_lock(directory, name, expected=editor_saved)
+            if read_at(directory, name) != current:
                 raise DevelopmentError("stale_plan")
             published = True
             if plan.original is None:
@@ -127,7 +131,32 @@ def _publication_error(exc: OSError | DevelopmentError, published: bool) -> Deve
     return exc if isinstance(exc, DevelopmentError) else DevelopmentError("guard_failed")
 
 
-def _check_editor_lock(directory: int, name: str) -> None:
+def _matches(current: bytes | None, original: bytes | None, editor_saved: bool) -> bool:
+    if current == original:
+        return True
+    if not editor_saved or current is None or original is None:
+        return False
+    try:
+        return [(t.kind, t.value) for t in tokenize(current)] == [
+            (t.kind, t.value) for t in tokenize(original)
+        ]
+    except SExprSyntaxError:
+        return False
+
+
+def editor_lock_present(root: Path, relative: str) -> bool:
+    """Whether KiCad holds `relative` open (its editor lock exists)."""
+    with parent_directory(root, relative) as (directory, name):
+        try:
+            _check_editor_lock(directory, name)
+        except DevelopmentError:
+            return True
+    return False
+
+
+def _check_editor_lock(directory: int, name: str, *, expected: bool = False) -> None:
+    if expected:
+        return
     for lock_name in ("~" + name + ".lck", name + ".lck"):
         try:
             os.stat(lock_name, dir_fd=directory, follow_symlinks=False)

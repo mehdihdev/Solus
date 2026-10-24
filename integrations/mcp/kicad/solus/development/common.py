@@ -70,16 +70,28 @@ def entity_uuid(path: str, original: bytes | None, operation: dict[str, Any], ro
 def finish(plan: MutationPlan, dry_run: bool, created: list[dict[str, Any]]) -> dict[str, Any]:
     if type(dry_run) is not bool:
         raise DevelopmentError("unsupported_value")
-    if not dry_run and plan.original != plan.proposed:
-        commit_plan(workspace(), plan)
+    from solus.development.live_kicad import PREVIEW_NOTE, live_commit, open_sheet_editor
+
+    changed = plan.original != plan.proposed
+    root = workspace()
+    editor = open_sheet_editor(root, plan.path) if changed and plan.original else None
+    live: dict[str, Any] = {}
+    if not dry_run and changed:
+        live = live_commit(root, plan, editor) if editor else {}
+        if editor is None:
+            commit_plan(root, plan)
+    preview = plan.preview()
+    if editor is not None:
+        preview = [*preview, {"label": "KiCad", "before": None, "after": PREVIEW_NOTE}]
     return {
-        "changed": plan.original != plan.proposed,
+        "changed": changed,
         "schematic_path": plan.path,
         "before_fingerprint": plan.before_fingerprint,
         "after_fingerprint": plan.after_fingerprint,
         "created": created,
         "dry_run": dry_run,
-        "preview": plan.preview(),
+        "preview": preview,
+        **live,
     }
 
 
