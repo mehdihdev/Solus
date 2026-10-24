@@ -1226,3 +1226,5 @@ verification), annual allowance 2,500, quiet period 90 s.
 
 - SOL can edit while the project is open.
 - One new local capability (synthetic input) is gated to KiCad, a declared sandbox-posture change that triggers a PROVENANCE re-review of the fork.
+
+**ADR-040 amendment (2026-10-24, SOLUSDEV-319; approved in-chat against the concrete text below):** Decision §1 gains step (d): after a successful Revert, save the (now clean, reloaded) sheet once more in KiCad, so the file on disk is in KiCad's canonical form and the next live edit's pre-save does not change it. The tool returns the fingerprint of the file after that save. If step (d) fails, the edit stands (KiCad shows it) and the result says the next live edit may need one retry. Vocabulary is unchanged (Save is already in §2).
