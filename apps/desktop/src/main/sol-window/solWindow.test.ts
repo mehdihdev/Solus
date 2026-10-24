@@ -19,7 +19,6 @@ import {
   type SolWindowHandle,
   type SolWindowManagerDeps
 } from './solWindow'
-import { DEFAULT_SOL_SETTINGS, type SolSettingsState } from '../solSettings'
 import { growPill, placePill, SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH } from './pillGeometry'
 
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
@@ -33,7 +32,6 @@ const DISPLAY_B = { id: 2, workArea: WA_B }
 interface Fake {
   handle: SolWindowHandle
   bounds: Rect
-  alwaysOnTop: boolean
   visible: boolean
   focus: ReturnType<typeof vi.fn>
   sent: Array<{ channel: string; payload: unknown }>
@@ -41,12 +39,11 @@ interface Fake {
   close(): void
 }
 
-function fakeWindow(bounds: Rect, alwaysOnTop: boolean): Fake {
+function fakeWindow(bounds: Rect): Fake {
   const listeners = new Map<string, Set<() => void>>()
   let destroyed = false
   const f: Fake = {
     bounds,
-    alwaysOnTop,
     visible: true,
     focus: vi.fn(),
     sent: [],
@@ -78,50 +75,30 @@ function fakeWindow(bounds: Rect, alwaysOnTop: boolean): Fake {
       setBounds: (rect) => {
         f.bounds = rect
       },
-      setAlwaysOnTop: (flag) => {
-        f.alwaysOnTop = flag
-      },
       webContents: { send: (channel, payload) => void f.sent.push({ channel, payload }) }
     }
   }
   return f
 }
 
-function harness(
-  settingsInit: Partial<SolSettingsState> = {},
-  cursor = { x: 100, y: 100 }
-): {
+function harness(cursor = { x: 100, y: 100 }): {
   moveCursor(p: { x: number; y: number }): void
   deps: SolWindowManagerDeps
   windows: Fake[]
-  settings: SolSettingsState
   others: Fake[]
 } {
   const windows: Fake[] = []
-  const others = [fakeWindow(WA_A, false)]
-  let settings: SolSettingsState = { ...DEFAULT_SOL_SETTINGS, ...settingsInit }
-  const state = {
-    get settings() {
-      return settings
-    }
-  }
+  const others = [fakeWindow(WA_A)]
   let pointer = cursor
   const deps: SolWindowManagerDeps = {
-    createWindow: (bounds, alwaysOnTop) => {
-      const w = fakeWindow(bounds, alwaysOnTop)
+    createWindow: (bounds) => {
+      const w = fakeWindow(bounds)
       windows.push(w)
       return w.handle
     },
     screen: {
       getCursorScreenPoint: () => pointer,
-      getDisplayNearestPoint: (p) => (p.x >= 1920 ? DISPLAY_B : DISPLAY_A),
-      getAllDisplays: () => [DISPLAY_A, DISPLAY_B]
-    },
-    settings: {
-      get: () => settings,
-      setAlwaysOnTop: (alwaysOnTop) => {
-        settings = { ...settings, alwaysOnTop }
-      }
+      getDisplayNearestPoint: (p) => (p.x >= 1920 ? DISPLAY_B : DISPLAY_A)
     },
     allWindows: () => [...others.map((o) => o.handle), ...windows.map((w) => w.handle)]
   }
@@ -131,10 +108,7 @@ function harness(
     },
     deps,
     windows,
-    others,
-    get settings() {
-      return state.settings
-    }
+    others
   }
 }
 
@@ -149,13 +123,17 @@ const STATE: SolState = {
   actionMode: 'guide',
   screenIntelligence: false,
   hotkeysEnabled: true,
-  alwaysOnTop: false,
   capture: { mode: 'available', message: '' },
   hotkeys: null,
   lastRegionRefused: false
 }
 
 const EVENT = {} as IpcMainInvokeEvent
+const PILL_FRAME = {}
+const PILL_EVENT = {
+  sender: { mainFrame: PILL_FRAME },
+  senderFrame: PILL_FRAME
+} as unknown as IpcMainInvokeEvent
 
 function registerWith(
   allowed: () => boolean,
@@ -171,7 +149,6 @@ function registerWith(
     {
       windows: {
         open: () => void calls.push('open'),
-        setAlwaysOnTop: (b) => void calls.push(`aot:${b}`),
         markReady: () => void calls.push('ready'),
         isSender: fromPill,
         resize: (h) => void calls.push(`resize:${h}`),
@@ -202,25 +179,31 @@ describe('IPC registration', () => {
   it('the pill invokes validate their argument and act only for the SOL window itself', () => {
     const c = SOL_WINDOW_CHANNELS
     const pill = registerWith(() => true)
-    pill.handlers.get(c.resize)?.(EVENT, 320)
-    pill.handlers.get(c.resize)?.(EVENT, '320') // not a number: ignored
-    pill.handlers.get(c.resize)?.(EVENT, Number.POSITIVE_INFINITY) // not finite: ignored
-    pill.handlers.get(c.setBusy)?.(EVENT, true)
-    pill.handlers.get(c.setBusy)?.(EVENT, 1) // not a boolean: ignored
-    expect(pill.handlers.get(c.hide)?.(EVENT, 'anything')).toEqual(STATE)
+    const send = (channel: string, event: IpcMainInvokeEvent, arg?: unknown): unknown =>
+      pill.handlers.get(channel)?.(event, arg) ?? null
+    send(c.resize, PILL_EVENT, 320)
+    send(c.resize, PILL_EVENT, '320') // not a number: ignored
+    send(c.resize, PILL_EVENT, Number.POSITIVE_INFINITY) // not finite: ignored
+    send(c.setBusy, PILL_EVENT, true)
+    send(c.setBusy, PILL_EVENT, 1) // not a boolean: ignored
+    expect(send(c.hide, PILL_EVENT, 'anything')).toEqual(STATE)
     expect(pill.calls).toEqual(['resize:320', 'busy:true', 'hide'])
+    // A subframe of the pill's own webContents is not the pill.
+    const subframe = { ...PILL_EVENT, senderFrame: {} } as unknown as IpcMainInvokeEvent
+    expect(send(c.hide, subframe)).toBeNull()
+    expect(pill.calls).toHaveLength(3)
     // The main window is an allowed sender for the other invokes, never for these.
     const main = registerWith(
       () => true,
       () => false
     )
     for (const channel of [c.resize, c.setBusy, c.hide]) {
-      expect(main.handlers.get(channel)?.(EVENT, true) ?? null).toBeNull()
+      expect(main.handlers.get(channel)?.(PILL_EVENT, true) ?? null).toBeNull()
     }
     expect(main.calls).toEqual([])
   })
 
-  it('registers the eleven invokes on the shared constants and returns the state', () => {
+  it('registers the ten invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
@@ -230,7 +213,6 @@ describe('IPC registration', () => {
         c.guideTarget,
         c.setMode,
         c.setScreenIntelligence,
-        c.setAlwaysOnTop,
         c.setHotkeys,
         c.openCaptureSettings,
         c.resize,
@@ -244,10 +226,9 @@ describe('IPC registration', () => {
     handlers.get(c.setMode)?.(EVENT, 'expert') // not a mode: ignored
     handlers.get(c.setScreenIntelligence)?.(EVENT, true)
     handlers.get(c.setScreenIntelligence)?.(EVENT, 'yes')
-    handlers.get(c.setAlwaysOnTop)?.(EVENT, false)
     handlers.get(c.setHotkeys)?.(EVENT, false)
     handlers.get(c.setHotkeys)?.(EVENT, 'off') // not a boolean: ignored
-    expect(calls).toEqual(['ready', 'open', 'mode:do', 'si:true', 'aot:false', 'hk:false'])
+    expect(calls).toEqual(['ready', 'open', 'mode:do', 'si:true', 'hk:false'])
   })
 
   it('a foreign sender gets null and no action', async () => {
@@ -308,7 +289,7 @@ function registerWindowLifecycleAndGeometryTests(): void {
   const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
 
   it('open creates one pill at the cursor; a repeat focuses it; closed clears the slot', () => {
-    const h = harness({}, { x: 2500, y: 300 })
+    const h = harness({ x: 2500, y: 300 })
     const m = createSolWindowManager(h.deps)
     expect(m.isOpen()).toBe(false)
     m.open()
@@ -328,12 +309,6 @@ function registerWindowLifecycleAndGeometryTests(): void {
 function registerPillSummonTests(): void {
   const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
 
-  it('the pill is always on top, whatever the legacy pin setting says', () => {
-    const h = harness({ alwaysOnTop: false })
-    createSolWindowManager(h.deps).open()
-    expect(h.windows[0].alwaysOnTop).toBe(true)
-  })
-
   it('blur hides an idle pill, keeps a busy one, and the window survives hiding', () => {
     const h = harness()
     const m = createSolWindowManager(h.deps)
@@ -350,7 +325,7 @@ function registerPillSummonTests(): void {
   })
 
   it('toggle hides a shown pill and re-summons a hidden one at the new cursor', () => {
-    const h = harness({}, { x: 600, y: 300 })
+    const h = harness({ x: 600, y: 300 })
     const m = createSolWindowManager(h.deps)
     m.toggle() // nothing open: opens
     const w = h.windows[0]
@@ -376,7 +351,7 @@ function registerPillSummonTests(): void {
   })
 
   it('resize grows upward from the summon placement and keeps that height on re-summon', () => {
-    const h = harness({}, { x: 600, y: 300 })
+    const h = harness({ x: 600, y: 300 })
     const m = createSolWindowManager(h.deps)
     m.resize(300) // no window: ignored, no throw
     m.open()
@@ -517,7 +492,6 @@ it('native lookup rejects late mode/scope changes and never queries for foreign 
     {
       windows: {
         open: vi.fn(),
-        setAlwaysOnTop: vi.fn(),
         markReady: vi.fn(),
         isSender: () => true,
         resize: vi.fn(),

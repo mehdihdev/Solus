@@ -40,7 +40,6 @@ function fakeFs(initial: Record<string, string> = {}): {
 }
 
 const CONFIG = '/home/u/.solus/config.json'
-const GEOMETRY = { x: 10, y: 20, width: 420, height: 640, displayId: 7 }
 
 describe('read', () => {
   it('missing file → defaults, no warning', () => {
@@ -49,19 +48,22 @@ describe('read', () => {
     expect(f.warn).not.toHaveBeenCalled()
   })
 
-  it('reads a well-formed file and ignores unknown/invalid fields', () => {
+  it('reads a well-formed file and ignores unknown fields, the retired pin and geometry too', () => {
     const f = fakeFs({
       [CONFIG]: JSON.stringify({
         schema_version: 1,
-        sol: { actionMode: 'do', screenIntelligence: true, alwaysOnTop: 'yes', window: { x: 1 } }
+        sol: {
+          actionMode: 'do',
+          screenIntelligence: true,
+          alwaysOnTop: true,
+          window: { x: 1, y: 2, width: 420, height: 640, displayId: 7 }
+        }
       })
     })
     expect(createSolSettings(f.deps).get()).toEqual({
       actionMode: 'do',
       screenIntelligence: true,
-      hotkeys: true,
-      alwaysOnTop: false,
-      window: null
+      hotkeys: true
     })
   })
 
@@ -99,17 +101,13 @@ describe('write', () => {
     const s = createSolSettings(f.deps)
     s.setScreenIntelligence(true)
     s.setHotkeys(false)
-    s.setAlwaysOnTop(true)
-    s.setWindowGeometry(GEOMETRY)
     const doc = JSON.parse(f.files.get(CONFIG) ?? '')
     expect(doc.other).toEqual({ keep: true })
     expect(doc.schema_version).toBe(SOL_CONFIG_SCHEMA_VERSION)
     expect(doc.sol).toEqual({
       actionMode: 'guide',
       screenIntelligence: true,
-      hotkeys: false,
-      alwaysOnTop: true,
-      window: GEOMETRY
+      hotkeys: false
     })
     expect([...f.files.keys()]).toEqual([CONFIG]) // no temp litter
     expect(createSolSettings(f.deps).get()).toEqual(doc.sol)
@@ -141,7 +139,7 @@ describe('onChange', () => {
     s.setMode('do')
     expect(cb).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
     off()
-    s.setAlwaysOnTop(true)
+    s.setHotkeys(false)
     expect(cb).toHaveBeenCalledTimes(1)
   })
 })

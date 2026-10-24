@@ -10,7 +10,6 @@ const STATE: SolState = {
   actionMode: 'do',
   screenIntelligence: true,
   hotkeysEnabled: false,
-  alwaysOnTop: false,
   capture: { mode: 'available', message: '' },
   hotkeys: null,
   lastRegionRefused: false
@@ -62,7 +61,6 @@ describe('invokes', () => {
     await expect(b.getState()).resolves.toEqual(STATE)
     await b.setMode('guide')
     await b.setScreenIntelligence(true)
-    await b.setAlwaysOnTop(false)
     await b.setHotkeys(false)
     await b.open()
     await b.openCaptureSettings()
@@ -74,7 +72,6 @@ describe('invokes', () => {
       { channel: c.getState, args: [] },
       { channel: c.setMode, args: ['guide'] },
       { channel: c.setScreenIntelligence, args: [true] },
-      { channel: c.setAlwaysOnTop, args: [false] },
       { channel: c.setHotkeys, args: [false] },
       { channel: c.open, args: [] },
       { channel: c.openCaptureSettings, args: [] },

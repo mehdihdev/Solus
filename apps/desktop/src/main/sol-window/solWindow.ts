@@ -69,7 +69,6 @@ export interface SolWindowHandle {
   close(): void
   getBounds(): Rect
   setBounds(bounds: Rect): void
-  setAlwaysOnTop(flag: boolean): void
   webContents: { send(channel: string, payload: unknown): void }
 }
 
@@ -97,7 +96,6 @@ export interface SolState {
   /** The hold-Ctrl gestures setting (main/solSettings `hotkeys`); `hotkeys`
    *  below is what is actually running given the platform. */
   hotkeysEnabled: boolean
-  alwaysOnTop: boolean
   capture: CaptureCapability
   hotkeys: SolHotkeyStatus | null
   /** The last gesture opened the window without a capture because the setting is off. */
@@ -117,13 +115,11 @@ export interface SolRegionPayload {
 }
 
 export interface SolWindowManagerDeps {
-  createWindow(bounds: Rect, alwaysOnTop: boolean): SolWindowHandle
+  createWindow(bounds: Rect): SolWindowHandle
   screen: {
     getCursorScreenPoint(): Point
     getDisplayNearestPoint(point: Point): DisplaySlice
-    getAllDisplays(): DisplaySlice[]
   }
-  settings: Pick<SolSettings, 'get' | 'setAlwaysOnTop'>
   /** The app's OWN renderers that hear state pushes (the main window). The SOL
    *  window is always included by the manager; extension windows never are —
    *  they host third-party bundles (security review M2). */
@@ -146,7 +142,6 @@ export interface SolWindowManager {
   isOpen(): boolean
   isVisible(): boolean
   close(): void
-  setAlwaysOnTop(flag: boolean): void
   pushState(state: SolState): void
   /** False when no SOL window is open. Queued until the renderer is mounted. */
   pushRegion(payload: SolRegionPayload): boolean
@@ -196,7 +191,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   const alive = (): boolean => current !== null && !current.isDestroyed()
 
   const create = (near: Point): void => {
-    const win = deps.createWindow(placement.summon(near, true), true)
+    const win = deps.createWindow(placement.summon(near, true))
     current = win
     ready = false
     pending = null
@@ -237,10 +232,6 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     isOpen: alive,
     isVisible: () => alive() && (current?.isVisible() ?? false),
     close: () => void (alive() && current?.close()),
-    setAlwaysOnTop(flag) {
-      deps.settings.setAlwaysOnTop(flag)
-      if (alive()) current?.setAlwaysOnTop(flag)
-    },
     pushState(state) {
       const targets = new Set<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>(
         deps.allWindows()
@@ -267,10 +258,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
 }
 
 export interface SolIpcDeps {
-  windows: Pick<
-    SolWindowManager,
-    'open' | 'setAlwaysOnTop' | 'markReady' | 'isSender' | 'resize' | 'setBusy' | 'hide'
-  >
+  windows: Pick<SolWindowManager, 'open' | 'markReady' | 'isSender' | 'resize' | 'setBusy' | 'hide'>
   settings: Pick<SolSettings, 'setMode' | 'setScreenIntelligence' | 'setHotkeys'>
   state(): SolState
   guideTarget?(): Promise<ToolWindowRef | null>
@@ -324,12 +312,6 @@ export function registerSolIpcHandlers(
     })
   )
   ipc.handle(
-    c.setAlwaysOnTop,
-    gated((on) => {
-      if (typeof on === 'boolean') deps.windows.setAlwaysOnTop(on)
-    })
-  )
-  ipc.handle(
     c.setHotkeys,
     gated((on) => {
       if (typeof on === 'boolean') deps.settings.setHotkeys(on)
@@ -351,10 +333,13 @@ function registerPillIpcHandlers(
   isAllowedSender: (event: IpcMainInvokeEvent) => boolean
 ): void {
   const c = SOL_WINDOW_CHANNELS
+  // The pill's own top frame only — never a subframe it might one day host.
+  const fromPillTopFrame = (event: IpcMainInvokeEvent): boolean =>
+    deps.windows.isSender(event.sender) && event.senderFrame === event.sender?.mainFrame
   const pillOnly =
     (action: (arg: unknown) => void) =>
     (event: IpcMainInvokeEvent, arg?: unknown): SolState | null => {
-      if (!isAllowedSender(event) || !deps.windows.isSender(event.sender)) return null
+      if (!isAllowedSender(event) || !fromPillTopFrame(event)) return null
       action(arg)
       return deps.state()
     }
@@ -377,16 +362,10 @@ function registerPillIpcHandlers(
 }
 
 /** The real SOL window: same renderer, #/sol-window route, CTR-06 wire. */
-export function createSolBrowserWindow(
-  bounds: Rect,
-  alwaysOnTop: boolean,
-  ipc: WireIpc,
-  icon?: string
-): BrowserWindow {
+export function createSolBrowserWindow(bounds: Rect, ipc: WireIpc, icon?: string): BrowserWindow {
   const win = new BrowserWindow({
     ...SOL_WINDOW_OPTIONS,
     ...bounds,
-    alwaysOnTop,
     ...(icon ? { icon } : {}),
     webPreferences: {
       ...SOL_WINDOW_WEB_PREFERENCES,

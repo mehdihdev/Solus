@@ -364,18 +364,17 @@ function startSol(): void {
   let hotkeyStatus: HotkeyStatus | null = null
   let lastRegionRefused = false
   const state = (): SolState => {
-    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled, alwaysOnTop } = settings.get()
+    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled } = settings.get()
     return {
       actionMode,
       screenIntelligence,
       hotkeysEnabled,
-      alwaysOnTop,
       capture: capture.capability(),
       hotkeys: hotkeyStatus,
       lastRegionRefused
     }
   }
-  const windows = createAppSolWindows(settings)
+  const windows = createAppSolWindows()
   solWindows = windows
   const publish = (): void => {
     const snapshot = state()
@@ -823,17 +822,11 @@ function registerCompanionHandlers(): void {
   )
 }
 
-function createAppSolWindows(settings: ReturnType<typeof createSolSettings>): SolWindowManager {
+function createAppSolWindows(): SolWindowManager {
   return createSolWindowManager({
-    createWindow: (bounds, alwaysOnTop) =>
-      createSolBrowserWindow(
-        bounds,
-        alwaysOnTop,
-        ipcMain,
-        process.platform === 'linux' ? icon : undefined
-      ),
+    createWindow: (bounds) =>
+      createSolBrowserWindow(bounds, ipcMain, process.platform === 'linux' ? icon : undefined),
     screen,
-    settings,
     // The main window only (the manager adds the SOL window itself). Never the
     // checkout window (remote Stripe content) nor extension windows (third-party
     // bundles) — sol:state is for the app's own renderers (security M2).

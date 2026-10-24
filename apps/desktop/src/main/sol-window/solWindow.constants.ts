@@ -9,7 +9,6 @@ export const SOL_WINDOW_CHANNELS = {
   guideTarget: 'sol:guide-target',
   setMode: 'sol:set-mode',
   setScreenIntelligence: 'sol:set-screen-intelligence',
-  setAlwaysOnTop: 'sol:set-always-on-top',
   setHotkeys: 'sol:set-hotkeys',
   /** SOLUSDEV-318: open the OS pane the capture capability names. No argument —
    *  main opens its own capability's settingsUrl, never a renderer-supplied one. */

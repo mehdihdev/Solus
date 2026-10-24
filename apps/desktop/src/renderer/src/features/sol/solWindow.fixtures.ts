@@ -8,7 +8,6 @@ export const SOL_STATE: SolState = {
   actionMode: 'guide',
   screenIntelligence: true,
   hotkeysEnabled: true,
-  alwaysOnTop: false,
   capture: { mode: 'available', message: '' },
   hotkeys: {
     hook: { status: 'available', message: '' },
@@ -42,7 +41,6 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
     setMode: vi.fn(async () => state),
     setScreenIntelligence: vi.fn(async () => state),
     setHotkeys: vi.fn(async () => state),
-    setAlwaysOnTop: vi.fn(async () => state),
     open: vi.fn(async () => state),
     openCaptureSettings: vi.fn(async () => state),
     resize: vi.fn(async () => state),

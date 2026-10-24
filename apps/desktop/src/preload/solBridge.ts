@@ -22,7 +22,6 @@ export interface SolBridge {
   setScreenIntelligence(on: boolean): Promise<SolState | null>
   /** The hold-Ctrl gestures (native key hook + cursor sampler) on/off. */
   setHotkeys(on: boolean): Promise<SolState | null>
-  setAlwaysOnTop(on: boolean): Promise<SolState | null>
   /** Open (or focus) the SOL window. */
   open(): Promise<SolState | null>
   /** Open the OS pane that grants screen capture (macOS Screen Recording). */
@@ -43,7 +42,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const isCapability = (v: unknown): boolean =>
   isRecord(v) && typeof v.mode === 'string' && typeof v.message === 'string'
 
-const FLAG_KEYS = ['screenIntelligence', 'hotkeysEnabled', 'alwaysOnTop', 'lastRegionRefused']
+const FLAG_KEYS = ['screenIntelligence', 'hotkeysEnabled', 'lastRegionRefused']
 const hasFlags = (r: Record<string, unknown>): boolean =>
   FLAG_KEYS.every((k) => typeof r[k] === 'boolean')
 
@@ -108,7 +107,6 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     setMode: (mode) => call(c.setMode, mode),
     setScreenIntelligence: (on) => call(c.setScreenIntelligence, on),
     setHotkeys: (on) => call(c.setHotkeys, on),
-    setAlwaysOnTop: (on) => call(c.setAlwaysOnTop, on),
     open: () => call(c.open),
     openCaptureSettings: () => call(c.openCaptureSettings),
     resize: (height) => call(c.resize, height),
