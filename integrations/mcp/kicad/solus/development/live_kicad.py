@@ -25,20 +25,21 @@ STEP_TIMEOUT_S = 15.0
 SETTLE_POLL_S = 0.2
 SETTLE_LIMIT_S = 5.0
 
-#: argv: (action in {available, save, revert}, sheet stem). Matches only
-#: KiCad windows titled "<stem> [..." or "*<stem> [..." ending in Schematic Editor.
+#: argv: (action in {available, save, revert}, sheet stem). Matches only the
+#: KiCad 10 window titled exactly "<stem> — Schematic Editor" ("*" prefix = unsaved).
 SCRIPT = """on run argv
-	set action to item 1 of argv
-	set sheet to item 2 of argv
+	-- Names avoid System Events terms ("action", "sheet") that shadow variables.
+	set verb to item 1 of argv
+	set wanted to (item 2 of argv) & " " & (character id 8212) & " Schematic Editor"
 	tell application "System Events"
 		set targetProc to missing value
 		set targetName to missing value
-		repeat with procName in {"kicad", "eeschema"}
+		repeat with procRef in {"kicad", "eeschema"}
+			set procName to contents of procRef
 			if exists process procName then
 				repeat with w in (windows of process procName)
 					set t to name of w
-					set named to t starts with (sheet & " [") or t starts with ("*" & sheet & " [")
-					if named and t contains "Schematic Editor" then
+					if t is wanted or t is ("*" & wanted) then
 						set targetProc to process procName
 						set targetName to t
 						exit repeat
@@ -48,26 +49,25 @@ SCRIPT = """on run argv
 			if targetProc is not missing value then exit repeat
 		end repeat
 		if targetProc is missing value then error "no_window"
-		if action is "available" then return "ok"
+		if verb is "available" then return "ok"
 		set frontmost of targetProc to true
 		perform action "AXRaise" of (first window of targetProc whose name is targetName)
 		delay 0.4
 		if not (frontmost of targetProc) then error "not_frontmost"
 		if (name of window 1 of targetProc) is not targetName then error "not_frontmost"
 		set fileMenu to menu "File" of menu bar 1 of targetProc
-		if action is "save" then
+		if verb is "save" then
 			click menu item "Save" of fileMenu
-		else if action is "revert" then
+		else if verb is "revert" then
 			click (first menu item of fileMenu whose name starts with "Revert")
 			delay 0.6
 			set confirmed to false
-			repeat with container in {window 1 of targetProc}
-				if exists sheet 1 of container then set container to sheet 1 of container
-				if exists button "Revert" of container then
-					click button "Revert" of container
-					set confirmed to true
-				end if
-			end repeat
+			set dialog to window 1 of targetProc
+			if exists sheet 1 of dialog then set dialog to sheet 1 of dialog
+			if exists button "Revert" of dialog then
+				click button "Revert" of dialog
+				set confirmed to true
+			end if
 			if not confirmed then error "no_confirm"
 		else
 			error "bad_action"
