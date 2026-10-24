@@ -23,10 +23,21 @@ SHEET = "live.kicad_sch"
 class FakeEditor:
     """Records the handshake and what the file held at each step."""
 
-    def __init__(self, path: Path, *, on_save: bytes | None = None, revert_ok: bool = True):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        on_save: bytes | None = None,
+        revert_ok: bool = True,
+        canonical: bytes | None = None,
+        resave_ok: bool = True,
+    ):
         self.path = path
         self.on_save = on_save
         self.revert_ok = revert_ok
+        self.canonical = canonical
+        self.resave_ok = resave_ok
+        self.reverted = False
         self.calls: list[tuple[str, str, bytes]] = []
 
     def available(self, sheet: str, path: str) -> bool:
@@ -36,13 +47,19 @@ class FakeEditor:
 
     def save(self, sheet: str, path: str) -> None:
         self.calls.append(("save", sheet, self.path.read_bytes()))
-        if self.on_save is not None:
+        if self.reverted:  # step (d): KiCad re-serializes what it reloaded
+            if not self.resave_ok:
+                raise LiveEditError("save", "save_unconfirmed")
+            if self.canonical is not None:
+                self.path.write_bytes(self.canonical)
+        elif self.on_save is not None:
             self.path.write_bytes(self.on_save)
 
     def revert(self, sheet: str, path: str) -> None:
         self.calls.append(("revert", sheet, self.path.read_bytes()))
         if not self.revert_ok:
             raise LiveEditError("revert", "no_confirm")
+        self.reverted = True
 
 
 @pytest.fixture
@@ -93,7 +110,7 @@ def test_open_sheet_is_saved_then_written_then_reverted(
 
     result = _approved(sheet["args"])
 
-    assert [c[0] for c in editor.calls] == ["available", "available", "save", "revert"]
+    assert [c[0] for c in editor.calls] == ["available", "available", "save", "revert", "save"]
     assert all(c[1] == "live" for c in editor.calls)
     assert editor.calls[2][2] == original
     assert editor.calls[3][2] == path.read_bytes() != original
@@ -223,6 +240,48 @@ def test_expired_live_preview_is_refused(
 
     with pytest.raises(DevelopmentError, match="live_preview_required"):
         add_symbol(**sheet["args"])
+
+
+def test_resave_after_revert_returns_the_canonical_fingerprint(
+    sheet: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-040 amendment step (d): KiCad's re-save canonicalizes the file, and
+    SOL's next edit must plan against what is actually on disk."""
+    canonical = b"(kicad_sch (canonical form from KiCad))"
+    editor = FakeEditor(sheet["path"], canonical=canonical)
+    _use(monkeypatch, editor)
+
+    result = _approved(sheet["args"])
+
+    assert sheet["path"].read_bytes() == canonical
+    assert result["after_fingerprint"] == fingerprint(canonical)
+    assert result["kicad_reload"] == "reloaded"
+
+
+def test_failed_resave_keeps_the_edit_and_warns(
+    sheet: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    editor = FakeEditor(sheet["path"], resave_ok=False)
+    _use(monkeypatch, editor)
+
+    result = _approved(sheet["args"])
+
+    assert result["kicad_reload"] == "reloaded"
+    assert result["kicad_resave"] == "failed"
+    assert fingerprint(sheet["path"].read_bytes()) == result["after_fingerprint"]
+
+
+def test_settle_waits_for_bytes_to_stop_changing(monkeypatch: pytest.MonkeyPatch) -> None:
+    reads = iter([b"a", b"b", b"c", b"c", b"c"])
+    monkeypatch.setattr(live_kicad.time, "sleep", lambda _s: None)
+    seen: list[bytes] = []
+
+    def read() -> bytes:
+        seen.append(next(reads))
+        return seen[-1]
+
+    live_kicad.wait_until_settled(read)
+    assert seen[-2:] == [b"c", b"c"]
 
 
 # --- the osascript driver ------------------------------------------------------

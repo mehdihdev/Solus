@@ -2,7 +2,8 @@
 
 KiCad 10's IPC API has no schematic item types and Eeschema never reloads a
 file changed on disk, so the handshake is: save the open sheet in KiCad,
-write (strict stale checks, see `commit_plan`), then File -> Revert to reload.
+write (strict stale checks, see `commit_plan`), File -> Revert to reload, then
+save once more so the file is in KiCad's canonical form (amendment step d).
 
 Input is a fixed vocabulary run by /usr/bin/osascript with a fixed script; the
 sheet stem and path travel as argv values and are never interpolated into the
@@ -19,8 +20,8 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
-from solus.development.commit import commit_plan, editor_lock_present
-from solus.development.models import DevelopmentError
+from solus.development.commit import commit_plan, editor_lock_present, read_schematic
+from solus.development.models import DevelopmentError, fingerprint
 from solus.development.plan import MutationPlan
 
 logger = logging.getLogger("solus.kicad.live")
@@ -28,6 +29,8 @@ logger = logging.getLogger("solus.kicad.live")
 OSASCRIPT = "/usr/bin/osascript"
 STEP_TIMEOUT_S = 20.0
 LIVE_PREVIEW_TTL_S = 30 * 60
+SETTLE_POLL_S = 0.3
+SETTLE_LIMIT_S = 5.0
 #: Matches the API's execution_policy.APPROVAL_REQUIRED_LABEL: the row makes the
 #: Build policy send this call to the approval card instead of running it.
 APPROVAL_REQUIRED_LABEL = "Approval required"
@@ -177,10 +180,26 @@ def live_editor() -> LiveEditor | None:
     return default_live_editor()
 
 
+def wait_until_settled(read: Callable[[], bytes | None]) -> None:
+    """KiCad writes asynchronously after Save; wait until two reads agree."""
+    deadline = time.monotonic() + SETTLE_LIMIT_S
+    previous = read()
+    while time.monotonic() < deadline:
+        time.sleep(SETTLE_POLL_S)
+        current = read()
+        if current == previous:
+            return
+        previous = current
+
+
 PREVIEW_NOTE = (
     "This sheet is open in KiCad: Solus will save it in KiCad (saving any in-progress "
     "work), apply this change, then use File → Revert to reload it. The sheet's undo "
     "history in KiCad resets."
+)
+RESAVE_FAILED_NOTE = (
+    "KiCad shows the change, but did not re-save it in its own format; the next live "
+    "edit may be refused once as stale and need one retry."
 )
 RELOAD_FAILED_NOTE = (
     "The change is written to disk, but KiCad did not reload it. In KiCad use File → "
@@ -231,6 +250,7 @@ def live_commit(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str,
         editor.save(sheet, path)
     except LiveEditError as exc:
         raise DevelopmentError("open_in_editor") from exc
+    wait_until_settled(lambda: read_schematic(root, plan.path))
     commit_plan(root, plan, editor_saved=True)
     try:
         editor.revert(sheet, path)
@@ -240,4 +260,22 @@ def live_commit(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str,
             "kicad_reload_reason": exc.reason,
             "kicad_reload_note": RELOAD_FAILED_NOTE,
         }
-    return {"kicad_reload": "reloaded"}
+    return {"kicad_reload": "reloaded", **_resave(root, plan, editor)}
+
+
+def _resave(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str, Any]:
+    """ADR-040 amendment step (d): re-save the reloaded sheet so the file is in
+    KiCad's canonical form; report the fingerprint actually on disk."""
+    sheet, path = _sheet(plan.path), str(root / plan.path)
+    result: dict[str, Any] = {}
+    try:
+        editor.save(sheet, path)
+    except LiveEditError as exc:
+        result = {
+            "kicad_resave": "failed",
+            "kicad_resave_reason": exc.reason,
+            "kicad_resave_note": RESAVE_FAILED_NOTE,
+        }
+    read = lambda: read_schematic(root, plan.path)  # noqa: E731
+    wait_until_settled(read)
+    return {**result, "after_fingerprint": fingerprint(read())}
