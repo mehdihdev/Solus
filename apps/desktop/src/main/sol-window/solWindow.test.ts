@@ -140,6 +140,7 @@ function harness(
 
 describe('manager', () => {
   registerWindowLifecycleAndGeometryTests()
+  registerPillSummonTests()
   registerWindowStateBroadcastsTests()
   registerWindowRegionReadinessTests()
 })
@@ -322,6 +323,10 @@ function registerWindowLifecycleAndGeometryTests(): void {
     expect(h.windows).toHaveLength(2)
     expect(h.windows[1].bounds).toEqual(placePill({ x: 5, y: 5 }, WA_A, pill))
   })
+}
+
+function registerPillSummonTests(): void {
+  const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
 
   it('the pill is always on top, whatever the legacy pin setting says', () => {
     const h = harness({ alwaysOnTop: false })

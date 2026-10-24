@@ -157,33 +157,46 @@ export interface SolWindowManager {
   isSender(sender: unknown): boolean
 }
 
+/** SOLUSDEV-319: where the pointer was at summon, the pill's collapsed
+ *  placement there, and the last height the renderer asked for. */
+function createPillPlacement(screen: SolWindowManagerDeps['screen']): {
+  summon(near: Point, fresh?: boolean): Rect
+  grow(height: number): Rect | null
+} {
+  let anchor: Point = { x: 0, y: 0 }
+  let home: Rect | null = null
+  let height: number = SOL_PILL_INITIAL_HEIGHT
+  const workAreaAt = (p: Point): Rect => screen.getDisplayNearestPoint(p).workArea
+  return {
+    /** Re-anchor at `near`: the collapsed placement, grown to the current
+     *  height — or collapsed, for a `fresh` window. */
+    summon(near, fresh = false) {
+      if (fresh) height = SOL_PILL_INITIAL_HEIGHT
+      const wa = workAreaAt(near)
+      anchor = near
+      home = placePill(near, wa, { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT })
+      return height === SOL_PILL_INITIAL_HEIGHT ? home : growPill(near, home, height, wa)
+    },
+    grow(next) {
+      if (home === null) return null
+      height = next
+      return growPill(anchor, home, next, workAreaAt(anchor))
+    }
+  }
+}
+
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
   let current: SolWindowHandle | null = null
   // A fresh window has no renderer yet; a region pushed before its first
   // state request would be lost, so it waits here (one turn's worth — never disk).
   let ready = false
   let pending: SolRegionPayload | null = null
-  // SOLUSDEV-319: where the pointer was at summon, the pill's collapsed
-  // placement there, and the last height the renderer asked for.
-  let anchor: Point = { x: 0, y: 0 }
-  let home: Rect | null = null
-  let height: number = SOL_PILL_INITIAL_HEIGHT
+  const placement = createPillPlacement(deps.screen)
   let busy = false
   const alive = (): boolean => current !== null && !current.isDestroyed()
-  const workAreaAt = (p: Point): Rect => deps.screen.getDisplayNearestPoint(p).workArea
-
-  /** Re-anchor at `near`: the collapsed placement, grown to the current height. */
-  const summonBounds = (near: Point): Rect => {
-    const wa = workAreaAt(near)
-    anchor = near
-    home = placePill(near, wa, { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT })
-    return height === SOL_PILL_INITIAL_HEIGHT ? home : growPill(near, home, height, wa)
-  }
 
   const create = (near: Point): void => {
-    height = SOL_PILL_INITIAL_HEIGHT
-    busy = false
-    const win = deps.createWindow(summonBounds(near), true)
+    const win = deps.createWindow(placement.summon(near, true), true)
     current = win
     ready = false
     pending = null
@@ -200,12 +213,9 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
 
   const open = (opts?: { near?: Point }): void => {
     const near = opts?.near ?? deps.screen.getCursorScreenPoint()
-    if (!alive() || current === null) {
-      create(near)
-      return
-    }
+    if (!alive() || current === null) return create(near)
     if (!current.isVisible()) {
-      current.setBounds(summonBounds(near))
+      current.setBounds(placement.summon(near))
       current.show()
     }
     current.focus()
@@ -219,13 +229,10 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     },
     hide: () => void (alive() && current?.hide()),
     resize(next) {
-      if (!alive() || current === null || home === null) return
-      height = next
-      current.setBounds(growPill(anchor, home, next, workAreaAt(anchor)))
+      const bounds = alive() ? placement.grow(next) : null
+      if (bounds !== null) current?.setBounds(bounds)
     },
-    setBusy(flag) {
-      busy = flag
-    },
+    setBusy: (flag) => void (busy = flag),
     focus: () => void (alive() && current?.focus()),
     isOpen: alive,
     isVisible: () => alive() && (current?.isVisible() ?? false),
@@ -328,8 +335,22 @@ export function registerSolIpcHandlers(
       if (typeof on === 'boolean') deps.settings.setHotkeys(on)
     })
   )
-  // SOLUSDEV-319: the pill's own invokes. The main window is an allowed sender
-  // for everything above but must not size, pin open or hide the pill.
+  registerPillIpcHandlers(ipc, deps, isAllowedSender)
+  // Any renderer argument is ignored: main opens its own capability's URL.
+  ipc.handle(
+    c.openCaptureSettings,
+    gated(() => deps.openCaptureSettings?.())
+  )
+}
+
+/** SOLUSDEV-319: the pill's own invokes. The main window is an allowed sender
+ *  for the others but must not size, pin open or hide the pill. */
+function registerPillIpcHandlers(
+  ipc: SolWindowIpc,
+  deps: SolIpcDeps,
+  isAllowedSender: (event: IpcMainInvokeEvent) => boolean
+): void {
+  const c = SOL_WINDOW_CHANNELS
   const pillOnly =
     (action: (arg: unknown) => void) =>
     (event: IpcMainInvokeEvent, arg?: unknown): SolState | null => {
@@ -352,11 +373,6 @@ export function registerSolIpcHandlers(
   ipc.handle(
     c.hide,
     pillOnly(() => deps.windows.hide())
-  )
-  // Any renderer argument is ignored: main opens its own capability's URL.
-  ipc.handle(
-    c.openCaptureSettings,
-    gated(() => deps.openCaptureSettings?.())
   )
 }
 
@@ -401,4 +417,3 @@ export function createSolBrowserWindow(
   }
   return win
 }
-
