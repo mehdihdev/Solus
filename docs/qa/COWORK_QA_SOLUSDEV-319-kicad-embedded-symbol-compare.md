@@ -40,6 +40,20 @@ Additional flow — schematic open in KiCad:
 | 8   | Keep the schematic open in KiCad's Schematic Editor and ask SOL to add a part. | Refused; SOL asks you to close the schematic window in KiCad (project window may stay open). File unchanged. | [ ]       |
 | 9   | Close only the Schematic Editor window and ask SOL to retry.                   | Placement succeeds; reopening the schematic shows the new part.                                              | [ ]       |
 
+## Live edits with the schematic open (ADR-040, macOS)
+
+Setup: grant Accessibility to the app that launches Solus (in dev, the terminal's host
+app); open USB Charger Lab's Schematic Editor in KiCad 10; SOL in Build mode.
+
+| #   | Steps                                                                                 | Expected                                                                                                                                                                                                                          | Pass/Fail |
+| --- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| L1  | Ask SOL: "add a resistor on the current KiCad project I have open".                   | SOL picks the open project (list_projects shows it first, `open_in_kicad`), states default value/reference, and shows an approval card with an "Approval required" row explaining save + Revert. Nothing changes before approval. | [ ]       |
+| L2  | Approve the card.                                                                     | KiCad saves (title loses `*`), the resistor appears in the open Schematic Editor after Revert; SOL reports success.                                                                                                               | [ ]       |
+| L3  | Make an unsaved edit in KiCad, then approve a pending SOL card.                       | Handshake saves your edit first; the write refuses `stale_plan`, nothing is written; SOL re-reads and proposes again.                                                                                                             | [ ]       |
+| L4  | Open a second project whose root sheet has the same name, then ask SOL to add a part. | Refused (ambiguous window → `open_in_editor`); nothing saved or reverted.                                                                                                                                                         | [ ]       |
+| L5  | Revoke Accessibility and repeat L1.                                                   | `open_in_editor`: SOL asks you to close the schematic window.                                                                                                                                                                     | [ ]       |
+| L6  | Leave a card pending > 30 min, then approve.                                          | `live_preview_required`; nothing saved; SOL previews again.                                                                                                                                                                       | [ ]       |
+
 ## Edge cases
 
 | #   | Case                                                                                                        | Expected                                                     | Pass/Fail |

@@ -228,6 +228,31 @@ Either way nothing is written and the file is untouched; for `open_in_editor`
 SOL asks the user to close that schematic window in KiCad, then retries.
 Pinned by `tests/test_write_tool_open_in_kicad.py`.
 
+Live edits while KiCad has the sheet open (ADR-040, macOS, SOLUSDEV-319): when the
+lock exists AND the fork's osascript driver finds exactly one window titled
+`<stem> — Schematic Editor`, the write tools use a save → write → File → Revert
+handshake (`solus/development/live_kicad.py`) instead of refusing.
+
+- The `dry_run` preview adds a row labelled `Approval required` describing the
+  handshake; the Build policy (`execution_policy.APPROVAL_REQUIRED_LABEL`) then
+  sends the call to the approval card — it never auto-runs.
+- The real call must match a live preview of the same plan (single use, 30 min);
+  otherwise `live_preview_required`.
+- Save must clear KiCad's `*` (`save_unconfirmed`); a save that changes content
+  makes the write `stale_plan` (formatting-only re-saves match by tokens).
+- Revert refuses a dirty sheet and confirms only the dialog naming the exact path.
+- Success adds `kicad_reload: "reloaded"`; a failed Revert returns
+  `kicad_reload: "failed"`, a reason code and a recovery note (use File → Revert,
+  do not save).
+- No driver, no matching window, or more than one matching window keeps the
+  `open_in_editor` refusal.
+
+`kicad.list_projects` (SOLUSDEV-319) lists only `.kicad_pro` files inside the linked
+workspace (no symlink following, depth 6, at most 50), each with `name`, `path`,
+`relative_path`, `modified` and `open_in_kicad` (its `~<name>.kicad_pro.lck`
+exists); the open project sorts first. It replaces upstream's search of
+`~/Documents/KiCad` and search paths, whose results every read tool refused.
+
 Planner output fingerprints original bytes, exact proposed bytes, arguments,
 resolved entities, selected library bytes and generated UUIDs. UUIDs derive from a
 stable namespaced hash of workspace-relative file path, original fingerprint and

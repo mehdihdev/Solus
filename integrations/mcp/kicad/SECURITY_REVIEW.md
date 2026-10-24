@@ -647,3 +647,59 @@ security reviews: PASS, no CRITICAL/HIGH.
 ### Sign-off
 
 No new sign-off line added here; no re-review trigger was hit.
+
+## 2026-10-24 — ADR-040 live edits to an open sheet; workspace-scoped `list_projects` (SOLUSDEV-319)
+
+### What changed
+
+- **Synthetic input (new capability, ADR-040).** `solus/development/live_kicad.py` runs a
+  fixed AppleScript through `/usr/bin/osascript` (argv list; sheet stem and absolute path are
+  argv values, never interpolated). Verbs: `available` (read-only window lookup), `save`
+  (File → Save, then wait until the title loses `*`), `revert` (refuse if dirty, File →
+  Revert, click Yes only in a dialog whose text starts `Revert '<exact path>'`, else No).
+  Exactly one window titled `<stem> — Schematic Editor` must match; every click re-checks
+  that window is frontmost. Failure reasons are a closed set, logged without content.
+- **Approval binding.** The dry-run preview carries an `Approval required` row; the API's
+  Build policy defers such calls to the card (a tool can only make itself stricter). The
+  real write requires a single-use, 30-minute record that a preview of the same plan
+  showed the handshake (`live_preview_required` otherwise), so a lock appearing after
+  approval cannot trigger an unseen save/Revert.
+- **Write path.** `commit_plan(editor_saved=True)` skips only the editor-lock refusal and
+  accepts a re-save that is token-identical to the plan's original; any content change is
+  `stale_plan` with nothing written.
+- **`list_projects`** is Solus-authored (same name; no allowlist change): `os.walk` without
+  following symlinks, every hit re-resolved inside the workspace, depth 6, 50 results.
+- **SOL prompt** (packages/api): missing routine details are filled with stated defaults;
+  ingested-data containment and approval rules are unchanged.
+
+### Security assessment
+
+- Phase 4 security review FAILED the first cut (Build auto-ran the handshake without the
+  ADR-040 §5 approval; preview/commit live mismatch; unverified save; stem-only matching).
+  All four are fixed above and covered by tests.
+- Residuals: window identity is by title, not document path (the window's AXDocument
+  attribute was not evaluated); two open projects with the same root-sheet name are refused rather than
+  disambiguated. Sub-sheets whose window title is the root sheet do not match and keep
+  `open_in_editor`. Accessibility is granted per responsible app (in dev: the terminal's
+  host app); the packaged Solus app needs its own grant.
+
+### Re-review triggers — HIT
+
+- **Declared sandbox posture changed** (synthetic input + Accessibility). Per PROVENANCE
+  "Re-review triggers", the 2026-10-06 sign-offs are void for this capability until both
+  developers re-sign. `upstream/`, `vendor/`, `bin/launch`, `allowlist.yaml` and the
+  lockfile are unchanged (tree hashes as recorded).
+
+### Evidence
+
+`tests/test_live_kicad.py` (ordering, stale on real unsaved edits, token-equal re-save,
+failed Revert note, preview row, preview binding/expiry/single use, driver argv, reason
+codes, script guards), `tests/test_project_discovery.py`,
+`packages/api/tests/test_build_execution_policy.py::test_preview_declaring_approval_required_goes_to_the_card_never_auto_runs`.
+Live run on macOS / KiCad 10.0.1 (2026-10-24): "add a resistor on the current KiCad project
+I have open" placed R3 in the open Schematic Editor and KiCad reloaded it (pre-fix build,
+before the approval card was enforced). Fork suite 484 passed.
+
+### Sign-off
+
+None added — sign-off lines are human (integrations/mcp/CLAUDE.md rule 2).
