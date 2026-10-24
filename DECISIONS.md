@@ -1228,3 +1228,62 @@ verification), annual allowance 2,500, quiet period 90 s.
 - One new local capability (synthetic input) is gated to KiCad, a declared sandbox-posture change that triggers a PROVENANCE re-review of the fork.
 
 **ADR-040 amendment (2026-10-24, SOLUSDEV-319; approved in-chat against the concrete text below):** Decision §1 gains step (d): after a successful Revert, save the (now clean, reloaded) sheet once more in KiCad, so the file on disk is in KiCad's canonical form and the next live edit's pre-save does not change it. The tool returns the fingerprint of the file after that save. If step (d) fails, the edit stands (KiCad shows it) and the result says the next live edit may need one retry. Vocabulary is unchanged (Save is already in §2).
+
+## ADR-041: SOL drives desktop tools through a gated pointer and keyboard loop
+
+**Status:** Accepted (2026-10-24, SOLUSDEV-319 follow-up; approved in-chat against the concrete text below). Supersedes ADR-040 §2 only.
+
+**Context:**
+
+- Users ask SOL to *do* things in tools they don't know ("add a resistor in KiCad"). The Ember Pill shows a plan, but SOL can only act through tool APIs (MCP fork tools, Onshape REST), and many actions have none.
+- ADR-040 §2 limits synthetic input to a fixed KiCad save/revert vocabulary: no free typing, no coordinates, no other app.
+- Driving the pointer is the most powerful local capability Solus would have. Everything on screen is untrusted input (CLAUDE.md §7), including text inside the target app that a malicious project could plant.
+
+**Decision:**
+
+1. **API first, pointer last.** SOL uses a tool's API when one exists. Driving is only for steps with no API equivalent, and the plan step says which kind it is.
+2. **Opt-in, Build only.**
+   - A new Settings switch, **SOL can use your mouse and keyboard**, is off by default.
+   - Driving needs Build mode, that switch on, and the OS grants: macOS Accessibility + Screen Recording, Windows equivalent.
+   - Guide never drives; it may only point (overlay arrows).
+3. **Allowlisted apps only.**
+   - Drivable apps are a Solus-authored allowlist, keyed by OS app identity (bundle id or executable path, not window title). Start with KiCad; Fusion and browser-hosted Onshape come later, each by amendment.
+   - A drive session is bound to one app window, chosen before any model sees the screen.
+4. **Approval is per plan step, with a bounded budget.**
+   - The plan card shows each driven step's intent ("Place R1 above nSLEEP").
+   - Approving a step authorises at most N low-level actions and T seconds inside that window (defaults: 15 actions, 30 s, config-driven).
+   - Running out of budget pauses and asks; it never extends itself.
+   - Steps with a real-world effect outside the app (save to disk, plot, export, delete, close) need their own explicit approval.
+5. **Closed action vocabulary, checked by Solus code.** The model may only *propose*, through the validated tool interface: `click`, `double_click`, `right_click`, `drag`, `scroll`, `move`, `key(chord)`, `type(text)`, `wait`. Before every action Solus code checks:
+   - The bound window is frontmost and its app identity still matches.
+   - Coordinates fall inside the window bounds (window-relative).
+   - The chord is not on a system denylist: app switch, quit, close, Spotlight, lock, screenshot, OS settings.
+   - `type` text is capped in length, and is refused while a secure/password field is focused (where the OS reports it).
+   - There is no clipboard access beyond pasting text the step itself produced.
+
+   A failed check aborts the step, not just the action.
+6. **The loop:** capture the bound window only (not the whole screen) → the model proposes one action → validate → execute → re-capture → the model confirms progress.
+   - Screenshots stay in memory for that step and are never persisted (as in sol-window §6).
+   - Every model call goes through ADR-019 budgets and ADR-026 routing, with timeouts, bounded retries and a per-provider circuit breaker.
+7. **The user is always in control.**
+   - The A3 driving status line and the amber outline on the bound window are shown for the whole session.
+   - Any physical mouse or keyboard input (detected by the existing uiohook listener) pauses immediately. Esc and double-tap Ctrl stop.
+   - Stopping lets no further action run. An action already sent to the OS is reported as done, never hidden.
+8. **The input executor is a Solus-built helper** (`solus-input`, a small signed native binary).
+   - It sits at a pinned path, takes argument lists only (as ADR-040 §3 does), and accepts only the vocabulary in §5. It refuses on its own if the target app identity doesn't match.
+   - No general-purpose third-party automation library.
+   - macOS first; then Windows (SendInput) and Linux X11; Wayland not supported.
+9. **Prompt-injection posture.**
+   - Captured pixels and their OCR'd text are data inside fenced untrusted blocks.
+   - Nothing on screen can change the bound app, the approved plan, the budget or the tool set. Those are fixed by Solus code before capture.
+   - Red-team fixtures (schematics and windows showing "ignore your instructions…") are part of the agent test suite.
+10. **Data events (ADR-011):** `drive.session_started` / `ended` (app id, step count, outcome), `drive.action` (action type, validation result; never typed text or screenshots), `drive.aborted` (reason code).
+11. **ADR-040 §2 is replaced by:** "Synthetic input happens only through the ADR-041 drive gate. ADR-040's save → write → Revert handshake stays as a fixed, pre-approved use of that gate for KiCad."
+
+**Consequences:**
+
+- SOL can carry out tool operations that have no API, in front of the user, with a visible way to stop.
+- A new signed native helper, plus Accessibility and Screen Recording grants. This is a declared sandbox-posture change that triggers a security and provenance review.
+- Driving costs credits per loop iteration, which matters for pricing (ADR-017/024).
+- Per-app allowlist and denylist maintenance; KiCad UI changes between versions can break steps. Mitigation: verification after every action, plus tool-knowledge notes (ADR-033).
+- Enterprise can disable driving per team. The setting is a team policy flag, so SSO/audit plans are not foreclosed.
