@@ -1201,3 +1201,28 @@ verification), annual allowance 2,500, quiet period 90 s.
 - ADR-030 GitHub webhooks become real.
 - Existing OAuth-bound sources are not migrated automatically.
 - GitLab groups would follow this pattern under their own ADR.
+
+## ADR-040: Live edits to an open KiCad schematic via a save → write → Revert handshake
+
+**Status:** Accepted (2026-10-24, SOLUSDEV-319; approved in-chat against the concrete text below).
+
+**Context:**
+
+- KiCad 10.0.1's IPC API exposes no schematic item types.
+- Eeschema neither watches its file nor reloads external changes.
+- The SOL write tools therefore refuse (`open_in_editor`) while the sheet is open, so users must close KiCad to let SOL edit.
+
+**Decision:**
+
+1. When the target sheet's editor lock exists, the KiCad fork may perform a three-step handshake inside the already-confirmed write: (a) save the open sheet in KiCad, (b) re-read and verify the plan fingerprint, then write atomically as today, (c) run KiCad's File → Revert to reload from disk.
+2. Synthetic input is a fixed vocabulary only: activate the KiCad window whose title names the target sheet, choose File → Save, choose File → Revert and confirm. No free-text typing, no coordinates, no other application. Each step verifies the KiCad window is frontmost and aborts otherwise.
+3. Input runs through `/usr/bin/osascript` with a fixed script; the sheet name is passed as an argv value, never interpolated.
+4. It requires the user's macOS Accessibility grant to Solus. Without it, or with no matching window, the tool refuses with `open_in_editor` exactly as before.
+5. The approval preview states that KiCad will save and reload the open sheet, which saves in-progress work and resets that sheet's undo history. The user's approval covers that single call.
+6. If the save changes the file (unsaved edits in KiCad), the write refuses with `stale_plan` and nothing is written. If Revert fails after a write, the tool reports it so SOL tells the user to use File → Revert and not save.
+7. macOS only. Other OSes keep `open_in_editor`. KiCad's IPC API replaces this once it supports schematic items.
+
+**Consequences:**
+
+- SOL can edit while the project is open.
+- One new local capability (synthetic input) is gated to KiCad, a declared sandbox-posture change that triggers a PROVENANCE re-review of the fork.
