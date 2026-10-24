@@ -1,15 +1,17 @@
-// SOLUSDEV-252 S3: the SOL window — route #/sol-window, a native-framed,
-// resizable, geometry-remembering BrowserWindow main opens on double-tap Ctrl
-// or a Ctrl-hold circle (docs/architecture/sol-window.md §2, wireflow §B/§C).
-// Header: wordmark · sees-screen dot · pin · close. Under it a
-// plain-language status line when something is degraded, the refused-capture
-// line, then SolChat (the region card and composer are its). Session and
-// project state rehydrate from the shared localStorage; signing in stays a
-// main-window flow (the retired OrbWindow's guard, kept).
+// SOLUSDEV-252 S3: the SOL window — route #/sol-window, opened on double-tap
+// Ctrl or a Ctrl-hold circle (docs/architecture/sol-window.md §2, wireflow
+// §B/§C). Session and project state rehydrate from the shared localStorage;
+// signing in stays a main-window flow (the retired OrbWindow's guard, kept).
+//
+// SOLUSDEV-319: the Ember Pill. A transparent, frameless window that main sizes
+// from the height measured here: the bar (orb · input · Guide|Build · send) and
+// footer sit at the bottom, the panel (Guide tasks, the thread, the region
+// card) grows above them. Esc and the hide button hide it through main; it
+// reports busy (streaming, approval parked, plan running) so blur leaves it up.
 //
 // Perf budget (solWindowPerf.test): no timers or animation frames here — the
-// streaming indicator is ONE CSS class (`sol-pulse`).
-import { useEffect } from 'react'
+// streaming indicator is ONE CSS class (`sol-pulse`); sizing is a ResizeObserver.
+import { useEffect, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { getDesktopSolBridge } from '../../lib/desktopBridge'
@@ -18,61 +20,13 @@ import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceS
 import type { SolState } from '../../../../main/sol-window/solWindow'
 import { SolChat } from './SolChat'
 import { GuideTasks } from '../guide/GuideTasks'
+import { selectSession, useSolChatStore } from './solChatStore'
 import { useSolSessionStore } from './solSessionStore'
 import { connectSolBridge, useSolWindowStore } from './solWindowStore'
 
 const REFUSED_LINE = 'SOL didn’t look — turn on SOL sees your screen in Settings to let it.'
 
-function Centered({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div
-      style={{
-        flex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 20,
-        fontSize: 12,
-        color: 'var(--mut)',
-        textAlign: 'center'
-      }}
-    >
-      {children}
-    </div>
-  )
-}
-
-function Header({ state }: { state: SolState | null }): React.JSX.Element {
-  const streaming = useSolSessionStore((s) => s.streaming)
-  const pinned = state?.alwaysOnTop ?? false
-  return (
-    <div className="sol-window-header">
-      <span className={streaming ? 'sol-window-dot sol-pulse' : 'sol-window-dot'} aria-hidden />
-      <Mono size={9.5} color="var(--tx)">
-        SOL
-      </Mono>
-      {state?.screenIntelligence && <span className="sol-window-sees">sees your screen</span>}
-      <div style={{ flex: 1 }} />
-      <button
-        type="button"
-        className="sol-window-icon"
-        aria-label="Keep on top"
-        aria-pressed={pinned}
-        onClick={() => void getDesktopSolBridge()?.setAlwaysOnTop(!pinned)}
-      >
-        Pin
-      </button>
-      <button
-        type="button"
-        className="sol-window-icon"
-        aria-label="Close"
-        onClick={() => window.close()}
-      >
-        ×
-      </button>
-    </div>
-  )
-}
+const hidePill = (): void => void getDesktopSolBridge()?.hide()
 
 /** Degraded-state lines (wireflow §B), plain text — a settings deep link is
  *  named in the message, never rendered as an anchor. */
@@ -83,34 +37,93 @@ function statusLines(state: SolState | null): string[] {
   return lines.filter((line) => line !== '')
 }
 
-function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
-  const status = useAuthStore((s) => s.status)
-  const mode = useSolWindowStore((s) => s.state?.actionMode)
-  if (status === 'loading') {
-    return (
-      <Centered>
-        <Spinner size={18} />
-      </Centered>
-    )
-  }
-  if (status === 'unauthenticated') {
-    return <Centered>Sign in from the main Solus window to use SOL here.</Centered>
-  }
+function FooterStart({ state }: { state: SolState | null }): React.JSX.Element {
   return (
     <>
-      {mode === 'guide' && projectId && <GuideTasks />}
-      <SolChat projectId={projectId} layout="panel" />
+      <Mono size={9.5} color="var(--tx)">
+        SOL
+      </Mono>
+      {state?.screenIntelligence && <span className="sol-window-sees">sees your screen</span>}
     </>
   )
 }
 
-export function SolWindow(): React.JSX.Element {
-  const project = useWorkspaceStore((s) => s.project)
+const FOOTER_END = (
+  <button type="button" className="sol-pill-hide" aria-label="Hide SOL" onClick={hidePill}>
+    ×
+  </button>
+)
+
+function Notice({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="sol-pill-bar sol-pill-notice">{children}</div>
+}
+
+function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
+  const status = useAuthStore((s) => s.status)
   const state = useSolWindowStore((s) => s.state)
-  const region = useSolWindowStore((s) => s.region)
-  // The first getState() is what tells main this renderer is up (markReady)
-  // and flushes a region captured before the window finished loading.
-  useEffect(() => connectSolBridge(), [])
+  if (status === 'loading') {
+    return (
+      <Notice>
+        <Spinner size={18} />
+      </Notice>
+    )
+  }
+  if (status === 'unauthenticated') {
+    return <Notice>Sign in from the main Solus window to use SOL here.</Notice>
+  }
+  return (
+    <SolChat
+      projectId={projectId}
+      layout="pill"
+      pillTop={state?.actionMode === 'guide' && projectId ? <GuideTasks /> : null}
+      pillFooterStart={<FooterStart state={state} />}
+      pillFooterEnd={FOOTER_END}
+    />
+  )
+}
+
+/** Busy = blur must not hide: a turn streaming or an approval waiting. */
+function useBusy(projectId: string | null): boolean {
+  const streaming = useSolSessionStore((s) => s.streaming)
+  const parked = useSolChatStore((s) =>
+    selectSession(s, projectId).items.some((item) => item.confirmations.length > 0)
+  )
+  return streaming || parked
+}
+
+/** Main sizes the window from this; the bottom edge stays put (grows upward). */
+function useReportHeight(ref: React.RefObject<HTMLDivElement | null>): void {
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      void getDesktopSolBridge()?.resize(Math.ceil(el.getBoundingClientRect().height))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [ref])
+}
+
+function usePillChrome(projectId: string | null): void {
+  const busy = useBusy(projectId)
+  useEffect(() => {
+    void getDesktopSolBridge()?.setBusy(busy)
+  }, [busy])
+  useEffect(() => {
+    // An Escape a control already used (the mention list) is not ours.
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !event.defaultPrevented) hidePill()
+    }
+    window.addEventListener('keydown', onKey)
+    document.documentElement.classList.add('sol-pill-host')
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.documentElement.classList.remove('sol-pill-host')
+    }
+  }, [])
+}
+
+function useWorkspaceFollow(): void {
   useEffect(() => {
     const syncWorkspace = (event: StorageEvent): void => {
       if (
@@ -123,10 +136,24 @@ export function SolWindow(): React.JSX.Element {
     window.addEventListener('storage', syncWorkspace)
     return () => window.removeEventListener('storage', syncWorkspace)
   }, [])
+}
+
+export function SolWindow(): React.JSX.Element {
+  const project = useWorkspaceStore((s) => s.project)
+  const state = useSolWindowStore((s) => s.state)
+  const region = useSolWindowStore((s) => s.region)
+  const ref = useRef<HTMLDivElement>(null)
+  const projectId = project?.id ?? null
+  // The first getState() is what tells main this renderer is up (markReady)
+  // and flushes a region captured before the window finished loading.
+  useEffect(() => connectSolBridge(), [])
+  useWorkspaceFollow()
+  usePillChrome(projectId)
+  useReportHeight(ref)
   const lines = statusLines(state)
   return (
-    <div className="sol-window">
-      <Header state={state} />
+    <div className="sol-pill" ref={ref}>
+      <Body projectId={projectId} />
       {lines.length > 0 && (
         <div className="sol-window-status">
           {lines.map((line) => (
@@ -137,7 +164,6 @@ export function SolWindow(): React.JSX.Element {
       {state?.lastRegionRefused && region === null && (
         <div className="sol-window-status">{REFUSED_LINE}</div>
       )}
-      <Body projectId={project?.id ?? null} />
     </div>
   )
 }

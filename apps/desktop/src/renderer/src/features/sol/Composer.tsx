@@ -7,6 +7,9 @@ import { Switch } from '../../components/ui/Switch'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { COMPOSER_ATTR } from './commandHotkey'
 import { ModeBadge } from './ModeBadge'
+import { Segmented } from '../../components/ui/Segmented'
+import { MODE_LABEL } from './solWindowStore'
+import { useSolSessionStore } from './solSessionStore'
 import type { Entity } from '../../lib/api/resources'
 import { useClassifyPreview } from './useClassifyPreview'
 import { useMentionPicker, type MentionPicker } from './useMentionPicker'
@@ -95,7 +98,8 @@ function MessageInput({
   value,
   onChange,
   page,
-  placeholder
+  placeholder,
+  pill = false
 }: {
   mention: MentionPicker
   // Passed beside the picker, not read off it: a ref read during render taints
@@ -105,6 +109,8 @@ function MessageInput({
   onChange: (text: string) => void
   page: boolean
   placeholder: string
+  /** SOLUSDEV-319: the borderless input inside the Ember Pill bar. */
+  pill?: boolean
 }): React.JSX.Element {
   return (
     <>
@@ -134,26 +140,31 @@ function MessageInput({
         placeholder={placeholder}
         aria-label="Message SOL"
         {...{ [COMPOSER_ATTR]: '' }}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: 'var(--sur)',
-          border: '1px solid var(--bd)',
-          borderRadius: 4,
-          color: 'var(--tx)',
-          fontFamily: 'var(--font-ui)',
-          fontSize: 12.5,
-          padding: '8px 10px',
-          outline: 'none'
-        }}
+        className={pill ? 'sol-pill-input' : undefined}
+        style={pill ? undefined : INPUT_STYLE}
       />
     </>
   )
 }
 
+const INPUT_STYLE: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: 'var(--sur)',
+  border: '1px solid var(--bd)',
+  borderRadius: 4,
+  color: 'var(--tx)',
+  fontFamily: 'var(--font-ui)',
+  fontSize: 12.5,
+  padding: '8px 10px',
+  outline: 'none'
+}
+
 /** The composer placeholder: the region, when attached, is the subject. */
 const PLACEHOLDER = 'Ask about a signal, a change, a part…'
 const PLACEHOLDER_WITH_REGION = 'What would you like to know about it?'
+/** SOLUSDEV-319: the pill acts in the tool in front, not just answers. */
+const PILL_PLACEHOLDER = 'Ask SOL, or tell it what to do…'
 
 /** The attached-region chip on the composer (wireflow §C); × drops the pixels. */
 function RegionChip({ onDismiss }: { onDismiss: () => void }): React.JSX.Element {
@@ -206,7 +217,10 @@ export function Composer({
   onDismissRegion,
   forceConfirmation,
   onForceConfirmationChange,
-  onSend
+  onSend,
+  pill = false,
+  footerStart,
+  footerEnd
 }: ComposerProps): React.JSX.Element {
   const [input, setInput] = useState('')
   const classify = useClassifyPreview(input)
@@ -223,7 +237,62 @@ export function Composer({
     mention.reset()
     classify.resetOverride() // also drops "Think harder" — it is per message
   }
+  const form: FormState = {
+    mention,
+    input,
+    setInput,
+    submit,
+    streaming,
+    empty,
+    mode,
+    onModeChange,
+    regionAttached,
+    onDismissRegion,
+    classify,
+    forceConfirmation,
+    onForceConfirmationChange
+  }
+  return pill ? (
+    <PillForm {...form} footerStart={footerStart} footerEnd={footerEnd} />
+  ) : (
+    <ColumnForm {...form} page={page} />
+  )
+}
 
+/** What both composer layouts render from: one state, one send path. */
+interface FormState {
+  mention: MentionPicker
+  input: string
+  setInput: (text: string) => void
+  submit: () => void
+  streaming: boolean
+  empty: boolean
+  mode: SolActionMode
+  onModeChange: (mode: SolActionMode) => void
+  regionAttached: boolean
+  onDismissRegion: () => void
+  classify: ReturnType<typeof useClassifyPreview>
+  forceConfirmation: boolean
+  onForceConfirmationChange: (checked: boolean) => void
+}
+
+/** The panel / page composer (unchanged layout). */
+function ColumnForm({
+  mention,
+  input,
+  setInput,
+  submit,
+  streaming,
+  empty,
+  mode,
+  onModeChange,
+  regionAttached,
+  onDismissRegion,
+  classify,
+  forceConfirmation,
+  onForceConfirmationChange,
+  page
+}: FormState & { page: boolean }): React.JSX.Element {
   return (
     <form
       onSubmit={(e) => {
@@ -315,4 +384,128 @@ export interface ComposerProps {
   forceConfirmation: boolean
   onForceConfirmationChange: (checked: boolean) => void
   onSend: ComposerSend
+  /** SOLUSDEV-319: render as the Ember Pill bar + footer. */
+  pill?: boolean
+  /** Pill footer, leading (SOL, sees-screen) and trailing (hide) slots. */
+  footerStart?: React.ReactNode
+  footerEnd?: React.ReactNode
+}
+
+const MODE_OPTIONS = [MODE_LABEL.guide, MODE_LABEL.do] as const
+const modeOf = (label: string): SolActionMode => (label === MODE_LABEL.do ? 'do' : 'guide')
+
+/** The pill's Guide | Build switch — the same shared setting as the badge. */
+function ModeSwitch({
+  mode,
+  onChange
+}: {
+  mode: SolActionMode
+  onChange: (mode: SolActionMode) => void
+}): React.JSX.Element {
+  return (
+    <Segmented
+      options={MODE_OPTIONS}
+      value={MODE_LABEL[mode]}
+      onChange={(label) => onChange(modeOf(label))}
+      size="sm"
+      ariaLabel="SOL action mode"
+    />
+  )
+}
+
+function PillToggle({
+  label,
+  checked,
+  onChange,
+  disabled
+}: {
+  label: string
+  checked: boolean
+  onChange: (checked: boolean) => void
+  disabled?: boolean
+}): React.JSX.Element {
+  return (
+    <span className="sol-pill-toggle">
+      <Switch checked={checked} onChange={onChange} ariaLabel={label} disabled={disabled} />
+      <span aria-hidden>{label}</span>
+    </span>
+  )
+}
+
+interface PillFormProps extends FormState {
+  footerStart?: React.ReactNode
+  footerEnd?: React.ReactNode
+}
+
+/** SOLUSDEV-319: the Ember Pill bar (orb · input · Guide|Build · send) and its
+ *  footer. Same state and send path as the panel composer — only the layout differs. */
+function PillForm(p: PillFormProps): React.JSX.Element {
+  // The shared streaming flag (every SOL surface) — the old window header's signal.
+  const pulsing = useSolSessionStore((s) => s.streaming)
+  return (
+    <form
+      className="sol-pill-bar"
+      onSubmit={(e) => {
+        e.preventDefault()
+        p.submit()
+      }}
+    >
+      <div className="sol-pill-row">
+        <span className={pulsing ? 'sol-pill-orb sol-pulse' : 'sol-pill-orb'} aria-hidden />
+        <MessageInput
+          mention={p.mention}
+          inputRef={p.mention.inputRef}
+          value={p.input}
+          onChange={p.setInput}
+          page={false}
+          pill
+          placeholder={p.regionAttached ? PLACEHOLDER_WITH_REGION : PILL_PLACEHOLDER}
+        />
+        <ModeSwitch mode={p.mode} onChange={p.onModeChange} />
+        <button
+          type="submit"
+          className="sol-pill-send"
+          aria-label="Send"
+          disabled={p.streaming || p.empty}
+        >
+          <svg aria-hidden width="16" height="16" viewBox="0 0 16 16">
+            <path
+              d="M8 13V3M3.5 7.5 8 3l4.5 4.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      </div>
+      <div className="sol-pill-footer">
+        {p.footerStart}
+        {p.regionAttached && <RegionChip onDismiss={p.onDismissRegion} />}
+        <span style={{ flex: 1 }} />
+        {/* The routing preview only while there is a message to route. */}
+        {p.classify.preview && (
+          <ClassifyIndicator
+            preview={p.classify.preview}
+            override={p.classify.override}
+            onOverride={p.classify.setOverride}
+            onReset={p.classify.resetOverride}
+          />
+        )}
+        <PillToggle
+          label="Think harder"
+          checked={p.classify.override.thinkHarder}
+          onChange={(thinkHarder) => p.classify.setOverride({ thinkHarder })}
+        />
+        <PillToggle
+          label="Confirm every change"
+          checked={p.forceConfirmation}
+          onChange={p.onForceConfirmationChange}
+          disabled={p.streaming}
+        />
+        {p.footerEnd}
+      </div>
+    </form>
+  )
 }

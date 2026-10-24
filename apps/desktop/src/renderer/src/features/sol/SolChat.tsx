@@ -18,11 +18,12 @@ import { AutoRunsView } from './AutoRunRow'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
 import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
-import { Composer } from './Composer'
+import { Composer, type ComposerSend } from './Composer'
 import { SolMarkdown } from './Markdown'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import type { SolScreenshot } from './solApi'
+import type { SolActionMode, SolScreenshot } from './solApi'
+import type { SolRegionPayload } from '../../../../main/sol-window/solWindow'
 import { selectSession, setForceConfirmation, useSolChatStore } from './solChatStore'
 import { regionToScreenshot, useSolActionMode, useSolWindowStore } from './solWindowStore'
 import {
@@ -314,17 +315,102 @@ function MessageList({
 
 export interface SolChatProps {
   projectId: string | null
-  /** 'panel' fills the SOL window; 'page' is the SolScreen column. */
-  layout?: 'panel' | 'page'
+  /** 'panel' fills a column; 'page' is the SolScreen column; 'pill' is the
+   *  SOLUSDEV-319 Ember Pill (panel above, bar below). */
+  layout?: 'panel' | 'page' | 'pill'
+  /** Pill only: content at the top of the panel (status, Guide tasks) — the
+   *  panel opens for it — and the footer's leading/trailing slots. */
+  pillTop?: React.ReactNode
+  pillFooterStart?: React.ReactNode
+  pillFooterEnd?: React.ReactNode
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
    *  context panel from the same one). Omitted, the surface owns its own. */
   chat?: SolChat
 }
 
+/** The circled region (SOL window only — main pushes it to that renderer).
+ *  Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
+ *  but only once that turn settled clean: a failed send keeps it attached so
+ *  the person can retry (FIX-2-R M3). A region circled meanwhile is not ours. */
+function useRegionSend(
+  chat: SolChat,
+  mode: SolActionMode,
+  forceConfirmation: boolean
+): {
+  region: SolRegionPayload | null
+  clearRegion: () => void
+  sendWithRegion: ComposerSend
+} {
+  const region = useSolWindowStore((s) => s.region)
+  const clearRegion = useSolWindowStore((s) => s.clearRegion)
+  const sendWithRegion: ComposerSend = (text, mentions, thinkHarder) => {
+    const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
+    void chat
+      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation })
+      .then((ok) => {
+        if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
+      })
+  }
+  return { region, clearRegion, sendWithRegion }
+}
+
+interface SurfaceParts {
+  layout: NonNullable<SolChatProps['layout']>
+  shortcut: ReturnType<typeof useCommandShortcut>
+  thread: React.ReactNode
+  hasThread: boolean
+  regionCard: React.ReactNode
+  strip: React.ReactNode
+  composer: React.ReactNode
+  pillTop?: React.ReactNode
+}
+
+/** SOLUSDEV-319: the pill stacks a panel (opened only when it has content)
+ *  over the bar; the panel and page layouts are one column. */
+function Surface(p: SurfaceParts): React.JSX.Element {
+  if (p.layout === 'pill') {
+    const panelOpen = p.hasThread || Boolean(p.regionCard) || Boolean(p.pillTop)
+    return (
+      <div className="sol-pill-stack" onKeyDownCapture={p.shortcut.onKeyDownCapture}>
+        {panelOpen && (
+          <section className="sol-pill-panel" aria-label="SOL conversation">
+            {p.pillTop}
+            {p.hasThread && p.thread}
+            {p.regionCard}
+          </section>
+        )}
+        {p.strip}
+        {p.composer}
+      </div>
+    )
+  }
+  return (
+    <div
+      onKeyDownCapture={p.shortcut.onKeyDownCapture}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        ...(p.layout === 'page' ? { maxWidth: 800, margin: '0 auto' } : {})
+      }}
+    >
+      {p.thread}
+      {p.regionCard}
+      {p.strip}
+      {p.composer}
+    </div>
+  )
+}
+
 export function SolChat({
   projectId,
   layout = 'panel',
-  chat: shared
+  chat: shared,
+  pillTop,
+  pillFooterStart,
+  pillFooterEnd
 }: SolChatProps): React.JSX.Element {
   // Hooks run unconditionally; with a shared instance the internal hook is
   // parked on a null project, which is inert (no fetch, no store writes).
@@ -341,24 +427,7 @@ export function SolChat({
     [chat, mode]
   )
   const shortcut = useCommandShortcut(chat.items)
-  // The circled region (SOL window only — main pushes it to that renderer).
-  // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
-  // but only once that turn settled clean: a failed send keeps it attached so
-  // the person can retry (FIX-2-R M3). A region circled meanwhile is not ours.
-  const region = useSolWindowStore((s) => s.region)
-  const clearRegion = useSolWindowStore((s) => s.clearRegion)
-  const sendWithRegion = (
-    text: string,
-    mentions: readonly string[],
-    thinkHarder: boolean
-  ): void => {
-    const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
-    void chat
-      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation })
-      .then((ok) => {
-        if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
-      })
-  }
+  const { region, clearRegion, sendWithRegion } = useRegionSend(chat, mode, forceConfirmation)
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>
@@ -366,38 +435,47 @@ export function SolChat({
       </div>
     )
   }
-  const page = layout === 'page'
   return (
     <CommandApprovalContext.Provider value={shortcut.registry}>
-      <div
-        onKeyDownCapture={shortcut.onKeyDownCapture}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          width: '100%',
-          ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
-        }}
-      >
-        <MessageList chat={chat} projectId={projectId} page={page} onDecide={decideInMode} />
-        {region && (
-          <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
-        )}
-        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
-        <Composer
-          streaming={chat.streaming}
-          page={page}
-          projectId={projectId}
-          mode={mode}
-          onModeChange={setMode}
-          regionAttached={region !== null}
-          onDismissRegion={clearRegion}
-          forceConfirmation={forceConfirmation}
-          onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
-          onSend={sendWithRegion}
-        />
-      </div>
+      <Surface
+        layout={layout}
+        shortcut={shortcut}
+        hasThread={chat.items.length > 0}
+        thread={
+          <MessageList
+            chat={chat}
+            projectId={projectId}
+            page={layout === 'page'}
+            onDecide={decideInMode}
+          />
+        }
+        regionCard={
+          region && (
+            <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
+          )
+        }
+        strip={
+          <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
+        }
+        pillTop={pillTop}
+        composer={
+          <Composer
+            streaming={chat.streaming}
+            page={layout === 'page'}
+            projectId={projectId}
+            mode={mode}
+            onModeChange={setMode}
+            regionAttached={region !== null}
+            onDismissRegion={clearRegion}
+            forceConfirmation={forceConfirmation}
+            onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
+            onSend={sendWithRegion}
+            pill={layout === 'pill'}
+            footerStart={pillFooterStart}
+            footerEnd={pillFooterEnd}
+          />
+        }
+      />
     </CommandApprovalContext.Provider>
   )
 }

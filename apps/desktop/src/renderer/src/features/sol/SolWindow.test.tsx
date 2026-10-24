@@ -1,6 +1,8 @@
-// SOLUSDEV-252 S3: the SOL window surface (#/sol-window) — header (wordmark,
-// mode badge, sees-screen dot, pin, close), the degraded-state status line,
-// the region card / refused line, and the SolChat body behind the auth guard.
+// SOLUSDEV-252 S3: the SOL window surface (#/sol-window) — the degraded-state
+// status line, the region card / refused line, and the SolChat body behind the
+// auth guard. SOLUSDEV-319: the Ember Pill — bar (orb, input, Guide|Build,
+// send), footer (SOL, sees-screen, hide), the panel that grows above it, the
+// measured height and busy signal sent to main, Esc to hide.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import * as solApi from './solApi'
@@ -33,7 +35,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => ({
   decideSolConfirmation: vi.fn()
 }))
 
-const PLACEHOLDER = 'Ask about a signal, a change, a part…'
+const PLACEHOLDER = 'Ask SOL, or tell it what to do…'
 let bridge: FakeSolBridge
 
 async function mount(): Promise<void> {
@@ -75,18 +77,18 @@ describe('SolWindow header', () => {
     expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument()
   })
 
-  it('keeps the shared action mode control only in the composer', async () => {
+  it('the Guide | Build switch in the bar is the one action-mode control', async () => {
     await mount()
-    const badges = screen.getAllByRole('button', { name: 'SOL action mode' })
-    // The composer remains the action-mode control.
-    expect(badges).toHaveLength(1)
-    for (const badge of badges) expect(badge).toHaveTextContent('Guide')
-    fireEvent.click(badges[0])
+    const modes = screen.getAllByRole('radiogroup', { name: 'SOL action mode' })
+    expect(modes).toHaveLength(1)
+    expect(within(modes[0]).getByRole('radio', { name: 'Guide' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    fireEvent.click(within(modes[0]).getByRole('radio', { name: 'Build' }))
     expect(bridge.setMode).toHaveBeenCalledWith('do')
     act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-    for (const badge of screen.getAllByRole('button', { name: 'SOL action mode' })) {
-      expect(badge).toHaveTextContent('Build')
-    }
+    expect(screen.getByRole('radio', { name: 'Build' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('follows a workspace selected in the main window', async () => {
@@ -119,32 +121,83 @@ describe('SolWindow header', () => {
     act(() => bridge.pushState({ ...SOL_STATE, screenIntelligence: false }))
     expect(screen.queryByText('sees your screen')).not.toBeInTheDocument()
   })
+})
 
-  it('pin toggles always-on-top through the bridge; close closes the window', async () => {
+describe('SolWindow hiding', () => {
+  it('has no pin; the hide button and Esc hide the pill through main, never close it', async () => {
     const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
     try {
       await mount()
-      const pin = screen.getByRole('button', { name: 'Keep on top' })
-      expect(pin).toHaveAttribute('aria-pressed', 'false')
-      fireEvent.click(pin)
-      expect(bridge.setAlwaysOnTop).toHaveBeenCalledWith(true)
-      act(() => bridge.pushState({ ...SOL_STATE, alwaysOnTop: true }))
-      expect(screen.getByRole('button', { name: 'Keep on top' })).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      )
-      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-      expect(close).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('button', { name: 'Keep on top' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide SOL' }))
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(bridge.hide).toHaveBeenCalledTimes(2)
+      expect(close).not.toHaveBeenCalled()
     } finally {
       close.mockRestore()
     }
   })
 
+  it('an Escape another control already handled does not hide the pill', async () => {
+    await mount()
+    const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    event.preventDefault()
+    act(() => void window.dispatchEvent(event))
+    expect(bridge.hide).not.toHaveBeenCalled()
+  })
+})
+
+describe('SolWindow streaming', () => {
   it('the streaming indicator is one CSS class, present only while a turn streams', async () => {
     await mount()
     expect(document.querySelector('.sol-pulse')).toBeNull()
     act(() => useSolSessionStore.getState().setStreaming(true))
     expect(document.querySelectorAll('.sol-pulse')).toHaveLength(1)
+  })
+})
+
+describe('SolWindow pill sizing and busy signal', () => {
+  it('reports its measured height to main so the window grows upward', async () => {
+    let observed: ResizeObserverCallback | null = null
+    const disconnect = vi.fn()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          observed = cb
+        }
+        observe(): void {}
+        disconnect = disconnect
+      }
+    )
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      vi.spyOn(pill, 'getBoundingClientRect').mockReturnValue({ height: 233.4 } as DOMRect)
+      act(() => observed?.([], {} as ResizeObserver))
+      expect(bridge.resize).toHaveBeenLastCalledWith(234)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('is busy while a turn streams, so a click elsewhere does not hide it', async () => {
+    await mount()
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(false)
+    act(() => useSolSessionStore.getState().setStreaming(true))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
+    act(() => useSolSessionStore.getState().setStreaming(false))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(false)
+  })
+
+  it('opens the panel above the bar only when there is something to show', async () => {
+    await mount()
+    // Guide mode carries the Guide tasks picker, so the panel is open.
+    expect(screen.getByRole('region', { name: 'SOL conversation' })).toBeInTheDocument()
+    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+    expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
+    act(() => bridge.pushRegion(SOL_REGION))
+    expect(screen.getByRole('region', { name: 'SOL conversation' })).toBeInTheDocument()
   })
 })
 
