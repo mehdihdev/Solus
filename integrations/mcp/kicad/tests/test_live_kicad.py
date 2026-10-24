@@ -217,6 +217,7 @@ def test_script_is_a_fixed_vocabulary() -> None:
     assert "keystroke" not in script and "key code" not in script
     assert "do shell script" not in script
     assert "click at" not in script
+    assert 'starts with "Revert \'"' in script and 'button "Yes"' in script
 
 
 def test_factory_is_off_outside_macos(monkeypatch: pytest.MonkeyPatch) -> None:

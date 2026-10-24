@@ -61,13 +61,20 @@ SCRIPT = """on run argv
 		else if verb is "revert" then
 			click (first menu item of fileMenu whose name starts with "Revert")
 			delay 0.6
+			-- KiCad 10 asks "Revert '<path>' ... to last version saved?" with Yes/No.
 			set confirmed to false
-			set dialog to window 1 of targetProc
-			if exists sheet 1 of dialog then set dialog to sheet 1 of dialog
-			if exists button "Revert" of dialog then
-				click button "Revert" of dialog
-				set confirmed to true
-			end if
+			repeat with d in (windows of targetProc)
+				set texts to (value of every static text of d) as list
+				repeat with i from 1 to (count of texts)
+					set v to (item i of texts) as text
+					if v starts with "Revert '" and (exists button "Yes" of d) then
+						click button "Yes" of d
+						set confirmed to true
+						exit repeat
+					end if
+				end repeat
+				if confirmed then exit repeat
+			end repeat
 			if not confirmed then error "no_confirm"
 		else
 			error "bad_action"
