@@ -14,6 +14,8 @@ import { memo, useCallback, useEffect, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
+import { commandHeader } from './commandCard'
+import { PlanCard } from './PlanCard'
 import { AutoRunsView } from './AutoRunRow'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
@@ -35,6 +37,9 @@ import {
 } from './useSolChat'
 
 const CITATION_DISPLAY_CAP = 64
+
+/** The message the plan's "Show me how instead" sends, in Guide mode. */
+const SHOW_ME_HOW = 'Show me how to do that myself, step by step, instead of doing it for me.'
 
 /** Display ceiling on the citations region (SEC-M5). */
 const MAX_CITATIONS = 12
@@ -168,6 +173,38 @@ function ParkedConfirmation({
   return <ConfirmationCard pending={pending} onDecide={decide} />
 }
 
+/** One card per parked action. A turn can park several since SOLUSDEV-168,
+ *  and each is approved on its own — approving a batch would suspend the
+ *  staleness re-check that makes "what you saw is what runs" true. The pill
+ *  (SOLUSDEV-319) groups the non-command ones into a PlanCard that still
+ *  decides them one by one; command cards always keep their own card. */
+function Confirmations({
+  confirmations,
+  onDecide,
+  onShowMe
+}: {
+  confirmations: readonly PendingConfirmation[]
+  onDecide: SolChat['decide']
+  onShowMe?: () => void
+}): React.JSX.Element {
+  const planned = onShowMe ? confirmations.filter((c) => commandHeader(c) === null) : []
+  const cards = confirmations.filter((c) => !planned.includes(c))
+  return (
+    <>
+      {planned.length > 0 && onShowMe && (
+        <PlanCard steps={planned} onDecide={onDecide} onShowMe={onShowMe} />
+      )}
+      {cards.map((confirmation) => (
+        <ParkedConfirmation
+          key={confirmation.confirmationId}
+          pending={confirmation}
+          onDecide={onDecide}
+        />
+      ))}
+    </>
+  )
+}
+
 // memo (S2): a token patch replaces ONE ChatItem immutably, so every other row
 // keeps its `item` identity and skips the render. `onDecide` is stable from
 // useSolChat. `settled` rows (not the last, not streaming) also opt into CSS
@@ -179,13 +216,16 @@ const MessageRow = memo(function MessageRow({
   projectId,
   onDecide,
   onFile,
-  settled
+  settled,
+  onShowMe
 }: {
   item: ChatItem
   projectId: string
   onDecide: SolChat['decide']
   onFile: SolChat['fileArtifact']
   settled: boolean
+  /** SOLUSDEV-319 (pill): given, non-command approvals render as one PlanCard. */
+  onShowMe?: () => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
   if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} />
@@ -214,16 +254,7 @@ const MessageRow = memo(function MessageRow({
       {item.error && <div style={{ ...MUTED, color: 'var(--err)' }}>{item.error}</div>}
       {/* CTR-03: a destructive action is parked, not executed, until this user
           approves the concrete diff shown here (CLAUDE.md §7). */}
-      {/* One card per parked action. A turn can park several since SOLUSDEV-168,
-          and each is approved on its own — approving a batch would suspend the
-          staleness re-check that makes "what you saw is what runs" true. */}
-      {confirmations.map((confirmation) => (
-        <ParkedConfirmation
-          key={confirmation.confirmationId}
-          pending={confirmation}
-          onDecide={onDecide}
-        />
-      ))}
+      <Confirmations confirmations={confirmations} onDecide={onDecide} onShowMe={onShowMe} />
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
           kept with its exit status after the card is gone. */}
       {(item.commandRuns ?? []).map((run) => (
@@ -245,12 +276,14 @@ function MessageList({
   chat,
   projectId,
   page,
-  onDecide
+  onDecide,
+  onShowMe
 }: {
   chat: SolChat
   projectId: string
   page: boolean
   onDecide: SolChat['decide']
+  onShowMe?: () => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -307,6 +340,7 @@ function MessageList({
           onDecide={onDecide}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
+          onShowMe={onShowMe}
         />
       ))}
     </div>
@@ -352,6 +386,18 @@ function useRegionSend(
       })
   }
   return { region, clearRegion, sendWithRegion }
+}
+
+/** SOLUSDEV-319: the plan's "Show me how instead" — declined, now teach it. */
+function useShowMeHow(
+  chat: SolChat,
+  setMode: (mode: SolActionMode) => void,
+  forceConfirmation: boolean
+): () => void {
+  return useCallback(() => {
+    setMode('guide')
+    void chat.send(SHOW_ME_HOW, 'guide', [], false, undefined, { forceConfirmation })
+  }, [chat, setMode, forceConfirmation])
 }
 
 interface SurfaceParts {
@@ -428,6 +474,7 @@ export function SolChat({
   )
   const shortcut = useCommandShortcut(chat.items)
   const { region, clearRegion, sendWithRegion } = useRegionSend(chat, mode, forceConfirmation)
+  const showMeHow = useShowMeHow(chat, setMode, forceConfirmation)
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>
@@ -447,6 +494,7 @@ export function SolChat({
             projectId={projectId}
             page={layout === 'page'}
             onDecide={decideInMode}
+            onShowMe={layout === 'pill' ? showMeHow : undefined}
           />
         }
         regionCard={

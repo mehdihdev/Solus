@@ -132,22 +132,23 @@ the bar alone:
 **Grows upward.** Once there is anything to show — messages, Guide tasks, running processes, the region
 card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
 never past the work-area top; the thread scrolls inside). If growing would cover the point the pointer
-was at when summoned, the pill shifts right of that point when there is room. Panel header: `SOL ·
-GUIDE|BUILD` label, New chat, Open in Solus (the full SOL page), collapse.
+was at when summoned, the pill shifts right of that point when there is room. The panel has no header
+of its own; New chat and history stay on the full SOL page.
 
 **Dismiss.** Clicking another app hides the pill; the conversation is kept and returns on the next
 summon. It does NOT hide while SOL is streaming, while an approval is waiting, or while a plan runs.
 Esc hides it (closes the mention list first when that is open).
 
-**Plan card.** When one SOL reply parks two or more non-command approvals, they render as one plan:
-`PLAN · N STEPS`, each step numbered with its summary and its concrete before → after rows (nothing
-hidden — CLAUDE.md §7). Buttons: **Run N steps** (Enter) · **Show me how instead** (rejects the parked
-steps and switches to Guide) · Esc cancels nothing (closes the pill only when idle). Run approves the steps
-ONE AT A TIME, in order, each through the normal decision call and its own staleness re-check; the first
-failure stops the run and the remaining steps stay parked as ordinary cards. A single approval, and every
-command card (SOLUSDEV-317), keeps its own card.
+**Plan card.** In the pill, the non-command approvals a SOL reply parks render as one plan (a single
+approval is a one-step plan): `PLAN · N STEPS`, each step numbered with its summary and its concrete
+before → after rows (nothing hidden — CLAUDE.md §7). Buttons: **Run N steps** · **Show me how instead**
+(declines the steps, switches to Guide and asks SOL to walk the user through it) · **Reject** (declines
+them). Run approves the steps ONE AT A TIME, in order, each through the normal decision call and its own
+staleness re-check; the first failure stops the run with the server's reason, the remaining steps stay in
+the plan, and a refused step is never sent again. Command cards (SOLUSDEV-317) keep their own card. The
+panel and page layouts keep one card per approval.
 
-**Running.** While a plan runs the panel shows a status strip: `APPLYING · STEP k OF N`, the current
-step's summary, an N-segment progress bar and **Stop** (Esc) — Stop lets the in-flight step finish and
-leaves the rest parked. SOL never moves the user's pointer in this ticket; free-form "SOL drives the
+**Running.** While a plan runs the plan shows a status strip: `APPLYING · STEP k OF N`, the current
+step's summary, an N-segment progress bar and **Stop** — Stop lets the in-flight step finish and leaves
+the rest parked. SOL never moves the user's pointer in this ticket; free-form "SOL drives the
 app" is a separate ticket that needs its own ADR (ADR-040 §2 limits synthetic input to KiCad save/revert).

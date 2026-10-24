@@ -297,11 +297,92 @@ it('shows the fixture hole diff in the actual SOL window and requires an explici
     target: { value: 'Add a 6 mm hole' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  const card = await screen.findByLabelText('Action needs your approval')
+  // SOLUSDEV-319: in the pill a non-command approval is a one-step plan.
+  const card = await screen.findByLabelText('Plan needs your approval')
   expect(within(card).getByText('new hole (diameter=6 mm)')).toBeInTheDocument()
   expect(decideSolConfirmation).not.toHaveBeenCalled()
   await act(async () => {
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Run 1 step' }))
   })
   expect(decideSolConfirmation).toHaveBeenCalledWith('p1', 'hole-card', 'approve')
+})
+
+it('two parked approvals render as one plan; Run approves them in order, one at a time', async () => {
+  resetSolChatSessions()
+  vi.mocked(solApi.createSolConversation).mockResolvedValue({
+    id: 'c-plan'
+  } as solApi.SolConversation)
+  vi.mocked(decideSolConfirmation).mockReset()
+  vi.mocked(decideSolConfirmation).mockResolvedValue({ ok: true } as Awaited<
+    ReturnType<typeof decideSolConfirmation>
+  >)
+  vi.mocked(solApi.streamSolMessage).mockImplementation(async ({ onEvent }) => {
+    for (const [id, after] of [
+      ['r1-card', '10k'],
+      ['r2-card', '4k7']
+    ]) {
+      onEvent({
+        type: 'tool_confirmation',
+        pending: {
+          confirmationId: id,
+          tool: 'kicad.set_symbol_property',
+          summary: `Set ${id}`,
+          preview: [{ label: 'Value', before: '1k', after }]
+        }
+      })
+    }
+  })
+  await mount()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: 'pull-ups' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  const plan = await screen.findByLabelText('Plan needs your approval')
+  expect(within(plan).getByText('10k')).toBeInTheDocument()
+  expect(screen.queryByLabelText('Action needs your approval')).not.toBeInTheDocument()
+  expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
+  await act(async () => {
+    fireEvent.click(within(plan).getByRole('button', { name: 'Run 2 steps' }))
+  })
+  expect(vi.mocked(decideSolConfirmation).mock.calls.map((c) => c.slice(0, 3))).toEqual([
+    ['p1', 'r1-card', 'approve'],
+    ['p1', 'r2-card', 'approve']
+  ])
+})
+
+it('a command card in the pill keeps its own card and never joins the plan', async () => {
+  resetSolChatSessions()
+  vi.mocked(solApi.createSolConversation).mockResolvedValue({
+    id: 'c-cmd'
+  } as solApi.SolConversation)
+  vi.mocked(solApi.streamSolMessage).mockImplementation(async ({ onEvent }) => {
+    onEvent({
+      type: 'tool_confirmation',
+      pending: {
+        confirmationId: 'cmd-card',
+        tool: 'code.exec',
+        summary: 'Run the tests',
+        preview: [{ label: 'command', before: null, after: 'pytest -q' }]
+      }
+    })
+    onEvent({
+      type: 'tool_confirmation',
+      pending: {
+        confirmationId: 'edit-card',
+        tool: 'kicad.set_symbol_property',
+        summary: 'Set R1',
+        preview: [{ label: 'Value', before: '1k', after: '10k' }]
+      }
+    })
+  })
+  await mount()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'go' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  const plan = await screen.findByLabelText('Plan needs your approval')
+  expect(within(plan).getByText('PLAN · 1 STEP')).toBeInTheDocument()
+  expect(within(plan).queryByText('pytest -q')).not.toBeInTheDocument()
+  const card = screen.getByLabelText('Action needs your approval')
+  expect(within(card).getByText('pytest -q')).toBeInTheDocument()
 })
