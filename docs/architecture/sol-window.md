@@ -169,13 +169,15 @@ Wireflow: `docs/wireflows/sol-window.md` "SOLUSDEV-319 Ember Pill". Changes to t
 
 - `main/sol-window/pillGeometry.ts` (new, pure): `placePill(cursor, workArea, size)` and
   `growPill(anchor, current, height, workArea)` — summon placement and bottom-anchored growth with the
-  shift-aside rule. Replaces `placeSolWindow`; geometry is no longer persisted (the `window` field in
-  `solSettings` is left readable and is no longer written).
+  shift-aside rule. Replaces `placeSolWindow`; geometry is no longer persisted, and the pin is retired
+  with it: `solSettings` drops `window` and `alwaysOnTop` (a stored value is ignored and gone on the next
+  write); `sol:set-always-on-top`, `SolState.alwaysOnTop` and the bridge's `setAlwaysOnTop` are removed.
 - `main/sol-window/solWindow.ts`: the window is frameless, transparent, always on top, non-resizable,
   hidden from the taskbar. The manager gains `toggle()` (double-tap Ctrl), keeps a hidden window alive
   between summons (`show` re-places it at the cursor), hides on `blur` unless the renderer reported busy,
   and applies renderer resize requests through `growPill`.
-- Three new invokes on `SOL_WINDOW_CHANNELS`, accepted only from the SOL window's own webContents:
+- Three new invokes on `SOL_WINDOW_CHANNELS`, accepted only from the SOL window's own webContents and
+  its top frame (`senderFrame === sender.mainFrame`):
   `sol:resize` (a finite number, clamped 80–620), `sol:set-busy` (boolean), `sol:hide` (no argument).
 - renderer `features/sol/SolWindow.tsx`: the pill layout (panel above, bar below), a ResizeObserver
   that reports its content height, Esc to hide, and the busy signal (streaming, a parked approval, or a

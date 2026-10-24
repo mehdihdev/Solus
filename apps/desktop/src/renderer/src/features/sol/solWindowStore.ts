@@ -16,6 +16,9 @@ export interface SolWindowState {
   setState: (state: SolState) => void
   setRegion: (region: SolRegionPayload) => void
   clearRegion: () => void
+  /** SOLUSDEV-319: one plan runs at a time across the surface; the pill is busy meanwhile. */
+  planRunning: boolean
+  setPlanRunning: (running: boolean) => void
 }
 
 export const useSolWindowStore = create<SolWindowState>()((set) => ({
@@ -23,7 +26,9 @@ export const useSolWindowStore = create<SolWindowState>()((set) => ({
   region: null,
   setState: (state) => set({ state }),
   setRegion: (region) => set({ region }),
-  clearRegion: () => set({ region: null })
+  clearRegion: () => set({ region: null }),
+  planRunning: false,
+  setPlanRunning: (planRunning) => set({ planRunning })
 }))
 
 // FIX-2-R H1: the region is the signed-in account's pixels — sign-out or an

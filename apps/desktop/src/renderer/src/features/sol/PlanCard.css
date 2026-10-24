@@ -15,9 +15,7 @@
   padding-left: 18px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  max-height: 220px;
-  overflow-y: auto;
+  gap: 9px;
 }
 .sol-plan-step::marker {
   font-family: var(--font-mono);
@@ -30,16 +28,43 @@
   color: var(--tx);
 }
 .sol-plan-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--mut);
   overflow-wrap: anywhere;
 }
-.sol-plan-before {
-  text-decoration: line-through;
+/* The single card's DiffValue (pre-wrap, verbatim), sized for the plan. */
+.sol-plan .confirmation-card__value {
+  font-size: 11.5px;
+  line-height: 1.5;
 }
-.sol-plan-after {
+.sol-plan-before .confirmation-card__value {
+  color: var(--mut);
+}
+.sol-plan-after .confirmation-card__value {
   color: var(--acc);
+}
+.sol-plan-step[data-refused='true'] .sol-plan-summary {
+  text-decoration: line-through;
+  color: var(--mut);
+}
+.sol-plan-refused {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--err);
+}
+.sol-plan-hold {
+  font-size: 11px;
+  color: var(--mut);
+}
+.sol-plan-run:disabled {
+  background: var(--sur2);
+  color: var(--mut);
+  cursor: default;
 }
 .sol-plan-failed {
   font-size: 11.5px;

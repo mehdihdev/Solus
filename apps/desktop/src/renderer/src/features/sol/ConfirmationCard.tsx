@@ -41,7 +41,8 @@ export interface ConfirmationCardProps {
   readonly onDecide: (decision: ConfirmationDecision) => Promise<void>
 }
 
-function DiffValue({ value }: { value: string | null }): React.JSX.Element {
+/** A value exactly as it will execute — null and '' named, never blank (SOLUSDEV-319 shares it). */
+export function DiffValue({ value }: { value: string | null }): React.JSX.Element {
   return (
     <span className="confirmation-card__value">
       {value === null ? (

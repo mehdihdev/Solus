@@ -136,16 +136,21 @@ was at when summoned, the pill shifts right of that point when there is room. Th
 of its own; New chat and history stay on the full SOL page.
 
 **Dismiss.** Clicking another app hides the pill; the conversation is kept and returns on the next
-summon. It does NOT hide while SOL is streaming, while an approval is waiting, or while a plan runs.
+summon. It does NOT hide while SOL is streaming, while the latest turn's approval is waiting, or while a plan
+runs (an older, forgotten approval does not keep it up).
 Esc hides it (closes the mention list first when that is open).
 
 **Plan card.** In the pill, the non-command approvals a SOL reply parks render as one plan (a single
 approval is a one-step plan): `PLAN · N STEPS`, each step numbered with its summary and its concrete
 before → after rows (nothing hidden — CLAUDE.md §7). Buttons: **Run N steps** · **Show me how instead**
 (declines the steps, switches to Guide and asks SOL to walk the user through it) · **Reject** (declines
-them). Run approves the steps ONE AT A TIME, in order, each through the normal decision call and its own
+them). Each step also names its tool, and values render exactly as they will run (`Not provided`, `Empty
+string`, whitespace and newlines kept — the approval card's own rendering). **Run is armed only when SOL
+has finished answering and every step has been on screen**; a step that arrives later disarms it until
+it has been seen, and the card says why Run is waiting. One plan runs at a time. Run approves the steps ONE AT A TIME, in order, each through the normal decision call and its own
 staleness re-check; the first failure stops the run with the server's reason, the remaining steps stay in
-the plan, and a refused step is never sent again. Command cards (SOLUSDEV-317) keep their own card. The
+the plan, and a refused step is marked "refused — won't run", left out of the count and never sent
+again. Command cards (SOLUSDEV-317) keep their own card. The
 panel and page layouts keep one card per approval.
 
 **Running.** While a plan runs the plan shows a status strip: `APPLYING · STEP k OF N`, the current

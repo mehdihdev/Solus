@@ -9,6 +9,7 @@ import * as solApi from './solApi'
 import { decideSolConfirmation } from '../../lib/api/resources'
 import { resetSolChatSessions } from './solChatStore'
 import { SolWindow } from './SolWindow'
+import { PreviewObserverContext, type ObserveInView } from './previewInView'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceStore'
 import { useSolSessionStore } from './solSessionStore'
@@ -38,8 +39,18 @@ vi.mock('../../lib/api/resources', async (importOriginal) => ({
 const PLACEHOLDER = 'Ask SOL, or tell it what to do…'
 let bridge: FakeSolBridge
 
+// jsdom has no IntersectionObserver: report every plan step as on screen.
+const allInView: ObserveInView = (_element, onChange) => {
+  onChange(true)
+  return () => undefined
+}
+
 async function mount(): Promise<void> {
-  render(<SolWindow />)
+  render(
+    <PreviewObserverContext.Provider value={allInView}>
+      <SolWindow />
+    </PreviewObserverContext.Provider>
+  )
   // The mount's getState() resolves on a microtask; let the mirror land.
   await act(async () => undefined)
 }
@@ -47,7 +58,7 @@ async function mount(): Promise<void> {
 beforeEach(() => {
   localStorage.clear()
   disconnectSolBridge()
-  useSolWindowStore.setState({ state: null, region: null })
+  useSolWindowStore.setState({ state: null, region: null, planRunning: false })
   useAuthStore.setState({
     status: 'authenticated',
     user: { email: 'a@b.dev' },
@@ -188,6 +199,8 @@ describe('SolWindow pill sizing and busy signal', () => {
     expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
     act(() => useSolSessionStore.getState().setStreaming(false))
     expect(bridge.setBusy).toHaveBeenLastCalledWith(false)
+    act(() => useSolWindowStore.getState().setPlanRunning(true))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
   })
 
   it('opens the panel above the bar only when there is something to show', async () => {

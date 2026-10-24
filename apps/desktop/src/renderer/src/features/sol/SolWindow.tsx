@@ -82,13 +82,16 @@ function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
   )
 }
 
-/** Busy = blur must not hide: a turn streaming or an approval waiting. */
+/** Busy = blur must not hide: a turn streaming, the LATEST turn's approval
+ *  waiting (an old, forgotten one must not pin the pill over every app), or a
+ *  plan running. */
 function useBusy(projectId: string | null): boolean {
   const streaming = useSolSessionStore((s) => s.streaming)
-  const parked = useSolChatStore((s) =>
-    selectSession(s, projectId).items.some((item) => item.confirmations.length > 0)
+  const planRunning = useSolWindowStore((s) => s.planRunning)
+  const parked = useSolChatStore(
+    (s) => (selectSession(s, projectId).items.at(-1)?.confirmations.length ?? 0) > 0
   )
-  return streaming || parked
+  return streaming || parked || planRunning
 }
 
 /** Main sizes the window from this; the bottom edge stays put (grows upward). */
