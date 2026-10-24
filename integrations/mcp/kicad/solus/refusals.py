@@ -15,6 +15,9 @@ REFUSAL_EXPLANATIONS = {
     "invalid_erc_report": "kicad-cli produced an ERC report this tool cannot read",
     "invalid_geometry": "the coordinates or wire route are not valid for placement",
     "library_unavailable": "that symbol was not found in the installed KiCad libraries",
+    "live_preview_required": "the sheet is open in KiCad but this change was not previewed as "
+    "a live KiCad edit (or that preview expired); preview it again so the approval shows "
+    "that KiCad will save and reload the sheet",
     "mutation_unverified": "the written file did not match the planned change; it was rolled back",
     "open_in_editor": "the schematic is open in KiCad's Schematic Editor, which would overwrite "
     "this change on its next save; ask the user to close that schematic window in KiCad (the "
