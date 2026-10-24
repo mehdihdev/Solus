@@ -45,6 +45,9 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
     setAlwaysOnTop: vi.fn(async () => state),
     open: vi.fn(async () => state),
     openCaptureSettings: vi.fn(async () => state),
+    resize: vi.fn(async () => state),
+    setBusy: vi.fn(async () => state),
+    hide: vi.fn(async () => state),
     onState: vi.fn((handler: (s: SolState) => void) => {
       stateHandler = handler
       return () => {

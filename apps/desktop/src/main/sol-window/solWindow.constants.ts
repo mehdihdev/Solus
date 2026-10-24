@@ -14,6 +14,12 @@ export const SOL_WINDOW_CHANNELS = {
   /** SOLUSDEV-318: open the OS pane the capture capability names. No argument —
    *  main opens its own capability's settingsUrl, never a renderer-supplied one. */
   openCaptureSettings: 'sol:open-capture-settings',
+  /** SOLUSDEV-319: the pill's measured content height (it grows upward). */
+  resize: 'sol:resize',
+  /** SOLUSDEV-319: busy pills (streaming, approval parked, plan running) ignore blur. */
+  setBusy: 'sol:set-busy',
+  /** SOLUSDEV-319: Esc hides the pill; the window and its thread live on. */
+  hide: 'sol:hide',
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */

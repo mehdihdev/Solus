@@ -27,6 +27,12 @@ export interface SolBridge {
   open(): Promise<SolState | null>
   /** Open the OS pane that grants screen capture (macOS Screen Recording). */
   openCaptureSettings(): Promise<SolState | null>
+  /** SOLUSDEV-319: the pill's measured content height; main grows it upward. */
+  resize(height: number): Promise<SolState | null>
+  /** SOLUSDEV-319: while busy the pill does not hide on blur. */
+  setBusy(busy: boolean): Promise<SolState | null>
+  /** SOLUSDEV-319: hide the pill (Esc); its window and thread live on. */
+  hide(): Promise<SolState | null>
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
 }
@@ -105,6 +111,9 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     setAlwaysOnTop: (on) => call(c.setAlwaysOnTop, on),
     open: () => call(c.open),
     openCaptureSettings: () => call(c.openCaptureSettings),
+    resize: (height) => call(c.resize, height),
+    setBusy: (busy) => call(c.setBusy, busy),
+    hide: () => call(c.hide),
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
   }

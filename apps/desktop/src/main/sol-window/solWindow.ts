@@ -12,10 +12,20 @@ import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { attachOrbOverlayWire, type WireIpc } from './orbOverlayWire'
 import { SOL_WINDOW_CHANNELS } from './solWindow.constants'
-import type { SolActionMode, SolSettings, SolWindowGeometry } from '../solSettings'
+import type { SolActionMode, SolSettings } from '../solSettings'
 import type { CaptureCapability } from '../capture/screenCapture'
 import type { CapabilityState } from '../platform/capabilities'
 import type { ActiveWindowInfo } from '../capture/activeWindow'
+import {
+  growPill,
+  placePill,
+  SOL_PILL_INITIAL_HEIGHT,
+  SOL_PILL_WIDTH,
+  type Point,
+  type Rect
+} from './pillGeometry'
+
+export type { Point, Rect } from './pillGeometry'
 
 /** The isolation posture, explicit and asserted — never inherited from an
  *  Electron default that a template bump could flip (SEC-H2). */
@@ -26,29 +36,22 @@ export const SOL_WINDOW_WEB_PREFERENCES = {
   webviewTag: false
 } as const
 
-export const SOL_WINDOW_DEFAULT_SIZE = { width: 420, height: 640 } as const
-export const SOL_WINDOW_MIN_SIZE = { width: 360, height: 420 } as const
-export const SOL_WINDOW_MARGIN = 24
-export const GEOMETRY_SAVE_DEBOUNCE_MS = 300
-
+/** SOLUSDEV-319: the Ember Pill. Frameless and transparent (the renderer draws
+ *  the rounded surfaces and their shadow), always on top, sized by main from
+ *  the renderer's measured height — never by hand. */
 export const SOL_WINDOW_OPTIONS = {
-  frame: true,
-  resizable: true,
-  minWidth: SOL_WINDOW_MIN_SIZE.width,
-  minHeight: SOL_WINDOW_MIN_SIZE.height,
+  frame: false,
+  transparent: true,
+  resizable: false,
+  alwaysOnTop: true,
+  skipTaskbar: true,
+  hasShadow: false,
+  width: SOL_PILL_WIDTH,
+  height: SOL_PILL_INITIAL_HEIGHT,
   show: false,
   autoHideMenuBar: true,
   title: 'SOL'
 } as const
-
-export interface Point {
-  x: number
-  y: number
-}
-export interface Rect extends Point {
-  width: number
-  height: number
-}
 
 export interface DisplaySlice {
   id: number
@@ -58,11 +61,14 @@ export interface DisplaySlice {
 /** Structural slice of BrowserWindow — just what the manager needs. */
 export interface SolWindowHandle {
   isDestroyed(): boolean
-  on(event: 'move' | 'resize' | 'close' | 'closed', listener: () => void): void
+  on(event: 'blur' | 'closed', listener: () => void): void
   focus(): void
   show(): void
+  hide(): void
+  isVisible(): boolean
   close(): void
   getBounds(): Rect
+  setBounds(bounds: Rect): void
   setAlwaysOnTop(flag: boolean): void
   webContents: { send(channel: string, payload: unknown): void }
 }
@@ -117,22 +123,28 @@ export interface SolWindowManagerDeps {
     getDisplayNearestPoint(point: Point): DisplaySlice
     getAllDisplays(): DisplaySlice[]
   }
-  settings: Pick<SolSettings, 'get' | 'setWindowGeometry' | 'setAlwaysOnTop'>
+  settings: Pick<SolSettings, 'get' | 'setAlwaysOnTop'>
   /** The app's OWN renderers that hear state pushes (the main window). The SOL
    *  window is always included by the manager; extension windows never are —
    *  they host third-party bundles (security review M2). */
   allWindows(): ReadonlyArray<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>
-  scheduler?: {
-    setTimeout(fn: () => void, ms: number): unknown
-    clearTimeout(handle: unknown): void
-  }
 }
 
 export interface SolWindowManager {
-  /** Create the window (near `near`, else the cursor) or focus the live one. */
+  /** Create the pill (near `near`, else the cursor), re-summon a hidden one
+   *  there, or focus a shown one. */
   open(opts?: { near?: Point }): void
+  /** Double-tap Ctrl: hide a shown pill, else open. */
+  toggle(): void
+  /** Esc / blur: hide; the window and its renderer state live on. */
+  hide(): void
+  /** The renderer's measured content height; main grows the pill upward. */
+  resize(height: number): void
+  /** A busy pill (streaming, approval parked, plan running) ignores blur. */
+  setBusy(busy: boolean): void
   focus(): void
   isOpen(): boolean
+  isVisible(): boolean
   close(): void
   setAlwaysOnTop(flag: boolean): void
   pushState(state: SolState): void
@@ -145,73 +157,78 @@ export interface SolWindowManager {
   isSender(sender: unknown): boolean
 }
 
-const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi)
-
-/** Saved geometry on a display that still exists, clamped into its work area;
- *  otherwise the default 420×640 bottom-right of `fallback`'s work area. */
-export function placeSolWindow(
-  saved: SolWindowGeometry | null,
-  displays: DisplaySlice[],
-  fallback: DisplaySlice
-): Rect {
-  const home = saved ? displays.find((d) => d.id === saved.displayId) : undefined
-  if (saved && home) {
-    const wa = home.workArea
-    // Electron enforces the window's own minimum size, so on a work area smaller
-    // than it the window IS the minimum — compute x/y against that, not a
-    // collapsed clamp (review M6).
-    const width = Math.max(SOL_WINDOW_MIN_SIZE.width, Math.min(saved.width, wa.width))
-    const height = Math.max(SOL_WINDOW_MIN_SIZE.height, Math.min(saved.height, wa.height))
-    return {
-      x: clamp(saved.x, wa.x, Math.max(wa.x, wa.x + wa.width - width)),
-      y: clamp(saved.y, wa.y, Math.max(wa.y, wa.y + wa.height - height)),
-      width,
-      height
-    }
-  }
-  const wa = fallback.workArea
-  return {
-    x: wa.x + wa.width - SOL_WINDOW_DEFAULT_SIZE.width - SOL_WINDOW_MARGIN,
-    y: wa.y + wa.height - SOL_WINDOW_DEFAULT_SIZE.height - SOL_WINDOW_MARGIN,
-    ...SOL_WINDOW_DEFAULT_SIZE
-  }
-}
-
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
-  const scheduler = deps.scheduler ?? { setTimeout, clearTimeout }
   let current: SolWindowHandle | null = null
   // A fresh window has no renderer yet; a region pushed before its first
   // state request would be lost, so it waits here (one turn's worth — never disk).
   let ready = false
   let pending: SolRegionPayload | null = null
+  // SOLUSDEV-319: where the pointer was at summon, the pill's collapsed
+  // placement there, and the last height the renderer asked for.
+  let anchor: Point = { x: 0, y: 0 }
+  let home: Rect | null = null
+  let height: number = SOL_PILL_INITIAL_HEIGHT
+  let busy = false
   const alive = (): boolean => current !== null && !current.isDestroyed()
+  const workAreaAt = (p: Point): Rect => deps.screen.getDisplayNearestPoint(p).workArea
+
+  /** Re-anchor at `near`: the collapsed placement, grown to the current height. */
+  const summonBounds = (near: Point): Rect => {
+    const wa = workAreaAt(near)
+    anchor = near
+    home = placePill(near, wa, { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT })
+    return height === SOL_PILL_INITIAL_HEIGHT ? home : growPill(near, home, height, wa)
+  }
 
   const create = (near: Point): void => {
-    const display = deps.screen.getDisplayNearestPoint(near)
-    const bounds = placeSolWindow(deps.settings.get().window, deps.screen.getAllDisplays(), display)
-    const win = deps.createWindow(bounds, deps.settings.get().alwaysOnTop)
+    height = SOL_PILL_INITIAL_HEIGHT
+    busy = false
+    const win = deps.createWindow(summonBounds(near), true)
     current = win
     ready = false
     pending = null
-    const cancelSave = trackWindowGeometry(win, deps, scheduler)
+    win.on('blur', () => {
+      if (!busy && !win.isDestroyed()) win.hide()
+    })
     win.on('closed', () => {
-      cancelSave()
       if (current === win) current = null
       pending = null // ephemeral by construction: a region never outlives its window
       ready = false
+      busy = false
     })
   }
 
+  const open = (opts?: { near?: Point }): void => {
+    const near = opts?.near ?? deps.screen.getCursorScreenPoint()
+    if (!alive() || current === null) {
+      create(near)
+      return
+    }
+    if (!current.isVisible()) {
+      current.setBounds(summonBounds(near))
+      current.show()
+    }
+    current.focus()
+  }
+
   return {
-    open(opts) {
-      if (alive()) {
-        current?.focus()
-        return
-      }
-      create(opts?.near ?? deps.screen.getCursorScreenPoint())
+    open,
+    toggle() {
+      if (alive() && current?.isVisible()) current.hide()
+      else open()
+    },
+    hide: () => void (alive() && current?.hide()),
+    resize(next) {
+      if (!alive() || current === null || home === null) return
+      height = next
+      current.setBounds(growPill(anchor, home, next, workAreaAt(anchor)))
+    },
+    setBusy(flag) {
+      busy = flag
     },
     focus: () => void (alive() && current?.focus()),
     isOpen: alive,
+    isVisible: () => alive() && (current?.isVisible() ?? false),
     close: () => void (alive() && current?.close()),
     setAlwaysOnTop(flag) {
       deps.settings.setAlwaysOnTop(flag)
@@ -243,7 +260,10 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
 }
 
 export interface SolIpcDeps {
-  windows: Pick<SolWindowManager, 'open' | 'setAlwaysOnTop' | 'markReady'>
+  windows: Pick<
+    SolWindowManager,
+    'open' | 'setAlwaysOnTop' | 'markReady' | 'isSender' | 'resize' | 'setBusy' | 'hide'
+  >
   settings: Pick<SolSettings, 'setMode' | 'setScreenIntelligence' | 'setHotkeys'>
   state(): SolState
   guideTarget?(): Promise<ToolWindowRef | null>
@@ -252,7 +272,7 @@ export interface SolIpcDeps {
   openCaptureSettings?(): void
 }
 
-/** Wire the five invokes (channel constants only — see the ratchet). Every
+/** Wire the invokes (channel constants only — see the ratchet). Every
  *  handler answers the current SolState to an allowed sender and null to any
  *  other webContents that gained IPC reach; arguments are validated here. */
 export function registerSolIpcHandlers(
@@ -308,6 +328,31 @@ export function registerSolIpcHandlers(
       if (typeof on === 'boolean') deps.settings.setHotkeys(on)
     })
   )
+  // SOLUSDEV-319: the pill's own invokes. The main window is an allowed sender
+  // for everything above but must not size, pin open or hide the pill.
+  const pillOnly =
+    (action: (arg: unknown) => void) =>
+    (event: IpcMainInvokeEvent, arg?: unknown): SolState | null => {
+      if (!isAllowedSender(event) || !deps.windows.isSender(event.sender)) return null
+      action(arg)
+      return deps.state()
+    }
+  ipc.handle(
+    c.resize,
+    pillOnly((h) => {
+      if (typeof h === 'number' && Number.isFinite(h)) deps.windows.resize(h)
+    })
+  )
+  ipc.handle(
+    c.setBusy,
+    pillOnly((on) => {
+      if (typeof on === 'boolean') deps.windows.setBusy(on)
+    })
+  )
+  ipc.handle(
+    c.hide,
+    pillOnly(() => deps.windows.hide())
+  )
   // Any renderer argument is ignored: main opens its own capability's URL.
   ipc.handle(
     c.openCaptureSettings,
@@ -345,6 +390,8 @@ export function createSolBrowserWindow(
   win.webContents.on('render-process-gone', () => {
     if (!win.isDestroyed()) win.close()
   })
+  // SOLUSDEV-319: summoned over whatever is in front, full-screen tools included.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.on('ready-to-show', () => win.show())
   attachOrbOverlayWire(win, ipc)
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -355,31 +402,3 @@ export function createSolBrowserWindow(
   return win
 }
 
-function trackWindowGeometry(
-  win: SolWindowHandle,
-  deps: SolWindowManagerDeps,
-  scheduler: NonNullable<SolWindowManagerDeps['scheduler']>
-): () => void {
-  let timer: unknown = null
-  const save = (): void => {
-    timer = null
-    if (win.isDestroyed()) return
-    const b = win.getBounds()
-    const d = deps.screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
-    deps.settings.setWindowGeometry({ ...b, displayId: d.id })
-  }
-  const scheduleSave = (): void => {
-    if (timer !== null) scheduler.clearTimeout(timer)
-    timer = scheduler.setTimeout(save, GEOMETRY_SAVE_DEBOUNCE_MS)
-  }
-  win.on('move', scheduleSave)
-  win.on('resize', scheduleSave)
-  win.on('close', () => {
-    if (timer === null) return
-    scheduler.clearTimeout(timer)
-    save()
-  })
-  return () => {
-    if (timer !== null) scheduler.clearTimeout(timer)
-  }
-}

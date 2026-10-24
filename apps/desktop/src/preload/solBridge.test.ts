@@ -66,6 +66,9 @@ describe('invokes', () => {
     await b.setHotkeys(false)
     await b.open()
     await b.openCaptureSettings()
+    await b.resize(240)
+    await b.setBusy(true)
+    await b.hide()
     const c = SOL_WINDOW_CHANNELS
     expect(f.invoked).toEqual([
       { channel: c.getState, args: [] },
@@ -74,7 +77,10 @@ describe('invokes', () => {
       { channel: c.setAlwaysOnTop, args: [false] },
       { channel: c.setHotkeys, args: [false] },
       { channel: c.open, args: [] },
-      { channel: c.openCaptureSettings, args: [] }
+      { channel: c.openCaptureSettings, args: [] },
+      { channel: c.resize, args: [240] },
+      { channel: c.setBusy, args: [true] },
+      { channel: c.hide, args: [] }
     ])
   })
 })

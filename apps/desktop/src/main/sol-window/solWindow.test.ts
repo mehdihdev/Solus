@@ -1,7 +1,8 @@
 // SOLUSDEV-252 S3: the SOL window manager (docs/architecture/sol-window.md §2,
-// wireflow §A/§B) — open-or-focus, geometry restore/clamp/reset, always-on-top,
-// pushes and the sender-gated IPC — against structural fakes; the real
-// BrowserWindow shell is on the COWORK QA checklist.
+// wireflow §A/§B) — open-or-focus, pushes and the sender-gated IPC — against
+// structural fakes; the real BrowserWindow shell is on the COWORK QA checklist.
+// SOLUSDEV-319: the Ember Pill — summoned at the cursor, hide-on-blur unless
+// busy, double-tap toggle, renderer-driven upward growth.
 import { describe, it, expect, vi } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { readdirSync, readFileSync } from 'node:fs'
@@ -10,12 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { SOL_WINDOW_CHANNELS } from './solWindow.constants'
 import {
   createSolWindowManager,
-  GEOMETRY_SAVE_DEBOUNCE_MS,
-  placeSolWindow,
   registerSolIpcHandlers,
-  SOL_WINDOW_DEFAULT_SIZE,
-  SOL_WINDOW_MARGIN,
-  SOL_WINDOW_MIN_SIZE,
   SOL_WINDOW_OPTIONS,
   SOL_WINDOW_WEB_PREFERENCES,
   type Rect,
@@ -24,6 +20,7 @@ import {
   type SolWindowManagerDeps
 } from './solWindow'
 import { DEFAULT_SOL_SETTINGS, type SolSettingsState } from '../solSettings'
+import { growPill, placePill, SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH } from './pillGeometry'
 
 vi.mock('electron', () => ({ BrowserWindow: class {} }))
 vi.mock('@electron-toolkit/utils', () => ({ is: { dev: false } }))
@@ -37,6 +34,7 @@ interface Fake {
   handle: SolWindowHandle
   bounds: Rect
   alwaysOnTop: boolean
+  visible: boolean
   focus: ReturnType<typeof vi.fn>
   sent: Array<{ channel: string; payload: unknown }>
   emit(event: string): void
@@ -49,6 +47,7 @@ function fakeWindow(bounds: Rect, alwaysOnTop: boolean): Fake {
   const f: Fake = {
     bounds,
     alwaysOnTop,
+    visible: true,
     focus: vi.fn(),
     sent: [],
     emit: (event) => {
@@ -67,9 +66,18 @@ function fakeWindow(bounds: Rect, alwaysOnTop: boolean): Fake {
         listeners.set(event, set)
       },
       focus: (...a) => void f.focus(...a),
-      show: () => {},
+      show: () => {
+        f.visible = true
+      },
+      hide: () => {
+        f.visible = false
+      },
+      isVisible: () => f.visible,
       close: () => f.close(),
       getBounds: () => f.bounds,
+      setBounds: (rect) => {
+        f.bounds = rect
+      },
       setAlwaysOnTop: (flag) => {
         f.alwaysOnTop = flag
       },
@@ -83,21 +91,21 @@ function harness(
   settingsInit: Partial<SolSettingsState> = {},
   cursor = { x: 100, y: 100 }
 ): {
+  moveCursor(p: { x: number; y: number }): void
   deps: SolWindowManagerDeps
   windows: Fake[]
   settings: SolSettingsState
-  timers: Array<{ fn: () => void; ms: number }>
   others: Fake[]
 } {
   const windows: Fake[] = []
   const others = [fakeWindow(WA_A, false)]
   let settings: SolSettingsState = { ...DEFAULT_SOL_SETTINGS, ...settingsInit }
-  const timers: Array<{ fn: () => void; ms: number }> = []
   const state = {
     get settings() {
       return settings
     }
   }
+  let pointer = cursor
   const deps: SolWindowManagerDeps = {
     createWindow: (bounds, alwaysOnTop) => {
       const w = fakeWindow(bounds, alwaysOnTop)
@@ -105,78 +113,30 @@ function harness(
       return w.handle
     },
     screen: {
-      getCursorScreenPoint: () => cursor,
+      getCursorScreenPoint: () => pointer,
       getDisplayNearestPoint: (p) => (p.x >= 1920 ? DISPLAY_B : DISPLAY_A),
       getAllDisplays: () => [DISPLAY_A, DISPLAY_B]
     },
     settings: {
       get: () => settings,
-      setWindowGeometry: (window) => {
-        settings = { ...settings, window }
-      },
       setAlwaysOnTop: (alwaysOnTop) => {
         settings = { ...settings, alwaysOnTop }
       }
     },
-    allWindows: () => [...others.map((o) => o.handle), ...windows.map((w) => w.handle)],
-    scheduler: {
-      setTimeout: (fn, ms) => {
-        timers.push({ fn, ms })
-        return timers.length
-      },
-      clearTimeout: (h) => {
-        if (typeof h === 'number') timers.splice(h - 1, 1, { fn: () => {}, ms: -1 })
-      }
-    }
+    allWindows: () => [...others.map((o) => o.handle), ...windows.map((w) => w.handle)]
   }
   return {
+    moveCursor: (p) => {
+      pointer = p
+    },
     deps,
     windows,
-    timers,
     others,
     get settings() {
       return state.settings
     }
   }
 }
-
-describe('placeSolWindow', () => {
-  it('no saved geometry → default size, bottom-right of the cursor display work area', () => {
-    expect(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_B)).toEqual({
-      x: WA_B.x + WA_B.width - SOL_WINDOW_DEFAULT_SIZE.width - SOL_WINDOW_MARGIN,
-      y: WA_B.y + WA_B.height - SOL_WINDOW_DEFAULT_SIZE.height - SOL_WINDOW_MARGIN,
-      ...SOL_WINDOW_DEFAULT_SIZE
-    })
-  })
-
-  it('restores saved geometry on its display, clamped into the work area', () => {
-    const saved = { x: 3200, y: -50, width: 2000, height: 500, displayId: 2 }
-    expect(placeSolWindow(saved, [DISPLAY_A, DISPLAY_B], DISPLAY_A)).toEqual({
-      x: WA_B.x,
-      y: WA_B.y,
-      width: WA_B.width,
-      height: 500
-    })
-  })
-
-  it('saved display gone → reset to default placement on the cursor display', () => {
-    const saved = { x: 10, y: 10, width: 500, height: 700, displayId: 99 }
-    expect(placeSolWindow(saved, [DISPLAY_A, DISPLAY_B], DISPLAY_A)).toEqual(
-      placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_A)
-    )
-  })
-
-  it('a work area smaller than the minimum keeps the minimum, anchored at the work-area origin', () => {
-    const tiny = { id: 3, workArea: { x: 100, y: 50, width: 300, height: 300 } }
-    const saved = { x: -100, y: -100, width: 500, height: 700, displayId: 3 }
-    expect(placeSolWindow(saved, [tiny], tiny)).toEqual({ x: 100, y: 50, ...SOL_WINDOW_MIN_SIZE })
-  })
-
-  it('never goes below the minimum size', () => {
-    const saved = { x: 0, y: 0, width: 10, height: 10, displayId: 1 }
-    expect(placeSolWindow(saved, [DISPLAY_A], DISPLAY_A)).toMatchObject(SOL_WINDOW_MIN_SIZE)
-  })
-})
 
 describe('manager', () => {
   registerWindowLifecycleAndGeometryTests()
@@ -196,7 +156,10 @@ const STATE: SolState = {
 
 const EVENT = {} as IpcMainInvokeEvent
 
-function registerWith(allowed: () => boolean): {
+function registerWith(
+  allowed: () => boolean,
+  fromPill: (sender: unknown) => boolean = () => true
+): {
   handlers: Map<string, (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown>
   calls: string[]
 } {
@@ -208,7 +171,11 @@ function registerWith(allowed: () => boolean): {
       windows: {
         open: () => void calls.push('open'),
         setAlwaysOnTop: (b) => void calls.push(`aot:${b}`),
-        markReady: () => void calls.push('ready')
+        markReady: () => void calls.push('ready'),
+        isSender: fromPill,
+        resize: (h) => void calls.push(`resize:${h}`),
+        setBusy: (b) => void calls.push(`busy:${b}`),
+        hide: () => void calls.push('hide')
       },
       settings: {
         setMode: (m) => void calls.push(`mode:${m}`),
@@ -231,7 +198,28 @@ describe('IPC registration', () => {
     expect(calls).toEqual(['capture-settings'])
   })
 
-  it('registers the eight invokes on the shared constants and returns the state', () => {
+  it('the pill invokes validate their argument and act only for the SOL window itself', () => {
+    const c = SOL_WINDOW_CHANNELS
+    const pill = registerWith(() => true)
+    pill.handlers.get(c.resize)?.(EVENT, 320)
+    pill.handlers.get(c.resize)?.(EVENT, '320') // not a number: ignored
+    pill.handlers.get(c.resize)?.(EVENT, Number.POSITIVE_INFINITY) // not finite: ignored
+    pill.handlers.get(c.setBusy)?.(EVENT, true)
+    pill.handlers.get(c.setBusy)?.(EVENT, 1) // not a boolean: ignored
+    expect(pill.handlers.get(c.hide)?.(EVENT, 'anything')).toEqual(STATE)
+    expect(pill.calls).toEqual(['resize:320', 'busy:true', 'hide'])
+    // The main window is an allowed sender for the other invokes, never for these.
+    const main = registerWith(
+      () => true,
+      () => false
+    )
+    for (const channel of [c.resize, c.setBusy, c.hide]) {
+      expect(main.handlers.get(channel)?.(EVENT, true) ?? null).toBeNull()
+    }
+    expect(main.calls).toEqual([])
+  })
+
+  it('registers the eleven invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
@@ -243,7 +231,10 @@ describe('IPC registration', () => {
         c.setScreenIntelligence,
         c.setAlwaysOnTop,
         c.setHotkeys,
-        c.openCaptureSettings
+        c.openCaptureSettings,
+        c.resize,
+        c.setBusy,
+        c.hide
       ].sort()
     )
     expect(handlers.get(c.getState)?.(EVENT)).toEqual(STATE) // marks the sender ready
@@ -298,25 +289,30 @@ describe('window hardening (SOLX-02 Phase-4 security, kept)', () => {
     })
   })
 
-  it('native frame, resizable, minimum 360×420, no webPreferences of its own', () => {
+  it('a frameless, transparent, always-on-top pill with no webPreferences of its own', () => {
     expect('webPreferences' in SOL_WINDOW_OPTIONS).toBe(false)
     expect(SOL_WINDOW_OPTIONS).toMatchObject({
-      frame: true,
-      resizable: true,
-      minWidth: 360,
-      minHeight: 420
+      frame: false,
+      transparent: true,
+      resizable: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      hasShadow: false,
+      width: SOL_PILL_WIDTH
     })
   })
 })
 
 function registerWindowLifecycleAndGeometryTests(): void {
-  it('open creates one window near the cursor; a repeat focuses it; closed clears the slot', () => {
+  const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
+
+  it('open creates one pill at the cursor; a repeat focuses it; closed clears the slot', () => {
     const h = harness({}, { x: 2500, y: 300 })
     const m = createSolWindowManager(h.deps)
     expect(m.isOpen()).toBe(false)
     m.open()
     expect(h.windows).toHaveLength(1)
-    expect(h.windows[0].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_B))
+    expect(h.windows[0].bounds).toEqual(placePill({ x: 2500, y: 300 }, WA_B, pill))
     m.open()
     expect(h.windows).toHaveLength(1)
     expect(h.windows[0].focus).toHaveBeenCalledTimes(1)
@@ -324,48 +320,80 @@ function registerWindowLifecycleAndGeometryTests(): void {
     expect(m.isOpen()).toBe(false)
     m.open({ near: { x: 5, y: 5 } })
     expect(h.windows).toHaveLength(2)
-    expect(h.windows[1].bounds).toEqual(placeSolWindow(null, [DISPLAY_A, DISPLAY_B], DISPLAY_A))
+    expect(h.windows[1].bounds).toEqual(placePill({ x: 5, y: 5 }, WA_A, pill))
   })
 
-  it('saves geometry 300 ms after the last move/resize, tagged with its display', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const w = h.windows[0]
-    w.bounds = { x: 2000, y: 100, width: 500, height: 700 }
-    w.emit('move')
-    w.emit('resize')
-    expect(h.settings.window).toBeNull()
-    // Two events, one live timer: the first was cleared by the second (debounce).
-    const live = h.timers.filter((t) => t.ms === GEOMETRY_SAVE_DEBOUNCE_MS)
-    expect(live).toHaveLength(1)
-    live[0].fn()
-    expect(h.settings.window).toEqual({ x: 2000, y: 100, width: 500, height: 700, displayId: 2 })
-  })
-
-  it('a pending save is flushed on close, and nothing fires after closed', () => {
-    const h = harness()
-    const m = createSolWindowManager(h.deps)
-    m.open()
-    const w = h.windows[0]
-    w.bounds = { x: 50, y: 60, width: 400, height: 500 }
-    w.emit('move')
-    w.close()
-    expect(h.settings.window).toEqual({ x: 50, y: 60, width: 400, height: 500, displayId: 1 })
-    expect(h.timers.every((t) => t.ms === -1)).toBe(true)
-  })
-
-  it('always-on-top is read from settings at creation and toggled live', () => {
-    const h = harness({ alwaysOnTop: true })
-    const m = createSolWindowManager(h.deps)
-    m.open()
+  it('the pill is always on top, whatever the legacy pin setting says', () => {
+    const h = harness({ alwaysOnTop: false })
+    createSolWindowManager(h.deps).open()
     expect(h.windows[0].alwaysOnTop).toBe(true)
-    m.setAlwaysOnTop(false)
-    expect(h.windows[0].alwaysOnTop).toBe(false)
-    expect(h.settings.alwaysOnTop).toBe(false)
+  })
+
+  it('blur hides an idle pill, keeps a busy one, and the window survives hiding', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.setBusy(true)
+    w.emit('blur')
+    expect(w.visible).toBe(true)
+    m.setBusy(false)
+    w.emit('blur')
+    expect(w.visible).toBe(false)
+    expect(m.isOpen()).toBe(true)
+    expect(m.isVisible()).toBe(false)
+  })
+
+  it('toggle hides a shown pill and re-summons a hidden one at the new cursor', () => {
+    const h = harness({}, { x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.toggle() // nothing open: opens
+    const w = h.windows[0]
+    expect(w.visible).toBe(true)
+    m.toggle()
+    expect(w.visible).toBe(false)
+    h.moveCursor({ x: 900, y: 500 })
+    m.toggle()
+    expect(h.windows).toHaveLength(1)
+    expect(w.visible).toBe(true)
+    expect(w.bounds).toEqual(placePill({ x: 900, y: 500 }, WA_A, pill))
+    expect(w.focus).toHaveBeenCalled()
+  })
+
+  it('open on a hidden pill shows it again (tray, page button, gesture)', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.hide()
+    expect(h.windows[0].visible).toBe(false)
+    m.open()
+    expect(h.windows[0].visible).toBe(true)
+  })
+
+  it('resize grows upward from the summon placement and keeps that height on re-summon', () => {
+    const h = harness({}, { x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.resize(300) // no window: ignored, no throw
+    m.open()
+    const home = placePill({ x: 600, y: 300 }, WA_A, pill)
+    m.resize(300)
+    expect(h.windows[0].bounds).toEqual(growPill({ x: 600, y: 300 }, home, 300, WA_A))
+    m.hide()
+    h.moveCursor({ x: 700, y: 900 })
+    m.open()
+    const home2 = placePill({ x: 700, y: 900 }, WA_A, pill)
+    expect(h.windows[0].bounds).toEqual(growPill({ x: 700, y: 900 }, home2, 300, WA_A))
+  })
+
+  it('a closed window forgets busy, so the next pill hides on blur', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.setBusy(true)
     h.windows[0].close()
-    m.setAlwaysOnTop(true) // no window: settings only, no throw
-    expect(h.settings.alwaysOnTop).toBe(true)
+    m.open()
+    h.windows[1].emit('blur')
+    expect(h.windows[1].visible).toBe(false)
   })
 }
 
@@ -482,7 +510,15 @@ it('native lookup rejects late mode/scope changes and never queries for foreign 
   registerSolIpcHandlers(
     { handle: (channel, fn) => void handlers.set(channel, fn) },
     {
-      windows: { open: vi.fn(), setAlwaysOnTop: vi.fn(), markReady: vi.fn() },
+      windows: {
+        open: vi.fn(),
+        setAlwaysOnTop: vi.fn(),
+        markReady: vi.fn(),
+        isSender: () => true,
+        resize: vi.fn(),
+        setBusy: vi.fn(),
+        hide: vi.fn()
+      },
       settings: { setMode: vi.fn(), setScreenIntelligence: vi.fn(), setHotkeys: vi.fn() },
       state: () => ({ ...STATE, actionMode: mode }),
       guideScope: () => generation,
