@@ -12,6 +12,7 @@ A live write needs a preview that showed the handshake (the approval covers it).
 """
 
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -35,8 +36,17 @@ SETTLE_LIMIT_S = 5.0
 #: Build policy send this call to the approval card instead of running it.
 APPROVAL_REQUIRED_LABEL = "Approval required"
 KNOWN_REASONS = frozenset(
-    {"no_window", "ambiguous", "not_frontmost", "save_unconfirmed", "dirty", "no_confirm"}
+    {
+        "no_window",
+        "ambiguous",
+        "not_frontmost",
+        "save_unconfirmed",
+        "dirty",
+        "no_confirm",
+        "reload_unconfirmed",
+    }
 )
+SAVE_WRITE_LIMIT_S = 3.0
 
 #: argv: (verb in {available, save, revert}, sheet stem, absolute sheet path).
 #: Matches only the KiCad 10 window titled exactly "<stem> — Schematic Editor"
@@ -90,7 +100,12 @@ SCRIPT = """on run argv
 						if v starts with "Revert '" and (exists button reply of d) then
 							if reply is "Yes" and v starts with prompt then
 								click button "Yes" of d
-								return "ok"
+								-- Reloaded once the editor (not the dialog) is front again.
+								repeat 25 times
+									delay 0.2
+									if (name of window 1 of targetProc) is wanted then return "ok"
+								end repeat
+								error "reload_unconfirmed"
 							else if reply is "No" then
 								click button "No" of d
 								error "no_confirm"
@@ -180,6 +195,24 @@ def live_editor() -> LiveEditor | None:
     return default_live_editor()
 
 
+def _stamp(path: str) -> tuple[int, int, int]:
+    info = os.stat(path, follow_symlinks=False)
+    return (info.st_mtime_ns, info.st_ino, info.st_size)
+
+
+def _saved(editor: LiveEditor, sheet: str, path: str) -> bool:
+    """Click Save and confirm KiCad actually rewrote the file (it does on every
+    Save, clean or not, verified on KiCad 10.0.1)."""
+    before = _stamp(path)
+    editor.save(sheet, path)
+    deadline = time.monotonic() + SAVE_WRITE_LIMIT_S
+    while _stamp(path) == before:
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
 def wait_until_settled(read: Callable[[], bytes | None]) -> None:
     """KiCad writes asynchronously after Save; wait until two reads agree."""
     deadline = time.monotonic() + SETTLE_LIMIT_S
@@ -247,9 +280,11 @@ def live_commit(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str,
         raise DevelopmentError("live_preview_required")
     sheet, path = _sheet(plan.path), str(root / plan.path)
     try:
-        editor.save(sheet, path)
+        saved = _saved(editor, sheet, path)
     except LiveEditError as exc:
         raise DevelopmentError("open_in_editor") from exc
+    if not saved:  # the click was swallowed: KiCad still holds unsaved state
+        raise DevelopmentError("open_in_editor")
     wait_until_settled(lambda: read_schematic(root, plan.path))
     commit_plan(root, plan, editor_saved=True)
     try:
@@ -268,12 +303,16 @@ def _resave(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str, Any
     KiCad's canonical form; report the fingerprint actually on disk."""
     sheet, path = _sheet(plan.path), str(root / plan.path)
     result: dict[str, Any] = {}
+    reason = "save_unconfirmed"
     try:
-        editor.save(sheet, path)
+        # One retry: a Save clicked while the Revert dialog closes can be swallowed.
+        saved = _saved(editor, sheet, path) or _saved(editor, sheet, path)
     except LiveEditError as exc:
+        saved, reason = False, exc.reason
+    if not saved:
         result = {
             "kicad_resave": "failed",
-            "kicad_resave_reason": exc.reason,
+            "kicad_resave_reason": reason,
             "kicad_resave_note": RESAVE_FAILED_NOTE,
         }
 

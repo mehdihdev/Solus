@@ -38,6 +38,7 @@ class FakeEditor:
         self.revert_ok = revert_ok
         self.canonical = canonical
         self.resave_ok = resave_ok
+        self.swallow_saves = 0
         self.reverted = False
         self.calls: list[tuple[str, str, bytes]] = []
 
@@ -47,14 +48,17 @@ class FakeEditor:
         return True
 
     def save(self, sheet: str, path: str) -> None:
+        """Like KiCad: every Save rewrites the file, unless the click is swallowed."""
         self.calls.append(("save", sheet, self.path.read_bytes()))
+        if self.swallow_saves:
+            self.swallow_saves -= 1
+            return
         if self.reverted:  # step (d): KiCad re-serializes what it reloaded
             if not self.resave_ok:
                 raise LiveEditError("save", "save_unconfirmed")
-            if self.canonical is not None:
-                self.path.write_bytes(self.canonical)
-        elif self.on_save is not None:
-            self.path.write_bytes(self.on_save)
+            self.path.write_bytes(self.canonical or self.path.read_bytes())
+        else:
+            self.path.write_bytes(self.on_save or self.path.read_bytes())
 
     def revert(self, sheet: str, path: str) -> None:
         self.calls.append(("revert", sheet, self.path.read_bytes()))
@@ -270,6 +274,42 @@ def test_failed_resave_keeps_the_edit_and_warns(
     assert result["kicad_reload"] == "reloaded"
     assert result["kicad_resave"] == "failed"
     assert fingerprint(sheet["path"].read_bytes()) == result["after_fingerprint"]
+
+
+def test_swallowed_resave_is_retried_once(
+    sheet: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    canonical = b"(kicad_sch (canonical))"
+    editor = FakeEditor(sheet["path"], canonical=canonical)
+    _use(monkeypatch, editor)
+    original_revert = editor.revert
+
+    def revert_then_swallow_next_save(sheet_name: str, path: str) -> None:
+        original_revert(sheet_name, path)
+        editor.swallow_saves = 1
+
+    editor.revert = revert_then_swallow_next_save  # type: ignore[method-assign,assignment]
+
+    result = _approved(sheet["args"])
+
+    assert [c[0] for c in editor.calls][-3:] == ["revert", "save", "save"]
+    assert result["after_fingerprint"] == fingerprint(canonical)
+    assert "kicad_resave" not in result
+
+
+def test_swallowed_pre_save_refuses_before_writing(
+    sheet: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = sheet["path"].read_bytes()
+    editor = FakeEditor(sheet["path"])
+    editor.swallow_saves = 1
+    _use(monkeypatch, editor)
+
+    with pytest.raises(DevelopmentError, match="open_in_editor"):
+        _approved(sheet["args"])
+
+    assert sheet["path"].read_bytes() == original
+    assert "revert" not in [c[0] for c in editor.calls]
 
 
 def test_settle_waits_for_bytes_to_stop_changing(monkeypatch: pytest.MonkeyPatch) -> None:
