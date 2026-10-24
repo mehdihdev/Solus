@@ -1,6 +1,7 @@
 """ADR-040: edits land in a sheet KiCad has open via save -> write -> Revert."""
 
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -235,8 +236,8 @@ def test_expired_live_preview_is_refused(
 ) -> None:
     _use(monkeypatch, FakeEditor(sheet["path"]))
     add_symbol(**sheet["args"], dry_run=True)
-    clock = live_kicad.time.monotonic() + live_kicad.LIVE_PREVIEW_TTL_S + 1
-    monkeypatch.setattr(live_kicad.time, "monotonic", lambda: clock)
+    clock = time.monotonic() + live_kicad.LIVE_PREVIEW_TTL_S + 1
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
 
     with pytest.raises(DevelopmentError, match="live_preview_required"):
         add_symbol(**sheet["args"])
@@ -273,7 +274,7 @@ def test_failed_resave_keeps_the_edit_and_warns(
 
 def test_settle_waits_for_bytes_to_stop_changing(monkeypatch: pytest.MonkeyPatch) -> None:
     reads = iter([b"a", b"b", b"c", b"c", b"c"])
-    monkeypatch.setattr(live_kicad.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
     seen: list[bytes] = []
 
     def read() -> bytes:

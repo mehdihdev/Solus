@@ -1,4 +1,5 @@
 """Cloud-owned file writes bind complete native state to a one-use task ticket."""
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,method-assign"
 
 import asyncio
 

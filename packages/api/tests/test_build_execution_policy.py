@@ -1,4 +1,5 @@
 """Build authorization is explicit, narrow, fresh, and consumed exactly once."""
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,attr-defined"
 
 import asyncio
 from contextvars import ContextVar

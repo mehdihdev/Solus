@@ -242,7 +242,7 @@ async def test_health_pass_never_restarts_a_server_busy_with_a_call(tmp_path: Pa
         async def unresponsive(_handle: object) -> bool:
             return False
 
-        sup._ping = unresponsive  # type: ignore[method-assign]
+        sup._ping = unresponsive  # type: ignore[method-assign,assignment]
         handle.begin_call()
         try:
             await sup.ensure_healthy()

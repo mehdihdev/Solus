@@ -276,6 +276,9 @@ def _resave(root: Path, plan: MutationPlan, editor: LiveEditor) -> dict[str, Any
             "kicad_resave_reason": exc.reason,
             "kicad_resave_note": RESAVE_FAILED_NOTE,
         }
-    read = lambda: read_schematic(root, plan.path)  # noqa: E731
+
+    def read() -> bytes:
+        return read_schematic(root, plan.path)
+
     wait_until_settled(read)
     return {**result, "after_fingerprint": fingerprint(read())}
