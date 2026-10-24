@@ -427,6 +427,10 @@ class Supervisor:
         for handle in self._handles.values():
             if handle.launch.unavailable_reason is not None or handle.state is ServerState.FAILED:
                 continue
+            if handle.active_calls:
+                # A sync server busy with a call cannot answer pings; killing it
+                # would abort the call mid-flight. The cloud owns call timeouts.
+                continue
             session = handle.session
             if session is not None and await self._ping(handle):
                 continue
