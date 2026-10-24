@@ -703,3 +703,37 @@ before the approval card was enforced). Fork suite 484 passed.
 ### Sign-off
 
 None added — sign-off lines are human (integrations/mcp/CLAUDE.md rule 2).
+
+## 2026-10-24 (later) — ADR-040 amendment step (d), save confirmation, supervisor busy-skip (SOLUSDEV-319)
+
+### What changed
+
+- **Step (d)** (ADR-040 amendment, approved in-chat): after a successful Revert the reloaded,
+  clean sheet is saved once more so the file is in KiCad's canonical form; the tool returns the
+  fingerprint actually on disk. Without it every live edit after a SOL edit was refused once as
+  `stale_plan` (KiCad's save adds default fields, a token-level change).
+- **Save confirmation:** KiCad 10.0.1 rewrites the file on every Save (clean or not; measured),
+  so each Save must change the file's stamp (mtime/inode/size) within 3 s. A swallowed pre-save
+  refuses `open_in_editor` before anything is written; a swallowed re-save is retried once, then
+  reported (`kicad_resave: failed`). Revert waits until the editor, not the dialog, is front.
+- **Companion supervisor** (`packages/companion`): the health pass no longer restarts a server
+  with an in-flight call. A live run showed a sync server busy in the handshake missing the 5 s
+  ping; the restart aborted the call after the write and before the reload, leaving KiCad's
+  Revert dialog open. The cloud owns call timeouts (contract §5).
+
+### Security assessment
+
+No new input vocabulary (Save already in ADR-040 §2). The extra Save runs only after a confirmed
+Revert of the exact path, on a clean sheet. Skipping pings for busy servers cannot extend a call:
+the cloud's per-call timeout still bounds it.
+
+### Evidence
+
+Live, macOS / KiCad 10.0.1, Build mode, approval card shown with the `Approval required` row:
+"add a resistor on the current KiCad project I have open" → R6 applied and reloaded; "add one
+more resistor next to it" → R7 applied and reloaded back to back; both returned fingerprints
+equal the file on disk. Fork suite 489 passed; companion suite 373 passed.
+
+### Sign-off
+
+None added — the sandbox-posture re-review trigger recorded above still needs both developers.

@@ -241,6 +241,10 @@ handshake (`solus/development/live_kicad.py`) instead of refusing.
 - Save must clear KiCad's `*` (`save_unconfirmed`); a save that changes content
   makes the write `stale_plan` (formatting-only re-saves match by tokens).
 - Revert refuses a dirty sheet and confirms only the dialog naming the exact path.
+- After Revert the sheet is saved once more (ADR-040 amendment step d) so the file is in
+  KiCad's canonical form; `after_fingerprint` is the file actually on disk. Every Save must
+  change the file stamp within 3 s (a swallowed pre-save refuses `open_in_editor`; a swallowed
+  re-save is retried once, then `kicad_resave: "failed"` with a note).
 - Success adds `kicad_reload: "reloaded"`; a failed Revert returns
   `kicad_reload: "failed"`, a reason code and a recovery note (use File → Revert,
   do not save).
