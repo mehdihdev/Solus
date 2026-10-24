@@ -205,8 +205,8 @@ describe('SolWindow pill sizing and busy signal', () => {
 
   it('opens the panel above the bar only when there is something to show', async () => {
     await mount()
-    // Guide mode carries the Guide tasks picker, so the panel is open.
-    expect(screen.getByRole('region', { name: 'SOL conversation' })).toBeInTheDocument()
+    // A1: summoned, the pill is the bar alone — in Guide mode too.
+    expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
     act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
     expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
     act(() => bridge.pushRegion(SOL_REGION))
@@ -278,11 +278,64 @@ describe('SolWindow auth guard (the retired OrbWindow pattern)', () => {
   })
 })
 
-it('mounts Guide tasks and hides them when Build is selected', async () => {
+it('opens Guide tasks on demand from the footer, only in Guide mode', async () => {
   await mount()
+  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
   expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
   act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
   expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Guide tasks' })).not.toBeInTheDocument()
+})
+
+describe('SolWindow summon starts a fresh chat (A1)', () => {
+  let visibility: DocumentVisibilityState = 'visible'
+  beforeEach(() => {
+    visibility = 'visible'
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility
+    })
+  })
+  const summonAgain = (): void => {
+    visibility = 'hidden'
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+    visibility = 'visible'
+    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+  }
+  const active = (): string | null =>
+    useSolSessionStore.getState().conversationByProject['p1'] ?? null
+
+  it('opening the pill forgets the last conversation; so does every re-summon', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'old-chat' } })
+    await mount()
+    expect(active()).toBeNull()
+    act(() => useSolSessionStore.getState().setConversation('p1', 'second-chat'))
+    summonAgain()
+    expect(active()).toBeNull()
+  })
+
+  it('a busy SOL keeps its conversation across a re-summon', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'live-chat' }, streaming: true })
+    await mount()
+    expect(active()).toBe('live-chat')
+    summonAgain()
+    expect(active()).toBe('live-chat')
+  })
+
+  it('a running plan keeps its conversation too', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'plan-chat' } })
+    useSolWindowStore.setState({ planRunning: true })
+    await mount()
+    expect(active()).toBe('plan-chat')
+  })
+
+  it('re-summon closes Guide tasks again', async () => {
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
+    summonAgain()
+    expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  })
 })
 
 it('shows the fixture hole diff in the actual SOL window and requires an explicit decision', async () => {

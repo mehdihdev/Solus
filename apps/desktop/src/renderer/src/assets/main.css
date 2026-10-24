@@ -327,6 +327,20 @@ body {
   font-size: 11px;
   color: var(--mut);
 }
+.sol-pill-chip {
+  background: transparent;
+  border: 1px solid var(--bd);
+  border-radius: 5px;
+  color: var(--mut);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+.sol-pill-chip[aria-pressed='true'] {
+  color: var(--tx);
+  background: var(--sur2);
+}
 .sol-pill-toggle {
   display: inline-flex;
   align-items: center;

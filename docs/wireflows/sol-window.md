@@ -120,6 +120,13 @@ below-left of the pointer, flipped above it when the pointer is near the bottom 
 clamped to the display under the cursor); shown → hidden. The other spawn paths (tray, page button,
 Cmd/Ctrl+Shift+Space, the circle gesture) always show and focus. No geometry is remembered.
 
+**Fresh on summon.** Every summon — the window created, or shown again after a hide — opens on a NEW
+chat with the bar alone (A1), unless SOL is busy (streaming, the latest reply's approvals waiting, or a
+plan running), in which case the user returns to that conversation. The previous conversation stays in
+the SOL page's history; because the active-conversation pointer is shared with the page, the page
+follows to the new chat. In Guide mode the walkthrough picker (SOLUSDEV-262) opens from a **Guide
+tasks** chip in the footer rather than holding the panel open, and closes again on the next summon.
+
 **Frame.** Frameless, transparent, always on top, not resizable by hand, 560 px wide. Collapsed it is
 the bar alone:
 
@@ -129,14 +136,12 @@ the bar alone:
   and Confirm every change as compact toggles · `⌃Space mode` · `⌃⌃ hide`. Degraded-status lines
   (§B list) render in the footer area, one per line.
 
-**Grows upward.** Once there is anything to show — messages, Guide tasks, running processes, the region
-card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
+**Grows upward.** Once there is anything to show — messages, opened Guide tasks, the region card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
 never past the work-area top; the thread scrolls inside). If growing would cover the point the pointer
 was at when summoned, the pill shifts right of that point when there is room. The panel has no header
 of its own; New chat and history stay on the full SOL page.
 
-**Dismiss.** Clicking another app hides the pill; the conversation is kept and returns on the next
-summon. It does NOT hide while SOL is streaming, while the latest turn's approval is waiting, or while a plan
+**Dismiss.** Clicking another app hides the pill (the next summon starts fresh, as above). It does NOT hide while SOL is streaming, while the latest turn's approval is waiting, or while a plan
 runs (an older, forgotten approval does not keep it up).
 Esc hides it (closes the mention list first when that is open).
 

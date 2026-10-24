@@ -11,7 +11,7 @@
 //
 // Perf budget (solWindowPerf.test): no timers or animation frames here — the
 // streaming indicator is ONE CSS class (`sol-pulse`); sizing is a ResizeObserver.
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { getDesktopSolBridge } from '../../lib/desktopBridge'
@@ -20,8 +20,8 @@ import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceS
 import type { SolState } from '../../../../main/sol-window/solWindow'
 import { SolChat } from './SolChat'
 import { GuideTasks } from '../guide/GuideTasks'
-import { selectSession, useSolChatStore } from './solChatStore'
-import { useSolSessionStore } from './solSessionStore'
+import { selectSession, startNewChat, useSolChatStore } from './solChatStore'
+import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { connectSolBridge, useSolWindowStore } from './solWindowStore'
 
 const REFUSED_LINE = 'SOL didn’t look — turn on SOL sees your screen in Settings to let it.'
@@ -37,13 +37,36 @@ function statusLines(state: SolState | null): string[] {
   return lines.filter((line) => line !== '')
 }
 
-function FooterStart({ state }: { state: SolState | null }): React.JSX.Element {
+interface GuideToggle {
+  open: boolean
+  onToggle: () => void
+}
+
+function FooterStart({
+  state,
+  guide
+}: {
+  state: SolState | null
+  guide: GuideToggle
+}): React.JSX.Element {
   return (
     <>
       <Mono size={9.5} color="var(--tx)">
         SOL
       </Mono>
       {state?.screenIntelligence && <span className="sol-window-sees">sees your screen</span>}
+      {/* A1: summoned, the pill is the bar alone — the walkthrough picker
+          (SOLUSDEV-262) opens on demand instead of holding the panel open. */}
+      {state?.actionMode === 'guide' && (
+        <button
+          type="button"
+          className="sol-pill-chip"
+          aria-pressed={guide.open}
+          onClick={guide.onToggle}
+        >
+          Guide tasks
+        </button>
+      )}
     </>
   )
 }
@@ -58,7 +81,13 @@ function Notice({ children }: { children: React.ReactNode }): React.JSX.Element 
   return <div className="sol-pill-bar sol-pill-notice">{children}</div>
 }
 
-function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
+function Body({
+  projectId,
+  guide
+}: {
+  projectId: string | null
+  guide: GuideToggle
+}): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
   const state = useSolWindowStore((s) => s.state)
   if (status === 'loading') {
@@ -75,23 +104,54 @@ function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
     <SolChat
       projectId={projectId}
       layout="pill"
-      pillTop={state?.actionMode === 'guide' && projectId ? <GuideTasks /> : null}
-      pillFooterStart={<FooterStart state={state} />}
+      pillTop={guide.open && state?.actionMode === 'guide' && projectId ? <GuideTasks /> : null}
+      pillFooterStart={<FooterStart state={state} guide={guide} />}
       pillFooterEnd={FOOTER_END}
     />
   )
 }
 
-/** Busy = blur must not hide: a turn streaming, the LATEST turn's approval
- *  waiting (an old, forgotten one must not pin the pill over every app), or a
- *  plan running. */
+/** The latest turn has an approval waiting (an old, forgotten one does not count). */
+const latestParked = (s: Parameters<typeof selectSession>[0], projectId: string | null): boolean =>
+  (selectSession(s, projectId).items.at(-1)?.confirmations.length ?? 0) > 0
+
+/** Busy = blur must not hide, and a summon must not start over: a turn
+ *  streaming, the latest turn's approval waiting, or a plan running. */
 function useBusy(projectId: string | null): boolean {
   const streaming = useSolSessionStore((s) => s.streaming)
   const planRunning = useSolWindowStore((s) => s.planRunning)
-  const parked = useSolChatStore(
-    (s) => (selectSession(s, projectId).items.at(-1)?.confirmations.length ?? 0) > 0
-  )
+  const parked = useSolChatStore((s) => latestParked(s, projectId))
   return streaming || parked || planRunning
+}
+
+/** The same answer read once, outside React (a summon event). */
+const busyNow = (projectId: string): boolean =>
+  useSolSessionStore.getState().streaming ||
+  useSolWindowStore.getState().planRunning ||
+  latestParked(useSolChatStore.getState(), projectId)
+
+/** A1: every summon — the window created, or shown again after a hide — opens
+ *  on a NEW chat, unless SOL is busy (then the user comes back to it). The old
+ *  conversation stays in the SOL page's history; the pointer is shared with the
+ *  page by design, so the page follows. */
+function useFreshOnSummon(projectId: string | null, onSummon: () => void): void {
+  const latest = useRef(onSummon)
+  useEffect(() => {
+    latest.current = onSummon
+  })
+  useEffect(() => {
+    if (!projectId) return
+    const summoned = (): void => {
+      if (document.visibilityState !== 'visible') return
+      latest.current()
+      if (busyNow(projectId)) return
+      if (selectConversationId(useSolSessionStore.getState(), projectId) === null) return
+      startNewChat(projectId)
+    }
+    summoned()
+    document.addEventListener('visibilitychange', summoned)
+    return () => document.removeEventListener('visibilitychange', summoned)
+  }, [projectId])
 }
 
 /** Main sizes the window from this; the bottom edge stays put (grows upward). */
@@ -147,6 +207,8 @@ export function SolWindow(): React.JSX.Element {
   const region = useSolWindowStore((s) => s.region)
   const ref = useRef<HTMLDivElement>(null)
   const projectId = project?.id ?? null
+  const [guideOpen, setGuideOpen] = useState(false)
+  useFreshOnSummon(projectId, () => setGuideOpen(false))
   // The first getState() is what tells main this renderer is up (markReady)
   // and flushes a region captured before the window finished loading.
   useEffect(() => connectSolBridge(), [])
@@ -156,7 +218,10 @@ export function SolWindow(): React.JSX.Element {
   const lines = statusLines(state)
   return (
     <div className="sol-pill" ref={ref}>
-      <Body projectId={projectId} />
+      <Body
+        projectId={projectId}
+        guide={{ open: guideOpen, onToggle: () => setGuideOpen((open) => !open) }}
+      />
       {lines.length > 0 && (
         <div className="sol-window-status">
           {lines.map((line) => (
