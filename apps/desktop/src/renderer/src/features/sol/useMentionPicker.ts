@@ -19,19 +19,22 @@ import {
 import { useMentionSearch } from './useMentionSearch'
 import { useSourceViewVersion } from '../graph/sourceViewEvents'
 
+/** The composer element: the SOL window's input or the page's autosizing textarea. */
+export type ComposerElement = HTMLInputElement | HTMLTextAreaElement
+
 export interface MentionPicker {
   listOpen: boolean
   results: readonly Entity[]
   active: Entity | null
   /** Ids to send with this message, in pick order. */
   mentionIds: readonly string[]
-  inputRef: React.RefObject<HTMLInputElement | null>
+  inputRef: React.RefObject<ComposerElement | null>
   /** Call on every input change, with the element, before/after setting text. */
-  onInput: (el: HTMLInputElement) => void
+  onInput: (el: ComposerElement) => void
   /** Call on caret-moving events (keyup, click). */
-  onCaretMove: (el: HTMLInputElement) => void
+  onCaretMove: (el: ComposerElement) => void
   /** Returns true when the picker consumed the key. */
-  onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => boolean
+  onKeyDown: (event: React.KeyboardEvent<ComposerElement>) => boolean
   choose: (entity: Entity) => void
   /** Clear picked mentions after a send. */
   reset: () => void
@@ -47,7 +50,7 @@ export function useMentionPicker(
   const [picked, setPicked] = useState<readonly PickedMention[]>([])
   const [highlight, setHighlight] = useState(0)
   const [dismissed, setDismissed] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<ComposerElement>(null)
   const [pickedProject, setPickedProject] = useState(projectId)
   const [pickedView, setPickedView] = useState(viewVersion)
   if (pickedProject !== projectId || pickedView !== viewVersion) {
@@ -72,7 +75,7 @@ export function useMentionPicker(
     .map((m) => m.id)
     .slice(0, MAX_MENTIONS)
 
-  const onCaretMove = (el: HTMLInputElement): void => setCaret(el.selectionStart ?? el.value.length)
+  const onCaretMove = (el: ComposerElement): void => setCaret(el.selectionStart ?? el.value.length)
 
   const choose = (entity: Entity): void => {
     if (!token) return
@@ -118,7 +121,9 @@ export function useMentionPicker(
   }
 }
 
-function mentionKeyHandler({
+/** Listbox keys for a text input: ArrowUp/Down wrap, Enter chooses, Escape
+ *  dismisses. Shared with the ⌘K palette (SOLUSDEV-320). */
+export function mentionKeyHandler<T>({
   listOpen,
   results,
   active,
@@ -127,13 +132,13 @@ function mentionKeyHandler({
   setDismissed
 }: {
   listOpen: boolean
-  results: readonly Entity[]
-  active: Entity | null
-  choose: (entity: Entity) => void
+  results: readonly T[]
+  active: T | null
+  choose: (item: T) => void
   setHighlight: React.Dispatch<React.SetStateAction<number>>
   setDismissed: (dismissed: boolean) => void
 }): MentionPicker['onKeyDown'] {
-  return (event: React.KeyboardEvent<HTMLInputElement>): boolean => {
+  return (event: React.KeyboardEvent<ComposerElement>): boolean => {
     if (!listOpen) return false
     if (event.key === 'ArrowDown') {
       setHighlight((h) => (h + 1) % results.length)

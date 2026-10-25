@@ -9,6 +9,7 @@ from conftest import create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.connectors.registry import ConnectorRegistry
+from test_solus_config import SYNCED_CONFIG_NODES, TREE_NODES
 
 
 @pytest.fixture(autouse=True)
@@ -47,8 +48,12 @@ async def test_filter_entities_by_type_and_domain(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     project_id = await _project_with_graph(client, alice_headers)
-    # 3 synced entities + `.solus` and its five section nodes (SOLUSDEV-242).
-    assert len(await _entities(client, alice_headers, project_id)) == 9
+    # 3 synced entities + the `.solus` tree: root, seven sections and the fixed
+    # subsection nodes (SOLUSDEV-242, extended by SOLUSDEV-320).
+    assert (
+        len(await _entities(client, alice_headers, project_id))
+        == 3 + TREE_NODES + SYNCED_CONFIG_NODES
+    )
     exports = await _entities(client, alice_headers, project_id, type="design_export")
     assert len(exports) == 1
     assert exports[0]["domain"] == "electrical"

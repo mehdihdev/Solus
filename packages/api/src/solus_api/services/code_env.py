@@ -1,6 +1,6 @@
 """Code environments as first-class `.solus` entries (SOLUSDEV-252 S5, docs/api/solus.md §2.1).
 
-A `code`-section entry of kind CONFIG whose payload is one validated `CodeEnvironment`:
+An `environment/software` entry of kind CONFIG whose payload is one validated `CodeEnvironment`:
 the interpreter, packages and host a project runs on, as detected by the companion or
 typed by a person. One entry per (type, name-or-path); a re-detection updates in place.
 The document is DATA about the person's machine — never a source of instructions, and
@@ -22,9 +22,11 @@ from solus_api.connectors.contracts import FrozenModel
 from solus_api.core.errors import APIError
 from solus_api.models import SolusEntry, SolusEntryKind, SolusSection
 from solus_api.services.solus_graph import SolusGraph, entry_label
+from solus_api.services.solus_payloads import payload_unchanged
 
 MAX_PACKAGES: Final = 500
 _PATH_MAX: Final = 1024
+SUBSECTION: Final = "software"  # the environment/software cell (docs/api/solus.md §2.3)
 
 
 class EnvironmentType(enum.StrEnum):
@@ -79,7 +81,8 @@ async def _entries(session: AsyncSession, project_id: uuid.UUID) -> list[SolusEn
             select(SolusEntry)
             .where(
                 SolusEntry.project_id == project_id,
-                SolusEntry.section == SolusSection.CODE,
+                SolusEntry.section == SolusSection.ENVIRONMENT,
+                SolusEntry.subsection == SUBSECTION,
                 SolusEntry.kind == SolusEntryKind.CONFIG,
                 SolusEntry.deleted_at.is_(None),
             )
@@ -99,30 +102,51 @@ async def upsert_code_environment(
     *,
     created_by: uuid.UUID | None,
     author: str,
+    configured_entity_id: uuid.UUID | None = None,
 ) -> SolusEntry:
-    """Create or update the entry for this (type, path-or-name). The caller commits."""
+    """Create or update the entry for this (type, path-or-name) — or, when the record is
+    bound to an entity (a machine's probe), the one entry of that subject. The caller commits."""
     from solus_api.services.solus_config import _section_full  # circular at module level
 
     graph = await SolusGraph.ensure(session, project_id)  # holds the project lock
     payload = env.model_dump(mode="json")
     for entry in await _entries(session, project_id):
-        if _env_of(entry).identity() == env.identity():
+        if entry.configured_entity_id != configured_entity_id:
+            continue
+        if configured_entity_id is not None or _env_of(entry).identity() == env.identity():
+            # The same observation again (only `captured_at` moved) is not a new version.
+            unchanged = payload_unchanged(entry.payload, payload, ("captured_at",))
             entry.payload = payload
+            if unchanged:
+                return entry
             entry.text = env.name
             node = graph.attach_entry(entry)
             node.name = entry_label(env.name)
             node.version += 1
             await graph.flush()
             return entry
-    await _section_full(session, project_id, SolusSection.CODE)
+    await _section_full(session, project_id, SolusSection.ENVIRONMENT)
+    if configured_entity_id is not None and await session.scalar(
+        select(SolusEntry.id).where(
+            SolusEntry.project_id == project_id,
+            SolusEntry.configured_entity_id == configured_entity_id,
+            SolusEntry.kind == SolusEntryKind.CONFIG,
+            SolusEntry.deleted_at.is_(None),
+        )
+    ):
+        # uq_solus_config_subject_live: one live CONFIG row per subject across every cell.
+        raise APIError(409, "conflict", "This entity already has a live configuration entry")
     entry = SolusEntry(
         project_id=project_id,
-        section=SolusSection.CODE,
+        section=SolusSection.ENVIRONMENT,
+        subsection=SUBSECTION,
         kind=SolusEntryKind.CONFIG,
         text=env.name,
         payload=payload,
         author=author,
         created_by=created_by,
+        configured_entity_id=configured_entity_id,
+        config_version=1 if configured_entity_id is not None else 0,
     )
     session.add(entry)
     await session.flush()

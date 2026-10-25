@@ -25,7 +25,16 @@ from solus_api.models import (
 from sqlalchemy import delete, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncSession
-from test_solus_config import SECTIONS, _get, _post, _project, _upload
+from test_solus_config import (
+    FIXED_SUBSECTIONS,
+    SECTIONS,
+    TREE_EDGES,
+    TREE_NODES,
+    _get,
+    _post,
+    _project,
+    _upload,
+)
 
 
 async def _graph(db: AsyncSession, project_id: str) -> tuple[list[GraphEntity], list[GraphEdge]]:
@@ -45,25 +54,39 @@ async def _graph(db: AsyncSession, project_id: str) -> tuple[list[GraphEntity], 
     return nodes, edges
 
 
-async def test_creation_is_one_root_with_five_real_section_children(
+async def test_creation_is_one_root_with_seven_sections_and_fixed_subsections(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     nodes, edges = await _graph(db, project_id)
-    assert len(nodes) == 6
+    assert len(nodes) == TREE_NODES
     root = next(node for node in nodes if node.kind == "solus_config")
     sections = {node.attrs["section"]: node for node in nodes if node.kind == "solus_section"}
     assert set(sections) == set(SECTIONS)
+    subsections = {
+        (node.attrs["section"], node.attrs["subsection"]): node
+        for node in nodes
+        if node.kind == "solus_subsection"
+    }
+    assert set(subsections) == {(s, sub) for s, subs in FIXED_SUBSECTIONS.items() for sub in subs}
     assert all(node.domain == Domain.PROJECT and node.origin == "manual" for node in nodes)
     assert {(edge.src_id, edge.dst_id, edge.relation_type) for edge in edges} == {
         (root.id, node.id, "contains") for node in sections.values()
-    }
+    } | {(sections[s].id, node.id, "contains") for (s, _), node in subsections.items()}
     assert {node.id for node in nodes} - {edge.dst_id for edge in edges} == {root.id}
 
 
-@pytest.mark.parametrize("section,kind", [("details", "solus_note"), ("errors", "solus_error")])
+@pytest.mark.parametrize(
+    "section,subsection,kind",
+    [("goals", "general", "solus_goal"), ("errors", None, "solus_error")],
+)
 async def test_note_edit_keeps_identity_and_delete_only_removes_its_node_and_edges(
-    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession, section: str, kind: str
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    db: AsyncSession,
+    section: str,
+    subsection: str | None,
+    kind: str,
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     response = await _post(
@@ -82,11 +105,17 @@ async def test_note_edit_keeps_identity_and_delete_only_removes_its_node_and_edg
     node_id = uuid.UUID(entry["entity_id"])
     node = await db.get(GraphEntity, node_id)
     assert node is not None and node.kind == kind
-    assert node.attrs == {"solus_entry_id": entry["id"], "section": section}
+    expected_attrs = {"solus_entry_id": entry["id"], "section": section, "subsection": subsection}
+    assert node.attrs == expected_attrs
     assert 0 < len(node.name) <= 120 and "\n" not in node.name
     before, edges = await _graph(db, project_id)
+    # Under its subsection node when it has one, else under the section node.
     container = next(
-        n for n in before if n.kind == "solus_section" and n.attrs["section"] == section
+        n
+        for n in before
+        if n.kind in ("solus_section", "solus_subsection")
+        and n.attrs["section"] == section
+        and n.attrs.get("subsection") == subsection
     )
     assert any(
         e.src_id == container.id and e.dst_id == node.id and e.relation_type == "contains"
@@ -114,7 +143,7 @@ async def test_note_edit_keeps_identity_and_delete_only_removes_its_node_and_edg
     assert patched.json()["data"]["entity_id"] == entry["entity_id"]
     await db.refresh(node)
     assert node.name == "Updated error diagnosis"
-    assert node.attrs == {"solus_entry_id": entry["id"], "section": section}
+    assert node.attrs == expected_attrs
     removed = await client.delete(
         f"/api/v1/projects/{project_id}/solus/entries/{entry['id']}", headers=alice_headers
     )
@@ -138,11 +167,12 @@ async def _legacy_entries(
             client,
             headers,
             project_id,
-            "docs",
+            "documentation",
             {
                 "kind": "artifact",
                 "artifact_id": artifact_id,
                 "name": "rules.pdf",
+                "subsection": "guides",
             },
         )
     ).json()["data"]
@@ -166,7 +196,7 @@ async def _legacy_entries(
     )
     deleted = SolusEntry(
         project_id=uuid.UUID(project_id),
-        section=SolusSection.DOCS,
+        section=SolusSection.DOCUMENTATION,
         kind=SolusEntryKind.TEXT,
         text="Deleted entry",
         author="user",
@@ -189,10 +219,12 @@ async def test_concurrent_get_backfills_legacy_once_preserving_artifact_identity
     await db.refresh(note)
     assert note.text == "Legacy failure\nDetails remain intact"
     nodes, edges = await _graph(db, project_id)
-    assert len(nodes) == 8 and len(edges) == 8
+    # The tree plus the note and the document; the note hangs off `errors`, the document
+    # off `documentation/guides` and off the root by `references`.
+    assert len(nodes) == TREE_NODES + 2 and len(edges) == TREE_EDGES + 3
     document_node = next(node for node in nodes if str(node.id) == document["entity_id"])
     assert document_node.attrs["solus_entry_id"] == document["id"]
-    assert replies[0]["sections"]["docs"][0]["entity_id"] == document["entity_id"]
+    assert replies[0]["sections"]["documentation"][0]["entity_id"] == document["entity_id"]
     artifact = await db.get(Artifact, uuid.UUID(artifact_id))
     assert artifact is not None and artifact.retained
     content = await client.get(
@@ -224,7 +256,7 @@ async def test_concurrent_get_creates_a_missing_hierarchy_once(
     replies = await asyncio.gather(*[_get(client, alice_headers, project_id) for _ in range(6)])
     assert len({reply["entity_id"] for reply in replies}) == 1
     nodes, edges = await _graph(db, project_id)
-    assert len(nodes) == 6 and len(edges) == 5
+    assert len(nodes) == TREE_NODES and len(edges) == TREE_EDGES
 
 
 def _run_migration(connection: Connection) -> None:
@@ -252,7 +284,6 @@ async def test_data_migration_backfills_idempotently_without_rewriting_legacy_co
     await db.refresh(note)
     assert note.entity_id is not None
     first_nodes, first_edges = await _graph(db, project_id)
-    assert len(first_nodes) == 8 and len(first_edges) == 8
     connection = await db.connection()
     await connection.run_sync(_run_migration)
     await db.commit()
@@ -274,13 +305,19 @@ async def test_section_limit_is_serialized_for_concurrent_writes(
     project_id, _ = await _project(client, alice_headers)
     responses = await asyncio.gather(
         *[
-            _post(client, alice_headers, project_id, "docs", {"kind": "text", "text": "One slot"})
+            _post(
+                client,
+                alice_headers,
+                project_id,
+                "documentation",
+                {"kind": "text", "text": "One slot"},
+            )
             for _ in range(4)
         ]
     )
     assert sorted(r.status_code for r in responses) == [201, 422, 422, 422]
     data = await _get(client, alice_headers, project_id)
-    assert len(data["sections"]["docs"]) == 1
+    assert len(data["sections"]["documentation"]) == 1
 
 
 async def test_entry_mutations_enforce_viewer_and_foreign_project_boundaries(
@@ -347,7 +384,7 @@ async def test_malformed_foreign_entry_reference_cannot_delete_other_projects_gr
     )
     assert response.status_code == 404
     nodes, edges = await _graph(db, alice_project)
-    assert len(nodes) == 7 and len(edges) == 6
+    assert len(nodes) == TREE_NODES + 1 and len(edges) == TREE_EDGES + 1
     assert uuid.UUID(alice_entry["entity_id"]) in {n.id for n in nodes}
     await db.refresh(row)
     assert row.deleted_at is None
@@ -380,7 +417,7 @@ async def test_maximum_text_and_rejected_edit_leave_the_original_identity(
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     created = await _post(
-        client, alice_headers, project_id, "details", {"kind": "text", "text": "x" * 4000}
+        client, alice_headers, project_id, "goals", {"kind": "text", "text": "x" * 4000}
     )
     assert created.status_code == 201
     entry = created.json()["data"]
@@ -392,6 +429,6 @@ async def test_maximum_text_and_rejected_edit_leave_the_original_identity(
         )
         assert response.status_code == 422
     nodes, _ = await _graph(db, project_id)
-    assert len(nodes) == 7
-    current = (await _get(client, alice_headers, project_id))["sections"]["details"][0]
+    assert len(nodes) == TREE_NODES + 2  # the goals/general subsection node + the entry
+    current = (await _get(client, alice_headers, project_id))["sections"]["goals"][0]
     assert current["entity_id"] == entry["entity_id"] and current["text"] == "x" * 4000

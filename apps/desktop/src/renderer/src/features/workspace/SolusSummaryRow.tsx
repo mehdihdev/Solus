@@ -1,5 +1,5 @@
-// The .solus line in Home's PROJECT SETUP (SOLUSDEV-317, concept 1): five
-// segments for the five sections (filled = holds something), "N of 5
+// The .solus line in Home's PROJECT SETUP (SOLUSDEV-317, concept 1): one
+// segment per section (filled = holds something), "N of M
 // sections filled", the filled sections with their counts, and "Add
 // instructions" (the pane opens its .solus tab, where notes are written).
 // Honest loading and offline states; the full card stays on the .solus tab.

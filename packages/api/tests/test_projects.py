@@ -8,6 +8,7 @@ from httpx import AsyncClient
 from solus_api.models import ProjectMembership
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from test_solus_config import TREE_EDGES, TREE_NODES
 
 
 async def test_create_and_list_projects(client: AsyncClient, alice_headers: dict[str, str]) -> None:
@@ -30,8 +31,9 @@ async def test_project_detail_includes_summaries(
     resp = await client.get(f"/api/v1/projects/{project['id']}", headers=alice_headers)
     assert resp.status_code == 200
     data = resp.json()["data"]
-    # A fresh project holds `.solus`, five sections, and their containment edges.
-    assert data["stats"] == {"entities": 6, "relations": 5}
+    # A fresh project holds `.solus`, seven sections, twelve fixed subsections and their
+    # containment edges (SOLUSDEV-320).
+    assert data["stats"] == {"entities": TREE_NODES, "relations": TREE_EDGES}
     assert data["sources"] == []
 
 
@@ -248,13 +250,13 @@ async def test_dashboard_list_and_detail_have_real_stats(
         await client.get(f"/api/v1/teams/{team['id']}/projects", headers=alice_headers)
     ).json()["data"]
     row = next(p for p in listing if p["id"] == project["id"])
-    # 2 synced entities + the project's six `.solus` entities (SOLUSDEV-242).
-    assert row["stats"] == {"entities": 8, "sources": 1}
+    # 2 synced entities + the project's `.solus` tree (SOLUSDEV-242, grown by SOLUSDEV-320).
+    assert row["stats"] == {"entities": 2 + TREE_NODES, "sources": 1}
 
     detail = (await client.get(f"/api/v1/projects/{project['id']}", headers=alice_headers)).json()[
         "data"
     ]
-    assert detail["stats"] == {"entities": 8, "relations": 6}
+    assert detail["stats"] == {"entities": 2 + TREE_NODES, "relations": 1 + TREE_EDGES}
     assert len(detail["sources"]) == 1
     assert detail["sources"][0]["name"] == "octo/r"
     assert detail["sources"][0]["status"] == "connected"
@@ -381,8 +383,8 @@ async def test_delete_project_leaves_sibling_graph_intact(
                 .select_from(model)
                 .where(model.project_id == _uuid.UUID(survivor["id"]))
             )
-            # GraphEntity: the seeded row + the sibling's six `.solus` entities.
-            expected = 7 if model is GraphEntity else 1
+            # GraphEntity: the seeded row + the sibling's `.solus` tree.
+            expected = 1 + TREE_NODES if model is GraphEntity else 1
             assert count == expected, f"sibling {model.__name__} rows were destroyed"
     # Sibling's credential survives; the deleted project's is gone.
     assert await store.get("source/survivor/github") == "survivor-token"

@@ -5,9 +5,9 @@ bounded, project-scoped text row that the team can edit or delete from the
 Workspace panel — none of CLAUDE.md §7's destructive classes (flash, deploy,
 mutate an external system, delete graph data). Nothing it writes ever re-enters a
 prompt as instructions; `.solus` text is data like every other ingested string.
-Scope is bound at construction by Solus code: the model chooses only the section
-and the text. Automatic error filing (S5) is a later ticket; this tool is how it
-will write.
+Scope is bound at construction by Solus code: the model chooses only the section,
+an optional subsection, and the text. `history` and `members` take no notes from
+SOL. Automatic error filing (`agent/errors_filing.py`) writes through the same service.
 """
 
 import uuid
@@ -20,6 +20,8 @@ from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.core.errors import APIError
 from solus_api.models import SolusSection
 from solus_api.services.solus_config import MAX_TEXT_CHARS, SECTION_LABELS, add_text_entry
+
+_NO_NOTES = (SolusSection.HISTORY, SolusSection.MEMBERS)
 
 ADD_SOLUS_ENTRY_DESCRIPTOR = ToolDescriptor(
     name="add_solus_entry",
@@ -34,6 +36,7 @@ ADD_SOLUS_ENTRY_DESCRIPTOR = ToolDescriptor(
         "type": "object",
         "properties": {
             "section": {"type": "string", "enum": [s.value for s in SolusSection]},
+            "subsection": {"type": "string", "minLength": 1, "maxLength": 32},
             "text": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARS},
         },
         "required": ["section", "text"],
@@ -44,9 +47,10 @@ ADD_SOLUS_ENTRY_DESCRIPTOR = ToolDescriptor(
         "properties": {
             "id": {"type": "string", "format": "uuid"},
             "section": {"type": "string"},
+            "subsection": {"type": ["string", "null"]},
             "text": {"type": "string"},
         },
-        "required": ["id", "section", "text"],
+        "required": ["id", "section", "subsection", "text"],
         "additionalProperties": False,
     },
 )
@@ -68,6 +72,11 @@ def build_add_solus_entry_tool(
             raise ToolException(
                 f"Unknown .solus section {args['section']!r}", code=ToolErrorCode.INVALID_ARGS
             ) from None
+        if section in _NO_NOTES:
+            raise ToolException(
+                f"The {section.value} section takes no notes", code=ToolErrorCode.INVALID_ARGS
+            )
+        subsection = args.get("subsection")
         async with session_factory() as session:
             try:
                 entry = await add_text_entry(
@@ -77,10 +86,16 @@ def build_add_solus_entry_tool(
                     str(args["text"]),
                     author="sol",
                     created_by=user_id,
+                    subsection=str(subsection) if subsection is not None else None,
                 )
                 await session.commit()
             except APIError as exc:
                 raise ToolException(exc.message, code=ToolErrorCode.INVALID_ARGS) from None
-            return {"id": str(entry.id), "section": section.value, "text": entry.text or ""}
+            return {
+                "id": str(entry.id),
+                "section": section.value,
+                "subsection": entry.subsection,
+                "text": entry.text or "",
+            }
 
     return InProcessTool(ADD_SOLUS_ENTRY_DESCRIPTOR, handler)

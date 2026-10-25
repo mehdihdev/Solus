@@ -16,6 +16,7 @@ from livebench.plugins.lb06.lb06_lines import LineTransportParams
 
 class JsonLinesDriver:
     driver_id: ClassVar[str] = "json-lines"
+    requires_packages: ClassVar[tuple[str, ...]] = ()
     display_name: ClassVar[str] = "JSON lines"
     transports: ClassVar[frozenset[TransportKind]] = LINE_TRANSPORTS
     params_model: ClassVar[type[BaseModel]] = LineTransportParams

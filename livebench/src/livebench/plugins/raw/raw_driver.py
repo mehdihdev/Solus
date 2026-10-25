@@ -122,6 +122,7 @@ class RawLinesSource:
 
 class RawLinesDriver:
     driver_id: ClassVar[str] = "raw-lines"
+    requires_packages: ClassVar[tuple[str, ...]] = ()
     display_name: ClassVar[str] = "Raw numeric lines (user-named channels)"
     transports: ClassVar[frozenset[TransportKind]] = LINE_TRANSPORTS
     params_model: ClassVar[type[BaseModel]] = RawLinesParams

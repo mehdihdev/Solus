@@ -1,11 +1,20 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { SolusEntry } from '../../lib/api/resources'
-import { askSolMessage, entryMenuItems, formatSize, sectionCountLabel } from './solusActions'
+import {
+  askSolMessage,
+  entryMenuItems,
+  formatSize,
+  isHardwareConfig,
+  sectionCountLabel,
+  sectionMenuItems,
+  targetLabel
+} from './solusActions'
 
 function entry(over: Partial<SolusEntry>): SolusEntry {
   return {
     id: 'e1',
-    section: 'code',
+    section: 'environment',
+    subsection: null,
     kind: 'text',
     author: 'user',
     text: 'x',
@@ -30,9 +39,34 @@ describe('solusActions pure helpers', () => {
     expect(formatSize(512)).toBe('512 B')
     expect(formatSize(2048)).toBe('2.0 KB')
     expect(formatSize(3 * 1024 * 1024)).toBe('3.0 MB')
-    expect(askSolMessage('Code environment', ' cuda version ')).toBe(
-      'Find for .solus › Code environment: cuda version'
+    expect(askSolMessage('Environment', ' cuda version ')).toBe(
+      'Find for .solus › Environment: cuda version'
     )
+  })
+
+  it('names the subsection in the Ask-SOL turn and the menu target', () => {
+    expect(targetLabel('environment', 'software')).toBe('Environment › software')
+    expect(targetLabel('errors', null)).toBe('Error logging')
+    expect(isHardwareConfig(entry({ kind: 'config', subsection: 'hardware' }))).toBe(true)
+    expect(isHardwareConfig(entry({ kind: 'config', subsection: 'software' }))).toBe(false)
+    expect(isHardwareConfig(entry({ kind: 'text', subsection: 'hardware' }))).toBe(false)
+    const onImport = vi.fn()
+    const onCompose = vi.fn()
+    const items = sectionMenuItems('documentation', false, onImport, onCompose, 'guides')
+    items[0].onSelect()
+    expect(onImport).toHaveBeenCalledWith('documentation', 'guides')
+    items[2].onSelect()
+    expect(onCompose).toHaveBeenCalledWith({
+      section: 'documentation',
+      subsection: 'guides',
+      kind: 'type'
+    })
+  })
+
+  it('offers no section actions on history or members — they own no hand-written rows', () => {
+    expect(sectionMenuItems('history', false, vi.fn(), vi.fn())).toEqual([])
+    expect(sectionMenuItems('members', false, vi.fn(), vi.fn())).toEqual([])
+    expect(sectionMenuItems('errors', false, vi.fn(), vi.fn())).toHaveLength(3)
   })
 
   it('offers Edit for notes only — never for artifacts or config entries', () => {

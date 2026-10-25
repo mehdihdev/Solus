@@ -32,6 +32,7 @@ import {
   stopCompanion,
   sendAccessToken,
   setCompanionProject,
+  setCompanionUpListener,
   writeCredential
 } from './companion'
 import { cloneRepo, cloneDeps, vscodeFolderUrl, type CloneInput } from './projectFolder'
@@ -47,6 +48,7 @@ import { isAllowedAppStoreUrl } from './appStoreUrl'
 import { isAllowedCheckoutEntryUrl } from './billingUrl'
 import { realSolChatCacheDeps, solChatCacheIpc } from './solChatCache'
 import { preferencesIpc, realPreferencesStoreDeps } from './preferencesStore'
+import { startMachineReporter, type MachineReporter, type SharedPreferences } from './machineReport'
 import { HardwareLocalStore } from './hardwareLocalState'
 import { HardwareSources, authorizeHardwareScope, readHardwareSource } from './hardwareSources'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
@@ -86,7 +88,7 @@ import {
 import { createExtensionsIpc, registerExtensionsIpc } from './extensions/extensionsIpc'
 import { realNetProxyDeps } from './extensions/netProxy'
 import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { arch, homedir, hostname, platform } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { bootDiagnostics, resolveSentryConfig } from './diagnostics/boot'
 import { isAppRendererUrl } from './diagnostics/diagnosticsIpc'
@@ -140,6 +142,9 @@ let mainWindow: BrowserWindow | null = null
 // Extension windows (SOLUSDEV-235): closed on sign-out and with the main window.
 let extensionWindows: ExtensionWindowManager | null = null
 let hardwareSources: HardwareSources | null = null
+// SOLUSDEV-320: tells the API which machine the member runs on and mirrors the
+// shared-flagged preferences; fed by bridge:token / bridge:project / companion up.
+let machineReporter: MachineReporter | null = null
 // SOL window / tray / hotkeys (SOLUSDEV-252 S3): torn down on before-quit.
 let solWindows: SolWindowManager | null = null
 let solTray: SolTray | null = null
@@ -213,7 +218,10 @@ function registerSolChatCacheHandlers(): void {
  *  newer-schema rule are enforced inside preferencesStore; the renderer's copy
  *  is re-parsed there, never trusted. */
 function registerPreferencesHandlers(): void {
-  const deps = realPreferencesStoreDeps
+  const deps = {
+    ...realPreferencesStoreDeps,
+    onShared: (shared: SharedPreferences) => machineReporter?.sendPreferences(shared)
+  }
   ipcMain.handle('prefs:read', (event) => preferencesIpc.read(isMainRendererSender(event), deps))
   ipcMain.handle('prefs:write', (event, document: unknown) =>
     preferencesIpc.write(isMainRendererSender(event), document, deps)
@@ -493,6 +501,8 @@ function createWindow(): void {
       mainWindow = null
       hardwareSources?.setToken(null)
       hardwareSources?.setProject(null)
+      machineReporter?.setToken(null)
+      machineReporter?.setProject(null)
     }
     // No main window → no session to host an extension bridge under.
     extensionWindows?.closeAll()
@@ -557,6 +567,18 @@ if (!app.requestSingleInstanceLock()) {
 
     registerFolderRegistryHandlers()
     registerSolChatCacheHandlers()
+    machineReporter = startMachineReporter({
+      fetcher: globalThis.fetch,
+      identity: () => machineIdentity(realMachineIdentityDeps),
+      platform: () => ({ os: platform(), arch: arch(), hostname: hostname() }),
+      now: Date.now,
+      schedule: (fn, ms) => {
+        const timer = setTimeout(fn, ms)
+        return () => clearTimeout(timer)
+      },
+      apiBaseUrl: resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
+    })
+    setCompanionUpListener(() => machineReporter?.onCompanionUp())
     registerPreferencesHandlers()
     registerHardwareSourceHandlers()
 
@@ -592,6 +614,7 @@ if (!app.requestSingleInstanceLock()) {
     hotkeys = null
     solTray?.destroy()
     solTray = null
+    machineReporter?.stop()
     if (companionStopped) return
     companionStopped = true
     event.preventDefault()
@@ -796,6 +819,7 @@ function registerCompanionHandlers(): void {
       guideSignedIn = typeof token === 'string' && token.length > 0
       sendAccessToken(token)
       hardwareSources?.setToken(token)
+      machineReporter?.setToken(token)
       if (extensionWindows) closeExtensionWindowsOnSignOut(extensionWindows, token)
     }
   })
@@ -809,6 +833,7 @@ function registerCompanionHandlers(): void {
       guideProject = projectId
       setCompanionProject(projectId)
       hardwareSources?.setProject(projectId)
+      machineReporter?.setProject(projectId)
     }
   })
   // BYO-license capture (SOLUSDEV-102 / MCP-05): relay license credentials

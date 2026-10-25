@@ -169,14 +169,12 @@ it('resumes pending acquisition polling when resetting the view fails', async ()
   vi.useFakeTimers()
   try {
     const changed = vi.fn()
-    mocks.view
-      .mockResolvedValueOnce({ ...defaultView, status: 'pending' })
-      .mockResolvedValueOnce({
-        ...defaultView,
-        status: 'ready',
-        source_id: 'snapshot',
-        branch: 'vlfh_tsfm'
-      })
+    mocks.view.mockResolvedValueOnce({ ...defaultView, status: 'pending' }).mockResolvedValueOnce({
+      ...defaultView,
+      status: 'ready',
+      source_id: 'snapshot',
+      branch: 'vlfh_tsfm'
+    })
     mocks.reset.mockRejectedValueOnce(new Error('Network unavailable'))
     render(<SourceRevisionPicker projectId="project" sourceId="source" onChanged={changed} />)
     await act(async () => {

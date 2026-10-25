@@ -12,7 +12,7 @@ import {
 import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   preferencesIpc,
   readPreferences,
@@ -71,6 +71,41 @@ const DOC: EngineeringPreferences = {
 describe('preferencesStore', () => {
   registerPreferencesDiskPersistenceTests()
   registerPreferencesDiskFailuresTests()
+})
+
+describe('onShared (SOLUSDEV-320 P5-T1d — the project mirror)', () => {
+  it('hands the flagged, non-empty subset to onShared after a successful write only', () => {
+    const { deps } = memoryDeps()
+    const onShared = vi.fn()
+    const wired = { ...deps, onShared }
+    expect(
+      writePreferences(
+        { ...DOC, mechanical: 'M3 only', shared: { electrical: true, mechanical: false } },
+        wired
+      )
+    ).toBe(true)
+    expect(onShared).toHaveBeenCalledTimes(1)
+    expect(onShared).toHaveBeenCalledWith({ electrical: 'JST-GH for signal.' })
+    expect(writePreferences({ ...DOC, freeText: 42 }, wired)).toBe(false)
+    expect(onShared).toHaveBeenCalledTimes(1)
+  })
+
+  it('an unflagged document mirrors an empty subset, and no hook means no call', () => {
+    const { deps } = memoryDeps()
+    const onShared = vi.fn()
+    expect(writePreferences(DOC, { ...deps, onShared })).toBe(true)
+    expect(onShared).toHaveBeenCalledWith({})
+    expect(writePreferences(DOC, deps)).toBe(true)
+  })
+
+  it('a throwing mirror never turns a completed write into a failure', () => {
+    const { deps, files } = memoryDeps()
+    const onShared = vi.fn(() => {
+      throw new Error('reporter down')
+    })
+    expect(writePreferences(DOC, { ...deps, onShared })).toBe(true)
+    expect(files.has(PATH)).toBe(true)
+  })
 })
 
 describe('preferencesIpc (the gate itself is tested)', () => {

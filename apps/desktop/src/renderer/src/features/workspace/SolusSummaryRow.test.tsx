@@ -15,11 +15,15 @@ vi.mock('../graph/useSolusConfig', async (importOriginal) => {
 const entries = (n: number): SolusEntry[] =>
   Array.from({ length: n }, (_, i) => ({ id: `e${i}` }) as unknown as SolusEntry)
 
-function mockSolus(status: solusConfig.SolusState['status'], hardware = 0, docs = 0): void {
+function mockSolus(status: solusConfig.SolusState['status'], environment = 0, docs = 0): void {
   vi.mocked(solusConfig.useSolusConfig).mockReturnValue({
     status,
     entityId: null,
-    sections: { ...solusConfig.emptySections(), hardware: entries(hardware), docs: entries(docs) },
+    sections: {
+      ...solusConfig.emptySections(),
+      environment: entries(environment),
+      documentation: entries(docs)
+    },
     refetch: vi.fn()
   })
 }
@@ -30,11 +34,11 @@ describe('SolusSummaryRow', () => {
   it('states how many sections hold something and names them with counts', () => {
     mockSolus('ready', 7, 2)
     render(<SolusSummaryRow projectId="p1" onAddInstructions={vi.fn()} />)
-    expect(screen.getByText(/2 of 5 sections filled/)).toBeInTheDocument()
-    expect(screen.getByText(/Hardware configs \(7\)/)).toBeInTheDocument()
+    expect(screen.getByText(/2 of 7 sections filled/)).toBeInTheDocument()
+    expect(screen.getByText(/Environment \(7\)/)).toBeInTheDocument()
     expect(screen.getByText(/Documentation \(2\)/)).toBeInTheDocument()
     const segments = screen.getAllByTestId('solus-segment')
-    expect(segments).toHaveLength(5)
+    expect(segments).toHaveLength(7)
     expect(segments.filter((s) => s.dataset.filled === 'true')).toHaveLength(2)
   })
 

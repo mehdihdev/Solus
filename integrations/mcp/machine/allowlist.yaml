@@ -29,3 +29,8 @@ tools:
     requires_confirmation: true
     files_errors: true
     reason: writes or replaces one file on your machine with the shown contents
+  # SOLUSDEV-320 P5-T1 — flagged for human ratification (integrations/mcp/CLAUDE.md rule 2).
+  - name: tool_versions
+    requires_confirmation: false
+    files_errors: false
+    reason: reports the versions of a fixed list of developer tools on your machine (argv-only "--version", nothing else runs)

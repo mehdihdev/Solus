@@ -1,20 +1,23 @@
-// SOLUSDEV-233: the SOL page's left column — the caller's saved chats for the
-// active project, newest first, with a new-chat affordance and a right-click
-// menu (rename / delete). Selection and "new chat" are the chat hook's
-// transitions; rename/delete round-trip the owner-private endpoints and a
-// deleted chat's ~/.solus cache file goes with it.
+// The SOL page's left column (design template): a "New chat ⌘N" card, the caller's saved
+// chats for the active project grouped by last activity (TODAY / THIS WEEK / EARLIER),
+// each with its title and relative time — never a fabricated message count — and the
+// usage card at the bottom. Selection and "new chat" are the chat hook's transitions;
+// rename/delete round-trip the owner-private endpoints and a deleted chat's ~/.solus
+// cache file goes with it. The list itself is lifted to SolScreen (the header shows it).
+import { useEffect, useState, type ReactNode } from 'react'
 import { clampMenuPosition } from '../../components/ui/ContextMenu'
-import { useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
-import { Icons } from '../../components/ui/icons.constants'
 import { relativeTime } from '../../lib/relativeTime'
+import { isModKeyShortcut, modKeyHint } from '../palette/paletteHotkey'
 import { DeleteConfirmModal, NameModal } from '../workspace/modals'
+import { groupChats } from './chatGroups'
+import { isMac } from './commandHotkey'
 import { removeCachedChat } from './solCache'
 import { deleteSolConversation, renameSolConversation, type SolConversation } from './solApi'
-import { useSolConversations } from './useSolConversations'
+import type { SolConversationsData } from './useSolConversations'
 
-const UNTITLED = 'New chat'
+export const UNTITLED = 'New chat'
 
 //: Approximate rendered menu box, used to clamp the context menu inside the
 //: viewport (a row near the bottom edge must not push Delete off-screen).
@@ -113,85 +116,59 @@ function ChatRow({
         e.preventDefault()
         onMenu({ conversation, ...clampMenuPosition(e.clientX, e.clientY, MENU_BOX) })
       }}
-      className="interactive sol-row-in"
-      style={{
-        padding: '10px 12px',
-        borderRadius: 5,
-        cursor: 'pointer',
-        background: active ? 'var(--sur2)' : 'transparent',
-        border: `1px solid ${active ? 'var(--bd)' : 'transparent'}`
-      }}
+      className="interactive sol-row-in sol-chat-row"
+      data-active={active || undefined}
     >
-      <div
-        style={{
-          fontSize: 12.5,
-          fontWeight: 600,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap'
-        }}
-      >
-        {conversation.title?.trim() || UNTITLED}
-      </div>
-      <div style={{ fontSize: 10, color: 'var(--mut)', marginTop: 3 }}>
-        {relativeTime(conversation.created_at)}
-      </div>
+      <div className="sol-chat-row-title">{conversation.title?.trim() || UNTITLED}</div>
+      <Mono size={10}>{relativeTime(conversation.updated_at || conversation.created_at)}</Mono>
     </div>
   )
 }
 
 function ChatList({
   projectId,
-  conversations,
-  status,
+  data,
   activeConversationId,
   onSelect,
   onMenu
 }: {
   projectId: string | null
-  conversations: readonly SolConversation[]
-  status: 'loading' | 'ready' | 'offline'
+  data: SolConversationsData
   activeConversationId: string | null
   onSelect: (conversationId: string) => void
   onMenu: (state: MenuState) => void
 }): React.JSX.Element {
+  const { conversations, status } = data
   return (
-    <div
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 2,
-        padding: '0 8px 12px'
-      }}
-    >
+    <div className="sol-chat-list">
       {status === 'loading' && conversations.length === 0 && (
         <div style={{ display: 'flex', justifyContent: 'center', padding: 14 }}>
           <Spinner size={14} />
         </div>
       )}
-      {status === 'offline' && (
-        <div style={{ fontSize: 11, color: 'var(--mut)', padding: '6px 6px' }}>
-          Chats unavailable — offline.
-        </div>
-      )}
+      {status === 'offline' && <p className="sol-side-empty">Chats unavailable — offline.</p>}
       {status === 'ready' && conversations.length === 0 && (
-        <div style={{ fontSize: 11, color: 'var(--mut)', padding: '6px 6px', lineHeight: 1.5 }}>
+        <p className="sol-side-empty">
           {projectId
             ? 'No chats yet. Ask SOL anything to start one.'
             : 'Open a project to see its chats.'}
-        </div>
+        </p>
       )}
-      {conversations.map((c) => (
-        <ChatRow
-          key={c.id}
-          conversation={c}
-          active={c.id === activeConversationId}
-          onSelect={onSelect}
-          onMenu={onMenu}
-        />
+      {groupChats(conversations).map((group) => (
+        <div key={group.label} className="sol-chat-group">
+          <Mono size={10} ls="0.08em" className="sol-chat-group-label">
+            {group.label}
+          </Mono>
+          {group.items.map((c) => (
+            <ChatRow
+              key={c.id}
+              conversation={c}
+              active={c.id === activeConversationId}
+              onSelect={onSelect}
+              onMenu={onMenu}
+            />
+          ))}
+        </div>
       ))}
     </div>
   )
@@ -262,41 +239,64 @@ function ChatActions({
   return null
 }
 
+/** ⌘N / Ctrl+N starts a new chat while the SOL page is mounted (the hint on the card is
+ *  only shown because the chord really works). */
+function useNewChatHotkey(onNewChat: () => void): void {
+  useEffect(() => {
+    const mac = isMac()
+    const onKey = (event: KeyboardEvent): void => {
+      if (!isModKeyShortcut(event, mac, 'n')) return
+      event.preventDefault()
+      onNewChat()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onNewChat])
+}
+
 export function ChatsSidebar({
   projectId,
   activeConversationId,
+  data,
   onSelect,
-  onNewChat
+  onNewChat,
+  footer
 }: {
   projectId: string | null
   activeConversationId: string | null
+  data: SolConversationsData
   onSelect: (conversationId: string) => void
   onNewChat: () => void
+  /** The usage card, rendered last. */
+  footer?: ReactNode
 }): React.JSX.Element {
-  const { conversations, status, refresh } = useSolConversations(projectId, activeConversationId)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<SolConversation | null>(null)
   const [deleting, setDeleting] = useState<SolConversation | null>(null)
+  useNewChatHotkey(onNewChat)
   return (
-    <div
-      style={{
-        width: 224,
-        flexShrink: 0,
-        borderRight: '1px solid var(--bd)',
-        display: 'flex',
-        flexDirection: 'column',
-        minHeight: 0
-      }}
-    >
-      <ChatsHeader onNewChat={onNewChat} />
+    <div className="sol-chats">
+      <div style={{ padding: 12 }}>
+        <button
+          type="button"
+          aria-label="New chat"
+          className="interactive sol-new-chat"
+          onClick={onNewChat}
+        >
+          <span>New chat</span>
+          <Mono size={10} style={{ textTransform: 'none' }}>
+            {modKeyHint(isMac(), 'n')}
+          </Mono>
+        </button>
+      </div>
       <ChatList
         projectId={projectId}
-        conversations={conversations}
-        status={status}
+        data={data}
         activeConversationId={activeConversationId}
         onSelect={onSelect}
         onMenu={setMenu}
       />
+      {footer}
       {menu && (
         <ChatMenu
           menu={menu}
@@ -316,7 +316,7 @@ export function ChatsSidebar({
           projectId={projectId}
           activeConversationId={activeConversationId}
           onNewChat={onNewChat}
-          onDone={refresh}
+          onDone={data.refresh}
           renaming={renaming}
           deleting={deleting}
           close={() => {
@@ -325,38 +325,6 @@ export function ChatsSidebar({
           }}
         />
       )}
-    </div>
-  )
-}
-
-function ChatsHeader({ onNewChat }: { onNewChat: () => void }): React.JSX.Element {
-  return (
-    <div
-      style={{
-        padding: '14px 14px 10px',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-      }}
-    >
-      <Mono size={9.5}>CHATS</Mono>
-      <button
-        type="button"
-        aria-label="New chat"
-        className="interactive"
-        onClick={onNewChat}
-        style={{
-          background: 'transparent',
-          border: '1px solid var(--bd)',
-          borderRadius: 4,
-          color: 'var(--tx)',
-          cursor: 'pointer',
-          padding: '3px 6px',
-          display: 'inline-flex'
-        }}
-      >
-        <Icons.plus size={12} />
-      </button>
     </div>
   )
 }

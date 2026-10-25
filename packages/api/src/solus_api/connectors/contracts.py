@@ -34,6 +34,24 @@ class AuthKind(enum.StrEnum):
     NONE = "none"
 
 
+class Capability(enum.StrEnum):
+    """What a connector can do today (SOLUSDEV-320). Shared code asks the registry
+    `providers_of(capability)`; it never names a provider."""
+
+    CHANGE_SIGNAL = "change_signal"
+    WEBHOOK = "webhook"
+    STRUCTURE = "structure"
+    GEOMETRY = "geometry"
+    CONSTRUCTION_HISTORY = "construction_history"
+    NETLIST = "netlist"
+    RENDER = "render"
+    WRITE_FEATURE = "write_feature"
+    WRITE_PARAMETER = "write_parameter"
+    WRITE_SYMBOL = "write_symbol"
+    WRITE_NET = "write_net"
+    WRITE_FILE = "write_file"
+
+
 class FrozenModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -158,6 +176,9 @@ class Connector(abc.ABC):
     #: connect this source. OAuth-only connectors leave this False so the
     #: token-connect path can't bypass the OAuth flow (CLAUDE.md §7).
     supports_token_connect: ClassVar[bool] = False
+    #: The capabilities this connector implements today (SOLUSDEV-320). Declared per
+    #: connector; shared code resolves providers through the registry, never by name.
+    capabilities: ClassVar[frozenset[Capability]] = frozenset()
 
     @abc.abstractmethod
     async def validate_credentials(self, creds: Credentials) -> AccountInfo:

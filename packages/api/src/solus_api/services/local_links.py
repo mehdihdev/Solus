@@ -7,7 +7,7 @@ GitHub/GitLab source in the same project whose `config["repo"]` matches
 (case-folded) owns the repo node (`code_host.REPO_ROOT_KEY`). Internal revision
 snapshots never participate. An exact branch match wins; otherwise the repository
 must have one unambiguous attached source. One edge per
-`(clone node, repo node)`, `origin="derived"`, filed under the LOCAL source's id
+`(clone node, repo node)`, `origin="system"`, filed under the LOCAL source's id
 so it dies with the source, and reconciled whenever either side syncs
 (`runtime._commit_success`). `apply_sync_result` reconciles only
 `origin="connector"` edges, so a derived edge is never churned by the sync
@@ -25,12 +25,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.code_host import REPO_ROOT_KEY
 from solus_api.connectors.local_folder import CLONE_KEY
+from solus_api.graph.edges import write_edge
 from solus_api.models import GraphEdge, GraphEntity, Source, SourceStatus, SourceType, utcnow
 
 logger = logging.getLogger("solus.services.local_links")
 
 CLONE_OF: Final = "clone_of"
-DERIVED_ORIGIN: Final = "derived"
+#: SOLUSDEV-320: `clone_of` is a system-derived link (`EdgeOrigin.SYSTEM`; was "derived").
+CLONE_ORIGIN: Final = "system"
 _HOST_TYPES: Final = {"github": SourceType.GITHUB, "gitlab": SourceType.GITLAB}
 
 
@@ -111,7 +113,7 @@ async def reconcile_local_links(session: AsyncSession, project_id: uuid.UUID) ->
             select(GraphEdge).where(
                 GraphEdge.project_id == project_id,
                 GraphEdge.relation_type == CLONE_OF,
-                GraphEdge.origin == DERIVED_ORIGIN,
+                GraphEdge.origin == CLONE_ORIGIN,
                 GraphEdge.deleted_at.is_(None),
             )
         )
@@ -124,18 +126,17 @@ async def reconcile_local_links(session: AsyncSession, project_id: uuid.UUID) ->
             desired.add((local.id, *edge))
     for key in desired - set(by_key):
         source_id, src_id, dst_id = key
-        session.add(
-            GraphEdge(
-                project_id=project_id,
-                source_id=source_id,
-                origin=DERIVED_ORIGIN,
-                src_id=src_id,
-                dst_id=dst_id,
-                relation_type=CLONE_OF,
-                domain_pair="code<->code",
-                confidence=1.0,
-                attrs={},
-            )
+        await write_edge(
+            session,
+            project_id=project_id,
+            src_id=src_id,
+            dst_id=dst_id,
+            relation_type=CLONE_OF,
+            origin=CLONE_ORIGIN,
+            confidence=1.0,
+            evidence=[],
+            created_by=None,
+            source_id=source_id,
         )
         logger.info("local clone linked project=%s source=%s", project_id, source_id)
     for key, row in by_key.items():

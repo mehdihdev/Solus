@@ -31,18 +31,27 @@ export class NodeTypeRegistry {
   }
 }
 
+/** Requirement kinds a folder shows under itself through `requires` (SOLUSDEV-320). */
+const REQUIREMENT_TYPES = new Set(['python_requirement', 'package_requirement'])
+
 const LOCAL_FOLDER: NodeTypeDefinition = {
   children: (entity, graph) => [
     ...CONTAINMENT.children(entity, graph),
     ...(graph.outgoing.get(entity.id) ?? []).filter(
       (edge) =>
         edge.type === 'requires' &&
-        graph.entities.get(edge.to_entity_id)?.type === 'python_requirement'
+        REQUIREMENT_TYPES.has(graph.entities.get(edge.to_entity_id)?.type ?? '')
     )
   ]
 }
 
+/** A finding observes its subjects; it never owns anything on the canvas. */
+const LEAF: NodeTypeDefinition = { children: () => [] }
+
 export const NODE_TYPES = new NodeTypeRegistry({
   local_clone: LOCAL_FOLDER,
-  local_folder: LOCAL_FOLDER
+  local_folder: LOCAL_FOLDER,
+  finding: LEAF,
+  // Explicit so the vocabulary reads here: member --contains--> machine (default containment).
+  member: CONTAINMENT
 })

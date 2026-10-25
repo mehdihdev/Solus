@@ -38,6 +38,8 @@ export interface FocusState {
 
   focus: (entityId: string, path?: readonly FocusStep[]) => Promise<void>
   setDepth: (depth: number) => void
+  /** Deselect without forgetting what was fetched: the next selection in this project is a cache hit. */
+  clearFocus: () => void
   clearProject: () => void
   reset: () => void
 }
@@ -110,6 +112,8 @@ export const useFocusStore = create<FocusState>((set, get) => ({
     const focused = get().focusedEntityId
     if (focused) void get().focus(focused, get().path)
   },
+
+  clearFocus: () => set({ focusedEntityId: null, status: 'idle', error: null, path: [] }),
 
   // Entity ids are project-scoped, so a project switch must drop the CACHE too — otherwise the
   // next project (or the next USER, after a sign-out) could render the previous one's entities

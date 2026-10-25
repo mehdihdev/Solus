@@ -44,6 +44,9 @@ response when access is gone.
 | `sources.changed`          | `project_id, source_id, at`                  | project sources                         |
 | `project.updated`          | `project_id, team_id, at`                    | project detail                          |
 | `job.updated`              | `project_id, job_id, status, at`             | the job / anything waiting on it        |
+| `finding.raised`           | `project_id, finding_id, status, at`         | `GET /findings?status=open` (SOLUSDEV-320) |
+| `finding.updated`          | `project_id, finding_id, status, at`         | the finding                             |
+| `finding.resolved`         | `project_id, finding_id, status, at`         | the finding + `.solus` errors           |
 | `access.revoked`           | `user_id, team_id, project_id, at`           | stream closes if access ended           |
 
 ## Account stream (team + user channels)

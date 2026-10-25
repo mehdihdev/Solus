@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from solus_api.connectors import quota
 from solus_api.connectors.acquisition import ExportAcquirer
-from solus_api.connectors.contracts import Connector
+from solus_api.connectors.contracts import Capability, Connector
 from solus_api.connectors.httpcache import CacheStore
 from solus_api.connectors.integration_cache import IntegrationCache
 from solus_api.connectors.local_folder import FolderAcquirer
@@ -112,6 +112,17 @@ class ConnectorRegistry:
     def providers(self) -> list[str]:
         return sorted(self._factories)
 
+    def providers_of(self, capability: Capability) -> list[str]:
+        """Providers declaring `capability` (SOLUSDEV-320): shared code asks this,
+        never a provider by name. Built through the factories, as `catalog()` is."""
+        # `getattr`: a test double or an out-of-tree connector that predates the
+        # contract field declares nothing, it must never make a sync raise.
+        return [
+            p
+            for p in self.providers()
+            if capability in getattr(self._factories[p](), "capabilities", frozenset())
+        ]
+
     def catalog(self) -> list[dict[str, Any]]:
         """Available connector types + their required config/auth shape."""
         items: list[dict[str, Any]] = []
@@ -132,6 +143,9 @@ class ConnectorRegistry:
                     # read+write), or None when the provider offers no choice.
                     # Same generic treatment as `selection` (SOLUS-ONS-A2).
                     "access_modes": getattr(connector, "access_modes", None),
+                    "capabilities": sorted(
+                        c.value for c in getattr(connector, "capabilities", frozenset())
+                    ),
                 }
             )
         return items

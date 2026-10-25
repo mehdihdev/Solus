@@ -10,9 +10,14 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
+import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Switch } from '../../components/ui/Switch'
+import { Icons } from '../../components/ui/icons.constants'
+import { citationDomain, citationEntityId, DomainDot } from './domainDot'
+import { mergeMentions } from './mentionToken'
+import { takeDraft } from './pinnedContextStore'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
@@ -98,47 +103,87 @@ function ArtifactsView({
   )
 }
 
-function CitationsView({ citations }: { citations: readonly string[] }): React.JSX.Element | null {
+const CHIP: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10.5,
+  color: 'var(--mut)',
+  background: 'var(--sur2)',
+  border: '1px solid var(--bd)',
+  borderRadius: 999,
+  padding: '2px 8px'
+}
+
+/** Provenance chips (design template): the raw `[connector:ref]` token, a domain dot when
+ *  the connector maps to one, and — for `[entity:id]` on the page — a jump to the node. */
+function CitationsView({
+  citations,
+  page,
+  onFocusEntity
+}: {
+  citations: readonly string[]
+  page: boolean
+  onFocusEntity?: (entityId: string) => void
+}): React.JSX.Element | null {
   if (citations.length === 0) return null
   return (
     <div
       data-testid="citations-region"
-      style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 6 }}
+      style={{ marginTop: 8, borderTop: page ? 0 : '1px solid var(--bd)', paddingTop: 6 }}
     >
-      <Mono size={9}>CITATIONS</Mono>
+      {!page && <Mono size={9}>CITATIONS</Mono>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-        {citations.slice(0, MAX_CITATIONS).map((token, i) => (
-          <span
-            key={`${token}-${i}`}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              color: 'var(--mut)',
-              background: 'var(--sur2)',
-              border: '1px solid var(--bd)',
-              borderRadius: 3,
-              padding: '2px 6px'
-            }}
-          >
-            {capCitation(token)}
-          </span>
-        ))}
+        {citations.slice(0, MAX_CITATIONS).map((token, i) => {
+          const entityId = onFocusEntity ? citationEntityId(token) : null
+          const body = (
+            <>
+              <DomainDot d={citationDomain(token)} size={5} />
+              {capCitation(token)}
+            </>
+          )
+          return entityId ? (
+            <button
+              key={`${token}-${i}`}
+              type="button"
+              className="interactive"
+              style={{ ...CHIP, cursor: 'pointer' }}
+              onClick={() => onFocusEntity?.(entityId)}
+            >
+              {body}
+            </button>
+          ) : (
+            <span key={`${token}-${i}`} style={CHIP}>
+              {body}
+            </span>
+          )
+        })}
       </div>
     </div>
   )
 }
 
 /** A message the person sent. */
-function UserRow({ item, rowClass }: { item: ChatItem; rowClass: string }): React.JSX.Element {
+function UserRow({
+  item,
+  rowClass,
+  page
+}: {
+  item: ChatItem
+  rowClass: string
+  page: boolean
+}): React.JSX.Element {
   return (
-    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
+    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: page ? '78%' : '85%' }}>
       <div
         style={{
           background: 'var(--sur2)',
           border: '1px solid var(--bd)',
           borderRadius: 6,
-          padding: '8px 10px',
+          padding: page ? '10px 13px' : '8px 10px',
           fontSize: 12.5,
+          lineHeight: 1.5,
           whiteSpace: 'pre-wrap'
         }}
       >
@@ -183,16 +228,20 @@ const MessageRow = memo(function MessageRow({
   projectId,
   onDecide,
   onFile,
-  settled
+  settled,
+  page,
+  onFocusEntity
 }: {
   item: ChatItem
   projectId: string
   onDecide: SolChat['decide']
   onFile: SolChat['fileArtifact']
   settled: boolean
+  page: boolean
+  onFocusEntity?: (entityId: string) => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
-  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} />
+  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} page={page} />
   if (item.role === 'tool') {
     return (
       <div
@@ -204,8 +253,8 @@ const MessageRow = memo(function MessageRow({
     )
   }
   const confirmations = item.confirmations
-  return (
-    <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+  const body = (
+    <>
       <TraceView trace={item.trace} />
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
       {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
@@ -236,11 +285,49 @@ const MessageRow = memo(function MessageRow({
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
       <div style={{ minHeight: item.pending ? CITATIONS_RESERVE_PX : undefined }}>
-        <CitationsView citations={item.citations} />
+        <CitationsView citations={item.citations} page={page} onFocusEntity={onFocusEntity} />
+      </div>
+    </>
+  )
+  return (
+    <AssistantFrame page={page} rowClass={rowClass}>
+      {body}
+    </AssistantFrame>
+  )
+})
+
+/** Page (design template): the Solus mark in a gutter and a mono SOL label; the window
+ *  keeps its compact rows. */
+function AssistantFrame({
+  page,
+  rowClass,
+  children
+}: {
+  page: boolean
+  rowClass: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  if (!page) {
+    return (
+      <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+        {children}
+      </div>
+    )
+  }
+  return (
+    <div className={rowClass} style={{ alignSelf: 'stretch', display: 'flex', gap: 12 }}>
+      <div style={{ flex: 'none', paddingTop: 2 }} aria-hidden="true">
+        <SolusLogo size={18} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Mono size={10} ls="0.08em">
+          SOL
+        </Mono>
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>{children}</div>
       </div>
     </div>
   )
-})
+}
 
 /** Stick-to-bottom margin: within this many px of the bottom counts as "following". */
 const FOLLOW_SLACK_PX = 48
@@ -249,12 +336,14 @@ function MessageList({
   chat,
   projectId,
   page,
-  onDecide
+  onDecide,
+  onFocusEntity
 }: {
   chat: SolChat
   projectId: string
   page: boolean
   onDecide: SolChat['decide']
+  onFocusEntity?: (entityId: string) => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -293,8 +382,9 @@ function MessageList({
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: 10,
-        padding: page ? '12px 24px' : 12
+        gap: page ? 20 : 10,
+        padding: page ? '24px 24px' : 12,
+        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
       }}
     >
       {chat.status === 'offline' && <Mono size={9.5}>SOL HISTORY UNAVAILABLE — OFFLINE</Mono>}
@@ -311,6 +401,8 @@ function MessageList({
           onDecide={onDecide}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
+          page={page}
+          onFocusEntity={onFocusEntity}
         />
       ))}
     </div>
@@ -392,11 +484,24 @@ function MentionList({
 
 /** The message box plus its `@` picker. Split from Composer so each stays
  *  readable — the composer owns text/mode/send, this owns the input element. */
+const COMPOSER_MAX_HEIGHT = 160
+
+/** Grow with the draft up to a ceiling (jsdom reports no scrollHeight, so this is a no-op there). */
+function useAutosize(ref: MentionPicker['inputRef'], value: string): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    if (el.scrollHeight) el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`
+  }, [ref, value])
+}
+
 function MessageInput({
   mention,
   inputRef,
   value,
   onChange,
+  onSubmitRequest,
   page,
   placeholder
 }: {
@@ -406,9 +511,12 @@ function MessageInput({
   inputRef: MentionPicker['inputRef']
   value: string
   onChange: (text: string) => void
+  /** Enter (no Shift, no Ctrl/Cmd — those belong to the command cards) sends. */
+  onSubmitRequest: () => void
   page: boolean
   placeholder: string
 }): React.JSX.Element {
+  useAutosize(inputRef, value)
   return (
     <>
       {mention.listOpen && (
@@ -419,14 +527,27 @@ function MessageInput({
           page={page}
         />
       )}
-      <input
-        ref={inputRef}
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement | null>}
+        rows={1}
         value={value}
         onChange={(e) => {
           onChange(e.target.value)
           mention.onInput(e.target)
         }}
-        onKeyDown={(e) => void mention.onKeyDown(e)}
+        onKeyDown={(e) => {
+          if (mention.onKeyDown(e)) return
+          if (
+            e.key === 'Enter' &&
+            !e.shiftKey &&
+            !e.ctrlKey &&
+            !e.metaKey &&
+            !e.nativeEvent.isComposing
+          ) {
+            e.preventDefault()
+            onSubmitRequest()
+          }
+        }}
         onKeyUp={(e) => mention.onCaretMove(e.currentTarget)}
         onClick={(e) => mention.onCaretMove(e.currentTarget)}
         role="combobox"
@@ -440,13 +561,15 @@ function MessageInput({
         style={{
           flex: 1,
           minWidth: 0,
-          background: 'var(--sur)',
-          border: '1px solid var(--bd)',
-          borderRadius: 4,
+          minHeight: 20,
+          resize: 'none',
+          background: 'transparent',
+          border: 0,
           color: 'var(--tx)',
           fontFamily: 'var(--font-ui)',
-          fontSize: 12.5,
-          padding: '8px 10px',
+          fontSize: 13,
+          lineHeight: 1.5,
+          padding: '6px 4px',
           outline: 'none'
         }}
       />
@@ -454,8 +577,92 @@ function MessageInput({
   )
 }
 
+/** The design's "+" beside the composer: upload a file or image into .solus, or go pick a
+ *  node from the graph. Rendered only when the surface offers those paths (the page). */
+function AttachMenu({
+  onUpload,
+  onAddNodeFromGraph
+}: {
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const file = useRef<HTMLInputElement | null>(null)
+  return (
+    <div style={{ position: 'relative', flex: 'none' }}>
+      <button
+        type="button"
+        aria-label="Attach"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="interactive"
+        onClick={() => setOpen((on) => !on)}
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 4,
+          background: 'var(--sur2)',
+          border: '1px solid var(--bd)',
+          color: 'var(--tx)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer'
+        }}
+      >
+        <Icons.plus size={15} />
+      </button>
+      <input
+        ref={file}
+        type="file"
+        aria-label="Upload file or image"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const picked = event.currentTarget.files?.[0]
+          event.currentTarget.value = ''
+          if (picked) onUpload?.(picked)
+        }}
+      />
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="popover-in sol-attach-menu">
+            {onUpload && (
+              <button
+                type="button"
+                role="menuitem"
+                className="interactive"
+                onClick={() => {
+                  setOpen(false)
+                  file.current?.click()
+                }}
+              >
+                Upload file or image
+              </button>
+            )}
+            {onAddNodeFromGraph && (
+              <button
+                type="button"
+                role="menuitem"
+                className="interactive"
+                onClick={() => {
+                  setOpen(false)
+                  onAddNodeFromGraph()
+                }}
+              >
+                Add node from graph
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 /** The composer placeholder: the region, when attached, is the subject. */
 const PLACEHOLDER = 'Ask about a signal, a change, a part…'
+const PAGE_PLACEHOLDER = 'Ask SOL about this project…'
 const PLACEHOLDER_WITH_REGION = 'What would you like to know about it?'
 
 /** The attached-region chip on the composer (wireflow §C); × drops the pixels. */
@@ -487,11 +694,8 @@ function ReviewPreference({
         ariaLabel="Confirm every change"
         disabled={streaming}
       />
-      <span>
+      <span title="Choose before sending. Review each proposed change before SOL applies it.">
         Confirm every change
-        <span style={{ display: 'block', fontSize: 10 }}>
-          Choose before sending. Review each proposed change before SOL applies it.
-        </span>
       </span>
     </div>
   )
@@ -509,9 +713,13 @@ function Composer({
   onDismissRegion,
   forceConfirmation,
   onForceConfirmationChange,
-  onSend
+  onSend,
+  pinnedMentionIds,
+  onUpload,
+  onAddNodeFromGraph
 }: ComposerProps): React.JSX.Element {
-  const [input, setInput] = useState('')
+  // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
+  const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
   const classify = useClassifyPreview(input)
   const empty = input.trim() === ''
 
@@ -521,11 +729,16 @@ function Composer({
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(text, mention.mentionIds, classify.override.thinkHarder)
+    onSend(
+      text,
+      mergeMentions(mention.mentionIds, pinnedMentionIds ?? []),
+      classify.override.thinkHarder
+    )
     setInput('')
     mention.reset()
     classify.resetOverride() // also drops "Think harder" — it is per message
   }
+  const attach = Boolean(onUpload || onAddNodeFromGraph)
 
   return (
     <form
@@ -534,47 +747,58 @@ function Composer({
         submit()
       }}
       style={{
-        borderTop: '1px solid var(--bd)',
-        padding: page ? '10px 24px 14px' : 10,
+        padding: page ? '12px 20px 18px' : 10,
         display: 'flex',
         flexDirection: 'column',
-        gap: 6
+        gap: 6,
+        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
       }}
     >
       {regionAttached && <RegionChip onDismiss={onDismissRegion} />}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
-        <MessageInput
-          mention={mention}
-          inputRef={mention.inputRef}
-          value={input}
-          onChange={setInput}
-          page={page}
-          placeholder={regionAttached ? PLACEHOLDER_WITH_REGION : PLACEHOLDER}
-        />
-        {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
-            Electron) — the same badge the SOL window header shows. */}
-        <ModeBadge mode={mode} onChange={onModeChange} />
-        {/* S1-W3: one tier up for THIS message. Lives in the classify override
-            state so the routing preview reflects it and the post-send reset
-            clears it — one source, two controls (this and the popover). */}
-        <Switch
-          checked={classify.override.thinkHarder}
-          onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
-          ariaLabel="Think harder"
-        />
-        <SendButton streaming={streaming} empty={empty} />
+      <div className="sol-composer-box">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
+          {attach && <AttachMenu onUpload={onUpload} onAddNodeFromGraph={onAddNodeFromGraph} />}
+          <MessageInput
+            mention={mention}
+            inputRef={mention.inputRef}
+            value={input}
+            onChange={setInput}
+            onSubmitRequest={submit}
+            page={page}
+            placeholder={
+              regionAttached ? PLACEHOLDER_WITH_REGION : page ? PAGE_PLACEHOLDER : PLACEHOLDER
+            }
+          />
+          <SendButton streaming={streaming} empty={empty} />
+        </div>
+        <div className="sol-composer-foot">
+          {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
+              Electron) — the same badge the SOL window header shows. */}
+          <ModeBadge mode={mode} onChange={onModeChange} />
+          {/* S1-W3: one tier up for THIS message. Lives in the classify override
+              state so the routing preview reflects it and the post-send reset
+              clears it — one source, two controls (this and the popover). */}
+          <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
+            <Switch
+              checked={classify.override.thinkHarder}
+              onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
+              ariaLabel="Think harder"
+            />
+            Think harder
+          </span>
+          <ReviewPreference
+            checked={forceConfirmation}
+            onChange={onForceConfirmationChange}
+            streaming={streaming}
+          />
+          <ClassifyIndicator
+            preview={classify.preview}
+            override={classify.override}
+            onOverride={classify.setOverride}
+            onReset={classify.resetOverride}
+          />
+        </div>
       </div>
-      <ReviewPreference
-        checked={forceConfirmation}
-        onChange={onForceConfirmationChange}
-        streaming={streaming}
-      />
-      <ClassifyIndicator
-        preview={classify.preview}
-        override={classify.override}
-        onOverride={classify.setOverride}
-        onReset={classify.resetOverride}
-      />
     </form>
   )
 }
@@ -586,12 +810,23 @@ export interface SolChatProps {
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
    *  context panel from the same one). Omitted, the surface owns its own. */
   chat?: SolChat
+  /** Page: the chat's pinned nodes, merged into every send and counted in the header. */
+  pinnedMentionIds?: readonly string[]
+  /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
+  /** Page: an `[entity:id]` citation chip focuses that node in the Workspace. */
+  onFocusEntity?: (entityId: string) => void
 }
 
 export function SolChat({
   projectId,
   layout = 'panel',
-  chat: shared
+  chat: shared,
+  pinnedMentionIds,
+  onUpload,
+  onAddNodeFromGraph,
+  onFocusEntity
 }: SolChatProps): React.JSX.Element {
   // Hooks run unconditionally; with a shared instance the internal hook is
   // parked on a null project, which is inert (no fetch, no store writes).
@@ -643,11 +878,16 @@ export function SolChat({
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
-          width: '100%',
-          ...(page ? { maxWidth: 800, margin: '0 auto' } : {})
+          width: '100%'
         }}
       >
-        <MessageList chat={chat} projectId={projectId} page={page} onDecide={decideInMode} />
+        <MessageList
+          chat={chat}
+          projectId={projectId}
+          page={page}
+          onDecide={decideInMode}
+          onFocusEntity={onFocusEntity}
+        />
         {region && (
           <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
         )}
@@ -663,6 +903,9 @@ export function SolChat({
           forceConfirmation={forceConfirmation}
           onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
           onSend={sendWithRegion}
+          pinnedMentionIds={pinnedMentionIds}
+          onUpload={onUpload}
+          onAddNodeFromGraph={onAddNodeFromGraph}
         />
       </div>
     </CommandApprovalContext.Provider>
@@ -681,11 +924,13 @@ function SendButton({
       type="submit"
       disabled={streaming || empty}
       style={{
+        height: 32,
+        flex: 'none',
         background: 'var(--acc)',
         color: 'var(--acc-ink)',
         border: 'none',
         borderRadius: 4,
-        padding: '7px 14px',
+        padding: '0 14px',
         fontSize: 12,
         fontWeight: 600,
         cursor: streaming ? 'wait' : 'pointer',
@@ -708,4 +953,7 @@ interface ComposerProps {
   forceConfirmation: boolean
   onForceConfirmationChange: (checked: boolean) => void
   onSend: ComposerSend
+  pinnedMentionIds?: readonly string[]
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
 }

@@ -23,8 +23,9 @@ import { layoutLevel, levelBounds, ORIGIN, type LevelBounds } from './layout'
 export const MAX_VISIBLE_NODES = 24
 const EMPTY_ENTITIES: readonly Entity[] = []
 const WHEEL_TRANSITION_MS = 350
-const EDITABLE =
-  'input, textarea, select, [contenteditable="true"], .graph-node-content, .graph-links-list, .graph-corner, .graph-pagination'
+/** Targets whose wheel / right-click belong to an embedded editor, not the canvas. */
+export const EDITABLE =
+  'input, textarea, select, [contenteditable="true"], .graph-node-content, .graph-corner, .graph-pagination'
 
 interface Location {
   parentId: string | null

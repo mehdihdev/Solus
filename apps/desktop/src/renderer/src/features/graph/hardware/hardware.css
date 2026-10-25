@@ -154,18 +154,6 @@
   cursor: pointer;
 }
 
-/* Hardware uses the available viewport, while the Integrations panel keeps its layout.
-   All detected cards and their evidence remain visible; secondary paths sit alongside. */
-.workspace-add-panel:has(> .hardware-add) {
-  position: fixed;
-  top: 110px;
-  left: max(72px, calc((100vw - 1100px) / 2));
-  max-height: calc(100vh - 130px);
-  width: min(1100px, calc(100vw - 100px));
-  max-width: calc(100vw - 100px);
-  min-width: 0;
-  box-sizing: border-box;
-}
 .hardware-add {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

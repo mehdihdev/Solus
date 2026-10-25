@@ -61,6 +61,7 @@ def test_catalog_exposes_auth_and_config() -> None:
             "selection": None,
             # None: and no access choice to make either (SOLUS-ONS-A2).
             "access_modes": None,
+            "capabilities": [],
         }
     ]
 
@@ -114,3 +115,23 @@ def test_build_registry_ships_the_roster() -> None:
         "config_key": "documents",
         "label": "document",
     }
+
+
+def test_providers_of_asks_capabilities_not_names() -> None:
+    """SOLUSDEV-320 T4: shared code asks `providers_of(capability)`; the roster declares."""
+    from solus_api.connectors.contracts import Capability
+    from solus_api.connectors.registry import build_registry
+    from solus_api.core.config import Settings
+
+    registry = build_registry(
+        Settings(supabase_jwt_secret="dummy-value-tests-only", database_url="sqlite+aiosqlite://")
+    )
+    assert registry.providers_of(Capability.NETLIST) == ["kicad"]
+    assert registry.providers_of(Capability.WEBHOOK) == ["onshape"]
+    assert registry.providers_of(Capability.RENDER) == []
+    catalog = {c["type"]: c for c in registry.catalog()}
+    for provider in registry.providers():
+        assert Capability.CHANGE_SIGNAL in registry.create(provider).capabilities, provider
+        assert "change_signal" in catalog[provider]["capabilities"]
+    assert catalog["kicad"]["capabilities"] == ["change_signal", "netlist", "structure"]
+    assert catalog["altium"]["capabilities"] == ["change_signal", "structure"]

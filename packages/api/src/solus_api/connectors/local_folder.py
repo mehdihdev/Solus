@@ -31,11 +31,13 @@ from pathlib import PurePosixPath
 from typing import Any, ClassVar, Final, Literal, Protocol
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from solus_api.connectors.code_host import requirement_entity
 from solus_api.connectors.contracts import (
     AccountInfo,
     AuthKind,
+    Capability,
     Connector,
     ConnectorError,
     Credentials,
@@ -46,6 +48,7 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.graph.inference.manifests import Ecosystem, valid_dependency
 
 PROVIDER: Final = "local"
 CLONE_KEY: Final = "clone:"
@@ -139,26 +142,31 @@ def _no_credentials(value: str | None) -> str | None:
 MAX_SCAN_DEPENDENCIES: Final = 500
 REQUIREMENT_KIND: Final = "python_requirement"
 REQUIRES: Final = "requires"
-_PACKAGE_NAME: Final = re.compile(r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
-_SPECIFIER_SET: Final = re.compile(r"^(?:(?:===|~=|==|!=|<=|>=|<|>)[A-Za-z0-9.*+!_-]+,?)*$")
 
 
 class ScannedDependency(_Wire):
     """One dependency declaration (SOLUSDEV-250): `(source file, package)`. Names
-    are PEP 503-normalised companion-side and re-checked here; a specifier is a
-    raw PEP 440 set, bounded — never evaluated here (the checker does that)."""
+    are normalised companion-side and re-checked here per ecosystem (SOLUSDEV-320:
+    python, npm, ros); a specifier is a raw version set, bounded — never evaluated
+    here (the checker does that)."""
 
     parts: list[str] = Field(min_length=1, max_length=MAX_PATH_PARTS)
-    ecosystem: Literal["python"] = "python"
-    name: str = Field(min_length=1, max_length=128, pattern=_PACKAGE_NAME.pattern)
-    # A PEP 440 specifier set and nothing else (security review H4: this
-    # string becomes a graph node's name and rides the model's graph context —
-    # it can carry a version, never a sentence).
-    specifier: str = Field(default="", max_length=128, pattern=_SPECIFIER_SET.pattern)
+    ecosystem: Ecosystem = "python"
+    name: str = Field(min_length=1, max_length=128)
+    # A version specifier and nothing else (security review H4: this string
+    # becomes a graph node's name and rides the model's graph context — it can
+    # carry a version, never a sentence). Shape-checked per ecosystem below.
+    specifier: str = Field(default="", max_length=128)
     extras: list[str] = Field(default_factory=list, max_length=8)
     line: int = Field(default=0, ge=0)
 
     _parts = field_validator("parts")(_segments)
+
+    @model_validator(mode="after")
+    def _shaped_for_ecosystem(self) -> ScannedDependency:
+        if not valid_dependency(self.name, self.specifier, self.ecosystem):
+            raise ValueError("dependency name or specifier out of shape for its ecosystem")
+        return self
 
     @field_validator("extras")
     @classmethod
@@ -425,8 +433,8 @@ def _python_code(files: list[ScannedFile], root_name: str) -> list[tuple[EntityO
 
 
 def _requirements(scan: FolderScan) -> list[EntityOut]:
-    """One `python_requirement` node per (source file, package); a masked path
-    segment or a duplicate declaration in the same file is skipped."""
+    """One requirement node per (source file, package); a masked path segment or
+    a duplicate declaration in the same file is skipped."""
     out: list[EntityOut] = []
     seen: set[str] = set()
     for dep in scan.dependencies:
@@ -437,19 +445,13 @@ def _requirements(scan: FolderScan) -> list[EntityOut]:
             continue
         seen.add(key)
         out.append(
-            EntityOut(
-                source_key=key,
-                type=REQUIREMENT_KIND,
-                domain=Domain.CODE,
-                name=f"{dep.name} {dep.specifier}".strip()[:512],
-                properties={
-                    "name": dep.name,
-                    "specifier": dep.specifier,
-                    "extras": list(dep.extras),
-                    "source_file": dep.source_file,
-                    "ecosystem": dep.ecosystem,
-                    "line": dep.line,
-                },
+            requirement_entity(
+                name=dep.name,
+                specifier=dep.specifier,
+                ecosystem=dep.ecosystem,
+                source_file=dep.source_file,
+                extras=dep.extras,
+                line=dep.line,
             )
         )
     return out
@@ -580,6 +582,9 @@ def detected_entries(graph: LocalGraph) -> list[dict[str, Any]]:
 
 class LocalFolderConnector(Connector):
     provider: ClassVar[str] = PROVIDER
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CHANGE_SIGNAL, Capability.STRUCTURE}
+    )
     auth_kind: ClassVar[AuthKind] = AuthKind.NONE
     config_fields: ClassVar[tuple[str, ...]] = ("machine_id", "machine_name", "folder_name")
     #: Read duck-typed by `runtime.run_sync` (like `selection`/`access_modes` in

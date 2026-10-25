@@ -1,6 +1,6 @@
 """Electrical / temporal attribute vocabulary read from ``graph_entity.attrs`` (SOLUS-CHK-01).
 
-No connector populates these yet — the EDA connectors (KiCad / SPICE / Altium) are unbuilt —
+No connector populates these yet — the EDA connectors are unbuilt —
 so this module DEFINES the keys the compatibility rules expect and is the spec those
 connectors must later honour (see ``docs/contracts/checker-interface.md``).
 

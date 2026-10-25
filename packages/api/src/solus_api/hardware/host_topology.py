@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
+from solus_api.graph.inference import infer_after_host_confirm
 from solus_api.hardware.operations import ReviewedHardwareOperations
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import read_entity_config, robot_root
@@ -39,6 +41,7 @@ from solus_api.models import (
     SourceType,
     utcnow,
 )
+from solus_api.services.activity import record_project_activity
 
 
 class HostAttachment(BaseModel):
@@ -325,8 +328,26 @@ class HostTopologyService:
                 409, "proposal_changed", "Host topology evidence changed; review a fresh proposal"
             )
         await self._persist(robot_id, body, proposal.topology)
+        # SOLUSDEV-320: `drives` from the overlay, `hosts` machine → robot (guarded, not on replay).
+        await infer_after_host_confirm(
+            self.session, self.project_id, robot_id=robot_id, machine_id=body.machine_id
+        )
         result = await read_topology(self.session, self.project_id, robot_id)
         ledger.record(key, "topology.host", digest, result.model_dump(mode="json"))
+        # SOLUSDEV-320 P5-T7 (solus.md §9): one history row per confirm, never on replay.
+        await record_project_activity(
+            self.session,
+            self.project_id,
+            "host.confirmed",
+            actor_id=self.user_id,
+            domain=Domain.RUNTIME.value,
+            payload={"robot_id": str(robot_id), "machine_id": body.machine_id},
+            entity_ids=[
+                robot_id,
+                body.endpoint_id,
+                *([body.software_entity_id] if body.software_entity_id is not None else []),
+            ],
+        )
         return result, False
 
     async def _persist(
@@ -375,7 +396,6 @@ class HostTopologyService:
                 "endpoint_id": str(body.endpoint_id),
                 "protocol": "usb" if relation == RELATION else None,
                 "address": None,
-                "evidence": [e.model_dump() for e in host.evidence],
             }
             if dst == host.id:
                 attrs["software"] = host.software
@@ -384,25 +404,18 @@ class HostTopologyService:
                 )
             if dst == body.endpoint_id:
                 attrs["brain_kind"] = next(n.brain_kind for n in topology.nodes if n.id == dst)
-            edge = await self.session.get(GraphEdge, edge_id)
-            if edge is None:
-                self.session.add(
-                    GraphEdge(
-                        id=edge_id,
-                        project_id=self.project_id,
-                        src_id=src,
-                        dst_id=dst,
-                        relation_type=relation,
-                        domain_pair="electrical<->electrical",
-                        origin="manual",
-                        attrs=attrs,
-                    )
-                )
-            else:
-                if (
-                    edge.project_id != self.project_id
-                    or edge.attrs.get("managed_by") != HOST_MARKER
-                ):
-                    raise APIError(409, "topology_conflict", "Host relation identity conflicts")
-                edge.attrs, edge.deleted_at = attrs, None
+            await write_edge(
+                self.session,
+                project_id=self.project_id,
+                src_id=src,
+                dst_id=dst,
+                relation_type=relation,
+                origin="manual",
+                confidence=1.0,
+                evidence=[e.as_edge_evidence() for e in host.evidence],
+                created_by=self.user_id,
+                attrs=attrs,
+                edge_id=edge_id,
+                managed_by=HOST_MARKER,
+            )
         await self.session.flush()

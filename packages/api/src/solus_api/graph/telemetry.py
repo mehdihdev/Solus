@@ -5,7 +5,8 @@ The bridge between Live Bench telemetry and the graph SOL reasons over. Three jo
 1. `ingest` — map an incoming (LB-06) `TelemetryPacket` to its graph entity by device/topic id
    and append each signal value to the bounded recent-values buffer. An unresolved device is
    dropped, not raised, so a stray/hostile packet never crashes the stream (§7).
-2. `get_recent_values` — the raw recent-values feed for one entity (Live Bench / Foxglove CON-03).
+2. `get_recent_values` — the raw recent-values feed for one entity (Live Bench / a telemetry
+   viewer, CON-03).
 3. `get_telemetry` — the W0-07 `SolSystems.get_telemetry(project_id, window)` shape: a bounded,
    batch-summarized SEQUENCE of window-summaries computed DETERMINISTICALLY from the buffer
    (per-signal mean/min/max/last/count). No LLM narration, no S3 `raw_ref` — those are later SYS /

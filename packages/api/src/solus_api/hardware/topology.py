@@ -7,13 +7,15 @@ never grant transport permissions and reads never infer missing hardware or soft
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from solus_contracts.relations import EdgeEvidence, EvidenceKind
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.models import Domain, GraphEdge, GraphEntity, utcnow
 
@@ -29,6 +31,16 @@ class Evidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
     by: str = Field(max_length=32)
     source: str | None = Field(default=None, max_length=512)
+
+    def as_edge_evidence(self) -> EdgeEvidence:
+        """Stored on the edge as `{kind: config, ref: by, detail: source}`."""
+        return EdgeEvidence(kind=EvidenceKind.CONFIG, ref=self.by, detail=self.source)
+
+    @classmethod
+    def from_edge_evidence(cls, item: dict[str, Any]) -> Evidence:
+        if "by" in item:  # pre-SOLUSDEV-320 shape; migration a32000000001 rewrites it
+            return cls.model_validate(item)
+        return cls(by=str(item["ref"]), source=item.get("detail"))
 
 
 class TopologyNode(BaseModel):
@@ -106,7 +118,7 @@ async def sync_topology(session: AsyncSession, project_id: uuid.UUID, robot_id: 
             bus_id = uuid.uuid5(endpoint_id, f"bus:{item.protocol}")
             await _node(session, project_id, bus_id, "hardware_bus", item.protocol, {})
             record = config.provenance_of(f"bus_map.{index}.protocol")
-            evidence = [Evidence(by=record.by.value, source=record.source).model_dump()]
+            evidence = [Evidence(by=record.by.value, source=record.source)]
             await _edge(
                 session,
                 project_id,
@@ -210,36 +222,30 @@ async def _edge(
     dst: uuid.UUID,
     protocol: str | None,
     address: str | None,
-    evidence: list[dict[str, str | None]],
+    evidence: list[Evidence],
     desired: set[uuid.UUID],
 ) -> None:
     edge_id = uuid.uuid5(robot_id, f"{MARKER}:{src}:{dst}:{protocol}:{address}")
     desired.add(edge_id)
-    edge = await session.get(GraphEdge, edge_id)
-    attrs = {
-        "managed_by": MARKER,
-        "robot_id": str(robot_id),
-        "protocol": protocol,
-        "address": address,
-        "evidence": evidence,
-    }
-    if edge is None:
-        edge = GraphEdge(
-            id=edge_id,
-            project_id=project_id,
-            src_id=src,
-            dst_id=dst,
-            relation_type=MEMBERSHIP if src == robot_id else RELATION,
-            domain_pair="electrical<->electrical",
-            origin="manual",
-            attrs=attrs,
-        )
-        session.add(edge)
-    elif edge.project_id != project_id or edge.attrs.get("managed_by") != MARKER:
-        raise APIError(409, "topology_conflict", "Hardware relation identity conflicts")
-    else:
-        edge.attrs = attrs
-        edge.deleted_at = None
+    await write_edge(
+        session,
+        project_id=project_id,
+        src_id=src,
+        dst_id=dst,
+        relation_type=MEMBERSHIP if src == robot_id else RELATION,
+        origin="manual",
+        confidence=1.0,
+        evidence=[e.as_edge_evidence() for e in evidence],
+        created_by=None,
+        attrs={
+            "managed_by": MARKER,
+            "robot_id": str(robot_id),
+            "protocol": protocol,
+            "address": address,
+        },
+        edge_id=edge_id,
+        managed_by=MARKER,
+    )
 
 
 async def read_topology(
@@ -343,7 +349,7 @@ async def read_topology(
             {},
         )
         evidence: list[Evidence] = [
-            Evidence.model_validate(item)
+            Evidence.from_edge_evidence(item)
             for item in next(
                 (e.attrs.get("evidence", []) for e in edges if e.dst_id == entity.id), []
             )

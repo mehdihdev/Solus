@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { Entity, Project, TeamSummary } from '../../lib/api/resources'
-import { nodeItems, pageItems, projectItems, teamItems } from './paletteItems'
+import {
+  nodeItems,
+  pageItems,
+  projectItems,
+  searchItems,
+  teamItems,
+  withIndexScores
+} from './paletteItems'
 
 const team = (team_id: string, name: string): TeamSummary => ({
   team_id,
@@ -125,5 +132,86 @@ describe('nodeItems', () => {
 
   it('returns nothing without entities', () => {
     expect(nodeItems('p1', null)).toEqual([])
+  })
+})
+
+describe('searchItems', () => {
+  const hit = {
+    id: 'e9',
+    kind: 'net',
+    domain: 'ee',
+    name: 'VBUS',
+    snippet: '',
+    score: 0.5,
+    why: 'text_match' as const
+  }
+  const entry = {
+    id: 's1',
+    entity_id: 'n1',
+    section: 'constraints',
+    subsection: 'budgets',
+    kind: 'text',
+    name: 'Power budget',
+    snippet: '',
+    score: 1,
+    why: 'name_match' as const
+  }
+
+  it('adds index entity hits the loaded snapshot lacks, with the index score as a floor', () => {
+    const items = searchItems('p1', { entities: [hit], solus: [] }, new Set(['e1']))
+    expect(items).toEqual([
+      {
+        key: 'node:p1:e9',
+        kind: 'node',
+        label: 'VBUS',
+        detail: 'ee · net',
+        matched: 40.5,
+        target: { type: 'node', projectId: 'p1', entityId: 'e9' }
+      }
+    ])
+    expect(searchItems('p1', { entities: [hit], solus: [] }, new Set(['e9']))).toEqual([])
+  })
+
+  it('turns .solus entries into their own kind, opening the entry node; one without a node is skipped', () => {
+    const items = searchItems(
+      'p1',
+      { entities: [], solus: [entry, { ...entry, id: 's2', entity_id: null }] },
+      new Set()
+    )
+    expect(items).toEqual([
+      {
+        key: 'solus:p1:s1',
+        kind: 'solus',
+        label: 'Power budget',
+        detail: 'constraints › budgets',
+        matched: 71,
+        target: { type: 'node', projectId: 'p1', entityId: 'n1' }
+      }
+    ])
+    expect(
+      searchItems('p1', { entities: [], solus: [{ ...entry, subsection: null }] }, new Set())[0]
+        .detail
+    ).toBe('constraints')
+  })
+})
+
+describe('withIndexScores', () => {
+  it('gives loaded nodes the index matched a score floor and leaves the rest alone', () => {
+    const [imu, motor] = nodeItems('p1', [entity('e1', 'IMU'), entity('e2', 'Motor')])
+    const scored = withIndexScores([imu, motor], {
+      entities: [
+        {
+          id: 'e2',
+          kind: 'ic',
+          domain: 'ee',
+          name: 'Motor',
+          snippet: '',
+          score: 1,
+          why: 'ref_match'
+        }
+      ]
+    })
+    expect(scored[0]).toBe(imu)
+    expect(scored[1]).toEqual({ ...motor, matched: 41 })
   })
 })

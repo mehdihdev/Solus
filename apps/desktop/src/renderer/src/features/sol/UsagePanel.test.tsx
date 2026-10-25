@@ -112,4 +112,13 @@ describe('UsagePanel', () => {
     await waitFor(() => expect(screen.getByText(/Usage unavailable offline/)).toBeInTheDocument())
     expect(screen.queryByText(/Loading usage/)).not.toBeInTheDocument()
   })
+
+  it('the accent + opens the credit packs even when nothing is low (design template)', async () => {
+    render(<UsagePanel creditsExhausted={false} />)
+    await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())
+    expect(screen.queryByText('$10')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Add credits' }))
+    expect(screen.getByText('Add credits')).toBeInTheDocument()
+    expect(screen.getByText('$10')).toBeInTheDocument()
+  })
 })

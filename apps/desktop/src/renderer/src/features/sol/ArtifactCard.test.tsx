@@ -72,11 +72,25 @@ describe('ArtifactCard', () => {
   it('files to the chosen section and shows the filed label; the row cannot file twice', async () => {
     const onFile = vi.fn(async () => {})
     const { rerender } = render(<ArtifactCard projectId="p1" artifact={SVG} onFile={onFile} />)
-    fireEvent.click(screen.getByRole('radio', { name: 'Documentation' }))
+    // Documentation is the default; the segmented control lists the seven sections.
+    expect(screen.getAllByRole('radio')).toHaveLength(7)
+    expect(screen.getByRole('radio', { name: 'Documentation' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
     fireEvent.click(screen.getByRole('button', { name: 'File' }))
-    await waitFor(() => expect(onFile).toHaveBeenCalledWith('docs'))
+    await waitFor(() => expect(onFile).toHaveBeenCalledWith('documentation'))
+    fireEvent.click(screen.getByRole('radio', { name: 'Environment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'File' }))
+    await waitFor(() => expect(onFile).toHaveBeenLastCalledWith('environment'))
     // The host marks the store item filed; the card renders that, not local state.
-    rerender(<ArtifactCard projectId="p1" artifact={{ ...SVG, filedTo: 'docs' }} onFile={onFile} />)
+    rerender(
+      <ArtifactCard
+        projectId="p1"
+        artifact={{ ...SVG, filedTo: 'documentation' }}
+        onFile={onFile}
+      />
+    )
     expect(screen.getByText('Filed to Documentation')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'File' })).toBeNull()
   })

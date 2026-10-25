@@ -8,10 +8,19 @@ import * as actions from './paletteActions'
 
 const data = vi.hoisted(() => ({
   switcher: { status: 'ready', groups: [] as unknown[] },
-  graph: { status: 'ready', entities: [] as unknown[] | null }
+  graph: { status: 'ready', entities: [] as unknown[] | null },
+  search: { entities: [] as unknown[], solus: [] as unknown[], pending: false },
+  fetchEnabled: true
 }))
 vi.mock('../workspace/useProjectSwitcher', () => ({ useProjectSwitcher: () => data.switcher }))
 vi.mock('../graph/useWorkspaceGraph', () => ({ useWorkspaceGraph: () => data.graph }))
+vi.mock('../workspace/useProjectSearch', () => ({
+  useProjectSearch: vi.fn(() => data.search)
+}))
+vi.mock('../workspace/workspaceOnline', () => ({
+  useWorkspaceFetchEnabled: () => data.fetchEnabled
+}))
+import { useProjectSearch } from '../workspace/useProjectSearch'
 vi.mock('./paletteEvents', () => ({ reportPaletteOpened: vi.fn() }))
 vi.mock('./paletteActions', () => ({ runPaletteTarget: vi.fn() }))
 
@@ -52,6 +61,8 @@ beforeEach(() => {
     status: 'ready',
     entities: [{ id: 'e1', name: 'IMU', type: 'sensor', domain: 'ee', source_key: null }]
   }
+  data.search = { entities: [], solus: [], pending: false }
+  data.fetchEnabled = true
 })
 
 describe('PaletteHost', () => {
@@ -115,5 +126,79 @@ describe('PaletteHost', () => {
     expect(usePaletteStore.getState().open).toBe(true)
     fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Escape' })
     expect(usePaletteStore.getState().open).toBe(false)
+  })
+})
+
+describe('PaletteHost — search index', () => {
+  const vbus = {
+    id: 'e9',
+    kind: 'net',
+    domain: 'ee',
+    name: 'VBUS',
+    snippet: '',
+    score: 0.5,
+    why: 'text_match'
+  }
+  const budget = {
+    id: 's1',
+    entity_id: 'n1',
+    section: 'constraints',
+    subsection: 'budgets',
+    kind: 'text',
+    name: 'Power budget',
+    snippet: '',
+    score: 1,
+    why: 'name_match'
+  }
+
+  it('asks the index for the typed query on the open project, scope all', () => {
+    renderHost()
+    act(() => usePaletteStore.getState().setOpen(true))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'power' } })
+    expect(useProjectSearch).toHaveBeenLastCalledWith('p1', 'power', { scope: 'all' })
+  })
+
+  it('does not ask the index while offline or in the dev bypass', () => {
+    data.fetchEnabled = false
+    renderHost()
+    act(() => usePaletteStore.getState().setOpen(true))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'power' } })
+    expect(useProjectSearch).toHaveBeenLastCalledWith(null, 'power', { scope: 'all' })
+  })
+
+  it('lists index-only nodes and .solus entries; opening an entry jumps to its node', () => {
+    data.search = { entities: [vbus], solus: [budget], pending: false }
+    const props = renderHost()
+    act(() => usePaletteStore.getState().setOpen(true))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'power' } })
+    expect(screen.getByRole('group', { name: 'Nodes' })).toHaveTextContent('VBUS')
+    expect(screen.getByRole('group', { name: '.solus' })).toHaveTextContent('Power budget')
+    fireEvent.click(screen.getByText('Power budget'))
+    expect(usePaletteStore.getState().recentKeys).toEqual(['solus:p1:s1'])
+    expect(events.reportPaletteOpened).toHaveBeenCalledWith('solus', expect.any(Number), 'power')
+    expect(actions.runPaletteTarget).toHaveBeenCalledWith(
+      { type: 'node', projectId: 'p1', entityId: 'n1' },
+      { go: props.go, openExtensionPage: props.openExtensionPage }
+    )
+  })
+
+  it('a loaded node the index also matched appears once', () => {
+    data.search = {
+      entities: [{ ...vbus, id: 'e1', name: 'IMU', kind: 'sensor', why: 'ref_match' }],
+      solus: [],
+      pending: false
+    }
+    renderHost()
+    act(() => usePaletteStore.getState().setOpen(true))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'bmi088' } })
+    expect(screen.getAllByText('IMU')).toHaveLength(1)
+  })
+
+  it('says Searching… while the index is still answering and nothing local matches', () => {
+    data.search = { entities: [], solus: [], pending: true }
+    renderHost()
+    act(() => usePaletteStore.getState().setOpen(true))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'zzz' } })
+    expect(screen.getByText('Searching…')).toBeInTheDocument()
   })
 })

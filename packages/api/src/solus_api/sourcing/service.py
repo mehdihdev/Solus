@@ -16,17 +16,39 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
-from solus_api.models import Domain, GraphEdge, GraphEntity, SourcingRequest, utcnow
+from solus_api.graph.edges import write_edge
+from solus_api.models import (
+    Domain,
+    GraphEdge,
+    GraphEntity,
+    SolusEntry,
+    SolusEntryKind,
+    SolusSection,
+    SourcingRequest,
+    utcnow,
+)
+from solus_api.services.solus_payloads import ConstraintMeta
 from solus_api.sourcing.candidates import Candidate
-from solus_api.sourcing.rules import SourcingRules, merge_rules, rules_from_repo_table
+from solus_api.sourcing.rules import (
+    DEFAULT_EXCLUSION_REASON,
+    MAX_LIST,
+    ExcludedSupplier,
+    SourcingRules,
+    _norm,
+    merge_rules,
+    rules_from_repo_table,
+)
 from solus_api.sourcing.torque import AssemblyPart
 from solus_api.widgets.solus_config import SOLUS_CONFIG_KIND
 
 RULES_KIND = "sourcing_rules"
+#: The `.solus` cell whose entries feed the rules (docs/api/solus.md §2.1).
+COMPLIANCE_SUBSECTION = "compliance"
 PART_KIND = "part"
 ORIGIN = "manual"
 #: Robot categories whose parts are electrical by nature; the rest are mechanical.
@@ -193,7 +215,9 @@ async def _rules_row(session: AsyncSession, project_id: uuid.UUID) -> GraphEntit
 
 
 async def load_rules(session: AsyncSession, project_id: uuid.UUID) -> SourcingRules:
-    """Effective rules: defaults ← repo `[ext.sourcing]` ← the project's document."""
+    """Effective rules: defaults ← repo `[ext.sourcing]` ← the project's document, plus
+    (SOLUSDEV-320 P5-T5) every live `constraints/compliance` entry's excluded suppliers and
+    required certifications — additive and de-duplicated, never overriding."""
     row = await _rules_row(session, project_id)
     project = SourcingRules()
     if row is not None:
@@ -201,7 +225,59 @@ async def load_rules(session: AsyncSession, project_id: uuid.UUID) -> SourcingRu
             project = SourcingRules.model_validate(row.attrs or {})
         except ValueError:
             project = SourcingRules()
-    return merge_rules(await _repo_rules(session, project_id), project)
+    merged = merge_rules(await _repo_rules(session, project_id), project)
+    return _add_compliance(merged, await _compliance_rules(session, project_id))
+
+
+async def _compliance_rules(session: AsyncSession, project_id: uuid.UUID) -> SourcingRules:
+    """What the `.solus` compliance entries exclude or require; the reason shown is the
+    entry's own first line. A malformed payload contributes nothing."""
+    rows = await session.scalars(
+        select(SolusEntry)
+        .where(
+            SolusEntry.project_id == project_id,
+            SolusEntry.section == SolusSection.CONSTRAINTS,
+            SolusEntry.subsection == COMPLIANCE_SUBSECTION,
+            SolusEntry.kind.in_((SolusEntryKind.TEXT, SolusEntryKind.SOL)),
+            SolusEntry.deleted_at.is_(None),
+            SolusEntry.payload.is_not(None),
+        )
+        .order_by(SolusEntry.created_at, SolusEntry.id)
+    )
+    excluded: list[ExcludedSupplier] = []
+    certifications: list[str] = []
+    for entry in rows:
+        try:
+            meta = ConstraintMeta.model_validate(entry.payload or {})
+        except ValidationError:
+            continue
+        first_line = next((ln.strip() for ln in (entry.text or "").splitlines() if ln.strip()), "")
+        reason = first_line[:200] or DEFAULT_EXCLUSION_REASON
+        for name in meta.excluded_suppliers:
+            try:
+                excluded.append(ExcludedSupplier(name=name, reason=reason))
+            except ValueError:
+                continue
+        certifications.extend(meta.required_certifications)
+    return SourcingRules(
+        excluded_suppliers=excluded[:MAX_LIST], required_certifications=certifications[:MAX_LIST]
+    )
+
+
+def _add_compliance(base: SourcingRules, extra: SourcingRules) -> SourcingRules:
+    """`base` plus `extra`'s suppliers/certifications, first occurrence wins (case-insensitive)."""
+    suppliers: dict[str, ExcludedSupplier] = {}
+    for supplier in [*base.excluded_suppliers, *extra.excluded_suppliers]:
+        suppliers.setdefault(_norm(supplier.name), supplier)
+    certifications: dict[str, str] = {}
+    for certification in [*base.required_certifications, *extra.required_certifications]:
+        certifications.setdefault(_norm(certification), certification)
+    return base.model_copy(
+        update={
+            "excluded_suppliers": list(suppliers.values())[:MAX_LIST],
+            "required_certifications": list(certifications.values())[:MAX_LIST],
+        }
+    )
 
 
 async def save_rules(
@@ -341,15 +417,16 @@ async def select_candidate(
     session.add(part)
     await session.flush()
     if category is not None:
-        session.add(
-            GraphEdge(
-                project_id=request.project_id,
-                src_id=category.id,
-                dst_id=part.id,
-                relation_type="contains",
-                domain_pair=f"project<->{domain.value}",
-                origin=ORIGIN,
-            )
+        await write_edge(
+            session,
+            project_id=request.project_id,
+            src_id=category.id,
+            dst_id=part.id,
+            relation_type="contains",
+            origin=ORIGIN,
+            confidence=1.0,
+            evidence=[],
+            created_by=user_id,
         )
     request.selected_candidate_id = candidate.id
     request.selected_entity_id = part.id

@@ -13,3 +13,5 @@ specs:
 telemetry:
   - {quantity: output, unit: us}
 datasheet_url: https://github.com/bitdump/BLHeli
+limits:
+  current_a: 35

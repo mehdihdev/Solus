@@ -8,11 +8,15 @@ SOLUSDEV-166 (ADR-034) adds the machine-local ~/.solus state shapes
 
 SOLUSDEV-235 (ADR-035) adds the ``extension.toml`` manifest shape
 (`extension_manifest`), ratified in-session at the Store backend design review.
+
+SOLUSDEV-320 adds the relation vocabulary (`relations`): relation classes and types,
+edge origins, matrix cells and evidence — approved in-chat at the design gate.
 """
 
 from solus_contracts.connector import (
     AccountInfo,
     AuthKind,
+    Capability,
     Connector,
     ConnectorError,
     Credentials,
@@ -50,6 +54,20 @@ from solus_contracts.local_state import (
     ProjectFolderLink,
     ProjectRegistry,
 )
+from solus_contracts.relations import (
+    CANDIDATE_THRESHOLD,
+    RELATION_CLASS,
+    RELATION_DOCS,
+    EdgeEvidence,
+    EdgeOrigin,
+    EvidenceKind,
+    MatrixCell,
+    RelationClass,
+    RelationType,
+    matrix_cell,
+    normalize_domain_pair,
+    relation_class,
+)
 
 __all__ = [
     "EXTENSION_ID_PATTERN",
@@ -75,6 +93,7 @@ __all__ = [
     "SOLUS_HOME_MODE",
     "AccountInfo",
     "AuthKind",
+    "Capability",
     "Connector",
     "ConnectorError",
     "Credentials",
@@ -86,4 +105,16 @@ __all__ = [
     "SyncContext",
     "SyncError",
     "SyncResult",
+    "CANDIDATE_THRESHOLD",
+    "RELATION_CLASS",
+    "RELATION_DOCS",
+    "EdgeEvidence",
+    "EdgeOrigin",
+    "EvidenceKind",
+    "MatrixCell",
+    "RelationClass",
+    "RelationType",
+    "matrix_cell",
+    "normalize_domain_pair",
+    "relation_class",
 ]

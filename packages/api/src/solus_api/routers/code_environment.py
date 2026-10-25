@@ -38,35 +38,41 @@ _PROBE_TIMEOUT_SECONDS: Final = 25.0
 #: One live probe per (user, project, machine) is reused for this long.
 PROBE_CACHE_SECONDS: Final = 10.0
 _ProbeKey = tuple[uuid.UUID, uuid.UUID, str]
-_probe_cache: dict[_ProbeKey, tuple[float, dict[str, Any] | None]] = {}
-_probe_locks: dict[_ProbeKey, asyncio.Lock] = {}
+_CacheKey = tuple[_ProbeKey, str]
+_probe_cache: dict[_CacheKey, tuple[float, dict[str, Any] | None]] = {}
+_probe_locks: dict[_CacheKey, asyncio.Lock] = {}
 
 
-async def _cached_probe(key: _ProbeKey, live: Any, call_cap: int) -> dict[str, Any] | None:
-    """The probe for `key`, at most once per PROBE_CACHE_SECONDS and never
+async def _cached_probe(
+    key: _ProbeKey, live: Any, call_cap: int, *, tool: str = PROBE_TOOL
+) -> dict[str, Any] | None:
+    """The `tool` probe for `key`, at most once per PROBE_CACHE_SECONDS and never
     two in flight for the same key (the second caller awaits the first)."""
-    lock = _probe_locks.setdefault(key, asyncio.Lock())
+    cache_key = (key, tool)
+    lock = _probe_locks.setdefault(cache_key, asyncio.Lock())
     async with lock:
         now = time.monotonic()
-        cached = _probe_cache.get(key)
+        cached = _probe_cache.get(cache_key)
         if cached is not None and now - cached[0] < PROBE_CACHE_SECONDS:
             return cached[1]
-        probe = await _probe(live, call_cap)
-        _probe_cache[key] = (now, probe)
+        probe = await _probe(live, call_cap, tool=tool)
+        _probe_cache[cache_key] = (now, probe)
         for stale in [k for k, (at, _) in _probe_cache.items() if now - at >= PROBE_CACHE_SECONDS]:
             _probe_cache.pop(stale, None)
             _probe_locks.pop(stale, None)
         return probe
 
 
-async def _probe(live: Any, call_cap: int) -> dict[str, Any] | None:
-    if live is None or not any(spec.descriptor.name == PROBE_TOOL for spec in live.inventory):
+async def _probe(live: Any, call_cap: int, *, tool: str = PROBE_TOOL) -> dict[str, Any] | None:
+    """One argument-less read tool over the live session: its dict value, or None when the
+    session is down, the tool is not advertised, it timed out or declined. Never raises."""
+    if live is None or not any(spec.descriptor.name == tool for spec in live.inventory):
         return None
     try:
         async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
-            result = await dispatch(live, PROBE_TOOL, {}, call_cap_bytes=call_cap)
+            result = await dispatch(live, tool, {}, call_cap_bytes=call_cap)
     except (TimeoutError, ToolException):
-        logger.info("code environment probe declined")
+        logger.info("%s declined", tool)
         return None
     return result.value if result.ok and isinstance(result.value, dict) else None
 

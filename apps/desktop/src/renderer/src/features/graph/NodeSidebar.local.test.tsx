@@ -183,11 +183,17 @@ describe('NodeSidebar local controls — focused', () => {
     useFocusStore.setState({
       focusedEntityId: 'e1',
       status: 'ready',
-      cache: { 'p1:e1@1': { entities: [E1, E2], edges: [], truncated: false } }
+      cache: {
+        'p1:e1@1': {
+          entities: [E1, E2],
+          edges: [{ id: 'r1', type: 'mates_with', from_entity_id: 'e1', to_entity_id: 'e2' }],
+          truncated: false
+        }
+      }
     })
     render(<GraphInspector />)
-    expect(screen.getByTestId('focused-name')).toHaveTextContent('elbow motor')
-    expect(screen.getByTestId('neighbour-count')).toHaveTextContent('2')
-    expect(screen.getByRole('button', { name: 'wrist servo' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'elbow motor' })).toBeInTheDocument()
+    expect(screen.getByText('CONNECTIONS · 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reveal wrist servo' })).toBeInTheDocument()
   })
 })

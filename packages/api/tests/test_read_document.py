@@ -573,7 +573,7 @@ async def test_propose_part_definition_previews_and_files_a_cited_hardware_entry
         select(SolusEntry).where(SolusEntry.id == uuid.UUID((result.value or {})["id"]))
     )
     assert entry is not None
-    assert entry.section is SolusSection.HARDWARE
+    assert entry.section is SolusSection.DOCUMENTATION and entry.subsection == "datasheets"
     assert entry.author == "sol"
     assert entry.text is not None
     assert str(artifact_id) in entry.text

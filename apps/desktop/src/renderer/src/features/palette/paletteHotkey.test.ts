@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { isPaletteShortcut, paletteShortcutHint, usePaletteHotkey } from './paletteHotkey'
+import {
+  isModKeyShortcut,
+  isPaletteShortcut,
+  modKeyHint,
+  paletteShortcutHint,
+  usePaletteHotkey
+} from './paletteHotkey'
 
 const key = (
   over: Partial<KeyboardEventInit> = {}
@@ -66,5 +72,18 @@ describe('usePaletteHotkey', () => {
     renderHook(() => usePaletteHotkey(onToggle))
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k' }))
     expect(onToggle).not.toHaveBeenCalled()
+  })
+})
+
+describe('isModKeyShortcut / modKeyHint', () => {
+  it('generalises the chord to any key and labels it per platform', () => {
+    expect(isModKeyShortcut(key({ key: 'n', ctrlKey: true }), false, 'n')).toBe(true)
+    expect(isModKeyShortcut(key({ key: 'N', metaKey: true }), true, 'n')).toBe(true)
+    expect(isModKeyShortcut(key({ key: 'n', metaKey: true, shiftKey: true }), true, 'n')).toBe(
+      false
+    )
+    expect(isModKeyShortcut(key({ key: 'k', metaKey: true }), true, 'n')).toBe(false)
+    expect(modKeyHint(true, 'n')).toBe('⌘N')
+    expect(modKeyHint(false, 'n')).toBe('Ctrl N')
   })
 })

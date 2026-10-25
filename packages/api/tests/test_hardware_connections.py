@@ -247,6 +247,9 @@ async def test_stale_connection_completion_is_closed(
                     entry = await session.scalar(
                         select(SolusEntry).where(
                             SolusEntry.project_id == uuid.UUID(project),
+                            # a hardware config, not the environment spec/divergences
+                            # entries a config write also recomputes (SOLUSDEV-320)
+                            SolusEntry.subsection == "hardware",
                             (SolusEntry.configured_entity_id == uuid.UUID(robot["id"]))
                             if change == "config"
                             else (SolusEntry.configured_entity_id != uuid.UUID(robot["id"])),

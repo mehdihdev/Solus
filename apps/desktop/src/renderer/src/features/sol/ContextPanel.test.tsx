@@ -1,7 +1,6 @@
-// SOLUSDEV-233: the CONTEXT IN USE panel — custom instruction card + the
-// last turn's context manifest (files + graph chips, labels only).
-import { render, screen, waitFor } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+// SOLUSDEV-233: the CONTEXT IN USE panel — the last turn's context manifest (files +
+// graph chips, labels only). The custom instruction card has its own test.
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -14,7 +13,6 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
   return { ...actual, getSettings: vi.fn(), updateCustomInstruction: vi.fn() }
 })
 const getSettings = vi.mocked(resources.getSettings)
-const updateCustomInstruction = vi.mocked(resources.updateCustomInstruction)
 
 const SETTINGS: resources.UserSettings = {
   sol_mode: 'guide',
@@ -82,27 +80,5 @@ describe('ContextPanel', () => {
   it('shows an honest empty state before the first turn', () => {
     render(<ContextPanel contextUsed={null} />)
     expect(screen.getByText(/Send a message and SOL will show/)).toBeInTheDocument()
-  })
-
-  it('adds a custom instruction and saves it', async () => {
-    updateCustomInstruction.mockResolvedValue(SETTINGS)
-    render(<ContextPanel contextUsed={null} />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
-    await userEvent.type(screen.getByLabelText('Custom instruction'), 'Prefer metric units.')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await waitFor(() =>
-      expect(updateCustomInstruction).toHaveBeenCalledWith('Prefer metric units.')
-    )
-    expect(screen.getByText('Prefer metric units.')).toBeInTheDocument()
-  })
-
-  it('keeps the editor open with an error when the save fails', async () => {
-    updateCustomInstruction.mockRejectedValue(new Error('422'))
-    render(<ContextPanel contextUsed={null} />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
-    await userEvent.type(screen.getByLabelText('Custom instruction'), 'x')
-    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(await screen.findByText(/Couldn.t save/)).toBeInTheDocument()
-    expect(screen.getByLabelText('Custom instruction')).toBeInTheDocument()
   })
 })

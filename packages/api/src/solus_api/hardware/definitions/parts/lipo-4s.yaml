@@ -11,3 +11,4 @@ specs:
   connector: XT60
 telemetry:
   - {quantity: voltage, unit: V}
+behaviour_class: power

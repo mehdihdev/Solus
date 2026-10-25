@@ -1,12 +1,21 @@
-import { useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { ContextMenu, clampMenuPosition } from '../../../components/ui/ContextMenu'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
 import type { MoveOrigin } from '../useWorkspaceLayout'
+import type { FindingsBySubject } from '../useFindings'
+import { GraphBreadcrumb } from './GraphBreadcrumb'
 import { GraphCard } from './GraphCard'
-import { GraphLinkDrawing, GraphLinkList } from './GraphLinks'
+import { GraphLinkDrawing, type StructureLine } from './GraphLinks'
 import { HelpPopover } from './HelpPopover'
 import { buildNavigationIndex, type NavigationStep } from './graphIndex'
-import { MAX_VISIBLE_NODES, useGraphNavigation, type NavigationModel } from './useGraphNavigation'
+import { CARD_HEIGHT, PAD } from './layout'
+import {
+  EDITABLE,
+  MAX_VISIBLE_NODES,
+  useGraphNavigation,
+  type NavigationModel
+} from './useGraphNavigation'
 import './navigation.css'
 import { useAuthStore } from '../../../store/authStore'
 import { useWorkspaceSessionGeneration } from '../workspaceSession'
@@ -35,6 +44,16 @@ export interface GraphNavigatorProps {
   reveal?: { entityId: string; sequence: number }
   /** Docked at the viewport's right edge; stays put while the stage scrolls. */
   overlay?: ReactNode
+  /** A drawn edge was clicked (never a synthetic projection id). */
+  onSelectEdge?: (relation: Relation) => void
+  selectedEdgeId?: string | null
+  /** Viewport "Re-layout": clear the current level's saved positions so defaults run again. */
+  onRelayout?: (levelIds: readonly string[]) => void
+  /** Open findings per entity id → each card's badge (SOLUSDEV-320 P4-T3). */
+  findings?: FindingsBySubject
+  /** Escape outside any editor or dialog: return true to consume it (e.g. a side panel
+   *  closed); otherwise the navigator goes up one level. */
+  onEscape?: () => boolean
 }
 
 /** Project key resets transient navigation/drag state before another tenant can render. */
@@ -113,6 +132,7 @@ function NavigationCards({
           childCount={previews.get(entity.id)?.length ?? 0}
           onRevealChild={scopeRootIds?.includes(entity.id) ? model.revealEntity : undefined}
           childPreviews={previews.get(entity.id)}
+          finding={props.findings?.get(entity.id) ?? null}
           onSelect={select}
           onEnter={enter}
           onBack={back}
@@ -133,11 +153,15 @@ function NavigationViewport({
 }: GraphNavigatorProps & {
   model: NavigationModel
 }): React.JSX.Element {
-  const { bounds, location, viewportRef, key, links, points, parent, visible, index, back } = model
+  const { bounds, location, viewportRef, key, links, points, visible, index } = model
   const previews = useChildPreviews(model, scopeRootIds, props.scopeGraph, props.projectId)
   const offset = useMemo(() => ({ x: bounds.left, y: bounds.top }), [bounds.left, bounds.top])
+  const menu = useRelayoutMenu(model, props.onRelayout)
+  const structure = useStructureLines(model)
+  useDragPan(viewportRef)
   return (
-    <div className="graph-viewport" ref={viewportRef}>
+    <div className="graph-viewport" ref={viewportRef} onContextMenu={menu.onContextMenu}>
+      {menu.element}
       <div
         key={key}
         className="graph-level"
@@ -156,9 +180,9 @@ function NavigationViewport({
           index={index}
           points={points}
           offset={offset}
-          anchor={location.origin}
-          parentName={parent?.name}
-          onBack={back}
+          onSelectEdge={props.onSelectEdge}
+          selectedEdgeId={props.selectedEdgeId}
+          structure={structure}
         />
         <NavigationCards
           {...props}
@@ -182,13 +206,90 @@ function NavigationViewport({
   )
 }
 
-function NavigationPagination({ model }: { model: NavigationModel }): React.JSX.Element {
+/** Containment, drawn (design template): inside a level, one stem from the frame's top edge
+ *  (the parent you zoomed out of) into a bus above the first row, with a drop into every card;
+ *  at the root, the project's `.solus` hub out to the other roots. Real `contains` edges and the
+ *  project's own membership — never an invented relation. */
+function useStructureLines(model: NavigationModel): readonly StructureLine[] {
+  const { parent, visible, points, bounds } = model
+  return useMemo(() => {
+    if (parent) {
+      const stem = { x: bounds.left + bounds.width / 2, y: bounds.top }
+      const via = bounds.top + PAD / 2
+      return visible.flatMap((entity) => {
+        const point = points[entity.id]
+        return point ? [{ from: stem, to: { x: point.x, y: point.y - CARD_HEIGHT / 2 }, via }] : []
+      })
+    }
+    const hub = visible.find((entity) => entity.type === 'solus_config')
+    const origin = hub && points[hub.id]
+    if (!hub || !origin) return []
+    return visible.flatMap((entity) => {
+      const point = points[entity.id]
+      if (entity.id === hub.id || !point) return []
+      const above = point.y < origin.y
+      return [
+        {
+          from: { x: origin.x, y: origin.y + (above ? -CARD_HEIGHT / 2 : CARD_HEIGHT / 2) },
+          to: { x: point.x, y: point.y + (above ? CARD_HEIGHT / 2 : -CARD_HEIGHT / 2) }
+        }
+      ]
+    })
+  }, [parent, visible, points, bounds])
+}
+
+/** Hold the pointer on the canvas background and drag to pan (scroll the viewport). Cards,
+ *  controls and editors keep their own pointer behaviour. */
+const NO_PAN = `.graph-node, ${EDITABLE}, button, a, path, .graph-suggestion`
+
+function useDragPan(viewportRef: React.RefObject<HTMLDivElement | null>): void {
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    let start: { id: number; x: number; y: number; left: number; top: number } | null = null
+    const down = (event: PointerEvent): void => {
+      if (event.button !== 0 || !(event.target instanceof Element) || event.target.closest(NO_PAN))
+        return
+      start = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        left: viewport.scrollLeft,
+        top: viewport.scrollTop
+      }
+      viewport.dataset.panning = 'true'
+      viewport.setPointerCapture?.(event.pointerId)
+    }
+    const move = (event: PointerEvent): void => {
+      if (!start || start.id !== event.pointerId) return
+      viewport.scrollLeft = start.left - (event.clientX - start.x)
+      viewport.scrollTop = start.top - (event.clientY - start.y)
+    }
+    const up = (event: PointerEvent): void => {
+      if (!start || start.id !== event.pointerId) return
+      start = null
+      delete viewport.dataset.panning
+      viewport.releasePointerCapture?.(event.pointerId)
+    }
+    viewport.addEventListener('pointerdown', down)
+    viewport.addEventListener('pointermove', move)
+    viewport.addEventListener('pointerup', up)
+    viewport.addEventListener('pointercancel', up)
+    return () => {
+      viewport.removeEventListener('pointerdown', down)
+      viewport.removeEventListener('pointermove', move)
+      viewport.removeEventListener('pointerup', up)
+      viewport.removeEventListener('pointercancel', up)
+    }
+  }, [viewportRef])
+}
+
+/** Paging only when a level has more cards than fit (design: no permanent bottom bar). */
+function NavigationPagination({ model }: { model: NavigationModel }): React.JSX.Element | null {
   const { page, level, setPage } = model
+  if (level.length <= MAX_VISIBLE_NODES) return null
   return (
     <div className="graph-pagination">
-      <span className="graph-edge-legend">
-        <i /> cross-links
-      </span>
       <button
         type="button"
         aria-label="Previous nodes"
@@ -216,7 +317,15 @@ function NavigationPagination({ model }: { model: NavigationModel }): React.JSX.
 function Navigator(props: GraphNavigatorProps): React.JSX.Element {
   const model = useGraphNavigation(props)
   useReveal(props.reveal, model)
-  useDefaultPositions(props, model)
+  useEscapeNavigation(props.onEscape, model.back)
+  const forgetDefaults = useDefaultPositions(props, model)
+  const { onRelayout } = props
+  const relayout = onRelayout
+    ? (ids: readonly string[]): void => {
+        forgetDefaults()
+        onRelayout(ids)
+      }
+    : undefined
   return (
     <section
       ref={model.rootRef}
@@ -226,23 +335,43 @@ function Navigator(props: GraphNavigatorProps): React.JSX.Element {
       aria-label="Project graph navigator"
     >
       <div className="graph-viewport-frame">
-        <NavigationViewport {...props} model={model} />
-        <GraphZoomControls viewportRef={model.viewportRef} />
-        <div className="graph-corner graph-corner-left">{props.toolbar}</div>
+        <NavigationViewport {...props} model={model} onRelayout={relayout} />
+        <GraphZoomControls viewportRef={model.viewportRef} levelKey={model.key} />
+        <div className="graph-corner graph-corner-left">
+          {props.toolbar}
+          <GraphBreadcrumb
+            trail={model.trail}
+            level={model.level.length}
+            total={model.index.entities.size}
+            onGo={model.go}
+            onBack={model.back}
+          />
+        </div>
         <div className="graph-corner graph-corner-right">
           <HelpPopover trail={model.trail} onOverview={() => model.go(null)} />
         </div>
         {props.overlay && <div className="graph-overlay">{props.overlay}</div>}
       </div>
       <NavigationPagination model={model} />
-      <GraphLinkList
-        key={model.key}
-        index={model.index}
-        links={model.links}
-        onShow={model.showLinked}
-      />
     </section>
   )
+}
+
+/** Escape at the window: dialogs and editors win (they preventDefault or sit inside
+ *  EDITABLE), then the owner may consume it (close a panel), then the level goes up. */
+function useEscapeNavigation(onEscape: GraphNavigatorProps['onEscape'], back: () => boolean): void {
+  const latest = useRef({ onEscape, back })
+  latest.current = { onEscape, back }
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (event.target instanceof Element && event.target.closest(EDITABLE)) return
+      if (latest.current.onEscape?.()) return
+      latest.current.back()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 }
 
 function useReveal(reveal: GraphNavigatorProps['reveal'], model: NavigationModel): void {
@@ -253,11 +382,41 @@ function useReveal(reveal: GraphNavigatorProps['reveal'], model: NavigationModel
   }, [reveal, model])
 }
 
-/** Persist only missing defaults once; dragging never triggers a rearrange. */
+/** Right-click on the canvas background (not a card or an editor) offers Re-layout. */
+function useRelayoutMenu(
+  { level }: NavigationModel,
+  onRelayout: GraphNavigatorProps['onRelayout']
+): { onContextMenu: (event: React.MouseEvent) => void; element: ReactNode } {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  useEffect(() => {
+    if (!menu) return
+    const dismiss = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMenu(null)
+    }
+    document.addEventListener('keydown', dismiss, true)
+    return () => document.removeEventListener('keydown', dismiss, true)
+  }, [menu])
+  const onContextMenu = (event: React.MouseEvent): void => {
+    if (!onRelayout || (event.target as Element).closest(`.graph-node, ${EDITABLE}`)) return
+    event.preventDefault()
+    setMenu(clampMenuPosition(event.clientX, event.clientY))
+  }
+  const element = menu && onRelayout && (
+    <ContextMenu
+      x={menu.x}
+      y={menu.y}
+      items={[{ label: 'Re-layout', onSelect: () => onRelayout(level.map(({ id }) => id)) }]}
+      onClose={() => setMenu(null)}
+    />
+  )
+  return { onContextMenu, element }
+}
+
+/** Persist only missing defaults once; dragging never triggers a rearrange. Returns the forget hook Re-layout uses. */
 function useDefaultPositions(
   { persistDefaults, positions, onMove }: GraphNavigatorProps,
   { visible, points }: NavigationModel
-): void {
+): () => void {
   const sent = useRef(new Set<string>())
   useEffect(() => {
     if (!persistDefaults) return
@@ -267,4 +426,5 @@ function useDefaultPositions(
       onMove(entity.id, points[entity.id], 'auto')
     }
   }, [persistDefaults, positions, onMove, visible, points])
+  return () => sent.current.clear()
 }

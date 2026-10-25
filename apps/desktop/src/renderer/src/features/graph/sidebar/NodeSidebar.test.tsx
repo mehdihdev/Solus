@@ -42,10 +42,11 @@ const nodes: SolusSidebarApi = {
     entityId: 'solus-1',
     sections: {
       ...emptySections(),
-      details: [
+      goals: [
         {
           id: 'n1',
-          section: 'details',
+          section: 'goals',
+          subsection: null,
           kind: 'text',
           author: 'user',
           text: 'Spec',
@@ -136,12 +137,19 @@ describe('NodeSidebar — focused entity', () => {
     useFocusStore.setState({
       focusedEntityId: 'e1',
       status: 'ready',
-      cache: { 'p1:e1@1': { entities: [E1, E2], edges: [], truncated: false } }
+      cache: {
+        'p1:e1@1': {
+          entities: [E1, E2],
+          edges: [{ id: 'r1', type: 'mates_with', from_entity_id: 'e1', to_entity_id: 'e2' }],
+          truncated: false
+        }
+      }
     })
     mount(E1)
-    expect(screen.getByTestId('focused-name')).toHaveTextContent('elbow motor')
-    expect(screen.getByTestId('neighbour-count')).toHaveTextContent('2')
-    expect(screen.getByRole('button', { name: 'wrist servo' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'elbow motor' })).toBeInTheDocument()
+    expect(screen.getByText('MECHANICAL · PART')).toBeInTheDocument()
+    expect(screen.getByText('CONNECTIONS · 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reveal wrist servo' })).toBeInTheDocument()
     expect(robots.renderSidebar).not.toHaveBeenCalled()
     expect(nodes.renderSidebar).not.toHaveBeenCalled()
   })
@@ -175,7 +183,7 @@ describe('NodeSidebar — routing by type', () => {
     )
     expect(screen.getByRole('heading', { name: /octocat/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /add another/i })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Ask SOL about selected node' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Ask SOL/ })).toBeNull()
     expect(screen.queryByText(/properties, sources, and links/i)).not.toBeInTheDocument()
     expect(robots.renderSidebar).not.toHaveBeenCalled()
     expect(nodes.renderSidebar).not.toHaveBeenCalled()
@@ -183,7 +191,8 @@ describe('NodeSidebar — routing by type', () => {
 
   it.each([
     ['solus_config', 'solus-1'],
-    ['solus_section', 'section-details'],
+    ['solus_section', 'section-goals'],
+    ['solus_subsection', 'subsection-documentation-guides'],
     ['solus_note', 'note-1']
   ])('routes a %s (%s) to the solus hook', (type, id) => {
     mount(part({ id, type, domain: 'project', name: type }))
@@ -197,7 +206,7 @@ it('opens SOL only after the selected subject is focused', async () => {
     useFocusStore.setState({ focusedEntityId: id, status: 'ready' })
   })
   mount(E1)
-  fireEvent.click(screen.getByRole('button', { name: 'Ask SOL about selected node' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Ask SOL about this node' }))
   await waitFor(() => expect(openSol).toHaveBeenCalledOnce())
   expect(focus).toHaveBeenCalledWith(E1.id)
   focus.mockRestore()
@@ -208,7 +217,7 @@ it('does not open SOL when selected entity focus failed', async () => {
     useFocusStore.setState({ focusedEntityId: id, status: 'error', error: 'missing' })
   })
   mount(E1)
-  fireEvent.click(screen.getByRole('button', { name: 'Ask SOL about selected node' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Ask SOL about this node' }))
   await waitFor(() => expect(useFocusStore.getState().status).toBe('error'))
   expect(openSol).not.toHaveBeenCalled()
   focus.mockRestore()
@@ -241,4 +250,30 @@ it('keeps the personal branch picker attached to the original repository on a sn
     part({ type: 'code_repo', source_id: 'snapshot', properties: { base_source_id: 'original' } })
   )
   expect(screen.getByTestId('branch-picker')).toHaveTextContent('original')
+})
+
+// SOLUSDEV-320 P4-T2 — a selected edge takes the sidebar over from the entity.
+it('renders the edge panel instead of the entity while an edge is selected', () => {
+  const onEdgeClose = vi.fn()
+  render(
+    <NodeSidebar
+      projectId="p1"
+      entity={part({ type: 'physical_robot' })}
+      robots={robots}
+      nodes={nodes}
+      edge={{
+        relation: { id: 'r1', type: 'wires', from_entity_id: 'e1', to_entity_id: 'e2' },
+        from: E1,
+        to: E2
+      }}
+      onEdgeDecided={vi.fn()}
+      onEdgeClose={onEdgeClose}
+    />
+  )
+  expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+    'elbow motor wires wrist servo'
+  )
+  expect(screen.queryByTestId('robot-sidebar')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  expect(onEdgeClose).toHaveBeenCalledOnce()
 })

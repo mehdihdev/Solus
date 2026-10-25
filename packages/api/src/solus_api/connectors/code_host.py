@@ -11,9 +11,12 @@ Everything is pure (path in, entity out) per the checker/analyzer rule.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, Final
 
 from solus_api.connectors.contracts import Domain, EntityOut
+from solus_api.graph import kinds
+from solus_api.graph.inference.manifests import parse_dependency_manifest
 from solus_api.widgets.solus_config import (
     MAX_PROJECT_TOML_BYTES,
     SOLUS_CONFIG_KIND,
@@ -22,6 +25,11 @@ from solus_api.widgets.solus_config import (
 )
 
 REPO_ROOT_KEY: Final = ":repo"
+#: Root-level dependency manifests a code host reads through its bounded content read
+#: (SOLUSDEV-320); python manifests arrive from the local-folder scan instead.
+MANIFEST_NAMES: Final = ("package.json", "package.xml")
+MAX_MANIFEST_BYTES: Final = 256 * 1024
+REQUIRES: Final = "requires"
 
 # Committed design-export detection (W0-08). Lowercased extension -> (kind, domain).
 DESIGN_EXPORTS: Final[dict[str, tuple[str, Domain]]] = {
@@ -88,12 +96,75 @@ def solus_config_blob(tree: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def solus_config_too_large(item: dict[str, Any]) -> bool:
+def blob_too_large(item: dict[str, Any], limit: int) -> bool:
     """Decided from the tree's declared size, so an oversized file is never
     fetched. A missing or non-integer size fails CLOSED — the tree is untrusted
     input and "unknown" is not "small enough"."""
     size = item.get("size")
-    return not isinstance(size, int) or isinstance(size, bool) or size > MAX_PROJECT_TOML_BYTES
+    return not isinstance(size, int) or isinstance(size, bool) or size > limit
+
+
+def solus_config_too_large(item: dict[str, Any]) -> bool:
+    return blob_too_large(item, MAX_PROJECT_TOML_BYTES)
+
+
+def root_manifest_blobs(tree: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The root-level `MANIFEST_NAMES` blobs, in tree order (nested ones are plain files)."""
+    return [
+        item for item in tree if item.get("path") in MANIFEST_NAMES and item.get("type") == "blob"
+    ]
+
+
+def requirement_entity(
+    *,
+    name: str,
+    specifier: str,
+    ecosystem: str,
+    source_file: str,
+    extras: Sequence[str] = (),
+    line: int = 0,
+    group: str | None = None,
+) -> EntityOut:
+    """One requirement node per (source file, package): `python_requirement` for python
+    (read by `checkers/environment.py`), `package_requirement` with `attrs.ecosystem` otherwise."""
+    properties: dict[str, Any] = {
+        "name": name,
+        "specifier": specifier,
+        "extras": list(extras),
+        "source_file": source_file,
+        "ecosystem": ecosystem,
+        "line": line,
+    }
+    if group is not None:
+        properties["group"] = group
+    return EntityOut(
+        source_key=f"req:{source_file}:{name}",
+        type=kinds.PYTHON_REQUIREMENT if ecosystem == "python" else kinds.PACKAGE_REQUIREMENT,
+        domain=Domain.CODE,
+        name=f"{name} {specifier}".strip()[:512],
+        properties=properties,
+    )
+
+
+def manifest_entities(path: str, text: str) -> list[EntityOut]:
+    """Requirement entities declared by one manifest file; a duplicate name lands once."""
+    out: list[EntityOut] = []
+    seen: set[str] = set()
+    for dep in parse_dependency_manifest(path, text):
+        if dep.name in seen:
+            continue
+        seen.add(dep.name)
+        out.append(
+            requirement_entity(
+                name=dep.name,
+                specifier=dep.specifier,
+                ecosystem=dep.ecosystem,
+                source_file=path,
+                line=dep.line,
+                group=dep.group,
+            )
+        )
+    return out
 
 
 def solus_config_entity(text: str) -> tuple[EntityOut | None, list[str]]:

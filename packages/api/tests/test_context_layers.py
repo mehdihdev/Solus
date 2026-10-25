@@ -48,7 +48,7 @@ async def _built(systems: FakeSolSystems | None = None, **kwargs: Any) -> Contex
 
 
 def _entry(
-    text: str | None, *, minutes: int, section: str = "details", **over: Any
+    text: str | None, *, minutes: int, section: str = "goals", **over: Any
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "id": uuid.uuid4(),
@@ -116,45 +116,45 @@ async def test_with_conversation_fills_the_last_layer() -> None:
 
 def test_solus_entries_render_newest_first_and_clipped() -> None:
     rows = {
-        "details": [_entry("oldest", minutes=0), _entry("X" * 2_000, minutes=2)],
-        "hardware": [_entry("middle", minutes=1, section="hardware")],
+        "goals": [_entry("oldest", minutes=0), _entry("X" * 2_000, minutes=2)],
+        "environment": [_entry("middle", minutes=1, section="environment")],
     }
     sections, dropped = solus_sections(rows, cap_tokens=10_000)
     assert [s.kind for s in sections] == ["solus"] * 3
     assert sections[0].text.count("X") == 500 and sections[0].text.endswith("…")
     assert "middle" in sections[1].text and "oldest" in sections[2].text
-    assert "Hardware configs" in sections[1].text and "user" in sections[1].text
+    assert "Environment" in sections[1].text and "user" in sections[1].text
     assert dropped == []
     for section in sections:
         assert section.citation is not None
-        assert section.citation.startswith("[solus:details:") or section.citation.startswith(
-            "[solus:hardware:"
+        assert section.citation.startswith("[solus:goals:") or section.citation.startswith(
+            "[solus:environment:"
         )
 
 
 def test_solus_layer_packs_under_its_cap_newest_kept_and_records_drops() -> None:
-    rows = {"details": [_entry(f"note {i} " + "y" * 400, minutes=i) for i in range(6)]}
+    rows = {"goals": [_entry(f"note {i} " + "y" * 400, minutes=i) for i in range(6)]}
     one = solus_sections(rows, cap_tokens=10_000)[0][0].tokens
     sections, dropped = solus_sections(rows, cap_tokens=one * 2)
     assert len(sections) == 2 and len(dropped) == 4
     assert "note 5" in sections[0].text and "note 4" in sections[1].text
-    assert all(d.startswith("[solus:details:") for d in dropped)
+    assert all(d.startswith("[solus:goals:") for d in dropped)
 
 
 def test_artifact_and_config_entries_summarise_without_inventing_text() -> None:
     rows = {
-        "docs": [
+        "documentation": [
             _entry(
                 None,
                 minutes=0,
-                section="docs",
+                section="documentation",
                 kind="artifact",
                 name="rules.pdf",
                 media_type="application/pdf",
             )
         ],
-        "hardware": [
-            _entry(None, minutes=1, section="hardware", kind="config", payload={"bus": "serial"})
+        "environment": [
+            _entry(None, minutes=1, section="environment", kind="config", payload={"bus": "serial"})
         ],
     }
     sections, _ = solus_sections(rows, cap_tokens=10_000)
@@ -187,7 +187,7 @@ async def test_build_context_loads_live_solus_entries_for_the_project(
     project = await create_project(client, alice_headers, team["id"])
     for text in ("first note", "second note"):
         resp = await client.post(
-            f"/api/v1/projects/{project['id']}/solus/details/entries",
+            f"/api/v1/projects/{project['id']}/solus/goals/entries",
             json={"kind": "text", "text": text},
             headers=alice_headers,
         )
@@ -206,7 +206,7 @@ async def test_build_context_loads_live_solus_entries_for_the_project(
         (False, True),
     ]
     assert context.layers.project_solus.empty_reason is None
-    assert all(s.citation and s.citation.startswith("[solus:details:") for s in solus)
+    assert all(s.citation and s.citation.startswith("[solus:goals:") for s in solus)
 
 
 async def test_no_entries_is_an_honest_empty_reason(

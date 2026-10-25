@@ -27,6 +27,7 @@ export function SearchBox(): React.JSX.Element {
         usePaletteStore.getState().setOpen(true)
       }}
       style={{
+        position: 'relative',
         width: 280,
         background: 'var(--sur)',
         border: '1px solid var(--bd)',

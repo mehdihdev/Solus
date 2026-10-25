@@ -65,6 +65,7 @@ from solus_api.agent.tools import (
     build_get_entity_tool,
 )
 from solus_api.agent.tools.exec import run_tool
+from solus_api.agent.tools.flash_history import record_tool_history
 from solus_api.agent.turn_limits import GUIDE_LIMITS, turn_limits
 from solus_api.models import SolMode
 from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
@@ -1174,6 +1175,13 @@ class LlmRunner:
                 yield AgentEvent.tool_call(call)
                 result = await ctx.dispatch(call)  # gates, then invokes
                 descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
+                # Mutation flags still protect Guide; actual Build dispatch
+                # is recorded separately. A parked/refused write must never
+                # be filed as though it ran. Manual failures remain in the
+                # confirmation decision path.
+                executed = call.call_id in ctx.executed_build_calls or (
+                    descriptor is not None and not descriptor.requires_confirmation
+                )
                 # S5 Error logging: a failed local-machine action is filed into the
                 # project's .solus errors section BEFORE the client sees the result,
                 # so the Workspace already has the note. Never raises.
@@ -1184,14 +1192,16 @@ class LlmRunner:
                     call=call,
                     result=result,
                     descriptor=descriptor,
-                    # Mutation flags still protect Guide; actual Build dispatch
-                    # is recorded separately. A parked/refused write must never
-                    # be filed as though it ran. Manual failures remain in the
-                    # confirmation decision path.
-                    executed=(
-                        call.call_id in ctx.executed_build_calls
-                        or (descriptor is not None and not descriptor.requires_confirmation)
-                    ),
+                    executed=executed,
+                )
+                # SOLUSDEV-320 P5-T7: and a clean, executed flash is one history row.
+                await record_tool_history(
+                    ctx.sessionmaker,
+                    project_id=ctx.project_id,
+                    user_id=ctx.user_id,
+                    call=call,
+                    result=result,
+                    executed=executed,
                 )
                 # EVERY outcome goes back to the model, including a parked one.
                 # A failure it can correct (NOT_FOUND for a hallucinated tool,

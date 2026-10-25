@@ -69,7 +69,7 @@ async def _artifact_entry(
     )
     assert upload.status_code == 201, upload.text
     resp = await client.post(
-        f"/api/v1/projects/{project_id}/solus/docs/entries",
+        f"/api/v1/projects/{project_id}/solus/documentation/entries",
         json={
             "kind": "artifact",
             "artifact_id": upload.json()["data"]["artifact_id"],

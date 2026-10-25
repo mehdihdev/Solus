@@ -19,8 +19,12 @@ export interface CommandPaletteProps {
   /** Projects/teams or the open project's nodes are still loading. */
   loading: boolean
   hasProject: boolean
+  /** The search index is still answering the current query. */
+  searching?: boolean
   onPick: (item: PaletteItem, rank: number, query: string) => void
   onClose: () => void
+  /** Every edit of the field, trimmed by nobody: the host searches the index with it. */
+  onQueryChange?: (query: string) => void
 }
 
 const FILTERS: readonly { id: PaletteFilter; label: string }[] = [
@@ -28,7 +32,8 @@ const FILTERS: readonly { id: PaletteFilter; label: string }[] = [
   { id: 'page', label: 'Pages' },
   { id: 'project', label: 'Projects' },
   { id: 'team', label: 'Teams' },
-  { id: 'node', label: 'Nodes' }
+  { id: 'node', label: 'Nodes' },
+  { id: 'solus', label: '.solus' }
 ]
 
 type IconName = keyof typeof Icons
@@ -44,6 +49,7 @@ const SCREEN_ICONS: Readonly<Record<string, IconName>> = {
 }
 
 function iconFor(item: PaletteItem): IconName {
+  if (item.kind === 'solus') return 'file'
   switch (item.target.type) {
     case 'screen':
       return SCREEN_ICONS[item.target.screen] ?? 'grid'
@@ -137,11 +143,12 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
             aria-controls="palette-results"
             aria-autocomplete="list"
             aria-activedescendant={current >= 0 ? ids[current] : undefined}
-            placeholder="Search pages, projects, teams, nodes…"
+            placeholder="Search pages, projects, teams, nodes, .solus…"
             value={query}
             spellCheck={false}
             onChange={(e) => {
               setQuery(e.target.value)
+              props.onQueryChange?.(e.target.value)
               setActive(0)
             }}
             onKeyDown={onKeyDown}
@@ -173,7 +180,12 @@ export function CommandPalette(props: CommandPaletteProps): React.JSX.Element {
             />
           ))}
           {flat.length === 0 && (
-            <EmptyResults query={query} filter={filter} hasProject={props.hasProject} />
+            <EmptyResults
+              query={query}
+              filter={filter}
+              hasProject={props.hasProject}
+              searching={props.searching === true}
+            />
           )}
         </div>
         <PaletteFooter />
@@ -266,20 +278,30 @@ function ResultSection({
   )
 }
 
+const NEEDS_PROJECT: Readonly<Partial<Record<PaletteFilter, string>>> = {
+  node: 'Open a project to search its nodes.',
+  solus: 'Open a project to search its .solus.'
+}
+
 function EmptyResults({
   query,
   filter,
-  hasProject
+  hasProject,
+  searching
 }: {
   query: string
   filter: PaletteFilter
   hasProject: boolean
+  searching: boolean
 }): React.JSX.Element {
+  const needsProject = NEEDS_PROJECT[filter]
   const text =
-    filter === 'node' && !hasProject
-      ? 'Open a project to search its nodes.'
+    needsProject && !hasProject
+      ? needsProject
       : query.trim()
-        ? `No results for “${query.trim()}”`
+        ? searching
+          ? 'Searching…'
+          : `No results for “${query.trim()}”`
         : 'Nothing here yet.'
   return <div className="palette-empty">{text}</div>
 }

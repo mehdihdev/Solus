@@ -12,12 +12,12 @@ from typing import Any
 
 from solus_api.connectors.step_tessellation import MAX_BYTES, MAX_TRIANGLES, tessellate_isolated
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.graph.live import graph_changed_frame
 from solus_api.models import (
     AccountConnection,
     ConnectionStatus,
     Domain,
-    GraphEdge,
     GraphEntity,
     JobStatus,
     Project,
@@ -407,21 +407,24 @@ async def refresh_model(
         entry = await add_artifact_entry(
             session,
             plan.project_id,
-            SolusSection.DOCS,
+            SolusSection.DOCUMENTATION,
+            subsection="guides",
             artifact_id=artifact.id,
             name=f"{entity.name} CAD geometry",
             created_by=model.user_id,
         )
-        session.add(
-            GraphEdge(
+        if entry.entity_id is not None:  # attached by add_artifact_entry
+            await write_edge(
+                session,
                 project_id=plan.project_id,
                 src_id=entity.id,
                 dst_id=entry.entity_id,
                 relation_type="references",
-                domain_pair="simulation<->project",
                 origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=model.user_id,
             )
-        )
         for binding, (_, document, element, _) in zip(attrs["cad_bindings"], resolved, strict=True):
             binding["observed_microversion"] = revisions[(document, element)]
         attrs.update(

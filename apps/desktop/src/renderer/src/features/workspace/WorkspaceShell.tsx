@@ -325,7 +325,7 @@ const SIMPLE_SCREENS: Readonly<
   Record<string, (navigate: (screen: MainScreen) => void) => React.JSX.Element>
 > = {
   store: () => <StoreScreen />,
-  sol: () => <SolScreen />,
+  sol: (navigate) => <SolScreen onNavigate={navigate} />,
   billing: () => <BillingScreen />,
   settings: (navigate) => <SettingsScreen onNavigate={navigate} />
 }
@@ -438,6 +438,7 @@ function ScreenView({
         return (
           <WorkspaceScreen
             onOpenBench={() => navigate('bench')}
+            onOpenSol={() => navigate('sol')}
             onOpenWidget={openExtensionPage}
             openAddRequest={addHardware.openAddRequest}
             onAddRequestConsumed={addHardware.onConsumed}

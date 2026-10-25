@@ -19,6 +19,8 @@ from sqlalchemy.orm import aliased
 from uuid6 import uuid7
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
+from solus_api.graph.inference import config_requires, run_guarded
 from solus_api.hardware.config import (
     EntityHardwareConfig,
     FieldProvenance,
@@ -36,15 +38,17 @@ from solus_api.models import (
     SolusEntryKind,
     SolusSection,
 )
+from solus_api.services.activity import record_project_activity
+from solus_api.services.environment_divergence import recompute_divergences_guarded
 from solus_api.services.physical_robots import ROBOT_CATEGORIES
 from solus_api.services.solus_graph import CONFIG_NODE_KIND, ORIGIN, SolusGraph, lock_project
 
 ROBOT_KIND = "physical_robot"
 CATEGORY_KIND = "robot_category"
 PART_KIND = "part"
+HARDWARE_SUBSECTION = "hardware"  # the environment/hardware cell (docs/api/solus.md §2.2)
 CONFIGURES = "configures"
 MAX_SPECS = 32
-_DOMAIN_PAIR = "project<->project"
 
 __all__ = [
     "CONFIG_NODE_KIND",
@@ -141,7 +145,8 @@ async def configuration_entries(
         .join(subject, subject.id == SolusEntry.configured_entity_id)
         .where(
             SolusEntry.project_id == project_id,
-            SolusEntry.section == SolusSection.HARDWARE,
+            SolusEntry.section == SolusSection.ENVIRONMENT,
+            SolusEntry.subsection == HARDWARE_SUBSECTION,
             SolusEntry.kind == SolusEntryKind.CONFIG,
             SolusEntry.deleted_at.is_(None),
             SolusEntry.configured_entity_id.in_(entity_ids),
@@ -188,7 +193,8 @@ async def _create_entry(
     graph = await SolusGraph.ensure(session, project_id)
     entry = SolusEntry(
         project_id=project_id,
-        section=SolusSection.HARDWARE,
+        section=SolusSection.ENVIRONMENT,
+        subsection=HARDWARE_SUBSECTION,
         kind=SolusEntryKind.CONFIG,
         text=f"Hardware config — {subject.name}",
         payload=config.model_dump(mode="json"),
@@ -202,15 +208,16 @@ async def _create_entry(
     node = graph.attach_entry(entry)
     node.attrs = {**node.attrs, "configured_entity_id": str(subject.id)}
     await graph.flush()
-    session.add(
-        GraphEdge(
-            project_id=project_id,
-            src_id=node.id,
-            dst_id=subject.id,
-            relation_type=CONFIGURES,
-            domain_pair=f"project<->{subject.domain.value}",
-            origin=ORIGIN,
-        )
+    await write_edge(
+        session,
+        project_id=project_id,
+        src_id=node.id,
+        dst_id=subject.id,
+        relation_type=CONFIGURES,
+        origin=ORIGIN,
+        confidence=1.0,
+        evidence=[],
+        created_by=created_by,
     )
     if subject.origin == ORIGIN and subject.source_id is None:
         subject.attrs = {**subject.attrs, "hardware_config_ref": str(entry.id)}
@@ -268,6 +275,30 @@ async def put_entity_config(
                 node.version += 1
     await synchronize_bindings(session, project_id, entry, config)
     await session.flush()
+    # SOLUSDEV-320 P5-T7 (solus.md §9): every saved version is one history row.
+    await record_project_activity(
+        session,
+        project_id,
+        "config.bumped",
+        actor_id=created_by,
+        domain=subject.domain.value,
+        payload={"entry_id": str(entry.id), "config_version": entry.config_version},
+        entity_ids=[subject.id],
+    )
+    # SOLUSDEV-320: the driver this config names → `requires` package nodes, same txn.
+    config_node_id = entry.entity_id
+    if config_node_id is not None:
+        driver_id = config.protocol.driver_id if config.protocol else None
+        await run_guarded(
+            session,
+            project_id,
+            "config_requires",
+            lambda: config_requires.infer(
+                session, project_id, config_node_id=config_node_id, driver_id=driver_id
+            ),
+        )
+    # SOLUSDEV-320 P5: a config may add `requires` → the spec and divergences follow.
+    await recompute_divergences_guarded(session, project_id)
     return entry
 
 
@@ -456,6 +487,22 @@ async def _category_node(
     return node
 
 
+async def _contains(
+    session: AsyncSession, project_id: uuid.UUID, parent_id: uuid.UUID, child_id: uuid.UUID
+) -> None:
+    await write_edge(
+        session,
+        project_id=project_id,
+        src_id=parent_id,
+        dst_id=child_id,
+        relation_type="contains",
+        origin=ORIGIN,
+        confidence=1.0,
+        evidence=[],
+        created_by=None,
+    )
+
+
 async def attach_part(
     session: AsyncSession,
     project_id: uuid.UUID,
@@ -490,17 +537,7 @@ async def attach_part(
     )
     session.add(part)
     await session.flush()
-    session.add(
-        GraphEdge(
-            project_id=project_id,
-            src_id=category_node.id,
-            dst_id=part.id,
-            relation_type="contains",
-            domain_pair=_DOMAIN_PAIR,
-            origin=ORIGIN,
-        )
-    )
-    await session.flush()
+    await _contains(session, project_id, category_node.id, part.id)
     return part
 
 
@@ -635,16 +672,7 @@ async def attach_existing_parts(
             raise APIError(
                 409, "conflict", f"{rows[entity_id].name} already belongs to another robot"
             )
-        session.add(
-            GraphEdge(
-                project_id=project_id,
-                src_id=category_node.id,
-                dst_id=entity_id,
-                relation_type="contains",
-                domain_pair=_DOMAIN_PAIR,
-                origin=ORIGIN,
-            )
-        )
+        await _contains(session, project_id, category_node.id, entity_id)
         attached.append(entity_id)
     await session.flush()
     entry, config = await ensure_config(session, project_id, robot, created_by=created_by)

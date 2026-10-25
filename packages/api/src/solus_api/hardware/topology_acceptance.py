@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sqlalchemy import select
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
+from solus_api.graph.inference import infer_after_acceptance
 from solus_api.graph.read_scope import resolve_scope
 from solus_api.hardware.config import is_private_source
 from solus_api.hardware.operations import ReviewedHardwareOperations
@@ -21,7 +23,8 @@ from solus_api.hardware.topology_proposals import (
     ExtractionRequest,
     TopologyProposalService,
 )
-from solus_api.models import Domain, GraphEdge, GraphEntity
+from solus_api.models import Domain, GraphEntity
+from solus_api.services.activity import record_project_activity
 
 
 class ExtractionSelection(BaseModel):
@@ -164,26 +167,29 @@ class TopologyAcceptanceService(TopologyProposalService):
                 await self.session.flush()
                 created += 1
             ids.append(entity_id)
-            self.session.add(
-                GraphEdge(
-                    id=uuid.uuid4(),
-                    project_id=self.project_id,
-                    src_id=body.brain_id,
-                    dst_id=entity_id,
-                    relation_type=RELATION,
-                    domain_pair="electrical<->electrical",
-                    origin="manual",
-                    attrs={
-                        "managed_by": MARKER,
-                        "nonoperational": True,
-                        "robot_id": str(robot_id),
-                        "reviewed_by": str(self.user_id),
-                        "is_placement": selection.entity_id is None,
-                        "reviewed_name": selection.name,
-                        "proposal_digest": proposal.proposal_digest,
-                        "row": row.model_dump(mode="json"),
-                    },
-                )
+            await write_edge(
+                self.session,
+                project_id=self.project_id,
+                src_id=body.brain_id,
+                dst_id=entity_id,
+                relation_type=RELATION,
+                origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=self.user_id,
+                attrs={
+                    "managed_by": MARKER,
+                    "nonoperational": True,
+                    "robot_id": str(robot_id),
+                    "reviewed_by": str(self.user_id),
+                    "is_placement": selection.entity_id is None,
+                    "reviewed_name": selection.name,
+                    "proposal_digest": proposal.proposal_digest,
+                    "source_kind": body.source_kind,
+                    "row": row.model_dump(mode="json"),
+                },
+                edge_id=uuid.uuid4(),
+                managed_by=MARKER,
             )
         await self.session.flush()
         result = ExtractionAcceptance(
@@ -196,4 +202,21 @@ class TopologyAcceptanceService(TopologyProposalService):
         ledger.record(
             body.operation_id, "topology.extraction", digest, result.model_dump(mode="json")
         )
+        # SOLUSDEV-320 P5-T7 (solus.md §9): one history row per confirm, never on replay.
+        await record_project_activity(
+            self.session,
+            self.project_id,
+            "topology.confirmed",
+            actor_id=self.user_id,
+            domain=Domain.ELECTRICAL.value,
+            payload={
+                "robot_id": str(robot_id),
+                "operation_id": str(body.operation_id),
+                "created": created,
+            },
+            entity_ids=[robot_id, body.brain_id, *ids],
+        )
+        # SOLUSDEV-320: reviewed rows feed `commands`/`reads`, the overlay and joint limits;
+        # guarded, never on replay, never failing the confirm.
+        await infer_after_acceptance(self.session, self.project_id, robot_id=robot_id)
         return result, False

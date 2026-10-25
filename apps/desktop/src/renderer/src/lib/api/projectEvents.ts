@@ -2,6 +2,10 @@
 // endpoint. This typed transport never calls a provider or requests a sync.
 import type {
   AccessRevoked,
+  FindingRaised,
+  FindingResolved,
+  FindingStatusName,
+  FindingUpdated,
   JobStatusName,
   JobUpdated,
   LayoutChanged,
@@ -36,7 +40,17 @@ export type ProjectEvent =
   | { type: 'sources.changed' }
   | { type: 'project.updated' }
   | { type: 'job.updated'; jobId: string; status: JobStatusName }
+  | { type: FindingFrameType; findingId: string; status: FindingStatusName }
   | { type: 'access.revoked' }
+
+/** SOLUSDEV-320: a finding node was raised, changed status, or was resolved. */
+export type FindingFrameType = 'finding.raised' | 'finding.updated' | 'finding.resolved'
+const FINDING_STATUSES: readonly FindingStatusName[] = [
+  'open',
+  'acknowledged',
+  'dismissed',
+  'resolved'
+]
 
 const MAX_DEVICES = 64
 const LEVELS: readonly DetectedLevel[] = ['transport', 'board', 'protocol', 'platform']
@@ -71,7 +85,19 @@ export function toDetectedDevices(value: unknown): DetectedDeviceOut[] | null {
 }
 
 const isJobStatus = (value: unknown): boolean => JOB_STATUSES.includes(value as JobStatusName)
+const isFindingStatus = (value: unknown): boolean =>
+  FINDING_STATUSES.includes(value as FindingStatusName)
+const findingShape = <T extends FindingFrameType>(type: T): Shape<FindingRaised> => ({
+  type: literal(type),
+  project_id: isString,
+  finding_id: isString,
+  status: isFindingStatus,
+  at: isString
+})
 const SHAPES = {
+  'finding.raised': findingShape('finding.raised') satisfies Shape<FindingRaised>,
+  'finding.updated': findingShape('finding.updated') satisfies Shape<FindingUpdated>,
+  'finding.resolved': findingShape('finding.resolved') satisfies Shape<FindingResolved>,
   'layout.changed': {
     type: literal('layout.changed'),
     project_id: isString,
@@ -115,19 +141,32 @@ function isRevokeForProject(data: Record<string, unknown>, projectId: string): b
   )
 }
 
-function decodeScoped(event: SolEvent, projectId: string): ProjectEvent | null {
-  const { type, data } = event
-  if (!(type in SHAPES) || !matchesShape(data, SHAPES[type as keyof typeof SHAPES])) return null
-  if (type === 'access.revoked') return isRevokeForProject(data, projectId) ? { type } : null
-  if (data.project_id !== projectId) return null
+/** The project-scoped frame types: the shape already matched and the project is ours. */
+function decodeKnown(type: keyof typeof SHAPES, data: Record<string, unknown>): ProjectEvent {
   switch (type) {
     case 'layout.changed':
       return { type, version: data.version as number }
     case 'job.updated':
       return { type, jobId: data.job_id as string, status: data.status as JobStatusName }
+    case 'finding.raised':
+    case 'finding.updated':
+    case 'finding.resolved':
+      return {
+        type,
+        findingId: data.finding_id as string,
+        status: data.status as FindingStatusName
+      }
     default:
       return { type } as ProjectEvent
   }
+}
+
+function decodeScoped(event: SolEvent, projectId: string): ProjectEvent | null {
+  const { type, data } = event
+  if (!(type in SHAPES) || !matchesShape(data, SHAPES[type as keyof typeof SHAPES])) return null
+  if (type === 'access.revoked') return isRevokeForProject(data, projectId) ? { type } : null
+  if (data.project_id !== projectId) return null
+  return decodeKnown(type as keyof typeof SHAPES, data)
 }
 
 function decodeProjectEvent(event: SolEvent, projectId: string): ProjectEvent | null {

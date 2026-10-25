@@ -1137,7 +1137,7 @@ def test_the_proposal_cache_is_bounded_and_forgets_on_take() -> None:
     tick = [0.0]
     cache = ProposalCache(max_entries=2, ttl_s=60.0, clock=lambda: tick[0])
     proposal = ProposalOut.model_validate(_wire_proposal())
-    keys = [(uuid.uuid4(), DEVICE_REF, None) for _ in range(3)]
+    keys = [(uuid.uuid4(), uuid.uuid4(), DEVICE_REF, "digest") for _ in range(3)]
     for key in keys:
         cache.put(key, proposal)
     rows = [f"{DEVICE_REF}/1"]

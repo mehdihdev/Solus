@@ -80,7 +80,10 @@ def url(project: str, robot: str) -> str:
 
 async def snapshot(db: AsyncSession) -> list[list[dict[str, Any]]]:
     return [
-        list((await db.execute(select(model.__table__).order_by(model.id))).mappings())
+        [
+            dict(row)
+            for row in (await db.execute(select(model.__table__).order_by(model.id))).mappings()
+        ]
         for model in (GraphEntity, GraphEdge, SolusEntry, HardwareOperation)
     ]
 

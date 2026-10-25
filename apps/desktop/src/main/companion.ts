@@ -309,6 +309,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     }
   }
   if (latestToken !== undefined) writeStdin(c, tokenLine(latestToken))
+  onCompanionUp?.()
 
   let down = false
   const onDown = (): void => {
@@ -337,6 +338,14 @@ function maybeSpawn(): void {
     return
   }
   spawnChild(cmd)
+}
+
+/** SOLUSDEV-320: called after every successful (re)spawn — MAIN sees no bridge
+ *  hello (stdout is ignored), so a launched child is the "companion up" signal
+ *  the machine reporter keys on. */
+let onCompanionUp: (() => void) | null = null
+export function setCompanionUpListener(listener: (() => void) | null): void {
+  onCompanionUp = listener
 }
 
 /** Arm the companion for this app run. It does not spawn until a project is

@@ -1,9 +1,9 @@
 """Bounded recent-values buffers for telemetry (SOLUS-LNK-06).
 
 The buffer holds the LIVE recent samples per `(project, entity, signal)` — the feed Live Bench
-and a Foxglove bridge (CON-03) read, and the source `get_telemetry` summarizes. It is bounded by
-design: each signal keeps only the last `capacity` samples, so a fast producer (backpressure) or a
-long-running stream can never grow it without bound.
+and a telemetry-viewer bridge (CON-03) read, and the source `get_telemetry` summarizes. It is
+bounded by design: each signal keeps only the last `capacity` samples, so a fast producer
+(backpressure) or a long-running stream can never grow it without bound.
 
 Two interchangeable backends behind the `TelemetryBuffer` Protocol, mirroring the codebase's
 Redis-optional convention (see `connectors/worker.py`): `InMemoryTelemetryBuffer` for local/dev and

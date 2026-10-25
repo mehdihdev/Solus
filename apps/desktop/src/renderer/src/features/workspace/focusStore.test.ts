@@ -289,3 +289,18 @@ describe('depth', () => {
     expect(() => useFocusStore.getState().setDepth(5)).toThrow()
   })
 })
+
+describe('clearFocus', () => {
+  it('deselects without forgetting the cache, so the next selection is a hit', async () => {
+    await useFocusStore.getState().focus('e-root')
+    expect(resources.getGraphNeighborhood).toHaveBeenCalledTimes(1)
+    useFocusStore.getState().clearFocus()
+    const state = useFocusStore.getState()
+    expect(state.focusedEntityId).toBeNull()
+    expect(state.status).toBe('idle')
+    expect(state.path).toEqual([])
+    expect(Object.keys(state.cache)).toHaveLength(1)
+    await useFocusStore.getState().focus('e-root')
+    expect(resources.getGraphNeighborhood).toHaveBeenCalledTimes(1)
+  })
+})

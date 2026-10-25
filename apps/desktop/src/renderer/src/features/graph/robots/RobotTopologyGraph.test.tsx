@@ -190,9 +190,9 @@ it('enters either robot through one shared host identity and keeps downstream bu
   expect(onSelect.mock.calls.at(-1)?.[1].map((step: { entity: Entity }) => step.entity.id)).toEqual(
     ['robot-two', 'host', 'bus']
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Back to bus' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Back to host' }))
-  fireEvent.click(screen.getByRole('button', { name: 'Back to robot-two' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom out (Esc)' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom out (Esc)' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom out (Esc)' }))
   enter('robot')
   enter('host')
   enter('bus')

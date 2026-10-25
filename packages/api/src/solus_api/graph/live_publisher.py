@@ -41,6 +41,9 @@ from typing import Any
 from pydantic import BaseModel
 from solus_contracts.live_events import (
     AccessRevoked,
+    FindingRaised,
+    FindingResolved,
+    FindingUpdated,
     JobUpdated,
     LayoutChanged,
     MembershipChanged,
@@ -57,9 +60,11 @@ from sqlalchemy import event, inspect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, SessionTransaction
 
+from solus_api.graph.kinds import FINDING
 from solus_api.graph.live import HUB_INFO_KEY, Channel
 from solus_api.models import (
     Activity,
+    GraphEntity,
     Invite,
     Job,
     JobStatus,
@@ -161,7 +166,7 @@ def _team(row: Team, kind: _Kind, at: str) -> _Derived:
 
 
 def _team_installation(row: TeamInstallation, kind: _Kind, at: str) -> _Derived:
-    # Any insert, update or soft delete changes what the team's GitHub card shows.
+    # Any insert, update or soft delete changes what the team's source-installation card shows.
     yield Channel.team(row.team_id), TeamUpdated(team_id=row.team_id, at=at)
 
 
@@ -256,7 +261,34 @@ def _job(row: Job, kind: _Kind, at: str) -> _Derived:
         )
 
 
+def _finding(row: GraphEntity, kind: _Kind, at: str) -> _Derived:
+    # Every GraphEntity flush lands here (syncs write thousands): the kind guard is first.
+    if row.kind != FINDING or kind == "deleted":
+        return
+    # Validated through the contract model (like `_job`): a bad status fails here, not on a client.
+    hint = {"project_id": row.project_id, "finding_id": row.id, "at": at}
+    status = row.attrs.get("status")
+    if kind == "new":
+        yield (
+            Channel.project(row.project_id),
+            FindingRaised.model_validate({**hint, "status": status}),
+        )
+        return
+    history = inspect(row).attrs.attrs.history
+    if not history.has_changes() or not history.deleted:
+        return
+    before = history.deleted[0] or {}
+    if all(before.get(k) == row.attrs.get(k) for k in ("status", "severity", "count")):
+        return  # explanation/detail fills and the like are not hints
+    if status == "resolved" and before.get("status") != "resolved":
+        frame: BaseModel = FindingResolved.model_validate(hint)
+    else:
+        frame = FindingUpdated.model_validate({**hint, "status": status})
+    yield Channel.project(row.project_id), frame
+
+
 _DERIVERS: dict[type, Callable[[Any, _Kind, str], _Derived]] = {
+    GraphEntity: _finding,
     Activity: _activity,
     Notification: _notification,
     Team: _team,

@@ -36,6 +36,7 @@ from solus_api.contracts.impact import (
     ImpactResult,
     worst_severity,
 )
+from solus_api.graph.edges import is_candidate
 from solus_api.graph.neighborhood import DEFAULT_MAX_ENTITIES, Neighborhood, load_neighborhood
 from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEntity
@@ -112,6 +113,8 @@ def _bfs(
     """
     adjacency: dict[UUID, list[tuple[UUID, str]]] = {}
     for edge in neighborhood.edges:
+        if is_candidate(edge):  # an unconfirmed inference is not a path a consequence may ride
+            continue
         adjacency.setdefault(edge.src_id, []).append((edge.dst_id, edge.relation_type))
         adjacency.setdefault(edge.dst_id, []).append((edge.src_id, edge.relation_type))
 

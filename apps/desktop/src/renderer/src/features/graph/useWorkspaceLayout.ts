@@ -38,6 +38,14 @@ function sameIdentity(identity: Identity): boolean {
   return auth.accessToken === identity.token && auth.user?.email === identity.email
 }
 
+function without(
+  positions: Record<string, Point>,
+  ids: ReadonlySet<string>
+): Record<string, Point> {
+  if (!ids.size) return positions
+  return Object.fromEntries(Object.entries(positions).filter(([id]) => !ids.has(id)))
+}
+
 function sameIds(a: ReadonlySet<string> | null, b: ReadonlySet<string> | null): boolean {
   if (a === null || b === null) return a === b
   return a.size === b.size && [...a].every((id) => b.has(id))
@@ -53,6 +61,8 @@ class LayoutSession {
   private autoIds = new Set<string>()
   private liveIds: ReadonlySet<string> | null
   private removedIds = new Set<string>()
+  /** Ids whose saved position the next flush drops (Re-layout); a new move revives one. */
+  private cleared = new Set<string>()
   private status: Status = 'loading'
   private error: string | null = null
   private client: ApiClient
@@ -78,6 +88,10 @@ class LayoutSession {
 
   private prune(positions: Record<string, Point>): Record<string, Point> {
     return Object.fromEntries(Object.entries(positions).filter(([id]) => !this.removedIds.has(id)))
+  }
+
+  private withoutCleared(positions: Record<string, Point>): Record<string, Point> {
+    return without(positions, this.cleared)
   }
 
   private isLive(id: string): boolean {
@@ -111,7 +125,7 @@ class LayoutSession {
       this.publish({
         projectId: this.projectId,
         identity: this.identity,
-        positions: this.prune({ ...this.layout?.positions, ...this.pending }),
+        positions: this.withoutCleared(this.prune({ ...this.layout?.positions, ...this.pending })),
         status,
         error
       })
@@ -199,16 +213,38 @@ class LayoutSession {
     if (!this.attached || !this.layout || !this.isLive(entityId) || !sameIdentity(this.identity))
       return
     this.pending = { ...this.pending, [entityId]: point }
+    this.cleared.delete(entityId)
     if (origin === 'auto') this.autoIds.add(entityId)
     else this.autoIds.delete(entityId)
     this.show('saving')
     void this.flush()
   }
 
-  private async failedSave(error: unknown, moves: Record<string, Point>): Promise<void> {
+  /** Forget the saved/pending positions of these ids; the rest is PUT under the current version. */
+  clear(entityIds: readonly string[]): void {
+    if (!this.attached || !this.layout || !sameIdentity(this.identity)) return
+    const known = { ...this.layout.positions, ...this.pending }
+    const drop = entityIds.filter((id) => id in known)
+    if (!drop.length) return
+    for (const id of drop) {
+      this.cleared.add(id)
+      this.autoIds.delete(id)
+    }
+    this.pending = this.withoutCleared(this.pending)
+    this.show('saving')
+    void this.flush()
+  }
+
+  private async failedSave(
+    error: unknown,
+    moves: Record<string, Point>,
+    drops: ReadonlySet<string>
+  ): Promise<void> {
     if (!sameIdentity(this.identity)) return
     this.pending = this.prune({ ...moves, ...this.pending })
     if (!(error instanceof ApiError) || error.status !== 409) {
+      // A cleared id moved again meanwhile keeps its new point; the rest retry the drop.
+      for (const id of drops) if (!(id in this.pending)) this.cleared.add(id)
       this.show('error', 'Positions could not be saved. Retry to save your moved nodes.')
       return
     }
@@ -232,12 +268,14 @@ class LayoutSession {
   async flush(): Promise<void> {
     if (!sameIdentity(this.identity) || this.busy || !this.layout) return
     const moves = this.prune(this.pending)
-    if (!Object.keys(moves).length) return
+    const drops = this.cleared
+    if (!Object.keys(moves).length && !drops.size) return
     this.busy = true
     this.pending = {}
+    this.cleared = new Set()
     const body = {
       version: this.layout.version,
-      positions: this.prune({ ...this.layout.positions, ...moves })
+      positions: without(this.prune({ ...this.layout.positions, ...moves }), drops)
     }
     this.layout = body
     this.show('saving')
@@ -249,7 +287,7 @@ class LayoutSession {
       this.forgetSettledAutos()
       saved = true
     } catch (error) {
-      await this.failedSave(error, moves)
+      await this.failedSave(error, moves, drops)
     } finally {
       this.busy = false
     }
@@ -279,6 +317,8 @@ export function useWorkspaceLayout(
   status: Status
   error: string | null
   move: (entityId: string, point: Point, origin?: MoveOrigin) => void
+  /** Re-layout: drop these ids' saved positions so default placement runs (and persists) again. */
+  clear: (entityIds: readonly string[]) => void
   retry: () => void
 } {
   const token = useAuthStore((state) => state.accessToken)
@@ -314,6 +354,9 @@ export function useWorkspaceLayout(
   const move = useCallback((id: string, point: Point, origin?: MoveOrigin) => {
     session.current?.move(id, point, origin)
   }, [])
+  const clear = useCallback((entityIds: readonly string[]) => {
+    session.current?.clear(entityIds)
+  }, [])
   const retry = useCallback(() => {
     session.current?.retry()
   }, [])
@@ -322,5 +365,12 @@ export function useWorkspaceLayout(
     : view.projectId === projectId && view.identity === identity
       ? view
       : { ...EMPTY, status: 'loading' as const }
-  return { positions: current.positions, status: current.status, error: current.error, move, retry }
+  return {
+    positions: current.positions,
+    status: current.status,
+    error: current.error,
+    move,
+    clear,
+    retry
+  }
 }

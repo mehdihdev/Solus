@@ -17,17 +17,28 @@ import * as workspaceApi from '../../lib/api/workspace'
 import * as robotApi from '../../lib/api/physicalRobots'
 import * as hardwareApi from '../../lib/api/hardware'
 import { clearWorkspaceGraphCache } from './useWorkspaceGraph'
+import { emptySections, SECTION_LABELS } from './useSolusConfig'
 import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEvents'
 import { useDetectedDevicesStore } from './hardware/detectedDevicesStore'
 import { placementNearRail } from './hardware/deviceCardRules'
 import { resetDeviceProposals } from './hardware/useDeviceProposals'
 import { reconcileWidgetGraph } from '../../lib/api/widgetGraph'
+import * as edgesApi from '../../lib/api/edges'
+import * as findingsApi from '../../lib/api/findings'
 
 vi.mock('../../lib/api/widgetGraph', () => ({ reconcileWidgetGraph: vi.fn() }))
 
 vi.mock('./hardware/createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
 
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))
+
+vi.mock('../../lib/api/edges', () => ({
+  listEdgeCandidates: vi.fn(async () => []),
+  confirmEdge: vi.fn(),
+  declineEdge: vi.fn()
+}))
+
+vi.mock('../../lib/api/findings', () => ({ listFindings: vi.fn() }))
 
 vi.mock('../../lib/api/workspace', () => ({
   listAllRelations: vi.fn(),
@@ -123,9 +134,10 @@ beforeEach(() => {
   vi.mocked(robotApi.listRobotOrphans).mockResolvedValue({ data: [], meta: { has_next: false } })
   vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([])
   vi.mocked(workspaceApi.getWorkspaceLayout).mockResolvedValue({ version: 0, positions: {} })
+  vi.mocked(findingsApi.listFindings).mockResolvedValue([])
   vi.mocked(resources.getSolus).mockResolvedValue({
     entity_id: 'solus-1',
-    sections: { hardware: [], details: [], errors: [], docs: [], code: [] }
+    sections: emptySections()
   })
   clearWorkspaceGraphCache()
   useWorkspaceStore.getState().reset()
@@ -175,15 +187,9 @@ describe('WorkspaceScreen — deliberate empty states', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows one real centered .solus root and zooms to five real section nodes', async () => {
+  it('shows one real centered .solus root and zooms to seven real section nodes', async () => {
     linkProject()
-    const sections = Object.entries({
-      hardware: 'Hardware configs',
-      details: 'Project details',
-      errors: 'Error logging',
-      docs: 'Documentation',
-      code: 'Code environment'
-    })
+    const sections = Object.entries(SECTION_LABELS)
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(6, 5))
     vi.mocked(resources.listAllEntities).mockResolvedValue([
       { id: 'solus-1', type: 'solus_config', domain: 'project', name: '.solus', source_key: '' },
@@ -210,18 +216,19 @@ describe('WorkspaceScreen — deliberate empty states', () => {
     expect(screen.getByTestId('graph-node-solus-1')).toHaveAttribute('data-x', '0')
     expect(screen.getByTestId('graph-node-solus-1')).toHaveAttribute('data-y', '0')
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument()
-    expect(screen.queryByText('Hardware configs')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Select Goals' })).not.toBeInTheDocument()
     expect(screen.queryByText(/empty project — on purpose/)).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Zoom into .solus' }))
     for (const [, name] of sections)
       expect(await screen.findByRole('button', { name: `Select ${name}` })).toBeInTheDocument()
     const navigator = within(screen.getByRole('region', { name: 'Project graph navigator' }))
-    expect(navigator.getAllByText('EMPTY')).toHaveLength(5)
-    // Entering .solus selects it, so its sidebar lists the same five sections — honest counts twice.
+    // Six: the history node is a view over activities and never says EMPTY (SOLUSDEV-320).
+    expect(navigator.getAllByText('EMPTY')).toHaveLength(6)
+    // Entering .solus selects it, so its sidebar lists the same seven sections — honest counts twice.
     expect(
       within(screen.getByRole('complementary', { name: 'Sidebar' })).getAllByText('EMPTY')
-    ).toHaveLength(5)
-    const details = screen.getByRole('button', { name: 'Select Project details' })
+    ).toHaveLength(7)
+    const details = screen.getByRole('button', { name: 'Select Goals' })
     fireEvent.contextMenu(details)
     expect(screen.getByRole('menu')).toBeInTheDocument()
     fireEvent.keyDown(details, { key: 'Escape' })
@@ -422,7 +429,7 @@ describe('WorkspaceScreen — account anchors (SOLUSDEV-250 Phase 5)', () => {
     expect(useFocusStore.getState().focusedEntityId).toBeNull()
     // Add another → Add › Integrations opens.
     await userEvent.click(sidebar.getByRole('button', { name: 'Add another' }))
-    expect(screen.getByRole('tab', { name: 'Integrations', selected: true })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Add to graph' })).toBeInTheDocument()
     await userEvent.keyboard('{Escape}')
     // A keyboard nudge on the anchor's handle is a session preview only: nothing is saved.
     screen.getByRole('button', { name: 'Move octocat' }).focus()
@@ -432,7 +439,7 @@ describe('WorkspaceScreen — account anchors (SOLUSDEV-250 Phase 5)', () => {
     // Entering the account shows the document as a card, packed around the account's point.
     await userEvent.click(screen.getByRole('button', { name: 'Zoom into octocat' }))
     expect(await screen.findByRole('button', { name: 'Select rover' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Back to octocat' })).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Graph trail' })).toHaveTextContent('octocat')
   })
 })
 
@@ -511,17 +518,17 @@ describe('WorkspaceScreen — transient state boundaries', () => {
       vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
       vi.mocked(resources.listAllEntities).mockResolvedValue([
         {
-          id: 'details',
+          id: 'goals',
           type: 'solus_section',
           domain: 'project',
-          name: 'Project details',
+          name: 'Goals',
           source_key: '',
-          properties: { section: 'details' }
+          properties: { section: 'goals' }
         }
       ])
       const previousAuth = useAuthStore.getState()
       const { unmount } = render(<WorkspaceScreen />)
-      fireEvent.contextMenu(await screen.findByRole('button', { name: 'Select Project details' }))
+      fireEvent.contextMenu(await screen.findByRole('button', { name: 'Select Goals' }))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
       await userEvent.type(screen.getByRole('textbox'), 'Private old draft')
       act(() => {
@@ -927,4 +934,116 @@ it('explains member-required initialization and exposes a manual retry', async (
   expect(screen.queryByText('private')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Retry widget initialization' }))
   await waitFor(() => expect(reconcileWidgetGraph).toHaveBeenCalledTimes(2))
+})
+
+// SOLUSDEV-320 P4 — clicking a drawn edge opens the EdgePanel; a decision refetches the
+// graph and closes it; selecting a card closes it; cards carry open-finding badges.
+const OPEN_FINDING: findingsApi.Finding = {
+  id: 'f1',
+  rule_id: 'i2c.address',
+  severity: 'critical',
+  source: 'checker',
+  status: 'open',
+  headline: 'clash',
+  explanation: '',
+  detail: null,
+  subjects: ['a'],
+  evidence: {},
+  count: 1,
+  first_seen: '',
+  last_seen: '',
+  matrix_cell: null,
+  domain: null,
+  dismissed_until: null,
+  created_at: '',
+  updated_at: ''
+}
+
+describe('WorkspaceScreen — edges and findings', () => {
+  const candidate: resources.Relation = {
+    id: 'r1',
+    type: 'wires',
+    from_entity_id: 'a',
+    to_entity_id: 'b',
+    origin: 'inferred',
+    confidence: 0.6,
+    properties: { evidence: [{ kind: 'netlist', ref: 'SDA' }] }
+  }
+  function seedPair(): void {
+    linkProject()
+    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1))
+    vi.mocked(resources.listAllEntities).mockResolvedValue([entity('a', 'IMU'), entity('b', 'MCU')])
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([candidate])
+    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
+      entities: [],
+      edges: [],
+      truncated: false
+    })
+  }
+
+  it('opens the edge panel for a clicked edge, confirms it and returns to the entity', async () => {
+    seedPair()
+    vi.mocked(edgesApi.confirmEdge).mockResolvedValue({ ...candidate, origin: 'manual' })
+    render(<WorkspaceScreen />)
+    await screen.findByRole('button', { name: 'Select IMU' })
+    fireEvent.click(document.querySelector('.graph-cross-edge')!)
+    // The edge rail and the entity rail are separate trees: query the sidebar fresh.
+    const sidebar = (): ReturnType<typeof within> =>
+      within(screen.getByRole('complementary', { name: 'Sidebar' }))
+    expect(sidebar().getByRole('heading', { level: 2 })).toHaveTextContent('IMU wires MCU')
+    const reads = vi.mocked(resources.getProject).mock.calls.length
+    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([{ ...candidate, origin: 'manual' }])
+    fireEvent.click(sidebar().getByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(edgesApi.confirmEdge).toHaveBeenCalledWith('p1', 'r1'))
+    // Nothing is selected once the edge is decided, so the panel closes (design template).
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Sidebar' })).toBeNull())
+    expect(vi.mocked(resources.getProject).mock.calls.length).toBeGreaterThan(reads)
+  })
+
+  it('closes the edge panel when a card is selected', async () => {
+    seedPair()
+    render(<WorkspaceScreen />)
+    await screen.findByRole('button', { name: 'Select IMU' })
+    fireEvent.click(document.querySelector('.graph-cross-edge')!)
+    expect(screen.getByText('IMU → MCU')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Select IMU' }))
+    expect(screen.queryByText('IMU → MCU')).toBeNull()
+  })
+
+  it('badges cards with their open findings', async () => {
+    seedPair()
+    vi.mocked(findingsApi.listFindings).mockResolvedValue([OPEN_FINDING])
+    render(<WorkspaceScreen />)
+    const card = await screen.findByTestId('graph-node-a')
+    await waitFor(() =>
+      expect(within(card).getByTitle('1 open finding, worst: critical')).toHaveTextContent('1')
+    )
+    expect(findingsApi.listFindings).toHaveBeenCalledWith('p1', { status: 'open' })
+    expect(screen.getByTestId('graph-node-b').querySelector('.graph-finding-badge')).toBeNull()
+  })
+
+  // Design template: the side panel exists only for a selection; ✕ / Escape close it first,
+  // a second Escape then zooms out. The neighbourhood cache survives the close.
+  it('mounts the panel on selection, closes it on Escape, and keeps the cache warm', async () => {
+    seedPair()
+    render(<WorkspaceScreen />)
+    await screen.findByRole('button', { name: 'Select IMU' })
+    expect(screen.queryByRole('complementary', { name: 'Sidebar' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Select IMU' }))
+    expect(screen.getByRole('complementary', { name: 'Sidebar' })).toBeInTheDocument()
+    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('a'))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByRole('complementary', { name: 'Sidebar' })).toBeNull()
+    expect(useFocusStore.getState().focusedEntityId).toBeNull()
+    expect(Object.keys(useFocusStore.getState().cache).length).toBeGreaterThan(0)
+    expect(screen.getByTestId('graph-navigator')).toHaveAttribute('data-depth', '0')
+  })
+
+  it('the header ✕ closes the panel too', async () => {
+    seedPair()
+    render(<WorkspaceScreen />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Select IMU' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Close panel' }))
+    expect(screen.queryByRole('complementary', { name: 'Sidebar' })).toBeNull()
+  })
 })

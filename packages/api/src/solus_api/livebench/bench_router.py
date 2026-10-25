@@ -510,6 +510,19 @@ async def _robot_opener(
         if isinstance(cfg, RobotRealConfig)
         else await hardware_entity(session, project_id, cfg.entity_id)
     )
+    # SOLUSDEV-320 P5-T4: a robot whose host was confirmed opens only on that host.
+    bound = robot.attrs.get("host_machine_id")
+    if bound is not None:
+        from solus_api.hardware.host_topology import LocalHostProvider
+
+        host = await LocalHostProvider(local).identity()
+        if host is not None and host != bound:
+            raise APIError(
+                409,
+                "host_mismatch",
+                "This robot is bound to another host machine; start the session there",
+                details=[{"host_machine_id": bound, "local_host_id": host}],
+            )
     config = await resolve_runtime_config(session, project_id, robot.id)
     if config.identity is None or config.protocol is None:
         raise APIError(

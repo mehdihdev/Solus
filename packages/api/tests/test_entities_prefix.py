@@ -24,6 +24,7 @@ from conftest import create_project, create_team, me
 from httpx import AsyncClient
 from solus_api.models import Domain, GraphEntity
 from sqlalchemy.ext.asyncio import AsyncSession
+from test_solus_config import TREE_NAMES
 
 
 async def _seed(db: AsyncSession, project_id: uuid.UUID, refs: list[str]) -> None:
@@ -162,12 +163,4 @@ async def test_a_blank_prefix_is_ignored_rather_than_matching_everything(
     rows = await _list(client, alice_headers, project, external_ref_prefix=prefix)
 
     # A blank prefix includes the seeded entity and the entire `.solus` hierarchy.
-    assert sorted(e["name"] for e in rows) == [
-        ".solus",
-        "Code environment",
-        "Documentation",
-        "Error logging",
-        "Hardware configs",
-        "Project details",
-        "Rover/Bracket",
-    ]
+    assert sorted(e["name"] for e in rows) == sorted([*TREE_NAMES, "Rover/Bracket"])

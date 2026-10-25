@@ -23,7 +23,8 @@ export interface ArtifactCardProps {
 }
 
 const LABELS = SOLUS_SECTIONS.map((s) => SECTION_LABELS[s])
-const sectionOf = (label: string): SolusSection => SOLUS_SECTIONS[LABELS.indexOf(label)] ?? 'docs'
+const sectionOf = (label: string): SolusSection =>
+  SOLUS_SECTIONS[LABELS.indexOf(label)] ?? 'documentation'
 
 /** The object URL for an image artifact: null while loading, the URL, or false
  *  when the bytes could not be fetched. Revoked on unmount. */
@@ -73,7 +74,7 @@ function FileRow({
   artifact,
   onFile
 }: Pick<ArtifactCardProps, 'artifact' | 'onFile'>): React.JSX.Element | null {
-  const [section, setSection] = useState<SolusSection>('docs')
+  const [section, setSection] = useState<SolusSection>('documentation')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [kept, setKept] = useState(false)
@@ -120,7 +121,11 @@ export function ArtifactCard({
 }: ArtifactCardProps): React.JSX.Element {
   const url = useArtifactUrl(projectId, artifact)
   return (
-    <section className="sol-artifact-card" aria-label={`Artifact: ${artifact.title}`}>
+    <section
+      id={`sol-artifact-${artifact.artifactId}`}
+      className="sol-artifact-card"
+      aria-label={`Artifact: ${artifact.title}`}
+    >
       <ArtifactBody artifact={artifact} url={url} />
       {artifact.summary && <div className="sol-artifact-note">{artifact.summary}</div>}
       <FileRow artifact={artifact} onFile={onFile} />

@@ -15,6 +15,7 @@ import {
   isEmptyPreferences,
   parseEngineeringPreferences,
   preferencesPromptChars,
+  sharedSubset,
   type EngineeringPreferences,
 } from "./engineering-preferences";
 import type { JsonShapeOf } from "./json";
@@ -49,6 +50,7 @@ describe("constants", () => {
         "schema_version",
         "updatedAt",
         "freeText",
+        "shared",
         ...PREFERENCE_SECTIONS,
       ].sort(),
     );
@@ -157,5 +159,65 @@ describe("caps bound what a prompt can see, without rejecting the user's text", 
       FULL.freeText.length +
       PREFERENCE_SECTIONS.reduce((n, key) => n + FULL[key].length, 0);
     expect(preferencesPromptChars(result.preferences)).toBe(expected);
+  });
+});
+
+// SOLUSDEV-320 P5-T1d — `shared`: which structured sections the user lets the
+// project mirror (`PUT /members/me/preferences`). Absent = nothing shared;
+// freeText is never shareable.
+describe("shared flags", () => {
+  test("absent shared parses to a document without the field", () => {
+    const result = parseEngineeringPreferences(EMPTY);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect("shared" in result.preferences).toBe(false);
+  });
+
+  test("boolean flags on known sections are kept; non-booleans are dropped", () => {
+    const result = parseEngineeringPreferences({
+      ...EMPTY,
+      shared: { electrical: true, mechanical: false, codeStyle: "yes" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.preferences.shared).toEqual({
+      electrical: true,
+      mechanical: false,
+    });
+  });
+
+  test("an unknown key inside shared rejects — freeText included", () => {
+    expect(
+      parseEngineeringPreferences({ ...EMPTY, shared: { freeText: true } }),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(
+      parseEngineeringPreferences({
+        ...EMPTY,
+        shared: JSON.parse('{"__proto__": true}'),
+      }),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(parseEngineeringPreferences({ ...EMPTY, shared: [] })).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+  });
+
+  test("sharedSubset returns only flagged, non-empty sections", () => {
+    const result = parseEngineeringPreferences({
+      ...FULL,
+      shared: { electrical: true, mechanical: true, documentation: false },
+    });
+    if (!result.ok) throw new Error("must parse");
+    expect(sharedSubset(result.preferences)).toEqual({
+      electrical: FULL.electrical,
+      mechanical: FULL.mechanical,
+    });
+    expect(
+      sharedSubset({
+        ...emptyEngineeringPreferences(),
+        shared: { electrical: true },
+      }),
+    ).toEqual({});
+    expect(sharedSubset(emptyEngineeringPreferences())).toEqual({});
   });
 });

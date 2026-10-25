@@ -1,4 +1,4 @@
-// The project `.solus` for the Workspace nodes (SOLUSDEV-240): one GET, five
+// The project `.solus` for the Workspace nodes (SOLUSDEV-240): one GET, seven
 // sections, refetched after every mutation. Degrades honestly — `offline` when
 // no project is linked or the API cannot answer; never a fabricated section.
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -12,13 +12,8 @@ import {
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
-export const SECTION_LABELS: Readonly<Record<SolusSection, string>> = {
-  hardware: 'Hardware configs',
-  details: 'Project details',
-  errors: 'Error logging',
-  docs: 'Documentation',
-  code: 'Code environment'
-}
+/** The display names live with the section list in resources.ts (one source). */
+export { SOLUS_SECTION_LABELS as SECTION_LABELS } from '../../lib/api/resources'
 
 export type SolusStatus = 'loading' | 'ready' | 'offline'
 

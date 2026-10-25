@@ -7,6 +7,8 @@ from fastapi import APIRouter, BackgroundTasks, Request, Response
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, RequireVerified, SessionDep, SettingsDep, require_role
+from solus_api.graph.edges import retire_edge, write_edge
+from solus_api.graph.inference import infer_after_scene
 from solus_api.graph.live import graph_changed_frame
 from solus_api.models import GraphEntity, Role, utcnow
 from solus_api.services.events import emit_event
@@ -36,6 +38,8 @@ async def finish(
         project_id=ctx.project.id,
         payload={"model_id": str(entity.id)},
     )
+    # SOLUSDEV-320: joint limits vs accepted firmware constants, same transaction (guarded).
+    await infer_after_scene(session, ctx.project.id)
     await session.commit()
     await request.app.state.graph_hub.publish(
         ctx.project.id,
@@ -184,23 +188,24 @@ async def bind_cad(
             GraphEdge.src_id == entity.id,
             GraphEdge.relation_type == "cad_visual_for",
             GraphEdge.origin == "manual",
+            GraphEdge.deleted_at.is_(None),
         )
     )
     for edge in old_edges:
-        await session.delete(edge)
-    session.add_all(
-        [
-            GraphEdge(
-                project_id=ctx.project.id,
-                src_id=entity.id,
-                dst_id=target.id,
-                relation_type="cad_visual_for",
-                domain_pair="simulation<->mechanical",
-                origin="manual",
-            )
-            for target in {target.id: target for target in targets}.values()
-        ]
-    )
+        retire_edge(edge)
+    await session.flush()
+    for target_id in {target.id for target in targets}:
+        await write_edge(
+            session,
+            project_id=ctx.project.id,
+            src_id=entity.id,
+            dst_id=target_id,
+            relation_type="cad_visual_for",
+            origin="manual",
+            confidence=1.0,
+            evidence=[],
+            created_by=ctx.user.id,
+        )
     emit_event(
         session,
         user=ctx.user,

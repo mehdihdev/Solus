@@ -25,3 +25,4 @@ telemetry:
   - {quantity: position, unit: deg}
 calibration_mode: degrees
 datasheet_url: https://emanual.robotis.com/docs/en/dxl/x/xm430-w350/
+mass_g: 82

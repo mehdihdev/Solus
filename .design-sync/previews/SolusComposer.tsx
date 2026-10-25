@@ -33,3 +33,19 @@ export function EditNote() {
     </div>
   )
 }
+
+/** A new entry into `.solus/constraints` picks which fixed subsection it lands in. */
+export function NewConstraintWithSubsection() {
+  return (
+    <div style={box}>
+      <SolusComposer
+        kind="type"
+        initial=""
+        section="constraints"
+        subsection="budgets"
+        onCancel={noop}
+        onSubmit={noopAsync}
+      />
+    </div>
+  )
+}

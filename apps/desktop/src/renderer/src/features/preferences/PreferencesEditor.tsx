@@ -1,7 +1,11 @@
 // SOLUSDEV-244 / HOME H3: the editor half of the "How you engineer" card —
 // one labelled textarea per section plus notes, a character counter on each
 // (the cap is what bounds the prompt), Save / Cancel. Pure: draft in, draft out.
-import { PREFERENCE_SECTIONS, type EngineeringPreferences } from '@solus/shared-types'
+import {
+  PREFERENCE_SECTIONS,
+  type EngineeringPreferences,
+  type PreferenceSection
+} from '@solus/shared-types'
 import { useId, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -22,15 +26,43 @@ const TEXTAREA_STYLE: React.CSSProperties = {
   marginTop: 4
 }
 
+/** SOLUSDEV-320: the per-section opt-in to the project mirror (freeText has none). */
+const SHARE_LABEL = 'Share with the project'
+
 interface SectionInputProps {
   copy: SectionCopy
   value: string
   cap: number
   rows: number
   onChange: (value: string) => void
+  /** Present for the structured sections only. */
+  shared?: boolean
+  onShare?: (shared: boolean) => void
 }
 
-function SectionInput({ copy, value, cap, rows, onChange }: SectionInputProps): React.JSX.Element {
+function ShareToggle({
+  shared,
+  onShare
+}: Required<Pick<SectionInputProps, 'shared' | 'onShare'>>): React.JSX.Element {
+  return (
+    <label
+      style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, color: 'var(--mut)' }}
+    >
+      <input type="checkbox" checked={shared} onChange={(e) => onShare(e.target.checked)} />
+      <Mono size={9}>{SHARE_LABEL}</Mono>
+    </label>
+  )
+}
+
+function SectionInput({
+  copy,
+  value,
+  cap,
+  rows,
+  onChange,
+  shared,
+  onShare
+}: SectionInputProps): React.JSX.Element {
   const id = useId()
   return (
     <div style={{ marginTop: 10 }}>
@@ -51,6 +83,7 @@ function SectionInput({ copy, value, cap, rows, onChange }: SectionInputProps): 
         placeholder={copy.placeholder}
         style={TEXTAREA_STYLE}
       />
+      {onShare && <ShareToggle shared={shared === true} onShare={onShare} />}
     </div>
   )
 }
@@ -75,6 +108,8 @@ export function PreferencesEditor({
   const [draft, setDraft] = useState<EngineeringPreferences>(initial)
   const patch = (key: keyof EngineeringPreferences, value: string): void =>
     setDraft((d) => ({ ...d, [key]: value }))
+  const share = (key: PreferenceSection, shared: boolean): void =>
+    setDraft((d) => ({ ...d, shared: { ...d.shared, [key]: shared } }))
   return (
     <div>
       {PREFERENCE_SECTIONS.map((key) => (
@@ -85,6 +120,8 @@ export function PreferencesEditor({
           cap={fieldCap}
           rows={2}
           onChange={(value) => patch(key, value)}
+          shared={draft.shared?.[key]}
+          onShare={(shared) => share(key, shared)}
         />
       ))}
       <SectionInput

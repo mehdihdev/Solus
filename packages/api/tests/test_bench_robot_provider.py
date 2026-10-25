@@ -241,3 +241,65 @@ async def test_hardware_provider_uses_saved_part_connection(
         assert robot_local.opened[0]["config"]["robot_entity_id"] == part["id"]
     else:
         assert robot_local.opened == []
+
+
+# ------------------------------------------------------------ SOLUSDEV-320 P5-T4 host binding
+
+
+async def _bound_robot(
+    client: AsyncClient,
+    headers: dict[str, str],
+    db: AsyncSession,
+    host_machine_id: str | None,
+) -> tuple[str, str]:
+    from solus_api.models import GraphEntity
+
+    project_id, robot_id = await _robot_project(client, headers)
+    await _configure(client, headers, project_id, robot_id)
+    if host_machine_id is not None:
+        robot = await db.get(GraphEntity, uuid.UUID(robot_id))
+        assert robot is not None
+        robot.attrs = {**robot.attrs, "host_machine_id": host_machine_id}
+        await db.commit()
+    return project_id, robot_id
+
+
+@pytest.mark.parametrize(
+    ("bound", "local", "status"),
+    [
+        ("a" * 32, "a" * 32, 201),  # match
+        ("a" * 32, "b" * 32, 409),  # mismatch
+        (None, "b" * 32, 201),  # no confirmed host → skipped
+        ("a" * 32, None, 201),  # no local identity → skipped
+    ],
+)
+async def test_robot_session_checks_the_confirmed_host(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    robot_local: _RobotLocal,
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    bound: str | None,
+    local: str | None,
+    status: int,
+) -> None:
+    from solus_api.hardware.host_topology import LocalHostProvider
+
+    async def identity(self: LocalHostProvider) -> str | None:
+        return local
+
+    monkeypatch.setattr(LocalHostProvider, "identity", identity)
+    project_id, robot_id = await _bound_robot(client, alice_headers, db, bound)
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions",
+        headers=alice_headers,
+        json=_robot_session_body(robot_id),
+    )
+    assert resp.status_code == status, resp.text
+    if status == 409:
+        error = resp.json()["error"]
+        assert error["code"] == "host_mismatch"
+        assert error["details"] == [{"host_machine_id": bound, "local_host_id": local}]
+        assert robot_local.opened == []
+    else:
+        assert len(robot_local.opened) == 1

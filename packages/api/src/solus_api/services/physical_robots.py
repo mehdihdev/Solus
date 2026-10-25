@@ -18,6 +18,7 @@ from sqlalchemy.sql.selectable import CompoundSelect, Select
 from uuid6 import uuid7
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.models import Domain, GraphEdge, GraphEntity, Project, utcnow
 
 ROBOT_CATEGORIES = {
@@ -186,18 +187,18 @@ class PhysicalRobotService:
         self.session.add_all([root, *categories])
         # No ORM relationships define ordering: persist endpoints before edges.
         await self.session.flush()
-        self.session.add_all(
-            GraphEdge(
+        for category in categories:
+            await write_edge(
+                self.session,
                 project_id=project_id,
                 src_id=root.id,
                 dst_id=category.id,
                 relation_type="contains",
-                domain_pair="project<->project",
                 origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=None,
             )
-            for category in categories
-        )
-        await self.session.flush()
         return root
 
     async def _editable_root(

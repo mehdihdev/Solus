@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import { GraphNavigator, type GraphNavigatorProps } from './GraphNavigator'
-import { CARD_WIDTH, layoutLevel } from './layout'
+import { layoutLevel } from './layout'
 
 const node = (id: string, type = 'part'): Entity => ({
   id,
@@ -64,16 +64,15 @@ describe('GraphNavigator anchor-relative packing', () => {
   }
 
   it('packs unsaved children around the entered card and keeps a saved child put', () => {
-    mount({ ...tree, positions: { root: { x: 320, y: 60 }, b: { x: 5, y: 5 } } })
+    mount({ ...tree, positions: { root: { x: 320, y: 60 }, b: { x: -20, y: 5 } } })
     fireEvent.doubleClick(selectButton('root'))
     expect(card('a')).toHaveAttribute('data-x', '320')
     expect(card('a')).toHaveAttribute('data-y', '60')
-    expect(card('b')).toHaveAttribute('data-x', '5')
+    expect(card('b')).toHaveAttribute('data-x', '-20')
     expect(card('b')).toHaveAttribute('data-y', '5')
-    // The frame is centred on the anchor, so the chip sits at the frame's half-width.
-    expect(screen.getByRole('button', { name: 'Back to root' }).style.left).toBe(
-      `${315 + CARD_WIDTH / 2 + 80}px`
-    )
+    // No parent chip: containment is one stem from the frame's top edge with a drop per card.
+    expect(screen.queryByRole('button', { name: /^Back to/ })).toBeNull()
+    expect(document.querySelectorAll('.graph-structure-edge')).toHaveLength(2)
   })
 
   it('spirals the second unsaved child one step out from the entered card', () => {
@@ -129,24 +128,60 @@ describe('GraphNavigator interactions and isolation', () => {
     const stage = container.querySelector<HTMLElement>('.graph-level')!
     expect(stage.style.getPropertyValue('--graph-origin-x')).toBe('152px')
     expect(stage.style.getPropertyValue('--graph-origin-y')).toBe('142px')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to root' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out (Esc)' }))
     expect(container.querySelector('.graph-level')).toHaveAttribute('data-direction', 'out')
     rect.mockRestore()
   })
 
-  it('exposes actual cross-link endpoints and navigates to an external endpoint', () => {
-    const { props } = mount({
+  it('draws a cross-link between sibling cards and lists nothing below the canvas', () => {
+    mount({
       entities: [node('root'), node('part'), node('controller')],
       relations: [edge('root', 'part'), edge('part', 'controller', 'connected_to')]
     })
+    // root and controller are both roots; the part→controller link projects onto root.
+    expect(document.querySelectorAll('.graph-cross-edge')).toHaveLength(1)
+    expect(screen.queryByText(/real endpoints/)).toBeNull()
+    expect(document.querySelector('details')).toBeNull()
     fireEvent.doubleClick(selectButton('root'))
-    expect(screen.getByText('connected_to')).toBeInTheDocument()
-    const details = screen.getByText(/cross-link.*real endpoints/).closest('details')!
-    expect(details).not.toHaveAttribute('open')
-    fireEvent.click(details.querySelector('summary')!)
-    fireEvent.click(screen.getByRole('button', { name: 'Show linked controller' }))
-    expect(depth()).toBe('0')
-    expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[2], [])
+    // Inside root only `part` is visible; its link leaves the level and is not drawn.
+    expect(document.querySelectorAll('.graph-cross-edge')).toHaveLength(0)
+  })
+
+  it('connects the level: the parent chip down to each card, and the .solus hub to the roots', () => {
+    const roots = mount({
+      entities: [node('solus', 'solus_config'), node('onshape'), node('kicad')],
+      relations: []
+    })
+    expect(roots.container.querySelectorAll('.graph-structure-edge')).toHaveLength(2)
+    roots.unmount()
+    const nested = mount({
+      entities: [node('root'), node('a'), node('b')],
+      relations: [edge('root', 'a'), edge('root', 'b')]
+    })
+    fireEvent.doubleClick(selectButton('root'))
+    expect(nested.container.querySelectorAll('.graph-structure-edge')).toHaveLength(2)
+  })
+
+  it('pans by dragging the canvas background, never from a card', () => {
+    const { container } = mount()
+    const viewport = container.querySelector<HTMLElement>('.graph-viewport')!
+    viewport.scrollLeft = 200
+    viewport.scrollTop = 100
+    const level = container.querySelector<HTMLElement>('.graph-level')!
+    fireEvent.pointerDown(level, { pointerId: 7, button: 0, clientX: 300, clientY: 300 })
+    expect(viewport).toHaveAttribute('data-panning', 'true')
+    fireEvent.pointerMove(level, { pointerId: 7, clientX: 250, clientY: 320 })
+    expect(viewport.scrollLeft).toBe(250)
+    expect(viewport.scrollTop).toBe(80)
+    fireEvent.pointerUp(level, { pointerId: 7 })
+    expect(viewport).not.toHaveAttribute('data-panning')
+    fireEvent.pointerDown(card('root'), { pointerId: 8, button: 0, clientX: 0, clientY: 0 })
+    expect(viewport).not.toHaveAttribute('data-panning')
+  })
+
+  it('shows paging only when a level overflows the card cap', () => {
+    mount()
+    expect(screen.queryByRole('button', { name: 'Next nodes' })).toBeNull()
   })
 })
 
@@ -292,7 +327,7 @@ function registerHierarchyNavigationTests(): void {
     ])
     fireEvent.doubleClick(selectButton('leaf'))
     expect(depth()).toBe('3')
-    fireEvent.click(screen.getByRole('button', { name: 'Back to part' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out (Esc)' }))
     expect(depth()).toBe('2')
     expect(props.onSelect).toHaveBeenLastCalledWith(props.entities[1], [
       { entity: props.entities[0], relation: 'contains' }
@@ -313,7 +348,7 @@ function registerHierarchyNavigationTests(): void {
     fireEvent.doubleClick(selectButton('root'))
     const help = screen.getByRole('button', { name: 'Help' })
     expect(help.closest('.graph-corner-right')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Back to root' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zoom out (Esc)' })).toBeInTheDocument()
     fireEvent.click(help)
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -534,8 +569,120 @@ it('previews actual scoped robot roots without inventing an inside count', () =>
         : { entities: [robot], relations: [] }
   })
   expect(within(card('robot')).getByRole('button', { name: 'Open brain-one' })).toBeInTheDocument()
-  expect(within(card('robot')).getByText(/2 inside/)).toBeInTheDocument()
+  expect(within(card('robot')).getByRole('button', { name: 'Zoom into robot' })).toHaveTextContent(
+    '2 nodes'
+  )
   fireEvent.click(within(card('robot')).getByRole('button', { name: 'Open brain-one' }))
   expect(card('brain-one')).toBeInTheDocument()
   expect(depth()).toBe('1')
+})
+
+// SOLUSDEV-320 P4 — edge selection threads through the navigator, and the
+// viewport context menu offers Re-layout for the current level.
+describe('GraphNavigator edges and re-layout', () => {
+  const pair = {
+    entities: [node('a'), node('b')],
+    relations: [edge('a', 'b', 'wires')],
+    positions: { a: { x: 100, y: 100 }, b: { x: 400, y: 100 } }
+  }
+
+  it('clicking a drawn edge reports the relation and the selected one is marked', () => {
+    const onSelectEdge = vi.fn()
+    const { container, rerender, props } = mount({ ...pair, onSelectEdge })
+    fireEvent.click(container.querySelector('.graph-cross-edge')!)
+    expect(onSelectEdge).toHaveBeenCalledWith(pair.relations[0])
+    expect(container.querySelector('g[data-selected]')).toBeNull()
+    rerender(<GraphNavigator {...props} selectedEdgeId="a-b-wires" />)
+    expect(container.querySelector('g[data-selected]')).not.toBeNull()
+  })
+
+  it('threads the findings map to each visible card', () => {
+    const findings = new Map([['a', { severity: 'warning' as const, count: 2 }]])
+    mount({ ...pair, findings })
+    expect(within(card('a')).getByTitle('2 open findings, worst: warning')).toHaveTextContent('2')
+    expect(card('b').querySelector('.graph-finding-badge')).toBeNull()
+  })
+
+  it('offers Re-layout on the viewport background and reports the level ids', () => {
+    const onRelayout = vi.fn()
+    mount({ ...pair, onRelayout })
+    fireEvent.contextMenu(screen.getByTestId('graph-navigator').querySelector('.graph-viewport')!)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Re-layout' }))
+    expect(onRelayout).toHaveBeenCalledWith(['a', 'b'])
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('leaves a card right-click alone and shows no menu without the prop', () => {
+    const onRelayout = vi.fn()
+    mount({ ...pair, onRelayout })
+    fireEvent.contextMenu(card('a'))
+    expect(screen.queryByRole('menuitem', { name: 'Re-layout' })).toBeNull()
+    mount(pair)
+    fireEvent.contextMenu(
+      screen.getAllByTestId('graph-navigator')[1].querySelector('.graph-viewport')!
+    )
+    expect(screen.queryByRole('menuitem', { name: 'Re-layout' })).toBeNull()
+  })
+
+  it('re-sends default placement for cleared positions after Re-layout', () => {
+    const onMove = vi.fn()
+    const onRelayout = vi.fn()
+    const { props, rerender } = mount({
+      entities: pair.entities,
+      relations: [],
+      positions: {},
+      persistDefaults: true,
+      onMove,
+      onRelayout
+    })
+    expect(onMove).toHaveBeenCalledTimes(2)
+    const saved = { a: onMove.mock.calls[0][1], b: onMove.mock.calls[1][1] }
+    rerender(<GraphNavigator {...props} positions={saved} />)
+    rerender(<GraphNavigator {...props} positions={{}} />)
+    expect(onMove).toHaveBeenCalledTimes(2)
+    fireEvent.contextMenu(screen.getByTestId('graph-navigator').querySelector('.graph-viewport')!)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Re-layout' }))
+    rerender(<GraphNavigator {...props} positions={saved} />)
+    rerender(<GraphNavigator {...props} positions={{}} />)
+    expect(onMove).toHaveBeenCalledTimes(4)
+    expect(onMove.mock.calls[3][2]).toBe('auto')
+  })
+})
+
+describe('GraphNavigator Escape and breadcrumb', () => {
+  it('Escape goes up a level unless the owner consumes it, an editor has focus, or a dialog took it', () => {
+    const onEscape = vi.fn(() => false)
+    mount({ onEscape, renderContent: () => <textarea aria-label="Edit note" /> })
+    fireEvent.doubleClick(selectButton('root'))
+    fireEvent.doubleClick(selectButton('assembly'))
+    expect(depth()).toBe('2')
+    fireEvent.keyDown(screen.getAllByRole('textbox')[0], { key: 'Escape' })
+    expect(depth()).toBe('2')
+    const taken = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true })
+    taken.preventDefault()
+    act(() => {
+      window.dispatchEvent(taken)
+    })
+    expect(depth()).toBe('2')
+    onEscape.mockReturnValueOnce(true)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onEscape).toHaveBeenCalledTimes(1)
+    expect(depth()).toBe('2')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(depth()).toBe('1')
+  })
+
+  it('shows the trail as a breadcrumb with the level stat and navigates from it', () => {
+    mount()
+    expect(screen.getByText('1 ROOTS · 4 NODES · DOUBLE-CLICK TO ZOOM IN')).toBeInTheDocument()
+    fireEvent.doubleClick(selectButton('root'))
+    fireEvent.doubleClick(selectButton('assembly'))
+    const trail = screen.getByRole('navigation', { name: 'Graph trail' })
+    expect(trail).toHaveTextContent('Graph›root›assembly')
+    expect(screen.getByText('1 NODES INSIDE · ESC TO ZOOM OUT')).toBeInTheDocument()
+    fireEvent.click(within(trail).getByRole('button', { name: 'root' }))
+    expect(depth()).toBe('1')
+    fireEvent.click(within(trail).getByRole('button', { name: 'Zoom out (Esc)' }))
+    expect(depth()).toBe('0')
+  })
 })

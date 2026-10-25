@@ -95,3 +95,30 @@ export function WithEmbeddedContent() {
     </div>
   )
 }
+
+/** SOLUSDEV-320: a focused node previews up to four children and carries its open-findings badge. */
+export function WithChildrenAndFinding() {
+  return (
+    <div style={{ ...stage, height: 260 }}>
+      <GraphCard
+        entity={{ ...DRIVER, name: 'main-board', type: 'pcb', source_key: 'kicad:main-board' }}
+        point={{ x: 124, y: 130 }}
+        offset={ORIGIN}
+        focused
+        childCount={14}
+        finding={{ severity: 'warning', count: 2 }}
+        childPreviews={[
+          { entity: DRIVER, childCount: 6 },
+          { entity: { ...DRIVER, id: 'e-u2-imu', name: 'BMI088 (U2)', type: 'imu' }, childCount: 0 },
+          { entity: { ...DRIVER, id: 'e-j4', name: 'J4 USB-C', type: 'connector' }, childCount: 0 }
+        ]}
+        onSelect={noop}
+        onEnter={noop}
+        onBack={noop}
+        onPreview={noop}
+        onMove={noop}
+        onRevealChild={noop}
+      />
+    </div>
+  )
+}

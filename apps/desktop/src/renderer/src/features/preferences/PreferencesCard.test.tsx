@@ -60,10 +60,11 @@ describe('PreferencesCard', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     const mechanical = screen.getByLabelText('Mechanical')
     await userEvent.type(mechanical, 'Metric fasteners only.')
-    // Counters name the per-field cap; nothing here is a toggle.
+    // Counters name the per-field cap; the only toggles are the five
+    // per-section "share with the project" opt-ins (SOLUSDEV-320).
     expect(screen.getAllByText(/\/ 800/).length).toBe(5)
     expect(screen.getByText(/\/ 2400/)).toBeInTheDocument()
-    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.getAllByRole('checkbox', { name: 'Share with the project' })).toHaveLength(5)
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(b.write).toHaveBeenCalledWith(

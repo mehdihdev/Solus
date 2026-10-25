@@ -51,6 +51,7 @@ from solus_api.agent.command_policy import classify
 from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.exec import run_tool
+from solus_api.agent.tools.flash_history import record_tool_history
 from solus_api.agent.tools.knowledge import record_write_outcome
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import (
@@ -681,6 +682,15 @@ async def decide_confirmation(
         call=stored,
         result=result,
         descriptor=descriptor,
+        executed=True,
+    )
+    # SOLUSDEV-320 P5-T7: the success twin — a clean flash is one `firmware.flashed` row.
+    await record_tool_history(
+        lambda: nullcontext(session),
+        project_id=project_id,
+        user_id=user_id,
+        call=stored,
+        result=result,
         executed=True,
     )
     return result

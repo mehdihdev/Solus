@@ -21,6 +21,9 @@ class ProtocolDriver(Protocol):
     display_name: ClassVar[str]
     transports: ClassVar[frozenset[TransportKind]]
     params_model: ClassVar[type[BaseModel]]
+    #: Python packages the driver needs on the host (SOLUSDEV-320); optional plugin
+    #: metadata, read with `getattr` like `channel_roles`, never required of a plugin.
+    requires_packages: ClassVar[tuple[str, ...]] = ()
 
     def open(self, channel: Channel, params: BaseModel, config: HardwareConfig) -> PacketSource:
         """A packet source over an open channel. Called off-loop; may block briefly."""
@@ -47,9 +50,17 @@ class DriverRegistry:
                 "display_name": driver.display_name,
                 "transports": sorted(kind.value for kind in driver.transports),
                 "params_schema": driver.params_model.model_json_schema(),
+                "requires_packages": list(self.requires_packages(driver.driver_id)),
             }
             for driver in sorted(self._drivers.values(), key=lambda d: d.driver_id)
         ]
+
+    def requires_packages(self, driver_id: str) -> tuple[str, ...]:
+        """The packages a driver declares (KeyError: unknown driver); undeclared → ()."""
+        declared = getattr(self.get(driver_id), "requires_packages", ())
+        if not isinstance(declared, tuple) or any(not isinstance(p, str) for p in declared):
+            return ()
+        return declared
 
     def validate_params(self, protocol: ProtocolBinding | None) -> BaseModel:
         """The driver's own model validates the config's parameters (unknown keys refused)."""

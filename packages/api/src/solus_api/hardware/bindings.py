@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.hardware.config import EntityHardwareConfig, part_ref
 from solus_api.models import GraphEdge, GraphEntity, SolusEntry, SolusEntryKind, utcnow
 
@@ -54,7 +55,10 @@ async def synchronize_bindings(
     )
     for edge in old:
         edge.deleted_at = utcnow()
+    owner = entry.entity_id
     if config.identity is not None:
+        if owner is None:
+            raise APIError(409, "binding_conflict", "Hardware config has no graph identity")
         desired = [
             (item.part_entity_id, item.address, item.protocol)
             for item in config.bus_map
@@ -79,22 +83,26 @@ async def synchronize_bindings(
                 if address
                 else config.identity.device_ref
             )
-            session.add(
-                GraphEdge(
-                    project_id=project_id,
-                    src_id=entry.entity_id,
-                    dst_id=target,
-                    relation_type=BINDING_RELATION,
-                    domain_pair="project<->project",
-                    origin="manual",
-                    attrs={
-                        "device_ref": ref,
-                        "address": address,
-                        "protocol": protocol,
-                        "config_version": entry.config_version,
-                        "enabled": True,
-                    },
-                )
+            # One identity per (config node, target, device ref, protocol): a re-sync
+            # resurrects the same row instead of minting a new one per config version.
+            await write_edge(
+                session,
+                project_id=project_id,
+                src_id=owner,
+                dst_id=target,
+                relation_type=BINDING_RELATION,
+                origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=None,
+                attrs={
+                    "device_ref": ref,
+                    "address": address,
+                    "protocol": protocol,
+                    "config_version": entry.config_version,
+                    "enabled": True,
+                },
+                edge_id=uuid.uuid5(owner, f"{BINDING_RELATION}:{target}:{ref}:{protocol}"),
             )
     invalidate_after_commit(session, project_id)
     await session.flush()

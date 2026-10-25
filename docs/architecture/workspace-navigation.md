@@ -12,7 +12,7 @@ from implemented behavior and measured results.
 ```mermaid
 flowchart LR
   Graph[Authorized project graph and source metadata] --> Index[Real containment and presentation index]
-  Accounts[Owner-only cached integration catalog] --> Add[Floating Add panel]
+  Accounts[Owner-only cached integration catalog] --> Add[Centered Add modal]
   Add --> Attach[Existing exact source attachment]
   Attach --> Graph
   Index --> Groups[Account boundaries and native document hierarchy]
@@ -46,23 +46,46 @@ Onshape preserves document→assembly→part; Git preserves repository→directo
 account/document/repository/branch matching prevents duplicate imports. Unbound sources remain
 separate until identity is proven.
 
-`.solus` remains the real top-level configuration node with five section entities and real
+`.solus` remains the real top-level configuration node with seven section entities (and subsection nodes, SOLUSDEV-320) and real
 entry/artifact graph identities. Text remains authoritative in solus_entries. Robots remain
 independent manual roots with existing category nodes, but empty categories may collapse/hide
 in presentation. Parts may remain unassigned and independently configured. Retained parts are
 reachable through Hardware search and the inspector even when provider containment supplies
 their normal presentation parent. Group membership and canvas position never assign hardware.
 
+## Edges with meaning (SOLUSDEV-320)
+
+Every projected link is labelled by its dominant `relation_type` (never "N links"); the bundle
+between two cards expands on click to one path per relation. Visual weight follows the
+`RelationClass` from `@solus/shared-types` `relations.ts` through CSS variables on
+`.graph-cross-edge`: structure thin and quiet, dependency loud, identity collapsed as today,
+outcome dotted, candidates (`origin = inferred`, `confidence < 0.8`) dashed. Hovering shows a
+sentence built from the type, the two names and the evidence refs (`edgeSentence.ts`, no model
+call). Clicking a path opens `EdgePanel` in the sidebar: type, direction, confidence, origin,
+every evidence item with its ref, created by and when, matrix cell, `attrs.checker_results` when
+present, and Confirm / Decline on candidates (`POST /edges/{id}/confirm|decline`). Selection
+state for an edge is local to the Workspace screen, like account anchors; synthetic projection ids
+never open the panel. Cards carry a finding badge (highest open severity + count from
+`GET /findings?status=open`, refetched on `graph.changed` and `finding.*`). The viewport context
+menu offers **Re-layout**, which clears the current level's saved positions through the versioned
+`PUT /workspace-layout` and lets default placement run again. Wheel zoom, free drag, the 24-card
+bound, `.solus` centred, account anchors and reduced motion are unchanged. Route plan:
+`docs/api/relations.md`, `docs/api/findings.md`.
+
 ## Canvas interaction and persistence
 
-Remove the full-width toolbar and retained-parts strip. Opaque Add anchors upper left; compact
-help/navigation anchors upper right. Back, save/conflict/error feedback and explicit arrange
-controls are discrete and do not obscure the canvas. Panel sizing follows available viewport
-and content with wrapping/scrolling, stable loading anchors, keyboard tabs and focus return.
+Design template (2026-10-24): the top-left toolbar is the accent Add button, a breadcrumb pill
+(`GraphBreadcrumb`: the navigator's trail, a back arrow when deeper) and a mono level stat drawn
+from the navigator's own counts; Help stays top-right; a zoom pill (`−` / `NN%` reset / `+` /
+`Fit`) sits bottom-right and is camera-only presentation zoom (`stepGraphZoom`, 50–200 %,
+never a coordinate write). Escape is owned at the window by the navigator: dialogs and editors
+win (they `preventDefault` or sit inside `EDITABLE`, which includes the toolbar corner the Add
+modal renders from), then the screen may consume it to close the side panel, then the level goes
+up. Save/conflict/error feedback stays in the discrete status row below the canvas.
 
 The incoming 250 navigator uses hover + wheel inward to enter the hovered card's immediate
-children and outward to go up one level. Double-click, keyboard, parent chip and Help → Project
-overview are equivalent hierarchy controls; leaves select without entering an empty level.
+children and outward to go up one level. Double-click, keyboard, the breadcrumb pill (back arrow
+and crumbs) and Help → Project overview are equivalent hierarchy controls; leaves select without entering an empty level.
 Click selects; body drag excludes inputs/buttons and crosses a movement threshold. Coordinates
 remain transformed correctly and keyboard movement/reduced motion remain supported. This is the
 current integrated interaction; the earlier plain-wheel-pan redesign is not claimed implemented.
@@ -78,16 +101,27 @@ Real entity UUID coordinates remain project-shared. Shared typed group placement
 work; local preferences never manufacture graph UUIDs or enter shared Focus.
 Explicit arrange/reset is the only automatic layout rewrite requested by a user.
 
-Initial placement uses deterministic organic packing near the current parent, with non-aligned
-offsets and collision avoidance, rather than grid cells or a tree layout. Existing saved points
-are never recomputed. Visible projected edges aggregate real relationships and counts, draw
+Initial placement (2026-10-24) fills rows of three below the current parent — centre, right,
+left, then the next row — with collision avoidance against saved points; a cell past the
+coordinate boundary mirrors to the other side. Existing saved points are never recomputed. The
+level frame hugs the cards (`levelBounds` pads their bounding box; it no longer centres the
+parent's point, which left an empty half above the first row). The level also draws containment
+structure (`StructureLine`s: inside a level one stem from the frame's top edge into a bus above
+the first row with a drop per card — there is no parent chip, the breadcrumb owns "up"; at the
+root the `.solus` hub → other roots) as unselectable dashed paths behind the cards; cards are
+`user-select: none` (editors inside keep text selection) so a press-and-drag never highlights
+text; the cross-link legend
+and endpoint list below the canvas were removed, and paging renders only past 24 cards. Dragging
+the viewport background pans it (`useDragPan`, pointer capture; cards and controls excluded). Visible projected edges aggregate real relationships and counts, draw
 curved paths with midpoint labels, and distinguish cross-domain links from quiet containment.
 Pending suggestions use existing project-authorized proposal evidence and explicit decisions;
 rendering them never generates or accepts links.
 
 Small graph overviews may fit the visible card bounds using presentation zoom without changing
-world coordinates. Drag deltas are converted back into world units before persistence. Framing
+world coordinates; explicit `−`/`+` steps clamp 50–200 % around the viewport centre and never
+persist coordinates. Drag deltas are converted back into world units before persistence. Framing
 is recomputed for viewport or visible membership changes, never to rearrange a dragged node.
+Cards are 300×184 (`layout.ts`); saved points are centres, so the size change migrates nothing.
 
 Keep the documented 24-card visible bound and explicit additional-child navigation until measured
 rendering evidence justifies a separately documented bound. Project snapshots may be complete;
@@ -105,8 +139,9 @@ fields, cross-project IDs/group keys, nonfinite or oversized coordinates are rej
 Reuse the current cached I1 listing. First expansion is cache-only; Load documents and Refresh
 are explicit provider operations. Refresh accounts discovers new Home connections. Reopening a
 cached catalog, selecting nodes, entering levels, dragging, zooming or refreshing graph data
-performs no provider call. First selection attaches/syncs a real source; reselecting a completed
-source focuses its existing root. Errors remain inline with Integrations recovery guidance.
+performs no provider call. Confirming picked documents attaches/syncs each in order through the
+same `ServiceProject.select` (it serialises on `busyId`); reselecting an attached document focuses
+its existing root. Errors remain inline with Integrations recovery guidance.
 
 The existing authenticated project event stream invalidates snapshots on committed graph hints.
 Initial readiness validates project version to close the subscribe/snapshot race; reconnect
@@ -120,9 +155,14 @@ IDs and makes no provider call. Manual robot edits publish graph hints after com
 
 ## Sidebar and explicit SOL actions
 
-`NodeSidebar` replaces the inspector: robot/category routes to the robot sidebar; `.solus`
-root/section/entry routes to its sidebar; account anchors use local account details; other real
-entities show cached focus summary and neighbors. Per-robot detail refresh follows invalidation,
+`NodeSidebar` mounts only for a selection (entity, account anchor or edge) and shares one chrome
+(`sidebar/PanelChrome.tsx`: domain dot, `panelLabel`, ✕, title, real facts; footer strip).
+Robot/category routes to the robot sidebar; `.solus` root/section/entry routes to its sidebar
+(now with the Add / Edit · Upload · Ask SOL footer); account anchors use local account details;
+other real entities show `ConnectionsPanel` — the cached neighbourhood's edges touching the node
+as cards (`edgeSentence`, status pill from open findings on either endpoint) — instead of the
+reference widgets, which remain the widget-contract fixtures. `focusStore.clearFocus` deselects
+without dropping the cache. Per-robot detail refresh follows invalidation,
 not a graph refetch for every click. Connection metadata renders connecting/connected/failed/
 disconnected separately from actual packet reception. Serial-less identity copy appears here
 as well as on the device card. Import/note expansion for every arbitrary node remains follow-up
@@ -133,9 +173,11 @@ progressively with honest loading/failure states. All supported nodes expose vis
 Ask SOL and Add note actions in addition to relevant type-specific controls. A retained part can
 be assigned/reassigned explicitly through the versioned ownership API.
 
-Selection makes no model call. Explicit Ask SOL opens the existing SOL window with the real
-selected node as subject, preserving current project/account context. Submission carries the UUID in existing
-`MessageCreate.mentions`, uses the current project conversation and consumes Guide/Expert mode,
+Selection makes no model call. Explicit Ask SOL pins the real selected node to the project's active
+chat (`features/sol/pinnedContextStore.ts`, localStorage, cleared when the account ends) and opens
+the SOL page with a seeded draft; the SOL window keeps `openSolSubject`. Submission carries the
+UUID in existing `MessageCreate.mentions` (pinned nodes merged with typed `@`-mentions, capped at
+8), uses the current project conversation and consumes Guide/Expert mode,
 action mode, budget admission and confirmation infrastructure. Bind each submitted turn to its
 submitted entity, even if selection changes; stale account/project results are discarded. Do
 not create a fresh chat for every click or invent a parallel agent service.

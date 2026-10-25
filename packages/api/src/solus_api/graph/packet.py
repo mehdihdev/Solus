@@ -1,9 +1,9 @@
 """Telemetry packet + read shapes — THE LB-06 telemetry packet format (SOLUSDEV-126).
 
 `TelemetryPacket` is the ratified LB-06 wire shape every telemetry producer speaks: the sim
-(LB-01), a real robot (LB-02), the Foxglove/MCAP ingest (CON-03), and the graph plumbing that
-maps it onto entities (LNK-06). Encode/decode live in `codec.py`; the normative description is
-`docs/contracts/telemetry-packet.md`.
+(LB-01), a real robot (LB-02), the telemetry-viewer/MCAP ingest (CON-03), and the graph
+plumbing that maps it onto entities (LNK-06). Encode/decode live in `codec.py`; the normative
+description is `docs/contracts/telemetry-packet.md`.
 
 It stays in this package rather than `packages/contracts/` by decision at the SOLUSDEV-126
 Phase 0 gate — that package is human-owned (ADR-028/032) and currently import-broken.
@@ -17,7 +17,7 @@ Everything a device sends is UNTRUSTED input (CLAUDE.md §7): sizes and counts a
 numeric values must be finite, so a malformed or hostile packet is rejected at the boundary and
 never crashes ingestion. `device_id`/signal names are DATA, never instructions.
 
-`RecentValuesView` is the raw recent-values read the same feed exposes to a Foxglove bridge
+`RecentValuesView` is the raw recent-values read the same feed exposes to a telemetry-viewer bridge
 (CON-03) — a plain, JSON-serializable per-signal series, no summarization.
 """
 
@@ -135,7 +135,7 @@ class SignalSeries(BaseModel):
 
 
 class RecentValuesView(BaseModel):
-    """The raw recent-values feed for one entity — the Foxglove-consumable (CON-03) read."""
+    """The raw recent-values feed for one entity — the telemetry-viewer-consumable (CON-03) read."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

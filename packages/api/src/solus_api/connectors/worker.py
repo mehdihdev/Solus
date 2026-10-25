@@ -58,6 +58,7 @@ from solus_api.connectors.secrets import SecretStore, build_secret_store
 from solus_api.core.db import build_engine, build_sessionmaker
 from solus_api.graph.live import LiveHub
 from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
+from solus_api.services.budgets import budget_job_id, make_budget_trigger, recompute_budgets
 from solus_api.services.connections import account_ref_for, onshape_application_for
 from solus_api.storage import ArtifactStore
 from solus_api.storage.cad_store import build_cad_store
@@ -259,6 +260,7 @@ async def execute_source_sync(
             force,
             hub,
             artifact_store,
+            registry,
         )
 
     if store is None:
@@ -446,6 +448,7 @@ async def _run_with_scene(
     force: bool,
     hub: Any | None,
     artifact_store: ArtifactStore | None,
+    registry: ConnectorRegistry | None = None,
 ) -> uuid.UUID | None:
     from solus_api.connectors.onshape import OnshapeConnector
     from solus_api.livebench.scene.cad_refresh import complete, prepare
@@ -467,6 +470,7 @@ async def _run_with_scene(
         resolved_acting_user_id,
         force or (plan.force if plan else False),
         hub,
+        registry,
     )
     if plan is not None:
         await complete(sessionmaker, artifact_store, plan, result, hub)
@@ -483,6 +487,7 @@ async def _run(
     resolved_acting_user_id: uuid.UUID | None,
     force: bool,
     hub: Any | None,
+    registry: ConnectorRegistry | None = None,
 ) -> uuid.UUID | None:
     from solus_api.models import SourceType, Sync
     from solus_api.services.onshape_webhooks import acknowledge_state, save_state, state_for
@@ -504,6 +509,7 @@ async def _run(
         acting_user_id=resolved_acting_user_id,
         force=force,
         hub=hub,
+        registry=registry,
     )
     if generation and sync_id:
         async with sessionmaker() as session:
@@ -1207,6 +1213,17 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     await hub.start()
     ctx["graph_hub"] = hub
     sessionmaker = build_sessionmaker(engine, settings=settings, hub=hub)
+
+    # SOLUSDEV-320 resolution 18: a worker commit's `graph.changed` re-queues the budgets
+    # (by name through arq's own connection), or runs them inline without Redis.
+    queue: Any = redis  # arq's ArqRedis; narrowed here so the closure never sees None
+
+    async def enqueue_budgets(job_name: str, project_id: str) -> None:
+        await queue.enqueue_job(job_name, project_id, _job_id=budget_job_id(project_id))
+
+    hub.on_graph_changed = make_budget_trigger(
+        sessionmaker=sessionmaker, enqueue=enqueue_budgets if queue is not None else None
+    )
     ctx["settings"] = settings
     ctx["engine"] = engine
     ctx["sessionmaker"] = sessionmaker
@@ -1237,6 +1254,8 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
 async def _on_shutdown(ctx: dict[str, Any]) -> None:
     hub = ctx.get("graph_hub")
     if hub is not None:
+        if hub.on_graph_changed is not None:
+            hub.on_graph_changed.close()
         await hub.stop()
     engine = ctx.get("engine")
     if engine is not None:
@@ -1276,6 +1295,8 @@ def build_worker_settings(settings: Settings) -> type:
             extension_review,
             # SOLUSDEV-246 (STORE ST5): one sourcing request → candidates, metered.
             func(sourcing_request, timeout=_SOURCING_JOB_SECONDS, max_tries=1),
+            # SOLUSDEV-320 P5-T6: enqueued by name from the hub's `graph.changed` trigger.
+            func(recompute_budgets, timeout=120, max_tries=1),
         ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —

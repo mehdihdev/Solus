@@ -25,3 +25,4 @@ telemetry:
   - {quantity: position, unit: deg}
 calibration_mode: degrees
 datasheet_url: https://emanual.robotis.com/docs/en/dxl/x/xl330-m288/
+mass_g: 18

@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
-from solus_api.models import Domain, GraphEdge, GraphEntity, Project, User
+from solus_api.graph.edges import write_edge
+from solus_api.models import Domain, GraphEntity, Project, User
 from solus_api.services.artifacts import fetch_artifact_bytes
 from solus_api.services.events import emit_event
 from solus_api.services.solus_graph import lock_project
@@ -143,16 +144,16 @@ class CompanionDeploymentService:
         )
         self.session.add(entity)
         await self.session.flush()
-        self.session.add(
-            GraphEdge(
-                project_id=self.project_id,
-                src_id=entity.id,
-                dst_id=body.target_id,
-                relation_type="deployment_for_target",
-                domain_pair="runtime:runtime",
-                origin="system",
-                attrs={},
-            )
+        await write_edge(
+            self.session,
+            project_id=self.project_id,
+            src_id=entity.id,
+            dst_id=body.target_id,
+            relation_type="deployment_for_target",
+            origin="system",
+            confidence=1.0,
+            evidence=[],
+            created_by=self.user_id,
         )
         await self._event(entity, "prepared")
         await self.session.flush()

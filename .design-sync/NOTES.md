@@ -50,7 +50,7 @@ Repo-specific gotchas for future syncs. Read this before re-running the sync.
   `BridgePill`, `TeamStrip`), which would render as error or empty cards.
 - `Icons` (`components/ui/icons.constants.tsx`) is excluded via `componentSrcMap: {"Icons": null}`:
   it's a record of SVG components, not a component.
-- The four curated components that reference stores/the API (`ProjectCard`, `DeviceCard`, `GraphCard`,
+- The three curated components that reference stores/the API (`DeviceCard`, `GraphCard`,
   `ClassifyIndicator`) do so only through **type-only imports**; they are fully prop-driven and render
   statically. Verified — don't re-litigate this each sync.
 - `Section`, `Row`, and `InlineError` (from `features/settings/settingsUi.tsx`) keep their repo names
@@ -66,17 +66,11 @@ Repo-specific gotchas for future syncs. Read this before re-running the sync.
 
 ## Known issues
 
-- **`DeviceCard` is excluded from the sync** (`componentSrcMap: {"DeviceCard": null}`).
-  `features/graph/hardware/` contains **both `deviceCard.ts` and `DeviceCard.tsx`** — the only
-  case-colliding module pair in the whole renderer tree. `DeviceCard.tsx` does
-  `import { cardGlyph, cardQuestion, cardSentence, conflictText, evidenceNotes } from './deviceCard'`,
-  and on macOS's case-insensitive filesystem esbuild resolves `./deviceCard` to `DeviceCard.tsx`
-  itself, so the build dies with five "No matching export" errors. Vite/electron-vite happen to
-  resolve it correctly, which is why the app builds fine.
-  **This is a latent repo hazard, not just a sync problem** — any case-strict-by-accident toolchain
-  can mis-resolve it. The fix is a one-line rename in product code (`deviceCard.ts` →
-  `deviceCardText.ts` + update its importers); deliberately NOT done as part of the sync. Once
-  renamed, drop the `DeviceCard: null` entry and restore its export in `.design-sync/entry.tsx`.
+- **`DeviceCard` is synced again (2026-10-24).** The case-colliding pair `deviceCard.ts` / `DeviceCard.tsx`
+  was fixed in product code (SOLUSDEV-260 renamed it to `deviceCardRules.ts`), so the esbuild
+  mis-resolution is gone. `componentSrcMap.DeviceCard` is pinned to its path, the export is back in
+  `.design-sync/entry.tsx`, and `.design-sync/previews/DeviceCard.tsx` authors six states from the
+  component's own test fixtures. Keep `cardMode: column` on it — its rows are wide.
 
 - **`ConnectTile` is excluded** (`componentSrcMap: {"ConnectTile": null}`). It imports
   `features/onboarding/integrationLogos.ts`, which loads the brand logos with **Vite's
@@ -265,9 +259,9 @@ Read this first on the next sync; each item is something that will NOT announce 
    `components/ui/` or the feature tree are NOT picked up automatically — there is no dist and no
    `.d.ts` tree to discover from. Adding a component means editing BOTH `componentSrcMap` and
    `.design-sync/entry.tsx`.
-4. **`DeviceCard` and `ConnectTile` are excluded for repo-side reasons** (case-collision, Vite
-   `import.meta.glob`). If either is fixed in product code, re-include it in both files. If neither is
-   fixed, they stay excluded — do not "fix" them inside the converter.
+4. **`ConnectTile` is excluded for a repo-side reason** (Vite `import.meta.glob` in
+   `integrationLogos.ts`). If it is fixed in product code, re-include it in both files; otherwise it
+   stays excluded — do not "fix" it inside the converter. (`DeviceCard` was re-included 2026-10-24.)
 5. **Preview files are never typechecked.** A prop rename in product source will not break the build;
    it will render a wrong or empty card that only the graded screenshot catches. Re-grade after any
    component API change.
@@ -281,3 +275,40 @@ Read this first on the next sync; each item is something that will NOT announce 
    `.ds-sync/`, Playwright chromium in `~/.cache/ms-playwright`. The converter deps live in the
    gitignored `.ds-sync/`, so a fresh clone must re-run the staging `cp -r` + `npm i` step, and
    recreate `ln -sfn ../.ds-sync/node_modules .design-sync/node_modules` for the fork's bare imports.
+
+## Re-sync 2026-10-24 — new project, system Chrome
+
+- **The original project (`14b41eeb…`) was deleted server-side** (`get_project` → 404, `list_projects`
+  empty). A fresh design-system project **"Solus" `d553326d-f8e7-412a-b58c-7779a4aa4bf8`** was created
+  and pinned in `config.json`. With no remote anchor, all 48 components were re-verified from scratch
+  (grades are gitignored, so nothing carried forward on this machine either).
+- **Render check runs on the system Chrome, not a Playwright-downloaded chromium.** `~/.cache/ms-playwright`
+  on this box holds an unrelated `b/browser@…` layout with no `chromium-<build>` dir. Instead:
+  `npm i playwright` into `.ds-sync/` (1.64.1 worked) and export
+  `DS_CHROMIUM_PATH=/usr/bin/google-chrome` for every validate / capture / driver run. Google Chrome
+  155 launched and rendered all 48 cards cleanly; no 200 MB download needed.
+- Source drift since the 2026-09-18 sync: `GraphCard.tsx` (SOLUSDEV-320 — `finding` badge,
+  `childPreviews`, `onRevealChild`, drag `scale`) and `SolusComposer.tsx` (`section`/`subsection` →
+  subsection picker), plus `navigation.css`, `hardware.css`, `sidebar.css`. Both previews gained one
+  cell each (`WithChildrenAndFinding`, `NewConstraintWithSubsection`); the old cells still render.
+  `main.css` and `preview-overrides.css` did not change, so `solus-base.css` was NOT regenerated.
+- Surface is now **48 components** (14 primitives + 34 feature exports incl. DeviceCard); `Icons`
+  still rides along as the 49th `window.Solus` export without a card.
+- The `.sol-md` list-bullet product finding above is still present in the product and in the
+  `SolMarkdown` card; graded good as faithful.
+- Conventions header (`conventions.md`) re-validated against this build: every token, class,
+  component and prop it names resolves. Not rewritten.
+
+## Merge with main 2026-10-24 — ProjectCard gone upstream, re-sync pending
+
+- `origin/main` (SOLUSDEV-317 Home redesign) deleted `features/workspace/ProjectCard.tsx`. Removed
+  it from `entry.tsx`, `componentSrcMap` and `overrides`, and dropped `previews/ProjectCard.tsx`.
+  Surface is now **47 components**; the uploaded project still shows the old 48 until the next
+  `/design-sync` run (which will also pick up main's palette/billing/onboarding source drift).
+- `ShellChrome.SearchBox` is now main's ⌘K command-palette button (`features/palette/`), not the
+  SOLUSDEV-320 inline search palette; neither is in the synced surface.
+- 2026-10-24 design-template redesign: `GraphCard` now imports `SolusLogo` and
+  `integrationLogo` (an `import.meta.glob` over `assets/integrations/*`); the synced preview needs
+  those modules (the dot fallback renders when no logo resolves). Card is 300×184 with a header
+  strip; `SolusComposer`, `TwoStepDelete`, `DeviceCard` unchanged. Source drift for the next run.
+

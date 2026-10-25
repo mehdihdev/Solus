@@ -13,14 +13,24 @@ interface KeyLike {
   readonly isComposing?: boolean
 }
 
-export function isPaletteShortcut(event: KeyLike, mac: boolean): boolean {
-  if (event.key.toLowerCase() !== 'k' || event.isComposing === true) return false
+/** ⌘<key> on macOS, Ctrl+<key> elsewhere; never with Shift or Alt, never mid-composition. */
+export function isModKeyShortcut(event: KeyLike, mac: boolean, key: string): boolean {
+  if (event.key.toLowerCase() !== key.toLowerCase() || event.isComposing === true) return false
   if (event.altKey || event.shiftKey) return false
   return mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey
 }
 
+export function isPaletteShortcut(event: KeyLike, mac: boolean): boolean {
+  return isModKeyShortcut(event, mac, 'k')
+}
+
+/** `⌘K` / `Ctrl K` style hint for a modifier shortcut. */
+export function modKeyHint(mac: boolean, key: string): string {
+  return mac ? `⌘${key.toUpperCase()}` : `Ctrl ${key.toUpperCase()}`
+}
+
 export function paletteShortcutHint(mac: boolean): string {
-  return mac ? '⌘K' : 'Ctrl K'
+  return modKeyHint(mac, 'k')
 }
 
 /** `onToggle` should be stable (a module-level function); a new one re-binds the listener. */

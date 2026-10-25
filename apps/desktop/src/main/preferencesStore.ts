@@ -18,7 +18,9 @@ import {
   SOLUS_HOME_MODE,
   emptyEngineeringPreferences,
   parseEngineeringPreferences,
-  type EngineeringPreferences
+  sharedSubset,
+  type EngineeringPreferences,
+  type PreferenceSection
 } from '@solus/shared-types'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -37,6 +39,10 @@ export interface PreferencesStoreDeps {
    *  the path is refused, never followed); null otherwise. */
   fileSize: (path: string) => number | null
   now: () => Date
+  /** SOLUSDEV-320: after a successful write, the `shared`-flagged, non-empty
+   *  sections — what the project mirror (`PUT /members/me/preferences`) gets.
+   *  Nothing else in the document ever leaves the machine this way. */
+  onShared?: (shared: Partial<Record<PreferenceSection, string>>) => void
 }
 
 /** The user's own conventions — owner read/write only. */
@@ -99,10 +105,16 @@ export function writePreferences(document: unknown, deps: PreferencesStoreDeps):
     const target = filePath(deps)
     deps.replaceFile(temp, target)
     deps.chmod(target, PREFERENCES_FILE_MODE)
-    return true
   } catch {
     return false
   }
+  // The file is on disk: a mirror failure must not report the save as failed.
+  try {
+    deps.onShared?.(sharedSubset(stamped))
+  } catch {
+    /* the reporter logs its own failures; the write already succeeded */
+  }
+  return true
 }
 
 /** The IPC seam: every channel's full decision — sender gate, argument

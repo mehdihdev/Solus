@@ -540,3 +540,17 @@ async def test_import_with_a_runner_that_saw_a_device_without_bus_evidence_is_ho
         f"/api/v1/projects/{project_id}/hardware/suggestions", headers=alice_headers
     )
     assert inbox.status_code == 200 and inbox.json()["data"] == []
+
+
+async def test_get_exposes_the_t6_part_fields(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """SOLUSDEV-320 T6: `mass_g`/`limits` ride the existing model dump."""
+    project_id, _ = await _project(client, alice_headers)
+    sts = await client.get(_url(project_id, "part", "sts3215"), headers=alice_headers)
+    assert sts.status_code == 200, sts.text
+    data = sts.json()["data"]
+    assert data["mass_g"] == 55 and data["behaviour_class"] is None
+    assert "limits" in data and data["limits"] is None
+    odrive = await client.get(_url(project_id, "part", "odrive-s1"), headers=alice_headers)
+    assert odrive.json()["data"]["limits"]["current_a"] == 40

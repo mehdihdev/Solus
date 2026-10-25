@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from solus_api.agent.runtime import build_sol_registry
 from solus_api.hardware.companion_deployment import PrepareCompanionDeployment
 
 
-def test_deployment_requires_complete_central_confirmation_and_explicit_factory():
+def test_deployment_requires_complete_central_confirmation_and_explicit_factory() -> None:
     registry = build_sol_registry(MagicMock(), uuid4(), companion_deployment_service=MagicMock())
     descriptor = next(t for t in registry.list() if t.name == "hardware.deploy_companion")
     assert descriptor.requires_confirmation
@@ -20,7 +21,7 @@ def test_deployment_requires_complete_central_confirmation_and_explicit_factory(
     }
 
 
-def test_prepare_accepts_only_scoped_identifiers():
+def test_prepare_accepts_only_scoped_identifiers() -> None:
     body = {"target_id": str(uuid4()), "artifact_id": str(uuid4())}
     assert PrepareCompanionDeployment.model_validate(body)
     for key in ("host", "command", "path", "approval"):
@@ -28,7 +29,7 @@ def test_prepare_accepts_only_scoped_identifiers():
             PrepareCompanionDeployment.model_validate(body | {key: "untrusted"})
 
 
-async def setup(client, headers, db, app, tmp_path):
+async def setup(client: Any, headers: Any, db: Any, app: Any, tmp_path: Any) -> dict[str, Any]:
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 
@@ -75,7 +76,7 @@ async def setup(client, headers, db, app, tmp_path):
     await add_artifact_entry(
         db,
         pid,
-        SolusSection.DOCS,
+        SolusSection.DOCUMENTATION,
         artifact_id=artifact.id,
         name="Offline companion bundle",
         created_by=uid,
@@ -93,7 +94,7 @@ async def setup(client, headers, db, app, tmp_path):
     registry.get.return_value = SimpleNamespace(session_id="old")
     handshake_control = {"connect": True}
 
-    def reconnect(session_id):
+    def reconnect(session_id: Any) -> None:
         registry.get.return_value = SimpleNamespace(
             session_id=session_id,
             scope=(uid, uuid.UUID(team), pid),
@@ -103,7 +104,7 @@ async def setup(client, headers, db, app, tmp_path):
             token_exp=datetime.now(UTC) + timedelta(seconds=60),
         )
 
-    async def execute(argv):
+    async def execute(argv: Any) -> Any:
         from pathlib import Path
 
         calls.append(argv)
@@ -125,7 +126,7 @@ async def setup(client, headers, db, app, tmp_path):
     }
     allowed = {artifact.id: hashlib.sha256(bundle).hexdigest()}
 
-    def factory(session, project_id, user_id, store):
+    def factory(session: Any, project_id: Any, user_id: Any, store: Any) -> Any:
         provider = LocalCompanionDeploymentProvider(
             project_id=project_id,
             user_id=user_id,
@@ -160,18 +161,18 @@ async def setup(client, headers, db, app, tmp_path):
     }
 
 
-def url(f):
+def url(f: dict[str, Any]) -> str:
     return f"/api/v1/projects/{f['project']}/hardware/companion-deployments/prepare"
 
 
-def body(f):
+def body(f: dict[str, Any]) -> dict[str, str]:
     return {"target_id": str(f["target"]), "artifact_id": str(f["artifact"])}
 
 
 @pytest.mark.parametrize("decision", ["approve", "reject", "changed", "stale_session"])
 async def test_actual_confirmation_decide_runs_real_installer_only_after_approval(
-    client, alice_headers, db, app, tmp_path, engine, decision
-):
+    client: Any, alice_headers: Any, db: Any, app: Any, tmp_path: Any, engine: Any, decision: Any
+) -> None:
     from solus_api.agent.confirmations import request_confirmation
     from solus_api.agent.tools.shapes import ToolCall
     from solus_api.models import ToolConfirmation
@@ -231,8 +232,15 @@ async def test_actual_confirmation_decide_runs_real_installer_only_after_approva
     "access,status", [("anonymous", 401), ("foreign", 404), ("unavailable", 503)]
 )
 async def test_prepare_auth_isolation_and_unavailable_default(
-    client, alice_headers, bob_headers, db, app, tmp_path, access, status
-):
+    client: Any,
+    alice_headers: Any,
+    bob_headers: Any,
+    db: Any,
+    app: Any,
+    tmp_path: Any,
+    access: Any,
+    status: Any,
+) -> None:
     f = await setup(client, alice_headers, db, app, tmp_path)
     if access == "unavailable":
         del app.state.companion_deployment_service_factory
@@ -244,8 +252,8 @@ async def test_prepare_auth_isolation_and_unavailable_default(
 
 @pytest.mark.parametrize("field", ["target_id", "artifact_id"])
 async def test_cross_project_references_cannot_create_plan(
-    client, alice_headers, db, app, tmp_path, field
-):
+    client: Any, alice_headers: Any, db: Any, app: Any, tmp_path: Any, field: Any
+) -> None:
     first = await setup(client, alice_headers, db, app, tmp_path / "first")
     second = await setup(client, alice_headers, db, app, tmp_path / "second")
     app.state.companion_deployment_service_factory = first["factory"]
@@ -258,8 +266,8 @@ async def test_cross_project_references_cannot_create_plan(
 
 @pytest.mark.parametrize("access", ["viewer", "unverified", "forged_factory"])
 async def test_prepare_rejects_insufficient_identity_and_forged_factory(
-    client, alice_headers, bob_headers, db, app, tmp_path, access
-):
+    client: Any, alice_headers: Any, bob_headers: Any, db: Any, app: Any, tmp_path: Any, access: Any
+) -> None:
     from conftest import ALICE, BOB, add_member, bearer, me
 
     f = await setup(client, alice_headers, db, app, tmp_path)
@@ -281,8 +289,8 @@ async def test_prepare_rejects_insufficient_identity_and_forged_factory(
 
 
 async def test_same_team_cannot_preview_or_decide_another_creators_plan(
-    client, alice_headers, bob_headers, db, app, tmp_path, engine
-):
+    client: Any, alice_headers: Any, bob_headers: Any, db: Any, app: Any, tmp_path: Any, engine: Any
+) -> None:
     from conftest import BOB, add_member, me
     from solus_api.agent.confirmations import request_confirmation
     from solus_api.agent.tools.shapes import ToolCall
@@ -326,7 +334,7 @@ async def test_same_team_cannot_preview_or_decide_another_creators_plan(
 
 
 @pytest.mark.parametrize("session_kind", ["old", "foreign", "expired", "new"])
-async def test_real_bridge_handshake_requires_new_authorized_session(session_kind):
+async def test_real_bridge_handshake_requires_new_authorized_session(session_kind: Any) -> None:
     from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 

@@ -87,6 +87,7 @@ def test_register_get_and_catalog() -> None:
             "display_name": "Demo request-response bus",
             "transports": ["usb_serial"],
             "params_schema": _Params.model_json_schema(),
+            "requires_packages": [],
         }
     ]
     with pytest.raises(KeyError):
@@ -141,3 +142,39 @@ def test_driver_module_names_no_vendor() -> None:
 
     source = Path(module.__file__).read_text().lower()
     assert re.search(r"\b(feetech|dynamixel|lerobot|sts3215|px4|odrive|mavlink)\b", source) is None
+
+
+def test_plugins_declare_the_packages_their_driver_needs() -> None:
+    """SOLUSDEV-320: `requires_packages` is optional plugin metadata read duck-typed by the
+    registry (like `channel_roles`); `graph/inference/config_requires` turns it into edges."""
+    from livebench.plugins.dynamixel.dynamixel_driver import DynamixelDriver
+    from livebench.plugins.feetech.feetech_driver import FeetechStsDriver
+    from livebench.plugins.jsonlines.jsonlines_driver import JsonLinesDriver
+    from livebench.plugins.lb06.lb06_driver import Lb06Driver
+    from livebench.plugins.mavlink.mavlink_driver import MavlinkDriver
+    from livebench.plugins.odrive.odrive_driver import OdriveCanDriver
+    from livebench.plugins.raw.raw_driver import RawLinesDriver
+
+    assert FeetechStsDriver.requires_packages == ("pyserial",)
+    assert DynamixelDriver.requires_packages == ("dynamixel-sdk",)
+    assert OdriveCanDriver.requires_packages == ("python-can",)
+    assert MavlinkDriver.requires_packages == ("pymavlink",)
+    assert Lb06Driver.requires_packages == JsonLinesDriver.requires_packages == ()
+    assert RawLinesDriver.requires_packages == ()
+
+    class _Undeclared:
+        driver_id: ClassVar[str] = "bare"
+        display_name: ClassVar[str] = "Bare"
+        transports: ClassVar[frozenset[TransportKind]] = frozenset({TransportKind.USB_SERIAL})
+        params_model: ClassVar[type[BaseModel]] = _Params
+
+        def open(self, channel: Channel, params: BaseModel, config: HardwareConfig) -> _Source:
+            return _Source("bare")
+
+    registry = DriverRegistry()
+    registry.register(_Undeclared)
+    registry.register(FeetechStsDriver)
+    assert {row["driver_id"]: row["requires_packages"] for row in registry.catalog()} == {
+        "bare": [],
+        "feetech-sts": ["pyserial"],
+    }

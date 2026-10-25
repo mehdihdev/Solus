@@ -45,11 +45,10 @@ export { Switch } from '../apps/desktop/src/renderer/src/components/ui/Switch'
 export { Wordmark } from '../apps/desktop/src/renderer/src/components/ui/Wordmark'
 
 // -- Cards & tiles ---------------------------------------------------------
-export { ProjectCard } from '../apps/desktop/src/renderer/src/features/workspace/ProjectCard'
 export { GraphCard } from '../apps/desktop/src/renderer/src/features/graph/navigation/GraphCard'
-// DeviceCard is excluded: features/graph/hardware/ contains both deviceCard.ts and
-// DeviceCard.tsx, and on a case-insensitive filesystem esbuild resolves the card's own
-// `import { cardSentence, … } from './deviceCard'` back to DeviceCard.tsx. See NOTES.md.
+// DeviceCard: re-included once the repo renamed deviceCard.ts -> deviceCardRules.ts
+// (SOLUSDEV-260), which removed the case-collision that used to break esbuild.
+export { DeviceCard } from '../apps/desktop/src/renderer/src/features/graph/hardware/DeviceCard'
 export {
   ExtensionCard,
   ExtensionIconTile,

@@ -50,7 +50,7 @@ function anchorOf(key: string, { source, roots }: Group): AnchoredGraph {
   }
 }
 
-function baseSourceId(entity: Entity): string | undefined {
+export function baseSourceId(entity: Entity): string | undefined {
   const base = entity.properties?.base_source_id
   return typeof base === 'string' ? base : (entity.source_id ?? undefined)
 }

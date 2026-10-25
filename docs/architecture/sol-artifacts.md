@@ -158,6 +158,16 @@ row — nothing is marked filed.
 
 ---
 
+### The SOL page's ARTIFACTS list (2026-10-24)
+
+The design template's right column lists the chat's artifacts by aggregating `items[].artifacts`
+client-side (`features/sol/chatArtifacts.ts`), deduped by id in transcript order. It is
+live-session only: reloaded turns carry no artifact bytes, and the empty copy says so. "Save to
+.solus folder" calls the same idempotent `fileArtifact(id, 'documentation')` the transcript card
+does; the `.solus` pill reads `filedTo`. "Copy contents" fetches the blob with the bearer and puts
+text media on the clipboard; there is no "open" item because a bearer-protected URL cannot be
+handed to the OS.
+
 ## 4. Automatic Error logging
 
 When a tool that Solus has marked `files_errors` comes back `ok=False`, the runner files **one**

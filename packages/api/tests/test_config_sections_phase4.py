@@ -16,7 +16,8 @@ from test_code_env import _env, _project
 def test_hardware_payload_validation_uses_per_entity_schema() -> None:
     subject = uuid.uuid4()
     result = validate_config_payload(
-        SolusSection.HARDWARE,
+        SolusSection.ENVIRONMENT,
+        "hardware",
         {"schema_version": 2, "entity_id": str(subject), "provenance": {}},
     )
     assert isinstance(result, EntityHardwareConfig)
@@ -39,22 +40,28 @@ async def test_code_config_lifecycle_does_not_change_hardware_config(
     hardware_node_id = hardware_entry.entity_id
     payload_before = hardware_entry.payload
     version_before = hardware_entry.config_version
-    url = f"/api/v1/projects/{project}/solus/code/entries"
+    url = f"/api/v1/projects/{project}/solus/environment/entries"
     created = await client.post(
-        url, headers=alice_headers, json={"kind": "config", "payload": _env()}
+        url,
+        headers=alice_headers,
+        json={"kind": "config", "subsection": "software", "payload": _env()},
     )
     assert created.status_code == 201, created.text
     entry = created.json()["data"]
     node = await db.get(GraphEntity, uuid.UUID(entry["entity_id"]))
     assert node is not None and node.kind == "solus_note"
-    assert node.attrs["section"] == "code"
+    assert node.attrs["section"] == "environment" and node.attrs["subsection"] == "software"
     assert node.attrs["solus_entry_id"] == entry["id"]
     edges = list(await db.scalars(select(GraphEdge).where(GraphEdge.src_id == node.id)))
     assert all(edge.relation_type != "configures" for edge in edges)
     updated = await client.post(
         url,
         headers=alice_headers,
-        json={"kind": "config", "payload": _env(packages=[{"name": "numpy", "version": "2.2.0"}])},
+        json={
+            "kind": "config",
+            "subsection": "software",
+            "payload": _env(packages=[{"name": "numpy", "version": "2.2.0"}]),
+        },
     )
     assert updated.status_code == 201
     assert updated.json()["data"]["id"] == entry["id"]

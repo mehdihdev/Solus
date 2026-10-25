@@ -391,3 +391,58 @@ def test_shared_library_modules_name_no_vendor() -> None:
     for module in (library_module, router_module):
         assert module.__file__ is not None
         assert BANNED.search(Path(module.__file__).read_text().lower()) is None, module.__name__
+
+
+# ------------------------------------------------------ SOLUSDEV-320 T6 part fields
+
+
+def test_part_definition_fields_load_and_stay_strict(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "parts",
+        "rich",
+        _part_yaml("rich")
+        + """
+        pins:
+          - {name: D3, capabilities: [pwm, gpio]}
+          - {name: GND, capabilities: [ground]}
+        behaviour_class: switcher
+        limits: {current_a: 1.5, voltage_min_v: 3.0, voltage_max_v: 5.5, temp_c: 85}
+        mass_g: 2.5
+        spice_model_ref: lib/rich.lib
+        """,
+    )
+    part = load_library(tmp_path).get("part", "rich")
+    assert isinstance(part, PartDefinition)
+    assert part.pins is not None and [p.name for p in part.pins] == ["D3", "GND"]
+    assert part.pins[0].capabilities == ["pwm", "gpio"]
+    assert part.behaviour_class == "switcher" and part.mass_g == 2.5
+    assert part.limits is not None and part.limits.current_a == 1.5
+    assert part.limits.torque_nm is None and part.spice_model_ref == "lib/rich.lib"
+
+    for bad in (
+        "        limits: {bogus: 1}\n",
+        "        mass_g: -1\n",
+        "        behaviour_class: warp_core\n",
+        "        pins: [{name: D3, capabilities: [laser]}]\n",
+        "        colour: red\n",
+    ):
+        _write(tmp_path, "parts", "rich", _part_yaml("rich") + bad)
+        load_library.cache_clear()  # the good load above is memoised
+        with pytest.raises(DefinitionError, match=r"rich\.yaml"):
+            load_library(tmp_path)
+
+
+def test_seeded_parts_transcribe_only_what_their_specs_already_state(library: Library) -> None:
+    sts = library.get("part", "sts3215")
+    assert isinstance(sts, PartDefinition)
+    assert sts.mass_g == 55 and sts.behaviour_class is None
+    assert sts.limits is None and sts.pins is None and sts.spice_model_ref is None
+    odrive = library.get("part", "odrive-s1")
+    assert isinstance(odrive, PartDefinition)
+    assert odrive.mass_g == 40 and odrive.limits is not None
+    assert (odrive.limits.voltage_min_v, odrive.limits.voltage_max_v) == (12, 50)
+    assert odrive.limits.current_a == 40
+    lipo = library.get("part", "lipo-4s")
+    assert isinstance(lipo, PartDefinition) and lipo.behaviour_class == "power"
+    assert lipo.limits is None and lipo.mass_g is None

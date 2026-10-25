@@ -13,9 +13,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.topology import MARKER, read_topology
-from solus_api.models import Domain, GraphEdge, GraphEntity, Project, SolusSection, User
+from solus_api.models import Domain, GraphEntity, Project, SolusSection, User
 from solus_api.services.artifacts import create_artifact, fetch_artifact_bytes
 from solus_api.services.events import emit_event
 from solus_api.services.solus_config import add_artifact_entry
@@ -163,7 +164,8 @@ class PresenceService:
             await add_artifact_entry(
                 self.session,
                 self.project_id,
-                SolusSection.DOCS,
+                SolusSection.DOCUMENTATION,
+                subsection="guides",
                 artifact_id=artifact.id,
                 name=f"Presence {key}",
                 created_by=self.user_id,
@@ -180,18 +182,17 @@ class PresenceService:
         self.session.add(entity)
         await self.session.flush()
         for target in (robot_id, brain_id):
-            self.session.add(
-                GraphEdge(
-                    project_id=self.project_id,
-                    src_id=entity.id,
-                    dst_id=target,
-                    relation_type="presence_prepared_for",
-                    domain_pair="runtime:runtime",
-                    origin="system",
-                    attrs={},
-                )
+            await write_edge(
+                self.session,
+                project_id=self.project_id,
+                src_id=entity.id,
+                dst_id=target,
+                relation_type="presence_prepared_for",
+                origin="system",
+                confidence=1.0,
+                evidence=[],
+                created_by=self.user_id,
             )
-        await self.session.flush()
         return {
             "plan_id": str(entity.id),
             "source": prepared["source"].decode("utf-8"),

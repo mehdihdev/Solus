@@ -28,7 +28,7 @@ function MeterBar({ fraction }: { fraction: number }): React.JSX.Element {
       aria-valuemax={100}
       style={{
         marginTop: 10,
-        height: 5,
+        height: 3,
         borderRadius: 99,
         background: 'var(--sur2)',
         overflow: 'hidden'
@@ -47,7 +47,7 @@ function MeterBar({ fraction }: { fraction: number }): React.JSX.Element {
   )
 }
 
-function TopUpCard({ exhausted }: { exhausted: boolean }): React.JSX.Element {
+function TopUpCard({ exhausted, low }: { exhausted: boolean; low: boolean }): React.JSX.Element {
   const billing = useBillingData()
   return (
     <Card
@@ -58,8 +58,8 @@ function TopUpCard({ exhausted }: { exhausted: boolean }): React.JSX.Element {
         borderColor: 'color-mix(in srgb, var(--warn) 45%, var(--bd))'
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--warn)' }}>
-        {exhausted ? 'Out of credits' : 'Running low on credits'}
+      <div style={{ fontSize: 12, fontWeight: 600, color: low ? 'var(--warn)' : 'var(--tx)' }}>
+        {exhausted ? 'Out of credits' : low ? 'Running low on credits' : 'Add credits'}
       </div>
       <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 3 }}>
         Top up to keep SOL grounded.
@@ -132,23 +132,83 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
   }, [fetchEnabled, creditsExhausted])
 
   const unlimited = usage?.unlimited === true
-  const lowOnCredits =
-    !unlimited && (creditsExhausted || (usage !== null && usage.balance <= LOW_BALANCE_CREDITS))
+  const lowOnCredits = lowCredits(usage, unlimited, creditsExhausted)
+  // Design template: the accent "+" opens the packs even when nothing is low.
+  const [wantTopUp, setWantTopUp] = useState(false)
 
   return (
-    <div style={{ marginTop: 22 }}>
-      <Mono size={9.5}>SOL USAGE</Mono>
-      <Card pad={12} className="sol-panel-in" style={{ marginTop: 10 }}>
-        {usage === null ? (
-          <div style={{ fontSize: 11, color: 'var(--mut)' }}>
-            {status === 'loading' ? 'Loading usage…' : 'Usage unavailable offline.'}
+    <div style={{ margin: 12 }}>
+      <Card pad={12} className="sol-panel-in">
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Mono size={10} ls="0.08em">
+              SOL USAGE
+            </Mono>
+            <UsageBody usage={usage} status={status} unlimited={unlimited} />
           </div>
-        ) : (
-          <UsageSummary usage={usage} unlimited={unlimited} />
-        )}
+          {!unlimited && (
+            <AddCreditsButton pressed={wantTopUp} onToggle={() => setWantTopUp((on) => !on)} />
+          )}
+        </div>
       </Card>
-      {lowOnCredits && <TopUpCard exhausted={creditsExhausted} />}
+      {(lowOnCredits || wantTopUp) && <TopUpCard exhausted={creditsExhausted} low={lowOnCredits} />}
     </div>
+  )
+}
+
+function lowCredits(usage: UsageApi | null, unlimited: boolean, exhausted: boolean): boolean {
+  return !unlimited && (exhausted || (usage !== null && usage.balance <= LOW_BALANCE_CREDITS))
+}
+
+function UsageBody({
+  usage,
+  status,
+  unlimited
+}: {
+  usage: UsageApi | null
+  status: UsageStatus
+  unlimited: boolean
+}): React.JSX.Element {
+  if (usage === null)
+    return (
+      <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 6 }}>
+        {status === 'loading' ? 'Loading usage…' : 'Usage unavailable offline.'}
+      </div>
+    )
+  return <UsageSummary usage={usage} unlimited={unlimited} />
+}
+
+/** The design's accent "+": opens the packs whether or not the balance is low. */
+function AddCreditsButton({
+  pressed,
+  onToggle
+}: {
+  pressed: boolean
+  onToggle: () => void
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label="Add credits"
+      title="Add credits"
+      className="interactive"
+      aria-pressed={pressed}
+      onClick={onToggle}
+      style={{
+        width: 32,
+        height: 32,
+        flex: 'none',
+        borderRadius: 4,
+        border: 0,
+        background: 'var(--acc)',
+        color: 'var(--acc-ink)',
+        fontSize: 18,
+        lineHeight: 1,
+        cursor: 'pointer'
+      }}
+    >
+      +
+    </button>
   )
 }
 
@@ -161,7 +221,14 @@ function UsageSummary({
 }): React.JSX.Element {
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginTop: 6
+        }}
+      >
         <span style={{ fontSize: 12, fontWeight: 600 }}>This cycle</span>
         <Mono size={10} style={{ textTransform: 'none' }}>
           {formatCredits(usage.used)}

@@ -7,6 +7,7 @@ import { useAuthStore } from '../../store/authStore'
 import { liveKeys, useLiveRevisionStore } from '../../store/liveRevisionStore'
 import { runReconnectingStream, type EventVerdict } from '../live/reconnect'
 import { markSafely } from '../../lib/perf/marks'
+import { findingsLiveKey } from './useFindings'
 
 const UNAVAILABLE = 'Live updates unavailable. Check project access.'
 const RECONNECTING = 'Live updates disconnected. Reconnecting…'
@@ -31,6 +32,11 @@ function applyLiveHint(projectId: string, event: HintEvent): void {
     case 'job.updated':
       live.bump([liveKeys.projectJobs(projectId)])
       return
+    case 'finding.raised':
+    case 'finding.updated':
+    case 'finding.resolved':
+      live.bump([findingsLiveKey(projectId)])
+      return
     case 'access.revoked':
       return
   }
@@ -49,8 +55,11 @@ function dispatchFrame(
   handlers: FrameHandlers
 ): void {
   if (event === 'ready') handlers.onReady?.()
-  else if (event === 'graph.changed') handlers.onChanged()
-  else if (event.type === 'hardware.devices_changed') {
+  else if (event === 'graph.changed') {
+    // Findings are graph nodes too: a committed change may have raised or cleared some.
+    useLiveRevisionStore.getState().bump([findingsLiveKey(projectId)])
+    handlers.onChanged()
+  } else if (event.type === 'hardware.devices_changed') {
     markSafely('hw:frame_received')
     handlers.onDevices?.(event.devices)
   } else applyLiveHint(projectId, event)

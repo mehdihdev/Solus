@@ -2,13 +2,14 @@ import { useEffect } from 'react'
 import { ContextMenu } from '../../components/ui/ContextMenu'
 import type { SolusEntry, SolusSection } from '../../lib/api/resources'
 import { DeleteConfirmModal } from '../workspace/modals'
-import { SECTION_LABELS } from './useSolusConfig'
-import { entryMenuItems, sectionMenuItems, type Composer } from './solusActions'
+import { entryMenuItems, sectionMenuItems, targetLabel, type Composer } from './solusActions'
 
 export interface Menu {
   x: number
   y: number
   section: SolusSection
+  /** Set when the menu opened on a `solus_subsection` node. */
+  subsection?: string | null
   entityId: string
   entry?: SolusEntry
 }
@@ -50,7 +51,7 @@ export function NodeMenu({
   streaming: boolean
   onCompose: (next: Composer) => void
   onDelete: (entry: SolusEntry) => void
-  onImport: (section: SolusSection) => void
+  onImport: (section: SolusSection, subsection?: string | null) => void
   onClose: () => void
 }): React.JSX.Element {
   useEffect(() => {
@@ -68,11 +69,11 @@ export function NodeMenu({
     <ContextMenu
       x={menu.x}
       y={menu.y}
-      title={menu.entry ? undefined : SECTION_LABELS[menu.section]}
+      title={menu.entry ? undefined : targetLabel(menu.section, menu.subsection)}
       items={
         menu.entry
           ? entryMenuItems(menu.entry, compose, onDelete)
-          : sectionMenuItems(menu.section, streaming, onImport, compose)
+          : sectionMenuItems(menu.section, streaming, onImport, compose, menu.subsection)
       }
       onClose={onClose}
     />

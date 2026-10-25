@@ -8,7 +8,8 @@ import {
   updateSolusEntry,
   uploadArtifact,
   type SolusEntry,
-  type SolusSection
+  type SolusSection,
+  isWritableSection
 } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
@@ -25,6 +26,29 @@ export function sectionCountLabel(count: number): string {
  *  into the right place with `add_solus_entry`. Pure. */
 export function askSolMessage(sectionLabel: string, query: string): string {
   return `Find for .solus › ${sectionLabel}: ${query.trim()}`
+}
+
+/** "Documentation › guides" for a subsection target, the plain label otherwise. Pure. */
+export function targetLabel(section: SolusSection, subsection?: string | null): string {
+  return subsection ? `${SECTION_LABELS[section]} › ${subsection}` : SECTION_LABELS[section]
+}
+
+/** The hardware CONFIG record (environment/hardware) is written by its own routes:
+ *  no context menu, no note editor, no delete from here. Pure. */
+export function isHardwareConfig(entry: SolusEntry): boolean {
+  return (
+    entry.kind === 'config' && entry.section === 'environment' && entry.subsection === 'hardware'
+  )
+}
+
+/** A section's entries, narrowed to one subsection when the node is one. Pure. */
+export function entriesIn(
+  sections: SolusState['sections'],
+  section: SolusSection,
+  subsection?: string | null
+): SolusEntry[] {
+  const items = sections[section]
+  return subsection ? items.filter((entry) => entry.subsection === subsection) : items
 }
 
 /** How an entry is named in menus, lists and confirmations. Pure. */
@@ -58,18 +82,31 @@ export type ComposerKind = 'ask' | 'type' | 'edit'
 export interface Composer {
   entityId?: string
   section: SolusSection
+  /** Set when the target is a subsection node or the composer's picker chose one. */
+  subsection?: string | null
   kind: ComposerKind
   entry?: SolusEntry
 }
+
+/** What a composer hands back: the text, plus the subsection its picker chose. */
+export type ComposerSubmit = (text: string, subsection?: string) => Promise<void>
 
 function toast(kind: 'ok' | 'warn', title: string, body: string): void {
   useShellStore.getState().setToast({ kind, title, body })
 }
 
+/** The POST body with `subsection` only when there is one (the API treats absent as null). */
+function withSubsection<T extends object>(
+  input: T,
+  subsection?: string | null
+): T & { subsection?: string } {
+  return subsection ? { ...input, subsection } : input
+}
+
 /* ---------------------------------------------------------------- actions */
 
 interface Actions {
-  importFile: (section: SolusSection, file: File) => Promise<void>
+  importFile: (section: SolusSection, file: File, subsection?: string | null) => Promise<void>
   submit: (composer: Composer, text: string) => Promise<boolean>
   remove: (entry: SolusEntry) => Promise<boolean>
 }
@@ -79,9 +116,10 @@ async function askSol(
   solus: SolusState,
   section: SolusSection,
   text: string,
-  isCurrent: () => boolean
+  isCurrent: () => boolean,
+  subsection?: string | null
 ): Promise<void> {
-  const label = SECTION_LABELS[section]
+  const label = targetLabel(section, subsection)
   const before = solus.sections[section].length
   startNewChat(projectId)
   await sendMessage(projectId, askSolMessage(label, text), 'do')
@@ -122,7 +160,11 @@ export function useSolusActions(
     onGraphChanged?.()
     return true
   }
-  const importFile = async (section: SolusSection, file: File): Promise<void> => {
+  const importFile = async (
+    section: SolusSection,
+    file: File,
+    subsection?: string | null
+  ): Promise<void> => {
     if (!projectId || !isCurrent()) return
     if (file.size > ARTIFACT_MAX_BYTES) {
       toast('warn', 'File too large', 'That file is over 8 MiB — Solus keeps .solus imports small.')
@@ -131,31 +173,38 @@ export function useSolusActions(
     try {
       const ref = await uploadArtifact(projectId, file)
       if (!isCurrent()) return
-      await addSolusEntry(projectId, section, {
-        kind: 'artifact',
-        artifact_id: ref.artifact_id,
-        name: file.name
-      })
+      await addSolusEntry(
+        projectId,
+        section,
+        withSubsection(
+          { kind: 'artifact', artifact_id: ref.artifact_id, name: file.name },
+          subsection
+        )
+      )
       if (!(await refresh())) return
       toast(
         'ok',
         `Imported ${file.name}`,
-        `.solus › ${SECTION_LABELS[section]} — now a node under .solus.`
+        `.solus › ${targetLabel(section, subsection)} — now a node under .solus.`
       )
     } catch (error: unknown) {
       if (isCurrent()) toast('warn', 'Import failed', errorText(error))
     }
   }
 
-  const submit = async ({ section, kind, entry }: Composer, text: string): Promise<boolean> => {
+  const submit = async (
+    { section, subsection, kind, entry }: Composer,
+    text: string
+  ): Promise<boolean> => {
     if (!projectId || !isCurrent()) return false
     try {
-      if (kind === 'ask') await askSol(projectId, solus, section, text, isCurrent)
+      if (kind === 'ask') await askSol(projectId, solus, section, text, isCurrent, subsection)
       else if (kind === 'edit' && entry) await updateSolusEntry(projectId, entry.id, text)
-      else await addSolusEntry(projectId, section, { kind: 'text', text })
+      else
+        await addSolusEntry(projectId, section, withSubsection({ kind: 'text', text }, subsection))
       if (!(await refresh(kind !== 'ask'))) return false
       if (kind === 'type')
-        toast('ok', `Added to .solus › ${SECTION_LABELS[section]}`, text.slice(0, 80))
+        toast('ok', `Added to .solus › ${targetLabel(section, subsection)}`, text.slice(0, 80))
       return true
     } catch (error: unknown) {
       if (isCurrent()) toast('warn', "That didn't work", errorText(error))
@@ -178,22 +227,26 @@ export function useSolusActions(
   return { importFile, submit, remove }
 }
 
-/** The three actions every section offers — identical everywhere by design. */
+/** The three actions every writable section (and subsection) offers — identical everywhere
+ *  by design; `history` and `members` own no hand-written rows and get none. */
 export function sectionMenuItems(
   section: SolusSection,
   streaming: boolean,
-  onImport: (section: SolusSection) => void,
-  onCompose: (composer: Composer) => void
+  onImport: (section: SolusSection, subsection?: string | null) => void,
+  onCompose: (composer: Composer) => void,
+  subsection?: string | null
 ): ContextMenuItem[] {
+  if (!isWritableSection(section)) return []
+  const target = withSubsection({ section }, subsection)
   return [
-    { label: 'Import files…', onSelect: () => onImport(section) },
+    { label: 'Import files…', onSelect: () => onImport(section, subsection) },
     {
       label: 'Ask SOL to find…',
-      onSelect: () => onCompose({ section, kind: 'ask' }),
+      onSelect: () => onCompose({ ...target, kind: 'ask' }),
       disabled: streaming,
       hint: 'SOL is busy with another turn'
     },
-    { label: 'Type it', onSelect: () => onCompose({ section, kind: 'type' }) }
+    { label: 'Type it', onSelect: () => onCompose({ ...target, kind: 'type' }) }
   ]
 }
 

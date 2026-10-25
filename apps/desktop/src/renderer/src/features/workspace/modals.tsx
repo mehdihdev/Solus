@@ -80,11 +80,14 @@ export function ModalShell({
   width = 360,
   labelledBy,
   closeOnEscape = false,
+  pad = 24,
   children
 }: {
   onClose: () => void
   /** Card width; the default fits the single-field dialogs. */
   width?: number
+  /** Card padding; 0 lets a caller lay out its own header/body/footer edge to edge. */
+  pad?: number
   labelledBy?: string
   closeOnEscape?: boolean
   children: React.ReactNode
@@ -117,7 +120,7 @@ export function ModalShell({
         style={{ outline: 'none' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <Card pad={24} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
+        <Card pad={pad} style={{ width, boxShadow: '0 18px 60px rgba(0,0,0,0.5)' }}>
           {children}
         </Card>
       </div>

@@ -1,5 +1,5 @@
 {
-  "projectId": "14b41eeb-8ea1-4831-aff6-de4f87c38348",
+  "projectId": "d553326d-f8e7-412a-b58c-7779a4aa4bf8",
   "shape": "package",
   "pkg": "@solus/desktop",
   "globalName": "Solus",
@@ -30,9 +30,8 @@
     "Spinner": "apps/desktop/src/renderer/src/components/ui/Spinner.tsx",
     "Switch": "apps/desktop/src/renderer/src/components/ui/Switch.tsx",
     "Wordmark": "apps/desktop/src/renderer/src/components/ui/Wordmark.tsx",
-    "ProjectCard": "apps/desktop/src/renderer/src/features/workspace/ProjectCard.tsx",
     "GraphCard": "apps/desktop/src/renderer/src/features/graph/navigation/GraphCard.tsx",
-    "DeviceCard": null,
+    "DeviceCard": "apps/desktop/src/renderer/src/features/graph/hardware/DeviceCard.tsx",
     "ExtensionCard": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
     "ExtensionIconTile": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
     "PublisherBadge": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
@@ -176,13 +175,13 @@
     "PlanLimitNotice": {
       "cardMode": "column"
     },
-    "ProjectCard": {
-      "cardMode": "column"
-    },
     "ScreenEmptyState": {
       "cardMode": "column"
     },
     "TitleBar": {
+      "cardMode": "column"
+    },
+    "DeviceCard": {
       "cardMode": "column"
     }
   },

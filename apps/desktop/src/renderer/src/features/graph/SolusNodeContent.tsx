@@ -1,8 +1,16 @@
 import type { ReactNode } from 'react'
 import type { Entity, SolusEntry, SolusSection } from '../../lib/api/resources'
 import { CodeEnvironmentCard } from './CodeEnvironmentCard'
+import { EnvironmentDivergences } from './EnvironmentDivergences'
+import { HistoryList } from './HistoryList'
 import { SolusComposer } from './SolusComposer'
-import { formatSize, sectionCountLabel, type Composer } from './solusActions'
+import {
+  formatSize,
+  isHardwareConfig,
+  sectionCountLabel,
+  type Composer,
+  type ComposerSubmit
+} from './solusActions'
 import { HardwareConfigPanel } from './hardware/HardwareConfigPanel'
 interface EntryProps {
   entry: SolusEntry
@@ -40,17 +48,20 @@ interface ContentProps {
   entity: Entity
   entry?: SolusEntry
   section: SolusSection | null
+  /** Set for a `solus_subsection` node: new entries file under it. */
+  subsection?: string | null
   count: number
   online: boolean
   composer: Composer | null
   onCompose: (next: Composer | null) => void
-  onSubmit: (text: string) => Promise<void>
+  onSubmit: ComposerSubmit
 }
 export function SolusNodeContent({
   projectId,
   entity,
   entry,
   section,
+  subsection,
   count,
   online,
   composer,
@@ -65,25 +76,18 @@ export function SolusNodeContent({
         key={composerKey(composer)}
         kind={composer.kind}
         initial={composerText(composer)}
+        section={composer.section}
+        subsection={composer.subsection}
         onCancel={() => onCompose(null)}
         onSubmit={onSubmit}
       />
     )
-  if (section)
-    return (
-      <SectionContent
-        section={section}
-        count={count}
-        online={online}
-        entity={entity}
-        onCompose={onCompose}
-      />
-    )
+  if (isProjectView(section, subsection))
+    return <ProjectView projectId={projectId} history={section === 'history'} />
+  if (section) return <SectionContent section={section} count={count} online={online} />
   if (entry)
     return <EntryContent entry={entry} entity={entity} online={online} onCompose={onCompose} />
-  return entity.type === 'solus_config' ? (
-    <span>Project knowledge · zoom in to open sections</span>
-  ) : null
+  return null
 }
 
 function composerKey(composer: NonNullable<ContentProps['composer']>): string {
@@ -91,6 +95,30 @@ function composerKey(composer: NonNullable<ContentProps['composer']>): string {
 }
 function composerText(composer: NonNullable<ContentProps['composer']>): string {
   return composer.entry?.text ?? ''
+}
+
+function isDivergences(section: string | null, subsection: string | null | undefined): boolean {
+  return section === 'environment' && subsection === 'divergences'
+}
+function isProjectView(section: string | null, subsection: string | null | undefined): boolean {
+  return section === 'history' || isDivergences(section, subsection)
+}
+
+/** SOLUSDEV-320: the views that read a project route rather than entries —
+ *  the history section (owns no rows, so no composer) and environment/divergences. */
+function ProjectView({
+  projectId,
+  history
+}: {
+  projectId?: string | null
+  history: boolean
+}): ReactNode {
+  if (!projectId) return <p role="status">Open a project to see this.</p>
+  return history ? (
+    <HistoryList key={projectId} projectId={projectId} />
+  ) : (
+    <EnvironmentDivergences projectId={projectId} />
+  )
 }
 
 function ConfigContent({
@@ -102,8 +130,11 @@ function ConfigContent({
   projectId?: string | null
   online: boolean
 }): ReactNode {
-  if (entry.section === 'code') return <CodeEnvironmentCard payload={entry.payload} />
-  if (entry.section === 'hardware') {
+  if (entry.section === 'environment' && entry.subsection === 'software')
+    return <CodeEnvironmentCard payload={entry.payload} />
+  if (isDivergences(entry.section, entry.subsection))
+    return <ProjectView projectId={projectId} history={false} />
+  if (isHardwareConfig(entry)) {
     const subject = entry.payload?.schema_version === 2 ? entry.payload.entity_id : null
     return projectId &&
       typeof subject === 'string' &&
@@ -121,26 +152,17 @@ function ConfigContent({
   return <p role="status">Unsupported configuration section.</p>
 }
 
+/** The card body for a section node: the real count only — adding lives in the side panel
+ *  footer and the right-click menu (design template). */
 function SectionContent({
   section,
   count,
-  online,
-  entity,
-  onCompose
-}: Pick<ContentProps, 'count' | 'online' | 'entity' | 'onCompose'> & {
-  section: SolusSection
-}): React.JSX.Element {
+  online
+}: Pick<ContentProps, 'count' | 'online'> & { section: SolusSection }): React.JSX.Element {
   return (
     <div className="solus-section-content">
       <span>{online ? sectionCountLabel(count) : '—'}</span>
       {section === 'errors' && <span>AUTO + YOU</span>}
-      <button
-        type="button"
-        disabled={!online}
-        onClick={() => onCompose({ section, kind: 'type', entityId: entity.id })}
-      >
-        Add a note
-      </button>
     </div>
   )
 }

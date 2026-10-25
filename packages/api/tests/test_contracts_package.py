@@ -44,6 +44,27 @@ def test_auth_kinds_match_the_draft() -> None:
     assert {k.value for k in solus_contracts.AuthKind} == {k.value for k in draft.AuthKind}
 
 
+def test_capability_vocabulary_matches_the_draft() -> None:
+    """SOLUSDEV-320: the capability vocabulary and the ClassVar exist on both contracts."""
+    assert {c.value for c in solus_contracts.Capability} == {c.value for c in draft.Capability}
+    assert {c.value for c in draft.Capability} == {
+        "change_signal",
+        "webhook",
+        "structure",
+        "geometry",
+        "construction_history",
+        "netlist",
+        "render",
+        "write_feature",
+        "write_parameter",
+        "write_symbol",
+        "write_net",
+        "write_file",
+    }
+    assert solus_contracts.Connector.capabilities == frozenset()
+    assert draft.Connector.capabilities == frozenset()
+
+
 def test_connector_abc_declares_the_w005_surface() -> None:
     abstract = solus_contracts.Connector.__abstractmethods__
     assert abstract == draft.Connector.__abstractmethods__

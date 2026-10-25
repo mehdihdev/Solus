@@ -4,6 +4,31 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as solApi from './solApi'
 import { ChatsSidebar } from './ChatsSidebar'
+import { useSolConversations } from './useSolConversations'
+
+/** The page owns the list now; the sidebar renders what it is given. */
+function Harness({
+  projectId,
+  activeConversationId,
+  onSelect,
+  onNewChat
+}: {
+  projectId: string | null
+  activeConversationId: string | null
+  onSelect: (id: string) => void
+  onNewChat: () => void
+}): React.JSX.Element {
+  const data = useSolConversations(projectId, activeConversationId)
+  return (
+    <ChatsSidebar
+      projectId={projectId}
+      activeConversationId={activeConversationId}
+      data={data}
+      onSelect={onSelect}
+      onNewChat={onNewChat}
+    />
+  )
+}
 
 vi.mock('./solApi', () => ({
   listSolConversations: vi.fn(),
@@ -34,15 +59,11 @@ describe('ChatsSidebar', () => {
       conversation('c2', null)
     ])
     render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId="c1"
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p1" activeConversationId="c1" onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     await waitFor(() => expect(screen.getByText('Project recap')).toBeInTheDocument())
-    expect(screen.getByText('New chat')).toBeInTheDocument() // untitled fallback
+    // The card says New chat; so does the untitled row.
+    expect(screen.getAllByText('New chat')).toHaveLength(2)
     expect(screen.getByRole('button', { name: /Project recap/ })).toHaveAttribute(
       'aria-current',
       'true'
@@ -54,7 +75,7 @@ describe('ChatsSidebar', () => {
     const onSelect = vi.fn()
     const onNewChat = vi.fn()
     render(
-      <ChatsSidebar
+      <Harness
         projectId="p1"
         activeConversationId={null}
         onSelect={onSelect}
@@ -70,23 +91,13 @@ describe('ChatsSidebar', () => {
   it('shows honest empty and offline states', async () => {
     listSolConversations.mockResolvedValue([])
     const { rerender } = render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId={null}
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     await waitFor(() => expect(screen.getByText(/No chats yet/)).toBeInTheDocument())
 
     listSolConversations.mockRejectedValue(new Error('down'))
     rerender(
-      <ChatsSidebar
-        projectId="p2"
-        activeConversationId={null}
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p2" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     await waitFor(() => expect(screen.getByText(/Chats unavailable/)).toBeInTheDocument())
   })
@@ -97,12 +108,7 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Old name')])
     renameSolConversation.mockResolvedValue(conversation('c1', 'Diagnose run 41'))
     render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId={null}
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     fireEvent.contextMenu(await screen.findByText('Old name'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
@@ -121,12 +127,7 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     deleteSolConversation.mockResolvedValue(undefined)
     const onNewChat = vi.fn()
     render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId="c1"
-        onSelect={vi.fn()}
-        onNewChat={onNewChat}
-      />
+      <Harness projectId="p1" activeConversationId="c1" onSelect={vi.fn()} onNewChat={onNewChat} />
     )
     fireEvent.contextMenu(await screen.findByText('Project recap'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
@@ -140,12 +141,7 @@ describe('right-click menu (SOLUSDEV-233)', () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Project recap')])
     deleteSolConversation.mockRejectedValue(new Error('404'))
     render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId={null}
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     fireEvent.contextMenu(await screen.findByText('Project recap'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
@@ -158,12 +154,7 @@ describe('menu positioning (code review M)', () => {
   it('clamps the context menu inside the viewport near edges', async () => {
     listSolConversations.mockResolvedValue([conversation('c1', 'Project recap')])
     render(
-      <ChatsSidebar
-        projectId="p1"
-        activeConversationId={null}
-        onSelect={vi.fn()}
-        onNewChat={vi.fn()}
-      />
+      <Harness projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
     )
     const row = await screen.findByText('Project recap')
     // Right-click at the very bottom-right corner of the window.
@@ -173,5 +164,41 @@ describe('menu positioning (code review M)', () => {
     const top = Number.parseFloat(menu.style.top)
     expect(left).toBeLessThanOrEqual(window.innerWidth - 150)
     expect(top).toBeLessThanOrEqual(window.innerHeight - 90)
+  })
+})
+
+describe('design template — groups and the ⌘N card', () => {
+  it('groups rows under TODAY / THIS WEEK / EARLIER by last activity', async () => {
+    const now = Date.now()
+    listSolConversations.mockResolvedValue([
+      { ...conversation('c1', 'Fresh'), updated_at: new Date(now - 3600_000).toISOString() },
+      { ...conversation('c2', 'Midweek'), updated_at: new Date(now - 3 * 86400_000).toISOString() },
+      { ...conversation('c3', 'Old'), updated_at: new Date(now - 30 * 86400_000).toISOString() }
+    ])
+    render(
+      <Harness projectId="p1" activeConversationId={null} onSelect={vi.fn()} onNewChat={vi.fn()} />
+    )
+    await waitFor(() => expect(screen.getByText('Old')).toBeInTheDocument())
+    expect(screen.getByText('TODAY')).toBeInTheDocument()
+    expect(screen.getByText('THIS WEEK')).toBeInTheDocument()
+    expect(screen.getByText('EARLIER')).toBeInTheDocument()
+  })
+
+  it('Ctrl+N / ⌘N starts a new chat while mounted', async () => {
+    listSolConversations.mockResolvedValue([])
+    const onNewChat = vi.fn()
+    render(
+      <Harness
+        projectId="p1"
+        activeConversationId={null}
+        onSelect={vi.fn()}
+        onNewChat={onNewChat}
+      />
+    )
+    await waitFor(() => expect(screen.getByText(/No chats yet/)).toBeInTheDocument())
+    const mac = /mac/i.test(navigator.platform)
+    fireEvent.keyDown(window, { key: 'n', metaKey: mac, ctrlKey: !mac })
+    expect(onNewChat).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: 'New chat' })).toHaveTextContent(/⌘N|Ctrl N/)
   })
 })
