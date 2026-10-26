@@ -37,7 +37,7 @@ desktop renderer (pill) ◀── step progress events (turn stream) ── A3 s
 
 Location `apps/desktop/native/solus-input/` (Swift package: `SolusInputCore` pure library, `solus-input`
 executable, XCTest suite). macOS 14+ (ScreenCaptureKit). One process per call; **argv in, one JSON line
-out**, exit 0 for every decided outcome (refusals included), non-zero only for a usage error or crash.
+out**, exit 0 for every outcome including refusals and usage errors (the JSON `code` says which); a non-zero exit means the helper crashed.
 
 | Command    | Arguments                                  | Result                                                                                                                                                                                                       |
 | ---------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

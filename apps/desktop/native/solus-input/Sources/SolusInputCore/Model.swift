@@ -1,0 +1,103 @@
+// The values `Runner` reasons over, and the one seam to the operating system.
+// Coordinates are global points (top-left origin), as CoreGraphics reports
+// window bounds and posts mouse events.
+import Foundation
+
+public struct Point: Equatable {
+    public let x: Double
+    public let y: Double
+    public init(x: Double, y: Double) { self.x = x; self.y = y }
+}
+
+public struct Rect: Equatable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x; self.y = y; self.width = width; self.height = height
+    }
+}
+
+public struct AppInfo: Equatable {
+    public let bundleId: String
+    public let pid: Int
+    public let name: String
+    public init(bundleId: String, pid: Int, name: String) {
+        self.bundleId = bundleId; self.pid = pid; self.name = name
+    }
+}
+
+public struct WindowInfo: Equatable {
+    public let id: UInt32
+    public let title: String
+    public let bounds: Rect
+    public let ownerBundleId: String
+    public let onScreen: Bool
+    public init(id: UInt32, title: String, bounds: Rect, ownerBundleId: String, onScreen: Bool) {
+        self.id = id; self.title = title; self.bounds = bounds
+        self.ownerBundleId = ownerBundleId; self.onScreen = onScreen
+    }
+}
+
+/// The frontmost app and its frontmost ordinary (layer 0) window, read fresh.
+public struct FrontmostInfo: Equatable {
+    public let app: AppInfo
+    public let window: WindowInfo?
+    public init(app: AppInfo, window: WindowInfo?) { self.app = app; self.window = window }
+}
+
+public struct CapturedImage: Equatable {
+    public let png: Data
+    public let imageWidth: Int
+    public let imageHeight: Int
+    public init(png: Data, imageWidth: Int, imageHeight: Int) {
+        self.png = png; self.imageWidth = imageWidth; self.imageHeight = imageHeight
+    }
+}
+
+public enum MouseButton: String, Equatable {
+    case left
+    case right
+}
+
+public enum Modifier: String, Hashable, CaseIterable {
+    case command
+    case shift
+    case option
+    case control
+}
+
+/// One event the helper posts. `sleep` is a pause inside a verb (`wait`).
+public enum SyntheticEvent: Equatable {
+    case mouseMove(Point)
+    case mouseDown(MouseButton, Point, clicks: Int)
+    case mouseUp(MouseButton, Point, clicks: Int)
+    case mouseDrag(Point)
+    case scroll(dx: Int, dy: Int)
+    case keyDown(UInt16, Set<Modifier>)
+    case keyUp(UInt16, Set<Modifier>)
+    case text(String)
+    case sleep(milliseconds: Int)
+}
+
+public struct CaptureError: Error {
+    public let message: String
+    public init(_ message: String) { self.message = message }
+}
+
+/// Everything `Runner` needs from macOS. The real one lives in the executable;
+/// tests use a fake.
+public protocol SystemPort {
+    func accessibilityTrusted() -> Bool
+    func screenRecordingAllowed() -> Bool
+    func frontmost() -> FrontmostInfo?
+    func window(id: UInt32) -> WindowInfo?
+    func focusedElementIsSecure() -> Bool
+    /// Seconds since the HID system last saw PHYSICAL input (any device).
+    func secondsSinceLastPhysicalInput() -> Double
+    /// Unix time, seconds.
+    func now() -> Double
+    func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage
+    func post(_ event: SyntheticEvent)
+}
