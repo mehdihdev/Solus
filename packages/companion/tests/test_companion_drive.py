@@ -1,0 +1,358 @@
+"""The ADR-041 `drive` builtin (docs/architecture/sol-drive.md §3): runs the
+pinned `solus-input` helper with an argument list, validates what comes back,
+stages captures as artifacts, and advertises nothing unless switched on.
+
+The helper here is a real executable script, so the subprocess path (argv, no
+shell, timeouts, output caps) is exercised for real.
+"""
+
+import base64
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+from mcp.types import CallToolResult, ImageContent, TextContent
+from solus_companion.dispatch import Dispatcher
+from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
+from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
+from solus_companion.frames import ToolCallIn
+from solus_companion.supervisor import Supervisor
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+OK_IDENTIFY = {"ok": True, "app": {"bundleId": "org.kicad.kicad"}, "allowed": True}
+
+
+def make_helper(tmp_path: Path, body: str) -> Path:
+    """An executable stand-in for solus-input. `argv` is the list it received;
+    it records every invocation in `calls.jsonl` beside itself."""
+    script = tmp_path / "solus-input"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys, time, pathlib\n"
+        "argv = sys.argv[1:]\n"
+        "log = pathlib.Path(__file__).with_name('calls.jsonl')\n"
+        "with log.open('a') as f: f.write(json.dumps(argv) + '\\n')\n" + body,
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def calls(tmp_path: Path) -> list[list[str]]:
+    log = tmp_path / "calls.jsonl"
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def echo_helper(tmp_path: Path, reply: dict[str, Any]) -> Path:
+    return make_helper(tmp_path, f"print(json.dumps({reply!r}))\n")
+
+
+def server_with(path: Path, **kwargs: Any) -> DriveServer:
+    return DriveServer(DriveHelper(path, **kwargs), enabled=True, platform="darwin")
+
+
+def text_of(result: CallToolResult) -> str:
+    return " ".join(b.text for b in result.content if isinstance(b, TextContent))
+
+
+# --- the pinned path -----------------------------------------------------------
+
+
+def test_resolve_helper_accepts_only_an_absolute_executable_regular_file(tmp_path: Path) -> None:
+    good = echo_helper(tmp_path, OK_IDENTIFY)
+    assert resolve_helper(str(good)) == good
+    assert resolve_helper(None) is None
+    assert resolve_helper("") is None
+    assert resolve_helper("solus-input") is None  # relative: never PATH-resolved
+    assert resolve_helper(str(tmp_path / "missing")) is None
+    assert resolve_helper(str(tmp_path)) is None  # a directory
+    link = tmp_path / "link"
+    link.symlink_to(good)
+    assert resolve_helper(str(link)) is None
+    plain = tmp_path / "plain"
+    plain.write_text("x")
+    plain.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    assert resolve_helper(str(plain)) is None
+
+
+def test_from_env_needs_the_switch_the_helper_and_macos(tmp_path: Path) -> None:
+    good = str(echo_helper(tmp_path, OK_IDENTIFY))
+    on = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": good}
+    assert drive_server_from_env(on, platform="darwin").inventory() is not None
+    assert (
+        drive_server_from_env(
+            {**on, "SOLUS_COMPANION_DRIVE": "true"}, platform="darwin"
+        ).inventory()
+        is None
+    )
+    assert (
+        drive_server_from_env({"SOLUS_DRIVE_HELPER": good}, platform="darwin").inventory() is None
+    )
+    assert (
+        drive_server_from_env({**on, "SOLUS_DRIVE_HELPER": "rel"}, platform="darwin").inventory()
+        is None
+    )
+    assert drive_server_from_env(on, platform="linux").inventory() is None
+
+
+# --- advertising -----------------------------------------------------------------
+
+
+def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> None:
+    helper = DriveHelper(echo_helper(tmp_path, OK_IDENTIFY))
+    for server, detail in [
+        (
+            DriveServer(helper, enabled=False, platform="darwin"),
+            "SOL can't use your mouse and keyboard (off)",
+        ),
+        (DriveServer(None, enabled=True, platform="darwin"), "the input helper is missing"),
+        (DriveServer(helper, enabled=True, platform="win32"), "driving apps needs macOS"),
+    ]:
+        assert server.inventory() is None
+        entry = server.status_entry()
+        assert entry["name"] == "drive"
+        assert entry["state"] == "not_launched"
+        assert entry["detail"] == detail
+
+
+async def test_off_server_refuses_calls_without_running_the_helper(tmp_path: Path) -> None:
+    server = DriveServer(
+        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)), enabled=False, platform="darwin"
+    )
+    result = await server.call_tool("identify", {})
+    assert result.isError
+    assert calls(tmp_path) == []
+
+
+def test_on_advertises_exactly_the_three_tools_with_strict_schemas(tmp_path: Path) -> None:
+    inventory = server_with(echo_helper(tmp_path, OK_IDENTIFY)).inventory()
+    assert inventory is not None
+    assert inventory["server"] == "drive"
+    assert (
+        {tool["name"] for tool in inventory["tools"]}
+        == TOOL_NAMES
+        == {"identify", "capture", "act"}
+    )
+    for tool in inventory["tools"]:
+        assert tool["input_schema"].get("additionalProperties") is False
+
+
+# --- identify / act ----------------------------------------------------------------
+
+
+async def test_identify_runs_the_helper_and_returns_its_json(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, OK_IDENTIFY))
+    result = await server.call_tool("identify", {})
+    assert not result.isError
+    assert result.structuredContent == OK_IDENTIFY
+    assert calls(tmp_path) == [["identify"]]
+
+
+async def test_act_builds_the_argument_list_in_a_fixed_order(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True, "verb": "click", "idleSeconds": 9}))
+    args = {
+        "bundle": "org.kicad.kicad",
+        "window": 7,
+        "since": 990.5,
+        "verb": "click",
+        "y": 20,
+        "x": 10,
+    }
+    result = await server.call_tool("act", args)
+    assert not result.isError
+    assert calls(tmp_path) == [
+        [
+            "act",
+            "--bundle",
+            "org.kicad.kicad",
+            "--window",
+            "7",
+            "--since",
+            "990.5",
+            "click",
+            "--x",
+            "10",
+            "--y",
+            "20",
+        ]
+    ]
+
+
+async def test_typed_text_is_one_argument_never_a_shell_string(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    hostile = '$(touch pwned); "; rm -rf ~ `id`'
+    await server.call_tool(
+        "act",
+        {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "type", "text": hostile},
+    )
+    assert calls(tmp_path)[0][-2:] == ["--text", hostile]
+    assert not (tmp_path / "pwned").exists()
+
+
+async def test_a_helper_refusal_reads_code_colon_message(tmp_path: Path) -> None:
+    refusal = {"ok": False, "code": "chord_denied", "message": "that shortcut is not allowed"}
+    server = server_with(echo_helper(tmp_path, refusal))
+    result = await server.call_tool(
+        "act",
+        {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "key", "chord": "cmd+q"},
+    )
+    assert result.isError
+    assert text_of(result) == "chord_denied: that shortcut is not allowed"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {
+            "bundle": "org.kicad.kicad",
+            "window": 7,
+            "since": 1.0,
+            "verb": "click",
+            "x": 1,
+            "y": 1,
+            "extra": 1,
+        },
+        {"bundle": "org.kicad.kicad", "window": "7", "since": 1.0, "verb": "click", "x": 1, "y": 1},
+        {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "launch"},
+        {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "type", "text": "a" * 201},
+        {"bundle": "org kicad; rm", "window": 7, "since": 1.0, "verb": "wait", "ms": 1},
+        {"bundle": "org.kicad.kicad", "window": -1, "since": 1.0, "verb": "wait", "ms": 1},
+        {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "wait", "ms": 2001},
+    ],
+)
+async def test_invalid_arguments_never_reach_the_helper(
+    tmp_path: Path, args: dict[str, Any]
+) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    result = await server.call_tool("act", args)
+    assert result.isError
+    assert text_of(result).startswith("invalid_arguments: ")
+    assert calls(tmp_path) == []
+
+
+async def test_unknown_tool_is_an_error(tmp_path: Path) -> None:
+    result = await server_with(echo_helper(tmp_path, {"ok": True})).call_tool("launch", {})
+    assert result.isError
+
+
+# --- capture -----------------------------------------------------------------------------
+
+
+def capture_reply(png: str) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "png": png,
+        "imageWidth": 1568,
+        "imageHeight": 1176,
+        "pointsWidth": 800,
+        "pointsHeight": 600,
+    }
+
+
+async def test_capture_returns_the_image_as_content_and_metadata_without_the_pixels(
+    tmp_path: Path,
+) -> None:
+    encoded = base64.b64encode(PNG).decode()
+    server = server_with(echo_helper(tmp_path, capture_reply(encoded)))
+    result = await server.call_tool("capture", {"bundle": "org.kicad.kicad", "window": 7})
+    assert not result.isError
+    assert result.structuredContent is None  # else dispatch would drop the image block
+    image = next(b for b in result.content if isinstance(b, ImageContent))
+    assert image.mimeType == "image/png"
+    assert base64.b64decode(image.data) == PNG
+    meta = json.loads(text_of(result))
+    assert meta == {
+        "imageWidth": 1568,
+        "imageHeight": 1176,
+        "pointsWidth": 800,
+        "pointsHeight": 600,
+    }
+    assert calls(tmp_path) == [
+        ["capture", "--bundle", "org.kicad.kicad", "--window", "7", "--max-edge", "1568"]
+    ]
+
+
+@pytest.mark.parametrize("png", ["not base64!!", base64.b64encode(b"GIF89a....").decode()])
+async def test_capture_refuses_anything_that_is_not_a_png(tmp_path: Path, png: str) -> None:
+    server = server_with(echo_helper(tmp_path, capture_reply(png)))
+    result = await server.call_tool("capture", {"bundle": "org.kicad.kicad", "window": 7})
+    assert result.isError
+    assert text_of(result).startswith("helper_output: ")
+
+
+async def test_dispatch_stages_the_capture_as_an_artifact_never_inline(tmp_path: Path) -> None:
+    encoded = base64.b64encode(PNG).decode()
+    sup = Supervisor((), builtins=(server_with(echo_helper(tmp_path, capture_reply(encoded))),))
+    assert [entry["server"] for entry in sup.inventory()] == ["drive"]
+    sent: list[dict[str, Any]] = []
+
+    async def send(raw: str) -> None:
+        sent.append(json.loads(raw))
+
+    dispatcher = Dispatcher(sup, send)
+    dispatcher.handle_tool_call(
+        ToolCallIn(
+            tool="drive.capture", args={"bundle": "org.kicad.kicad", "window": 7}, call_id="c1"
+        )
+    )
+    await dispatcher.wait_idle()
+    blocks = sent[0]["data"]["value"]["content"]
+    image = next(b for b in blocks if b["type"] == "image")
+    assert image["inlined"] is False
+    assert image["media_type"] == "image/png"
+    assert "artifact_id" in image
+    assert encoded not in json.dumps(sent)
+
+
+# --- a misbehaving helper --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        ("print('not json')\n", "helper_output: "),
+        ("print('[1, 2]')\n", "helper_output: "),
+        ("print(json.dumps({'no_ok': 1}))\n", "helper_output: "),
+        ("print('{}'); print('{}')\n", "helper_output: "),
+        ("sys.exit(3)\n", "helper_crashed: "),
+        ("sys.stdout.write('x' * (13 * 1024 * 1024))\n", "helper_output: "),
+    ],
+)
+async def test_bad_helper_output_is_an_error_not_a_guess(
+    tmp_path: Path, body: str, expected: str
+) -> None:
+    result = await server_with(make_helper(tmp_path, body)).call_tool("identify", {})
+    assert result.isError
+    assert text_of(result).startswith(expected)
+
+
+async def test_a_hung_helper_is_killed_at_its_timeout(tmp_path: Path) -> None:
+    pidfile = tmp_path / "pid"
+    body = f"open({str(pidfile)!r}, 'w').write(str(__import__('os').getpid()))\ntime.sleep(30)\n"
+    server = server_with(make_helper(tmp_path, body), timeouts={"identify": 0.5})
+    result = await server.call_tool("identify", {})
+    assert result.isError
+    assert text_of(result).startswith("helper_timeout: ")
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+async def test_helper_runs_with_a_minimal_environment(tmp_path: Path) -> None:
+    body = "import os\nprint(json.dumps({'ok': True, 'env': sorted(os.environ)}))\n"
+    os.environ["SOLUS_SECRET_TEST_VALUE"] = "nope"
+    try:
+        result = await DriveHelper(make_helper(tmp_path, body)).run(["identify"], timeout=5)
+    finally:
+        del os.environ["SOLUS_SECRET_TEST_VALUE"]
+    assert "SOLUS_SECRET_TEST_VALUE" not in result["env"]
+
+
+async def test_helper_errors_carry_a_code(tmp_path: Path) -> None:
+    with pytest.raises(DriveHelperError) as caught:
+        await DriveHelper(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
+    assert caught.value.code == "helper_crashed"
