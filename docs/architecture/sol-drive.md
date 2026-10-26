@@ -74,9 +74,12 @@ Checks before ANY event is posted (each failure is a refusal with a code; nothin
    HID system has seen physical input more recently than `T`, refuse with `user_active`. Our own events
    come from a private-state source tagged with a Solus marker in `eventSourceUserData`.
 
-While posting, the bound app and window are re-checked before EVERY event; a change stops the verb
-with `focus_lost` and reports `postedEvents`. Keyboard and text events go to the bound process only
-(`CGEvent.postToPid`), so a focus change between check and post cannot redirect a keystroke; pointer
+While posting, the bound app and window are re-checked before EVERY event, and every pointer event is
+hit-tested again right before it is posted (a menu or dialog may have opened since the previous one); a
+change stops the verb with `focus_lost` or `occluded` and reports `postedEvents`. If a button is still
+held when a verb stops (mid-drag), the release goes to the bound process only — never globally, where a
+release over a popup menu would choose an item. A right-button double-click is refused (a right click
+opens a menu). Keyboard and text events go to the bound process only (`CGEvent.postToPid`); pointer
 events are posted globally after the hit-test.
 
 Refusal codes: `usage`, `app_not_allowed`, `not_trusted`, `screen_recording_denied`, `not_frontmost`,

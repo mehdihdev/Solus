@@ -176,6 +176,27 @@ final class ActGuardTests: XCTestCase {
         XCTAssertEqual(port.posted.count, 1, "nothing after the focus change")
     }
 
+    func testAPopupAppearingMidDragStopsAndReleasesTheButtonToTheBoundAppOnly() {
+        let port = FakePort()
+        var posts = 0
+        port.afterPost = { p in
+            posts += 1
+            if posts == 3 { p.windowAt = { _ in 99 } } // a menu opens after the first drag step
+        }
+        let r = act(port, ["drag", "--x", "1", "--y", "1", "--to-x", "100", "--to-y", "1"])
+        XCTAssertEqual(code(r), "occluded")
+        XCTAssertEqual(r["postedEvents"] as? Int, 3)
+        guard case .mouseUp(.left, _, clicks: 1) = port.posted.last else { return XCTFail("button left held") }
+        XCTAssertEqual(port.postedPids.last, 42, "the release goes to KiCad, never to the popup")
+    }
+
+    func testRightDoubleClickIsRefused() {
+        let port = FakePort()
+        XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "1", "--button", "right", "--count", "2"])),
+                       "usage")
+        XCTAssertEqual(port.posted, [])
+    }
+
     func testAnAppOffTheListIsRefusedEvenWhenItIsFrontmost() {
         let port = FakePort()
         port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "Terminal"),
@@ -218,15 +239,18 @@ final class ActEventTests: XCTestCase {
         XCTAssertEqual(port.postedPids, [nil, nil, nil], "pointer events are hit-tested, then posted globally")
     }
 
-    func testDoubleRightClick() {
+    func testDoubleClickAndASingleRightClick() {
         let port = FakePort()
-        _ = act(port, ["click", "--x", "0", "--y", "0", "--button", "right", "--count", "2"])
+        _ = act(port, ["click", "--x", "0", "--y", "0", "--count", "2"])
         let p = Point(x: 100, y: 50)
         XCTAssertEqual(port.posted, [
             .mouseMove(p),
-            .mouseDown(.right, p, clicks: 1), .mouseUp(.right, p, clicks: 1),
-            .mouseDown(.right, p, clicks: 2), .mouseUp(.right, p, clicks: 2),
+            .mouseDown(.left, p, clicks: 1), .mouseUp(.left, p, clicks: 1),
+            .mouseDown(.left, p, clicks: 2), .mouseUp(.left, p, clicks: 2),
         ])
+        let right = FakePort()
+        _ = act(right, ["click", "--x", "0", "--y", "0", "--button", "right"])
+        XCTAssertEqual(right.posted, [.mouseMove(p), .mouseDown(.right, p, clicks: 1), .mouseUp(.right, p, clicks: 1)])
     }
 
     func testDragMovesThroughToTheEnd() {

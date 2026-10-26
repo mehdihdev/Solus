@@ -172,15 +172,34 @@ public struct Runner {
     }
 
     /// Post in order, re-checking before EVERY event that the bound app and
-    /// window are still in front; keys and text go to the bound process only.
+    /// window are still in front and — for pointer events — that nothing has
+    /// opened over the target since (a menu, a dialog). Keys and text go to the
+    /// bound process only. A stop with a button still held releases it to the
+    /// bound process, never globally (a release over a popup menu would choose
+    /// an item in it).
     private func post(_ events: [SyntheticEvent], bundle: String, windowId: UInt32, pid: Int) -> Refusal? {
+        var held: (MouseButton, Point)?
         for (index, event) in events.enumerated() {
-            guard let front = port.frontmost(), front.app.bundleId == bundle, front.window?.id == windowId else {
-                var lost = refuse("focus_lost", "the bound window lost focus; SOL stopped")
-                lost.postedEvents = index
-                return lost
+            var stop: Refusal?
+            if let front = port.frontmost(), front.app.bundleId == bundle, front.window?.id == windowId {
+                if let p = Self.pointerTarget(event), port.topWindow(at: p) != windowId {
+                    stop = refuse("occluded", "something opened over that point; SOL stopped")
+                }
+            } else {
+                stop = refuse("focus_lost", "the bound window lost focus; SOL stopped")
+            }
+            if var stop {
+                if let (button, at) = held { port.post(.mouseUp(button, at, clicks: 1), toPid: pid) }
+                stop.postedEvents = index
+                return stop
             }
             port.post(event, toPid: Self.pointerTarget(event) == nil && !Self.isPause(event) ? pid : nil)
+            switch event {
+            case .mouseDown(let button, let at, _): held = (button, at)
+            case .mouseUp: held = nil
+            case .mouseDrag(let at): held = held.map { ($0.0, at) }
+            default: break
+            }
         }
         return nil
     }
@@ -220,7 +239,8 @@ public struct Runner {
         case "click":
             guard args.has(only: common.union(["x", "y", "button", "count"])), let p = point("x", "y"),
                   let button = MouseButton(rawValue: args.string("button") ?? "left"),
-                  let count = args.string("count") == nil ? 1 : args.int("count"), (1...2).contains(count)
+                  let count = args.string("count") == nil ? 1 : args.int("count"), (1...2).contains(count),
+                  button == .left || count == 1 // a right click opens a menu; never click it twice
             else { return .failure(usage) }
             return .success(Plan(verb: verb, events: { b in
                 let at = global(p, b)
