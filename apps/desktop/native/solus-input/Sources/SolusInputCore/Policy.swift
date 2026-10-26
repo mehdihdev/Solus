@@ -58,24 +58,19 @@ public struct Chord: Equatable {
     }
 }
 
-/// A chord is denied when its key matches and it holds at least the rule's
-/// modifiers — so `cmd+shift+q` (log out) falls under `cmd+q`.
-public enum Denylist {
-    struct Rule {
-        let keys: Set<String>
-        let modifiers: Set<Modifier>
-    }
+/// Chords are ALLOWED, never denied (an allowlist cannot miss a system shortcut):
+/// an editing key alone or with shift, or command with the few editing
+/// shortcuts SOL needs. Function keys never pass (Mission Control, Show Desktop).
+public enum ChordPolicy {
+    static let functionKeys: Set<String> = Set((1...12).map { "f\($0)" })
+    static let commandKeys: Set<String> = ["z", "c", "v", "x", "a", "f", "g", "=", "-", "0"]
 
-    static let rules: [Rule] = [
-        Rule(keys: ["q", "w", "h", "m", "tab", "`", "space", "s", "p"], modifiers: [.command]),
-        Rule(keys: ["space"], modifiers: [.control]),
-        Rule(keys: ["escape"], modifiers: [.command, .option]),
-        Rule(keys: ["3", "4", "5", "6"], modifiers: [.command, .shift]),
-        Rule(keys: ["left", "right", "up", "down"], modifiers: [.control]),
-        Rule(keys: ["d"], modifiers: [.command, .option]),
-    ]
-
-    public static func denies(_ chord: Chord) -> Bool {
-        rules.contains { $0.keys.contains(chord.key) && $0.modifiers.isSubset(of: chord.modifiers) }
+    public static func allows(_ chord: Chord) -> Bool {
+        switch chord.modifiers {
+        case [], [.shift]: return KeyMap.canonical(chord.key) != nil && !functionKeys.contains(chord.key)
+        case [.command]: return commandKeys.contains(chord.key)
+        case [.command, .shift]: return chord.key == "z"
+        default: return false
+        }
     }
 }

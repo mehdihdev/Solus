@@ -16,14 +16,17 @@ final class ChordTests: XCTestCase {
         }
     }
 
-    func testDenylistBlocksSystemAndOutsideEffectChordsInAnyOrder() {
+    func testOnlyAllowlistedChordsPassInAnyModifierOrder() {
         for denied in ["cmd+q", "cmd+w", "cmd+tab", "cmd+space", "ctrl+cmd+q", "cmd+option+escape",
                        "shift+cmd+3", "cmd+shift+5", "ctrl+right", "cmd+h", "cmd+m", "cmd+s",
-                       "shift+cmd+s", "cmd+p", "cmd+`"] {
-            XCTAssertTrue(Denylist.denies(Chord.parse(denied)!), denied)
+                       "shift+cmd+s", "cmd+p", "cmd+`", "f3", "f11", "shift+f1", "ctrl+f2", "ctrl+a",
+                       "option+e", "cmd+option+z", "cmd+k", "cmd+shift+c", "ctrl+space"] {
+            XCTAssertFalse(ChordPolicy.allows(Chord.parse(denied)!), denied)
         }
-        for allowed in ["cmd+z", "shift+cmd+z", "escape", "a", "return", "delete", "e", "w", "cmd+c", "up"] {
-            XCTAssertFalse(Denylist.denies(Chord.parse(allowed)!), allowed)
+        for allowed in ["cmd+z", "shift+cmd+z", "escape", "a", "shift+a", "return", "delete", "e",
+                        "w", "cmd+c", "cmd+v", "cmd+x", "cmd+a", "cmd+f", "cmd+=", "cmd+-", "up",
+                        "shift+left", "tab", "space", "5"] {
+            XCTAssertTrue(ChordPolicy.allows(Chord.parse(allowed)!), allowed)
         }
     }
 

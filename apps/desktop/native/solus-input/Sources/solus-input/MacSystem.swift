@@ -90,7 +90,21 @@ struct MacSystem: SystemPort {
         return CapturedImage(png: try png(image), imageWidth: image.width, imageHeight: image.height)
     }
 
-    func post(_ event: SyntheticEvent) {
+    func topWindow(at point: Point) -> UInt32? {
+        // Front-to-back, every layer (menus, floating panels, Solus's own
+        // windows): the first visible window containing the point is the one a
+        // click would hit. Fully transparent windows are not hit.
+        let probe = CGPoint(x: point.x, y: point.y)
+        return windowList([.optionOnScreenOnly], kCGNullWindowID).first { entry in
+            guard (entry[kCGWindowAlpha as String] as? Double ?? 1) > 0,
+                  let dict = entry[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: dict as CFDictionary)
+            else { return false }
+            return rect.contains(probe)
+        }.flatMap { $0[kCGWindowNumber as String] as? UInt32 }
+    }
+
+    func post(_ event: SyntheticEvent, toPid pid: Int?) {
         switch event {
         case .sleep(let ms):
             usleep(useconds_t(ms) * 1_000)
@@ -103,12 +117,12 @@ struct MacSystem: SystemPort {
                 for down in [true, false] {
                     let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
                     e?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-                    send(e)
+                    send(e, toPid: pid)
                 }
             }
             return
         default:
-            send(cgEvent(for: event))
+            send(cgEvent(for: event), toPid: pid)
         }
     }
 
@@ -144,10 +158,12 @@ struct MacSystem: SystemPort {
         }
     }
 
-    private func send(_ event: CGEvent?) {
+    /// Keyboard and text go straight to the bound process, so a focus change
+    /// between the check and the post cannot redirect a keystroke.
+    private func send(_ event: CGEvent?, toPid pid: Int?) {
         guard let event else { return }
         event.setIntegerValueField(.eventSourceUserData, value: solusEventMarker)
-        event.post(tap: .cghidEventTap)
+        if let pid { event.postToPid(pid_t(pid)) } else { event.post(tap: .cghidEventTap) }
         usleep(interEventMicros)
     }
 

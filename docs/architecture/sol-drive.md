@@ -57,27 +57,36 @@ Checks before ANY event is posted (each failure is a refusal with a code; nothin
 3. The frontmost app's bundle id is `B` and its frontmost layer-0 window id is `W` (re-read now, not
    cached). Bounds are re-read too, so a moved window still maps correctly.
 4. Coordinates are inside `[0,width) × [0,height)` of that window.
-5. `key`: the chord parses (modifiers `cmd shift option ctrl`, a named key) and is not denylisted:
-   app switch (`cmd+tab`, `cmd+shift+tab`, ``cmd+` ``), quit/close/hide/minimise (`cmd+q`, `cmd+w`,
-   `cmd+shift+w`, `cmd+option+w`, `cmd+h`, `cmd+option+h`, `cmd+m`), Spotlight/input source
-   (`cmd+space`, `ctrl+space`), lock (`ctrl+cmd+q`), force quit (`cmd+option+escape`), screenshots
-   (`cmd+shift+3/4/5/6`), Spaces (`ctrl+left/right/up/down`), Dock (`cmd+option+d`), and effects outside
-   the app that need their own approval (`cmd+s`, `cmd+shift+s`, `cmd+p`).
-6. `type`: 1–200 characters, printable only (no newline/control characters — Return is a `key`), and
+5. **Hit-test:** every pointer target's topmost visible on-screen window (any layer) is `W` itself —
+   anything on top, Solus's own pill included, refuses with `occluded` (SOL must never be able to click
+   its own Run button). Consequence for slice 3: the amber outline is drawn as edge strips OUTSIDE the
+   window bounds, never as a window over it.
+6. `key`: the chord parses and is on the **chord allowlist** (an allowlist cannot miss a system
+   shortcut): an editing key alone or with shift (letters, digits, punctuation, Return, Escape, Tab,
+   Space, Delete, arrows, Home/End/Page keys — never F-keys), or `cmd` + `z c v x a f g = - 0`, or
+   `cmd+shift+z`. Everything else — app switching, quit/close/hide, Spotlight, lock, screenshots,
+   Spaces, save/print, any `ctrl`/`option` combination — refuses with `chord_denied`.
+7. `type`: 1–200 characters, printable only (no newline/control characters — Return is a `key`), and
    refused while the focused element's role/subrole is `AXSecureTextField`.
-7. **Kill switch:** `--since T` is the Unix time the caller's previous action finished (or the step
-   start). If the HID system has seen physical input more recently than `T`
-   (`CGEventSource.secondsSinceLastEventType(.hidSystemState, anyInput) < now − T`), refuse with
-   `user_active`. Our own events come from a private-state source tagged with a Solus marker in
-   `eventSourceUserData`, so the caller's own previous action never counts as the user.
+8. **Kill switch:** `--since T` is a time from the HELPER's clock — `identify` returns `now` (the step
+   start), `act` returns `finishedAt` (pass it to the next act) — so the check never compares the cloud
+   clock with the local one. `T` must be finite, not in the future, and at most 10 minutes old. If the
+   HID system has seen physical input more recently than `T`, refuse with `user_active`. Our own events
+   come from a private-state source tagged with a Solus marker in `eventSourceUserData`.
+
+While posting, the bound app and window are re-checked before EVERY event; a change stops the verb
+with `focus_lost` and reports `postedEvents`. Keyboard and text events go to the bound process only
+(`CGEvent.postToPid`), so a focus change between check and post cannot redirect a keystroke; pointer
+events are posted globally after the hit-test.
 
 Refusal codes: `usage`, `app_not_allowed`, `not_trusted`, `screen_recording_denied`, `not_frontmost`,
-`window_mismatch`, `window_not_found`, `out_of_bounds`, `bad_chord`, `chord_denied`, `bad_text`,
-`secure_field`, `user_active`, `capture_failed`.
+`window_mismatch`, `window_not_found`, `out_of_bounds`, `occluded`, `bad_chord`, `chord_denied`,
+`bad_text`, `secure_field`, `user_active`, `focus_lost`, `capture_failed`.
 
 Known limits (documented, not hidden): letter keys map to ANSI virtual keycodes (non-US layouts may
 differ); a save/export reached through menus by clicking is not detectable by the chord denylist — the
-step budget, the plan approval and the API loop's verification are the controls there.
+step budget, the plan approval and the API loop's verification are the controls there (and `cmd+s` /
+`cmd+p` themselves are off the chord allowlist).
 
 ## 3. Companion `drive` server (slice 1: built, not wired)
 

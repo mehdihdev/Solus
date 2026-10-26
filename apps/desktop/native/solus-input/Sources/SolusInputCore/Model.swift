@@ -99,5 +99,9 @@ public protocol SystemPort {
     /// Unix time, seconds.
     func now() -> Double
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage
-    func post(_ event: SyntheticEvent)
+    /// The id of the topmost visible on-screen window containing `point`, any layer.
+    func topWindow(at point: Point) -> UInt32?
+    /// Keyboard/text events go to `pid` only; pointer events (pid nil) are posted
+    /// globally after the hit-test.
+    func post(_ event: SyntheticEvent, toPid pid: Int?)
 }

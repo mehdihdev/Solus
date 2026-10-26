@@ -5,6 +5,8 @@ import Foundation
 public struct Refusal: Error, Equatable {
     public let code: String
     public let message: String
+    /// Set when the refusal came mid-verb (`focus_lost`): how many events landed.
+    public var postedEvents: Int?
 }
 
 private func refuse(_ code: String, _ message: String) -> Refusal { Refusal(code: code, message: message) }
@@ -24,6 +26,8 @@ public struct Runner {
     static let dragSteps = 10
     /// Our own previous action may land a hair after the `since` stamp.
     static let ownActionSlack = 0.05
+    /// `--since` older than this is a stale or forged stamp, not a step in progress.
+    static let maxSinceAge = 600.0
 
     let port: SystemPort
 
@@ -44,7 +48,9 @@ public struct Runner {
         switch result {
         case .success(let body): return encode(["ok": true].merging(body) { $1 })
         case .failure(let refusal):
-            return encode(["ok": false, "code": refusal.code, "message": refusal.message])
+            var body: [String: Any] = ["ok": false, "code": refusal.code, "message": refusal.message]
+            if let posted = refusal.postedEvents { body["postedEvents"] = posted }
+            return encode(body)
         }
     }
 
@@ -57,10 +63,13 @@ public struct Runner {
             "accessibility": port.accessibilityTrusted(),
             "screenRecording": port.screenRecordingAllowed(),
         ]
+        // `now` is the helper's clock: the caller passes it back as `--since`, so
+        // the kill switch never compares across machines (cloud vs local).
         guard let front else {
-            return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false])
+            return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
         }
         return .success([
+            "now": port.now(),
             "app": ["bundleId": front.app.bundleId, "pid": front.app.pid, "name": front.app.name],
             "window": front.window.map(Self.windowJSON) ?? NSNull(),
             "trust": trust,
@@ -133,28 +142,65 @@ public struct Runner {
         guard let window = front.window, window.id == windowId else {
             return .failure(refuse("window_mismatch", "the bound window is not in front"))
         }
+        let now = port.now()
+        guard since.isFinite, since <= now + Self.ownActionSlack, now - since <= Self.maxSinceAge else {
+            return .failure(refuse("usage", "--since must be a recent time from this helper's clock"))
+        }
         let events = plan.events(window.bounds)
         if let outside = Self.firstOutside(events, window.bounds) { return .failure(outside) }
+        if let covered = firstOccluded(events, window.id) { return .failure(covered) }
         if plan.isTyping, port.focusedElementIsSecure() {
             return .failure(refuse("secure_field", "a password field has focus"))
         }
         let idle = port.secondsSinceLastPhysicalInput()
-        if port.now() - idle > since + Self.ownActionSlack {
+        if now - idle > since + Self.ownActionSlack {
             return .failure(refuse("user_active", "you used the mouse or keyboard; SOL stopped"))
         }
-        events.forEach(port.post)
-        return .success(["verb": plan.verb, "idleSeconds": idle])
+        if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid) { return .failure(lost) }
+        return .success(["verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now()])
+    }
+
+    /// Each pointer target must be the bound window itself, not something on top
+    /// of it — Solus's own windows included (SOL must never click its own Run).
+    private func firstOccluded(_ events: [SyntheticEvent], _ windowId: UInt32) -> Refusal? {
+        for event in events {
+            if let p = Self.pointerTarget(event), port.topWindow(at: p) != windowId {
+                return refuse("occluded", "another window covers that point")
+            }
+        }
+        return nil
+    }
+
+    /// Post in order, re-checking before EVERY event that the bound app and
+    /// window are still in front; keys and text go to the bound process only.
+    private func post(_ events: [SyntheticEvent], bundle: String, windowId: UInt32, pid: Int) -> Refusal? {
+        for (index, event) in events.enumerated() {
+            guard let front = port.frontmost(), front.app.bundleId == bundle, front.window?.id == windowId else {
+                var lost = refuse("focus_lost", "the bound window lost focus; SOL stopped")
+                lost.postedEvents = index
+                return lost
+            }
+            port.post(event, toPid: Self.pointerTarget(event) == nil && !Self.isPause(event) ? pid : nil)
+        }
+        return nil
+    }
+
+    private static func isPause(_ event: SyntheticEvent) -> Bool {
+        if case .sleep = event { return true }
+        return false
+    }
+
+    private static func pointerTarget(_ event: SyntheticEvent) -> Point? {
+        switch event {
+        case .mouseMove(let p), .mouseDrag(let p), .mouseDown(_, let p, _), .mouseUp(_, let p, _): return p
+        default: return nil
+        }
     }
 
     /// Every pointer event must land inside the window it is bound to.
     private static func firstOutside(_ events: [SyntheticEvent], _ bounds: Rect) -> Refusal? {
         for event in events {
-            let point: Point?
-            switch event {
-            case .mouseMove(let p), .mouseDrag(let p), .mouseDown(_, let p, _), .mouseUp(_, let p, _): point = p
-            default: point = nil
-            }
-            if let p = point,
+            if let p = pointerTarget(event),
                p.x < bounds.x || p.y < bounds.y || p.x >= bounds.x + bounds.width || p.y >= bounds.y + bounds.height {
                 return refuse("out_of_bounds", "the point is outside the bound window")
             }
@@ -208,7 +254,7 @@ public struct Runner {
             guard let chord = Chord.parse(text), let code = KeyMap.code(for: chord.key) else {
                 return .failure(refuse("bad_chord", "not a chord this helper knows"))
             }
-            guard !Denylist.denies(chord) else { return .failure(refuse("chord_denied", "that shortcut is not allowed")) }
+            guard ChordPolicy.allows(chord) else { return .failure(refuse("chord_denied", "that shortcut is not allowed")) }
             return .success(Plan(verb: verb, events: { _ in
                 [.keyDown(code, chord.modifiers), .keyUp(code, chord.modifiers)]
             }, isTyping: false))
