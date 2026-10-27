@@ -187,7 +187,9 @@ public struct Runner {
         if now - idle > since + Self.ownActionSlack {
             return .failure(refuse("user_active", "you used the mouse or keyboard; SOL stopped"))
         }
-        if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid) { return .failure(lost) }
+        if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid, root: root) {
+            return .failure(lost)
+        }
         return .success(["verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now()])
     }
 
@@ -244,18 +246,19 @@ public struct Runner {
     }
 
     /// Post in order. Before EVERY event: no stop signal, the bound app and window
-    /// still in front, no physical input since our previous post, and — for a
+    /// still in front, still working inside the workspace, no physical input since our previous post, and — for a
     /// pointer event — nothing opened over its target since. Keys, text and
     /// pauses go to the bound process (or nowhere); pointer events post globally.
     /// A stop with a button held releases it — globally while the press point is
     /// still over the bound window (the window server tracks the button there),
     /// otherwise to the bound process only (a global release over a popup menu
     /// would choose an item in it).
-    private func post(_ events: [SyntheticEvent], bundle: String, windowId: UInt32, pid: Int) -> Refusal? {
+    private func post(_ events: [SyntheticEvent], bundle: String, windowId: UInt32, pid: Int, root: String) -> Refusal? {
         var held: (MouseButton, Point)?
         var lastPost: Double?
         for (index, event) in events.enumerated() {
-            if var stop = stopReason(event, bundle: bundle, windowId: windowId, lastPost: lastPost) {
+            if var stop = stopReason(event, bundle: bundle, windowId: windowId, lastPost: lastPost)
+                ?? (worksInside(pid: pid, root) ? nil : outsideWorkspace) {
                 if let (button, at) = held {
                     port.post(.mouseUp(button, at, clicks: 1), toPid: port.topWindow(at: at) == windowId ? nil : pid)
                 }

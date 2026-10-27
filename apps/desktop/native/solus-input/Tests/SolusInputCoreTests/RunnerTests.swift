@@ -472,4 +472,13 @@ final class WorkspaceBindingTests: XCTestCase {
         XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])),
                        "outside_workspace")
     }
+
+    func testAProjectSwitchMidVerbStopsBeforeTheNextEvent() {
+        let port = FakePort()
+        port.afterPost = { $0.cwd[42] = "/other-team/board" }
+        let r = act(port, ["click", "--x", "10", "--y", "40"])
+        XCTAssertEqual(code(r), "outside_workspace")
+        XCTAssertEqual(r["postedEvents"] as? Int, 1)
+        XCTAssertEqual(port.posted.count, 1)
+    }
 }
