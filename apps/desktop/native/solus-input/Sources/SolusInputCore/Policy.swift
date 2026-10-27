@@ -61,9 +61,11 @@ public struct Chord: Equatable {
 /// Chords are ALLOWED, never denied (an allowlist cannot miss a system shortcut):
 /// an editing key alone or with shift, or command with the few editing
 /// shortcuts SOL needs. Function keys never pass (Mission Control, Show Desktop).
+/// No clipboard shortcuts (ADR-041 §5): copy/cut overwrite the user's clipboard
+/// and paste could carry a copied secret into the app and the next capture.
 public enum ChordPolicy {
     static let functionKeys: Set<String> = Set((1...12).map { "f\($0)" })
-    static let commandKeys: Set<String> = ["z", "c", "v", "x", "a", "f", "g", "=", "-", "0"]
+    static let commandKeys: Set<String> = ["z", "a", "f", "g", "=", "-", "0"]
 
     public static func allows(_ chord: Chord) -> Bool {
         switch chord.modifiers {

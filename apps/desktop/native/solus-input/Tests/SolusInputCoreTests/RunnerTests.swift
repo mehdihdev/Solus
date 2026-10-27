@@ -9,7 +9,10 @@ final class FakePort: SystemPort {
     var screenRecording = true
     var front: FrontmostInfo?
     var windows: [UInt32: WindowInfo] = [:]
-    var secure = false
+    /// nil = the focused element could not be read (counts as secure).
+    var secure: Bool? = false
+    var titleBar: Double = 28
+    var stop = false
     var idle: Double = 100
     var clock: Double = 1_000
     var posted: [SyntheticEvent] = []
@@ -36,7 +39,9 @@ final class FakePort: SystemPort {
     func screenRecordingAllowed() -> Bool { screenRecording }
     func frontmost() -> FrontmostInfo? { front }
     func window(id: UInt32) -> WindowInfo? { windows[id] }
-    func focusedElementIsSecure() -> Bool { secure }
+    func focusedElementIsSecure(pid: Int) -> Bool? { secure }
+    func titleBarHeight(window: WindowInfo) -> Double { titleBar }
+    func stopRequested() -> Bool { stop }
     func secondsSinceLastPhysicalInput() -> Double { idle }
     func now() -> Double { clock }
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage { image }
@@ -79,9 +84,14 @@ final class IdentifyTests: XCTestCase {
         let port = FakePort()
         port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "Terminal"),
                                    window: nil)
+        port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.mail", pid: 9, name: "Mail"),
+                                   window: WindowInfo(id: 3, title: "Re: salary review", bounds: Rect(x: 0, y: 0, width: 9, height: 9),
+                                                      ownerBundleId: "com.apple.mail", onScreen: true))
         let r = invoke(port, ["identify"])
         XCTAssertEqual(r["allowed"] as? Bool, false)
-        XCTAssertTrue(r["window"] is NSNull)
+        XCTAssertTrue(r["window"] is NSNull, "never another app's window title")
+        XCTAssertTrue(r["app"] is NSNull, "never another app's identity")
+        XCTAssertNotNil(r["trust"])
     }
 }
 
@@ -110,6 +120,13 @@ final class CaptureTests: XCTestCase {
                        "window_mismatch")
     }
 
+    func testACaptureWhoseShapeDoesNotMatchTheWindowIsRefused() {
+        let port = FakePort()
+        port.image = CapturedImage(png: Data([1]), imageWidth: 1600, imageHeight: 1176) // shadow padding
+        XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])),
+                       "capture_failed")
+    }
+
     func testRefusesWithoutScreenRecording() {
         let port = FakePort()
         port.screenRecording = false
@@ -121,27 +138,27 @@ final class CaptureTests: XCTestCase {
 final class ActGuardTests: XCTestCase {
     func testEveryGuardRefusesAndPostsNothing() {
         let cases: [(String, (FakePort) -> Void, [String], String)] = [
-            ("untrusted", { $0.trusted = false }, ["click", "--x", "1", "--y", "1"], "not_trusted"),
+            ("untrusted", { $0.trusted = false }, ["click", "--x", "1", "--y", "40"], "not_trusted"),
             ("other app in front", {
                 $0.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "T"),
                                          window: nil)
-            }, ["click", "--x", "1", "--y", "1"], "not_frontmost"),
+            }, ["click", "--x", "1", "--y", "40"], "not_frontmost"),
             ("other window in front", {
                 $0.front = FrontmostInfo(app: AppInfo(bundleId: "org.kicad.kicad", pid: 42, name: "KiCad"),
                                          window: WindowInfo(id: 9, title: "x",
                                                             bounds: Rect(x: 0, y: 0, width: 50, height: 50),
                                                             ownerBundleId: "org.kicad.kicad", onScreen: true))
-            }, ["click", "--x", "1", "--y", "1"], "window_mismatch"),
+            }, ["click", "--x", "1", "--y", "40"], "window_mismatch"),
             ("x past the edge", { _ in }, ["click", "--x", "800", "--y", "1"], "out_of_bounds"),
             ("negative y", { _ in }, ["move", "--x", "1", "--y", "-1"], "out_of_bounds"),
             ("drag end outside", { _ in },
-             ["drag", "--x", "1", "--y", "1", "--to-x", "1", "--to-y", "600"], "out_of_bounds"),
-            ("user moved", { $0.idle = 0.3 }, ["click", "--x", "1", "--y", "1"], "user_active"),
+             ["drag", "--x", "1", "--y", "40", "--to-x", "1", "--to-y", "600"], "out_of_bounds"),
+            ("user moved", { $0.idle = 0.3 }, ["click", "--x", "1", "--y", "40"], "user_active"),
             ("another window on top", { p in p.windowAt = { _ in 99 } },
-             ["click", "--x", "1", "--y", "1"], "occluded"),
+             ["click", "--x", "1", "--y", "40"], "occluded"),
             ("drag ends under another window", { p in
                 p.windowAt = { $0.x > 150 ? 99 : nil }
-            }, ["drag", "--x", "1", "--y", "1", "--to-x", "100", "--to-y", "1"], "occluded"),
+            }, ["drag", "--x", "1", "--y", "40", "--to-x", "100", "--to-y", "40"], "occluded"),
             ("denied chord", { _ in }, ["key", "--chord", "cmd+q"], "chord_denied"),
             ("unknown key", { _ in }, ["key", "--chord", "cmd+banana"], "bad_chord"),
             ("password field", { $0.secure = true }, ["type", "--text", "hunter2"], "secure_field"),
@@ -160,7 +177,7 @@ final class ActGuardTests: XCTestCase {
     func testSinceMustBeFiniteNotInTheFutureAndRecent() {
         for since in ["inf", "nan", "1001.5", "300"] { // clock is 1000; > 10 min old is stale
             let port = FakePort()
-            XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "1"], since: since)), "usage", since)
+            XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40"], since: since)), "usage", since)
             XCTAssertEqual(port.posted, [])
         }
     }
@@ -170,7 +187,7 @@ final class ActGuardTests: XCTestCase {
         port.afterPost = { p in
             p.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "T"), window: nil)
         }
-        let r = act(port, ["click", "--x", "1", "--y", "1"])
+        let r = act(port, ["click", "--x", "1", "--y", "40"])
         XCTAssertEqual(code(r), "focus_lost")
         XCTAssertEqual(r["postedEvents"] as? Int, 1)
         XCTAssertEqual(port.posted.count, 1, "nothing after the focus change")
@@ -183,7 +200,7 @@ final class ActGuardTests: XCTestCase {
             posts += 1
             if posts == 3 { p.windowAt = { _ in 99 } } // a menu opens after the first drag step
         }
-        let r = act(port, ["drag", "--x", "1", "--y", "1", "--to-x", "100", "--to-y", "1"])
+        let r = act(port, ["drag", "--x", "1", "--y", "40", "--to-x", "100", "--to-y", "40"])
         XCTAssertEqual(code(r), "occluded")
         XCTAssertEqual(r["postedEvents"] as? Int, 3)
         guard case .mouseUp(.left, _, clicks: 1) = port.posted.last else { return XCTFail("button left held") }
@@ -197,11 +214,88 @@ final class ActGuardTests: XCTestCase {
         XCTAssertEqual(port.posted, [])
     }
 
+    func testTheTitleBarIsOffLimits() {
+        let port = FakePort()
+        XCTAssertEqual(code(act(port, ["click", "--x", "10", "--y", "10"])), "window_chrome")
+        XCTAssertEqual(code(act(port, ["drag", "--x", "10", "--y", "40", "--to-x", "10", "--to-y", "5"])),
+                       "window_chrome")
+        XCTAssertEqual(port.posted, [])
+    }
+
+    func testPasswordFieldsAreProtectedFromKeysTooAndUnknownCountsAsSecure() {
+        for (secure, verb) in [(Bool?.some(true), ["key", "--chord", "a"]),
+                               (nil, ["type", "--text", "x"]), (nil, ["key", "--chord", "return"])] {
+            let port = FakePort()
+            port.secure = secure
+            XCTAssertEqual(code(act(port, verb)), "secure_field", "\(verb)")
+            XCTAssertEqual(port.posted, [])
+        }
+    }
+
+    func testPhysicalInputMidVerbStopsAtTheNextEvent() {
+        let port = FakePort()
+        port.afterPost = { p in p.idle = 0 } // the user grabbed the mouse right after our first event
+        port.clock = 1_000
+        var tick = 1_000.0
+        let original = port.afterPost
+        port.afterPost = { p in original(p); tick += 0.2; p.clock = tick }
+        let r = act(port, ["drag", "--x", "1", "--y", "40", "--to-x", "100", "--to-y", "40"])
+        XCTAssertEqual(code(r), "user_active")
+        XCTAssertEqual(r["postedEvents"] as? Int, 1)
+    }
+
+    func testAStopSignalEndsTheVerbAndReleasesAHeldButton() {
+        let port = FakePort()
+        var posts = 0
+        port.afterPost = { p in posts += 1; if posts == 2 { p.stop = true } }
+        let r = act(port, ["drag", "--x", "1", "--y", "40", "--to-x", "100", "--to-y", "40"])
+        XCTAssertEqual(code(r), "stopped")
+        XCTAssertEqual(r["postedEvents"] as? Int, 2)
+        guard case .mouseUp(.left, let at, clicks: 1) = port.posted.last else { return XCTFail("button left held") }
+        XCTAssertEqual(at, Point(x: 101, y: 90))
+        XCTAssertEqual(port.postedPids.last, Optional<Int>.none, "still over the window: release globally")
+    }
+
+    func testAResizeSinceTheCaptureRefuses() {
+        let port = FakePort()
+        XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40", "--expect-width", "640",
+                                       "--expect-height", "600"])), "window_resized")
+        XCTAssertEqual(act(port, ["click", "--x", "1", "--y", "40", "--expect-width", "800",
+                                  "--expect-height", "600"])["ok"] as? Bool, true)
+    }
+
+    func testTypeRefusesInvisibleAndFunctionKeyCharacters() {
+        for text in ["\u{F704}", "a\u{2028}b", "a\u{2029}", "a" + String(repeating: "\u{0301}", count: 300), "\u{200B}"] {
+            let port = FakePort()
+            XCTAssertEqual(code(act(port, ["type", "--text", text])), "bad_text", text.debugDescription)
+        }
+        let port = FakePort()
+        XCTAssertEqual(act(port, ["type", "--text", "R1 = 10k Ω, 5%"])["ok"] as? Bool, true)
+    }
+
+    func testMalformedArgumentEdgeCases() {
+        let port = FakePort()
+        for argv in [
+            ["act", "--bundle", "org.kicad.kicad", "--bundle", "x", "--window", "7", "--since", "990", "wait", "--ms", "1"],
+            ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990", "wait", "wait", "--ms", "1"],
+            ["act", "--bundle", "org.kicad.kicad", "--window", "4294967296", "--since", "990", "wait", "--ms", "1"],
+            ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990", "wait", "--ms"],
+            ["--act"],
+            ["capture", "--bundle", "org.kicad.kicad", "--window", "7", "--max-edge", "255"],
+            ["capture", "--bundle", "org.kicad.kicad", "--window", "7", "--max-edge", "2049"],
+            ["capture", "--bundle", "org.kicad.kicad", "--window", "7", "--max-edge", "big"],
+            ["identify", "--x", "1"],
+        ] {
+            XCTAssertEqual(code(invoke(port, argv)), "usage", argv.joined(separator: " "))
+        }
+        XCTAssertEqual(port.posted, [])
+    }
+
     func testAnAppOffTheListIsRefusedEvenWhenItIsFrontmost() {
         let port = FakePort()
         port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "Terminal"),
                                    window: FakePort.kicadWindow)
-        XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "1"], bundle: "com.apple.Terminal")),
+        XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40"], bundle: "com.apple.Terminal")),
                        "app_not_allowed")
         XCTAssertEqual(port.posted, [])
     }
@@ -209,7 +303,7 @@ final class ActGuardTests: XCTestCase {
     func testOurOwnPreviousActionIsNotMistakenForTheUser() {
         let port = FakePort()
         port.idle = 10.2 // last HID event ~ when our previous action finished (since = clock − 10)
-        let r = act(port, ["click", "--x", "1", "--y", "1"], since: "990")
+        let r = act(port, ["click", "--x", "1", "--y", "40"], since: "990")
         XCTAssertEqual(r["ok"] as? Bool, true)
         XCTAssertEqual(r["finishedAt"] as? Double, 1_000, "the next --since comes from this clock")
     }
@@ -232,39 +326,42 @@ final class ActGuardTests: XCTestCase {
 final class ActEventTests: XCTestCase {
     func testClickPostsInGlobalCoordinatesFromTheLiveWindowBounds() {
         let port = FakePort()
-        let r = act(port, ["click", "--x", "10", "--y", "20"])
+        let r = act(port, ["click", "--x", "10", "--y", "40"])
         XCTAssertEqual(r["ok"] as? Bool, true)
-        let p = Point(x: 110, y: 70)
+        let p = Point(x: 110, y: 90)
         XCTAssertEqual(port.posted, [.mouseMove(p), .mouseDown(.left, p, clicks: 1), .mouseUp(.left, p, clicks: 1)])
         XCTAssertEqual(port.postedPids, [nil, nil, nil], "pointer events are hit-tested, then posted globally")
     }
 
     func testDoubleClickAndASingleRightClick() {
         let port = FakePort()
-        _ = act(port, ["click", "--x", "0", "--y", "0", "--count", "2"])
-        let p = Point(x: 100, y: 50)
+        _ = act(port, ["click", "--x", "0", "--y", "30", "--count", "2"])
+        let p = Point(x: 100, y: 80)
         XCTAssertEqual(port.posted, [
             .mouseMove(p),
             .mouseDown(.left, p, clicks: 1), .mouseUp(.left, p, clicks: 1),
             .mouseDown(.left, p, clicks: 2), .mouseUp(.left, p, clicks: 2),
         ])
         let right = FakePort()
-        _ = act(right, ["click", "--x", "0", "--y", "0", "--button", "right"])
+        _ = act(right, ["click", "--x", "0", "--y", "30", "--button", "right"])
         XCTAssertEqual(right.posted, [.mouseMove(p), .mouseDown(.right, p, clicks: 1), .mouseUp(.right, p, clicks: 1)])
     }
 
     func testDragMovesThroughToTheEnd() {
         let port = FakePort()
-        _ = act(port, ["drag", "--x", "0", "--y", "0", "--to-x", "100", "--to-y", "0"])
-        XCTAssertEqual(port.posted.first, .mouseMove(Point(x: 100, y: 50)))
-        XCTAssertEqual(port.posted.last, .mouseUp(.left, Point(x: 200, y: 50), clicks: 1))
-        XCTAssertTrue(port.posted.contains(.mouseDrag(Point(x: 200, y: 50))))
+        _ = act(port, ["drag", "--x", "0", "--y", "30", "--to-x", "100", "--to-y", "30"])
+        XCTAssertEqual(port.posted.first, .mouseMove(Point(x: 100, y: 80)))
+        XCTAssertEqual(port.posted.last, .mouseUp(.left, Point(x: 200, y: 80), clicks: 1))
+        XCTAssertTrue(port.posted.contains(.mouseDrag(Point(x: 200, y: 80))))
+        XCTAssertTrue(port.posted.contains(.mouseDrag(Point(x: 110, y: 80))), "10 even steps")
     }
 
     func testScrollAtAPoint() {
         let port = FakePort()
-        _ = act(port, ["scroll", "--x", "5", "--y", "5", "--dy", "-3"])
-        XCTAssertEqual(port.posted, [.mouseMove(Point(x: 105, y: 55)), .scroll(dx: 0, dy: -3)])
+        _ = act(port, ["scroll", "--x", "5", "--y", "35", "--dy", "-3"])
+        let at = Point(x: 105, y: 85)
+        XCTAssertEqual(port.posted, [.mouseMove(at), .scroll(at, dx: 0, dy: -3)])
+        XCTAssertEqual(port.postedPids, [nil, nil], "scroll is a pointer event: hit-tested, posted globally")
     }
 
     func testAllowedChordPostsKeyDownAndUpWithItsModifiers() {

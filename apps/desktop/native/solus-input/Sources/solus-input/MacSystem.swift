@@ -16,16 +16,32 @@ let interEventMicros: useconds_t = 8_000
 let captureTimeout: DispatchTimeInterval = .seconds(10)
 /// HID event types that count as the user touching the machine.
 let physicalInputTypes: [CGEventType] = [
-    .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged,
-    .rightMouseDragged, .scrollWheel, .keyDown, .flagsChanged,
+    .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown,
+    .otherMouseUp, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel,
+    .keyDown, .keyUp, .flagsChanged, .tabletPointer, .tabletProximity,
 ]
+/// Fallback when a window's close button cannot be read.
+let defaultTitleBarHeight = 28.0
+/// Room below the traffic-light buttons that still belongs to the title bar.
+let titleBarMargin = 4.0
+
+/// Set by the SIGTERM handler (main.swift); read between posted events.
+final class StopFlag: @unchecked Sendable {
+    static let shared = StopFlag()
+    private let lock = NSLock()
+    private var raised = false
+    func raise() { lock.lock(); raised = true; lock.unlock() }
+    var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return raised }
+}
 
 struct MacSystem: SystemPort {
     private let source = CGEventSource(stateID: .privateState)
 
     func accessibilityTrusted() -> Bool { AXIsProcessTrusted() }
     func screenRecordingAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
-    func now() -> Double { Date().timeIntervalSince1970 }
+    /// Monotonic (system uptime), like the HID idle counter it is compared with.
+    func now() -> Double { ProcessInfo.processInfo.systemUptime }
+    func stopRequested() -> Bool { StopFlag.shared.isRaised }
 
     func secondsSinceLastPhysicalInput() -> Double {
         physicalInputTypes
@@ -33,32 +49,59 @@ struct MacSystem: SystemPort {
             .min() ?? .greatestFiniteMagnitude
     }
 
+    /// The owner of the front-most ordinary (layer 0) window, read live from the
+    /// window server — NSWorkspace.frontmostApplication is notification-backed
+    /// and goes stale in a process with no run loop.
     func frontmost() -> FrontmostInfo? {
-        guard let app = NSWorkspace.shared.frontmostApplication, let bundle = app.bundleIdentifier else { return nil }
-        let pid = app.processIdentifier
-        let front = windowList([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-            .first { ($0[kCGWindowOwnerPID as String] as? pid_t) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 }
+        guard let front = windowList([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            .first(where: { ($0[kCGWindowLayer as String] as? Int) == 0 }),
+            let pid = front[kCGWindowOwnerPID as String] as? pid_t,
+            let app = NSRunningApplication(processIdentifier: pid), let bundle = app.bundleIdentifier
+        else { return nil }
         return FrontmostInfo(
             app: AppInfo(bundleId: bundle, pid: Int(pid), name: app.localizedName ?? bundle),
-            window: front.flatMap(windowInfo))
+            window: windowInfo(front))
     }
 
     func window(id: UInt32) -> WindowInfo? {
         windowList([.optionIncludingWindow], CGWindowID(id)).first.flatMap(windowInfo)
     }
 
-    func focusedElementIsSecure() -> Bool {
-        let system = AXUIElementCreateSystemWide()
+    /// The bound process's focused element, not the system-wide one. "No focused
+    /// element" is not secure; any other AX failure is unknown (nil → secure).
+    func focusedElementIsSecure(pid: Int) -> Bool? {
+        let app = AXUIElementCreateApplication(pid_t(pid))
         var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let element = focused, CFGetTypeID(element) == AXUIElementGetTypeID()
-        else { return false }
-        let ax = element as! AXUIElement // swiftlint:disable:this force_cast — type id checked above
+        let status = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused)
+        if status == .noValue { return false }
+        guard status == .success, let element = focused, CFGetTypeID(element) == AXUIElementGetTypeID() else {
+            return nil
+        }
+        let ax = element as! AXUIElement // type id checked above
         return [kAXRoleAttribute, kAXSubroleAttribute].contains { attribute in
             var value: CFTypeRef?
             AXUIElementCopyAttributeValue(ax, attribute as CFString, &value)
-            return (value as? String) == "AXSecureTextField"
+            return (value as? String) == kAXSecureTextFieldSubrole as String
         }
+    }
+
+    /// From the window's real close button when AX can find it; else 28 pt.
+    func titleBarHeight(window: WindowInfo) -> Double {
+        guard let pid = windowList([.optionIncludingWindow], CGWindowID(window.id)).first?[kCGWindowOwnerPID as String]
+            as? pid_t else { return defaultTitleBarHeight }
+        let app = AXUIElementCreateApplication(pid)
+        var windows: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows) == .success,
+              let list = windows as? [AXUIElement] else { return defaultTitleBarHeight }
+        for candidate in list where frame(candidate).map({ near($0.origin, window.bounds) }) == true {
+            var button: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(candidate, kAXCloseButtonAttribute as CFString, &button) == .success,
+                  let close = button, CFGetTypeID(close) == AXUIElementGetTypeID(),
+                  let closeFrame = frame(close as! AXUIElement) // type id checked above
+            else { continue }
+            return max(defaultTitleBarHeight, closeFrame.maxY - window.bounds.y + titleBarMargin)
+        }
+        return defaultTitleBarHeight
     }
 
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage {
@@ -79,6 +122,7 @@ struct MacSystem: SystemPort {
                 config.width = max(1, Int(width * fit))
                 config.height = max(1, Int(height * fit))
                 config.showsCursor = false
+                config.ignoreShadowsSingleWindow = true // the image must be exactly the window
                 outcome = .success(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config))
             } catch {
                 outcome = .failure(error)
@@ -110,10 +154,9 @@ struct MacSystem: SystemPort {
             usleep(useconds_t(ms) * 1_000)
             return
         case .text(let text):
-            // Unicode text in small chunks: one key-down/up pair per chunk.
-            let units = Array(text.utf16)
-            stride(from: 0, to: units.count, by: 16).forEach { start in
-                let chunk = Array(units[start..<min(start + 16, units.count)])
+            // Unicode text in small chunks (one key-down/up pair each), split on
+            // character boundaries so a surrogate pair or emoji is never cut.
+            for chunk in textChunks(text) {
                 for down in [true, false] {
                     let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
                     e?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
@@ -144,9 +187,11 @@ struct MacSystem: SystemPort {
             let e = b == .left ? mouse(.leftMouseUp, p) : mouse(.rightMouseUp, p, .right)
             e?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
             return e
-        case .scroll(let dx, let dy):
-            return CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2,
-                           wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0)
+        case .scroll(let at, let dx, let dy):
+            let e = CGEvent(scrollWheelEvent2Source: source, units: .line, wheelCount: 2,
+                            wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0)
+            e?.location = CGPoint(x: at.x, y: at.y) // the hit-tested point, not wherever the cursor is
+            return e
         case .keyDown(let code, let modifiers), .keyUp(let code, let modifiers):
             let down: Bool
             if case .keyDown = event { down = true } else { down = false }
@@ -192,6 +237,38 @@ struct MacSystem: SystemPort {
             bounds: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
             ownerBundleId: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "",
             onScreen: entry[kCGWindowIsOnscreen as String] as? Bool ?? false)
+    }
+
+    private func textChunks(_ text: String) -> [[UniChar]] {
+        var chunks: [[UniChar]] = []
+        var current: [UniChar] = []
+        for character in text {
+            let units = Array(String(character).utf16)
+            if !current.isEmpty, current.count + units.count > 16 {
+                chunks.append(current)
+                current = []
+            }
+            current += units
+        }
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
+    }
+
+    private func frame(_ element: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?
+        var size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let p = position, let s = size else { return nil }
+        var origin = CGPoint.zero
+        var extent = CGSize.zero
+        guard AXValueGetValue(p as! AXValue, .cgPoint, &origin), // AX position/size are AXValues
+              AXValueGetValue(s as! AXValue, .cgSize, &extent) else { return nil }
+        return CGRect(origin: origin, size: extent)
+    }
+
+    private func near(_ origin: CGPoint, _ bounds: Rect) -> Bool {
+        abs(origin.x - bounds.x) < 2 && abs(origin.y - bounds.y) < 2
     }
 
     private func png(_ image: CGImage) throws -> Data {

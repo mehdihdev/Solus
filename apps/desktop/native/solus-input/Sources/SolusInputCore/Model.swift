@@ -74,7 +74,7 @@ public enum SyntheticEvent: Equatable {
     case mouseDown(MouseButton, Point, clicks: Int)
     case mouseUp(MouseButton, Point, clicks: Int)
     case mouseDrag(Point)
-    case scroll(dx: Int, dy: Int)
+    case scroll(Point, dx: Int, dy: Int)
     case keyDown(UInt16, Set<Modifier>)
     case keyUp(UInt16, Set<Modifier>)
     case text(String)
@@ -93,11 +93,17 @@ public protocol SystemPort {
     func screenRecordingAllowed() -> Bool
     func frontmost() -> FrontmostInfo?
     func window(id: UInt32) -> WindowInfo?
-    func focusedElementIsSecure() -> Bool
-    /// Seconds since the HID system last saw PHYSICAL input (any device).
+    /// Whether the bound process's focused element is a password field; nil when
+    /// it cannot be read (the caller treats unknown as secure).
+    func focusedElementIsSecure(pid: Int) -> Bool?
+    /// Height of the window's title bar (close/minimise/zoom live there), points.
+    func titleBarHeight(window: WindowInfo) -> Double
+    /// Seconds since the HID system last saw input (any device).
     func secondsSinceLastPhysicalInput() -> Double
-    /// Unix time, seconds.
+    /// A monotonic clock, seconds (system uptime) — the `--since` clock.
     func now() -> Double
+    /// SIGTERM arrived: stop between events and release anything held.
+    func stopRequested() -> Bool
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage
     /// The id of the topmost visible on-screen window containing `point`, any layer.
     func topWindow(at point: Point) -> UInt32?

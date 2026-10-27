@@ -20,11 +20,14 @@ final class ChordTests: XCTestCase {
         for denied in ["cmd+q", "cmd+w", "cmd+tab", "cmd+space", "ctrl+cmd+q", "cmd+option+escape",
                        "shift+cmd+3", "cmd+shift+5", "ctrl+right", "cmd+h", "cmd+m", "cmd+s",
                        "shift+cmd+s", "cmd+p", "cmd+`", "f3", "f11", "shift+f1", "ctrl+f2", "ctrl+a",
-                       "option+e", "cmd+option+z", "cmd+k", "cmd+shift+c", "ctrl+space"] {
+                       "option+e", "cmd+option+z", "cmd+k", "cmd+shift+c", "ctrl+space",
+                       // ADR-041 §5: no clipboard access — copy/cut overwrite the user's
+                       // clipboard, paste could leak a copied secret into a capture.
+                       "cmd+c", "cmd+v", "cmd+x"] {
             XCTAssertFalse(ChordPolicy.allows(Chord.parse(denied)!), denied)
         }
         for allowed in ["cmd+z", "shift+cmd+z", "escape", "a", "shift+a", "return", "delete", "e",
-                        "w", "cmd+c", "cmd+v", "cmd+x", "cmd+a", "cmd+f", "cmd+=", "cmd+-", "up",
+                        "w", "cmd+a", "cmd+f", "cmd+=", "cmd+-", "up",
                         "shift+left", "tab", "space", "5"] {
             XCTAssertTrue(ChordPolicy.allows(Chord.parse(allowed)!), allowed)
         }

@@ -15,7 +15,7 @@ private func refuse(_ code: String, _ message: String) -> Refusal { Refusal(code
 private struct Plan {
     let verb: String
     let events: (Rect) -> [SyntheticEvent]
-    let isTyping: Bool
+    let isKeyboard: Bool
 }
 
 public struct Runner {
@@ -28,6 +28,11 @@ public struct Runner {
     static let ownActionSlack = 0.05
     /// `--since` older than this is a stale or forged stamp, not a step in progress.
     static let maxSinceAge = 600.0
+    /// Mid-verb, our own just-posted event lands within this of its post time;
+    /// input later than that is the user (fails closed if delivery is slower).
+    static let ownEventSlack = 0.003
+    /// A capture's aspect may differ from the window's by rounding only.
+    static let aspectTolerance = 0.02
 
     let port: SystemPort
 
@@ -68,12 +73,16 @@ public struct Runner {
         guard let front else {
             return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
         }
+        // Another app's identity and window title never leave the machine.
+        guard DrivableApps.allows(front.app.bundleId) else {
+            return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
+        }
         return .success([
             "now": port.now(),
             "app": ["bundleId": front.app.bundleId, "pid": front.app.pid, "name": front.app.name],
             "window": front.window.map(Self.windowJSON) ?? NSNull(),
             "trust": trust,
-            "allowed": DrivableApps.allows(front.app.bundleId),
+            "allowed": true,
         ])
     }
 
@@ -95,7 +104,7 @@ public struct Runner {
               let bundle = args.string("bundle"), let windowId = args.windowId("window")
         else { return .failure(refuse("usage", "capture --bundle B --window W [--max-edge N]")) }
         let maxEdge = args.string("max-edge") == nil ? Self.defaultMaxEdge : (args.int("max-edge") ?? -1)
-        guard (256...4096).contains(maxEdge) else { return .failure(refuse("usage", "max-edge must be 256-4096")) }
+        guard (256...2048).contains(maxEdge) else { return .failure(refuse("usage", "max-edge must be 256-2048")) }
         guard DrivableApps.allows(bundle) else { return .failure(refuse("app_not_allowed", "not a drivable app")) }
         guard port.screenRecordingAllowed() else {
             return .failure(refuse("screen_recording_denied", "Screen Recording is not granted"))
@@ -108,6 +117,12 @@ public struct Runner {
         }
         do {
             let image = try port.capture(window: window, maxEdge: maxEdge)
+            // A padded image (a window shadow) would skew every coordinate mapped from it.
+            let imageAspect = Double(image.imageWidth) / Double(max(image.imageHeight, 1))
+            let windowAspect = window.bounds.width / max(window.bounds.height, 1)
+            guard abs(imageAspect - windowAspect) <= Self.aspectTolerance * windowAspect else {
+                return .failure(refuse("capture_failed", "the capture does not match the window's shape"))
+            }
             return .success([
                 "png": image.png.base64EncodedString(),
                 "imageWidth": image.imageWidth, "imageHeight": image.imageHeight,
@@ -146,11 +161,15 @@ public struct Runner {
         guard since.isFinite, since <= now + Self.ownActionSlack, now - since <= Self.maxSinceAge else {
             return .failure(refuse("usage", "--since must be a recent time from this helper's clock"))
         }
+        if let resized = Self.resized(args, window.bounds) { return .failure(resized) }
         let events = plan.events(window.bounds)
         if let outside = Self.firstOutside(events, window.bounds) { return .failure(outside) }
+        if let chrome = Self.firstOnChrome(events, window.bounds, port.titleBarHeight(window: window)) {
+            return .failure(chrome)
+        }
         if let covered = firstOccluded(events, window.id) { return .failure(covered) }
-        if plan.isTyping, port.focusedElementIsSecure() {
-            return .failure(refuse("secure_field", "a password field has focus"))
+        if plan.isKeyboard, port.focusedElementIsSecure(pid: front.app.pid) != false {
+            return .failure(refuse("secure_field", "a password field has focus, or focus could not be read"))
         }
         let idle = port.secondsSinceLastPhysicalInput()
         if now - idle > since + Self.ownActionSlack {
@@ -158,6 +177,27 @@ public struct Runner {
         }
         if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid) { return .failure(lost) }
         return .success(["verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now()])
+    }
+
+    /// `--expect-width/--expect-height`: the size the caller captured. A resize
+    /// since then would land a remapped click on a different control.
+    private static func resized(_ args: Arguments, _ bounds: Rect) -> Refusal? {
+        let width = args.string("expect-width") == nil ? nil : args.int("expect-width") ?? -1
+        let height = args.string("expect-height") == nil ? nil : args.int("expect-height") ?? -1
+        if let width, width != Int(bounds.width.rounded()) { return refuse("window_resized", "the window changed size") }
+        if let height, height != Int(bounds.height.rounded()) { return refuse("window_resized", "the window changed size") }
+        return nil
+    }
+
+    /// The title bar holds close / minimise / zoom (and double-click zooms):
+    /// closing needs its own approval (ADR-041 §4), so no pointer target lands there.
+    private static func firstOnChrome(_ events: [SyntheticEvent], _ bounds: Rect, _ titleBar: Double) -> Refusal? {
+        for event in events {
+            if let p = pointerTarget(event), p.y < bounds.y + titleBar {
+                return refuse("window_chrome", "that point is on the window's title bar")
+            }
+        }
+        return nil
     }
 
     /// Each pointer target must be the bound window itself, not something on top
@@ -171,28 +211,26 @@ public struct Runner {
         return nil
     }
 
-    /// Post in order, re-checking before EVERY event that the bound app and
-    /// window are still in front and — for pointer events — that nothing has
-    /// opened over the target since (a menu, a dialog). Keys and text go to the
-    /// bound process only. A stop with a button still held releases it to the
-    /// bound process, never globally (a release over a popup menu would choose
-    /// an item in it).
+    /// Post in order. Before EVERY event: no stop signal, the bound app and window
+    /// still in front, no physical input since our previous post, and — for a
+    /// pointer event — nothing opened over its target since. Keys, text and
+    /// pauses go to the bound process (or nowhere); pointer events post globally.
+    /// A stop with a button held releases it — globally while the press point is
+    /// still over the bound window (the window server tracks the button there),
+    /// otherwise to the bound process only (a global release over a popup menu
+    /// would choose an item in it).
     private func post(_ events: [SyntheticEvent], bundle: String, windowId: UInt32, pid: Int) -> Refusal? {
         var held: (MouseButton, Point)?
+        var lastPost: Double?
         for (index, event) in events.enumerated() {
-            var stop: Refusal?
-            if let front = port.frontmost(), front.app.bundleId == bundle, front.window?.id == windowId {
-                if let p = Self.pointerTarget(event), port.topWindow(at: p) != windowId {
-                    stop = refuse("occluded", "something opened over that point; SOL stopped")
+            if var stop = stopReason(event, bundle: bundle, windowId: windowId, lastPost: lastPost) {
+                if let (button, at) = held {
+                    port.post(.mouseUp(button, at, clicks: 1), toPid: port.topWindow(at: at) == windowId ? nil : pid)
                 }
-            } else {
-                stop = refuse("focus_lost", "the bound window lost focus; SOL stopped")
-            }
-            if var stop {
-                if let (button, at) = held { port.post(.mouseUp(button, at, clicks: 1), toPid: pid) }
                 stop.postedEvents = index
                 return stop
             }
+            lastPost = port.now()
             port.post(event, toPid: Self.pointerTarget(event) == nil && !Self.isPause(event) ? pid : nil)
             switch event {
             case .mouseDown(let button, let at, _): held = (button, at)
@@ -204,6 +242,20 @@ public struct Runner {
         return nil
     }
 
+    private func stopReason(_ event: SyntheticEvent, bundle: String, windowId: UInt32, lastPost: Double?) -> Refusal? {
+        if port.stopRequested() { return refuse("stopped", "SOL was stopped") }
+        guard let front = port.frontmost(), front.app.bundleId == bundle, front.window?.id == windowId else {
+            return refuse("focus_lost", "the bound window lost focus; SOL stopped")
+        }
+        if let lastPost, port.now() - port.secondsSinceLastPhysicalInput() > lastPost + Self.ownEventSlack {
+            return refuse("user_active", "you used the mouse or keyboard; SOL stopped")
+        }
+        if let p = Self.pointerTarget(event), port.topWindow(at: p) != windowId {
+            return refuse("occluded", "something opened over that point; SOL stopped")
+        }
+        return nil
+    }
+
     private static func isPause(_ event: SyntheticEvent) -> Bool {
         if case .sleep = event { return true }
         return false
@@ -211,7 +263,8 @@ public struct Runner {
 
     private static func pointerTarget(_ event: SyntheticEvent) -> Point? {
         switch event {
-        case .mouseMove(let p), .mouseDrag(let p), .mouseDown(_, let p, _), .mouseUp(_, let p, _): return p
+        case .mouseMove(let p), .mouseDrag(let p), .mouseDown(_, let p, _), .mouseUp(_, let p, _), .scroll(let p, _, _):
+            return p
         default: return nil
         }
     }
@@ -228,7 +281,7 @@ public struct Runner {
     }
 
     private static func plan(_ verb: String, _ args: Arguments) -> Result<Plan, Refusal> {
-        let common: Set<String> = ["bundle", "window", "since"]
+        let common: Set<String> = ["bundle", "window", "since", "expect-width", "expect-height"]
         let usage = refuse("usage", "bad arguments for \(verb)")
         func point(_ xKey: String, _ yKey: String) -> (Int, Int)? {
             guard let x = args.int(xKey), let y = args.int(yKey) else { return nil }
@@ -247,10 +300,10 @@ public struct Runner {
                 return [.mouseMove(at)] + (1...count).flatMap { n in
                     [SyntheticEvent.mouseDown(button, at, clicks: n), .mouseUp(button, at, clicks: n)]
                 }
-            }, isTyping: false))
+            }, isKeyboard: false))
         case "move":
             guard args.has(only: common.union(["x", "y"])), let p = point("x", "y") else { return .failure(usage) }
-            return .success(Plan(verb: verb, events: { b in [.mouseMove(global(p, b))] }, isTyping: false))
+            return .success(Plan(verb: verb, events: { b in [.mouseMove(global(p, b))] }, isKeyboard: false))
         case "drag":
             guard args.has(only: common.union(["x", "y", "to-x", "to-y"])),
                   let from = point("x", "y"), let to = point("to-x", "to-y") else { return .failure(usage) }
@@ -261,14 +314,16 @@ public struct Runner {
                     return .mouseDrag(Point(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
                 }
                 return [.mouseMove(start), .mouseDown(.left, start, clicks: 1)] + path + [.mouseUp(.left, end, clicks: 1)]
-            }, isTyping: false))
+            }, isKeyboard: false))
         case "scroll":
             guard args.has(only: common.union(["x", "y", "dx", "dy"])), let p = point("x", "y"),
                   let dy = args.int("dy"), let dx = args.string("dx") == nil ? 0 : args.int("dx"),
                   abs(dx) <= maxScroll, abs(dy) <= maxScroll
             else { return .failure(usage) }
-            return .success(Plan(verb: verb, events: { b in [.mouseMove(global(p, b)), .scroll(dx: dx, dy: dy)] },
-                                 isTyping: false))
+            return .success(Plan(verb: verb, events: { b in
+                let at = global(p, b)
+                return [.mouseMove(at), .scroll(at, dx: dx, dy: dy)]
+            }, isKeyboard: false))
         case "key":
             guard args.has(only: common.union(["chord"])), let text = args.string("chord") else { return .failure(usage) }
             guard let chord = Chord.parse(text), let code = KeyMap.code(for: chord.key) else {
@@ -277,24 +332,35 @@ public struct Runner {
             guard ChordPolicy.allows(chord) else { return .failure(refuse("chord_denied", "that shortcut is not allowed")) }
             return .success(Plan(verb: verb, events: { _ in
                 [.keyDown(code, chord.modifiers), .keyUp(code, chord.modifiers)]
-            }, isTyping: false))
+            }, isKeyboard: true))
         case "type":
             guard args.has(only: common.union(["text"])), let text = args.string("text") else { return .failure(usage) }
-            guard (1...maxTextLength).contains(text.count),
-                  !text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
-            else { return .failure(refuse("bad_text", "1-200 printable characters, no newlines")) }
-            return .success(Plan(verb: verb, events: { _ in [.text(text)] }, isTyping: true))
+            guard (1...maxTextLength).contains(text.unicodeScalars.count),
+                  text.unicodeScalars.allSatisfy(Self.isVisibleText)
+            else { return .failure(refuse("bad_text", "1-200 visible characters, no newlines or control characters")) }
+            return .success(Plan(verb: verb, events: { _ in [.text(text)] }, isKeyboard: true))
         case "wait":
             guard args.has(only: common.union(["ms"])), let ms = args.int("ms"), (0...maxWaitMs).contains(ms)
             else { return .failure(usage) }
-            return .success(Plan(verb: verb, events: { _ in [.sleep(milliseconds: ms)] }, isTyping: false))
+            return .success(Plan(verb: verb, events: { _ in [.sleep(milliseconds: ms)] }, isKeyboard: false))
         default:
             return .failure(refuse("usage", "unknown verb"))
         }
     }
 
+    /// Letters, marks, numbers, punctuation, symbols and the space separator —
+    /// never control/format/private-use (U+F704 is Cocoa's F1) or line separators.
+    static let visibleText: CharacterSet = CharacterSet.letters
+        .union(.decimalDigits).union(.nonBaseCharacters).union(.punctuationCharacters).union(.symbols)
+        .union(CharacterSet(charactersIn: " "))
+        .union(CharacterSet(charactersIn: UnicodeScalar(0x2150)!...UnicodeScalar(0x218F)!)) // number forms
+    static func isVisibleText(_ scalar: Unicode.Scalar) -> Bool {
+        visibleText.contains(scalar) && !(0xE000...0xF8FF).contains(scalar.value)
+    }
+
     private func encode(_ object: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
               let line = String(data: data, encoding: .utf8)
         else { return #"{"code":"usage","message":"unencodable","ok":false}"# }
         return line
