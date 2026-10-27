@@ -1287,3 +1287,5 @@ verification), annual allowance 2,500, quiet period 90 s.
 - Driving costs credits per loop iteration, which matters for pricing (ADR-017/024).
 - Per-app allowlist and denylist maintenance; KiCad UI changes between versions can break steps. Mitigation: verification after every action, plus tool-knowledge notes (ADR-033).
 - Enterprise can disable driving per team. The setting is a team policy flag, so SSO/audit plans are not foreclosed.
+
+**ADR-041 amendment (2026-10-26, SOLUSDEV-319 drive slice 1 security review H1; approved in-chat against the concrete text below):** The OS grants (Accessibility, Screen Recording) are held only by `solus-input`, shipped as its own signed, notarised, `LSUIElement` app bundle inside Solus.app and launched with responsibility disclaimed. Solus.app never requests or holds either grant. The helper verifies its caller's code signature (Solus team ID) and its own integrity before acting, so no other process — including MCP servers and commands Solus runs — can use it or the grants. Consequence: one more signed artifact and signing identity to maintain; the drive setting's permission prompts name the helper, not Solus.
