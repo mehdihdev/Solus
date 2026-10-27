@@ -133,7 +133,8 @@ function attentionActions(ctx: PageContext): AttentionActions {
     openBilling: () => ctx.navigate('billing'),
     openAccounts: () => ctx.openHome('accounts'),
     requestDrivePermissions: ctx.drive.requestPermissions,
-    turnOffDrive: () => ctx.drive.setDrive(false)
+    turnOffDrive: () => ctx.drive.setDrive(false),
+    openDriveApproval: ctx.drive.openApproval
   }
 }
 

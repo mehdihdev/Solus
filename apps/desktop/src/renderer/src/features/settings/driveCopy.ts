@@ -18,6 +18,9 @@ export const DRIVE_REASON_COPY: Readonly<Record<DriveUnavailable, string>> = {
     "This project's folder is inside, or contains, another linked project's folder. Move one of them so SOL can't act on the other project's files."
 }
 
+/** Slice 3b: the agent is registered but the helper bundle is missing. */
+export const DRIVE_NOT_FOUND_COPY = 'The input helper is not installed correctly; reinstall Solus.'
+
 /** The helper bundle the grants belong to (never Solus.app). */
 export const DRIVE_HELPER_NAME = 'SolusInput'
 
@@ -34,4 +37,14 @@ export function missingGrants(trust: DriveTrust | null): DriveGrant[] {
 /** On, available, and the helper lacks a grant — off is not the user's problem. */
 export function driveBlocked(status: DriveStatus | null): boolean {
   return !!status?.enabled && status.available && missingGrants(status.trust).length > 0
+}
+
+/** On, and macOS wants the agent approved under Login Items (slice 3b). */
+export function driveNeedsApproval(status: DriveStatus | null): boolean {
+  return !!status?.enabled && status.agent === 'requires_approval'
+}
+
+/** On, and the agent's helper is not where the install put it. */
+export function driveHelperMissing(status: DriveStatus | null): boolean {
+  return !!status?.enabled && status.agent === 'not_found'
 }

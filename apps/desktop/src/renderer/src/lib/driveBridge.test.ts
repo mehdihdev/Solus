@@ -31,4 +31,11 @@ describe('getDriveBridge', () => {
     install(sol)
     expect(getDriveBridge()).toBe(sol)
   })
+
+  it('still returns the bridge when only openDriveApproval is absent', () => {
+    const rest: Partial<ReturnType<typeof fakeDriveBridge>> = { ...fakeDriveBridge() }
+    delete rest.openDriveApproval
+    install(rest)
+    expect(getDriveBridge()).not.toBeNull()
+  })
 })

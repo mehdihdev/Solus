@@ -113,3 +113,30 @@ describe('SolSection — SOL can use your mouse and keyboard (sol-drive.md §5)'
     ).toBeInTheDocument()
   })
 })
+
+describe('SolSection — the launchd agent (slice 3b)', () => {
+  it('tags an agent awaiting Login Items approval', async () => {
+    const onFixDrive = vi.fn()
+    const bridge = fakeDriveBridge(driveStatus({ enabled: true, agent: 'requires_approval' }))
+    render(<Harness bridge={bridge} onFixDrive={onFixDrive} />)
+    await screen.findByRole('switch', { name: LABEL })
+    expect(screen.getByText('Needs approval')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'How to fix' }))
+    expect(onFixDrive).toHaveBeenCalled()
+  })
+
+  it('says to reinstall when the helper is not found', async () => {
+    renderWith(driveStatus({ enabled: true, agent: 'not_found' }))
+    await screen.findByRole('switch', { name: LABEL })
+    expect(
+      screen.getByText('The input helper is not installed correctly; reinstall Solus.')
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Needs approval')).toBeNull()
+  })
+
+  it('shows neither while driving is off', async () => {
+    renderWith(driveStatus({ agent: 'requires_approval' }))
+    await screen.findByRole('switch', { name: LABEL })
+    expect(screen.queryByText('Needs approval')).toBeNull()
+  })
+})

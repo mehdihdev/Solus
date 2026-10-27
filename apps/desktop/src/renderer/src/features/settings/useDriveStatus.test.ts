@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { DRIVE_APPLY_ERROR, DRIVE_LOAD_ERROR, useDriveStatus } from './useDriveStatus'
 import { driveStatus, fakeDriveBridge } from './drive.fixtures'
+import type { DriveBridge } from '../../lib/driveBridge'
 
 describe('useDriveStatus', () => {
   it('is inert without the drive bridge', () => {
@@ -88,5 +89,32 @@ describe('useDriveStatus — rereads on return', () => {
     unmount()
     window.dispatchEvent(new Event('focus'))
     expect(bridge.getDriveStatus).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('useDriveStatus — Login Items approval (slice 3b)', () => {
+  it('opens the Login Items pane through the bridge', async () => {
+    const bridge = fakeDriveBridge()
+    const { result } = renderHook(() => useDriveStatus(bridge))
+    await waitFor(() => expect(result.current.status).not.toBeNull())
+    act(() => result.current.openApproval())
+    expect(bridge.openDriveApproval).toHaveBeenCalledTimes(1)
+  })
+
+  it('says so when main cannot open it', async () => {
+    const bridge = fakeDriveBridge()
+    vi.mocked(bridge.openDriveApproval!).mockRejectedValueOnce(new Error('no'))
+    const { result } = renderHook(() => useDriveStatus(bridge))
+    await waitFor(() => expect(result.current.status).not.toBeNull())
+    act(() => result.current.openApproval())
+    await waitFor(() => expect(result.current.error).toBe(DRIVE_APPLY_ERROR))
+  })
+
+  it('is a no-op when the preload lacks the member', async () => {
+    const bridge: DriveBridge = { ...fakeDriveBridge() }
+    delete bridge.openDriveApproval
+    const { result } = renderHook(() => useDriveStatus(bridge))
+    await waitFor(() => expect(result.current.status).not.toBeNull())
+    expect(() => act(() => result.current.openApproval())).not.toThrow()
   })
 })

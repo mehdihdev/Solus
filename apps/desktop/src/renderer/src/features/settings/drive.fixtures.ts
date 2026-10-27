@@ -8,7 +8,8 @@ export const DRIVE_STATUS: DriveStatus = {
   available: true,
   reason: null,
   trust: { accessibility: true, screenRecording: true },
-  unsignedDev: false
+  unsignedDev: false,
+  agent: 'enabled'
 }
 
 export function driveStatus(overrides: Partial<DriveStatus> = {}): DriveStatus {
@@ -26,6 +27,7 @@ export function fakeDriveBridge(status: DriveStatus | null = DRIVE_STATUS): Fake
     setDrive: vi.fn(async (on: boolean) => (status ? { ...status, enabled: on } : null)),
     requestDrivePermissions: vi.fn(async () => status),
     setDriving: vi.fn(async () => undefined),
+    openDriveApproval: vi.fn(async () => undefined),
     onDriveStatus: vi.fn((h: (s: DriveStatus) => void) => {
       handler = h
       return () => {

@@ -15,9 +15,13 @@ export interface DriveBridge {
   /** Tell main a drive.step is running (outline on) or ended (outline off). */
   setDriving: (active: boolean) => Promise<void>
   onDriveStatus: (handler: (status: DriveStatus) => void) => () => void
+  /** Slice 3b: open System Settings › Login Items. Optional — a preload
+   *  without it still drives; the approval card's button then does nothing. */
+  openDriveApproval?: () => Promise<void>
 }
 
-const MEMBERS: readonly (keyof DriveBridge)[] = [
+/** The required members; optional ones are feature-detected where used. */
+const MEMBERS: readonly Exclude<keyof DriveBridge, 'openDriveApproval'>[] = [
   'getDriveStatus',
   'setDrive',
   'requestDrivePermissions',

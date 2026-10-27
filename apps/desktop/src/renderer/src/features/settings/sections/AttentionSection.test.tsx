@@ -11,7 +11,8 @@ function actions(): AttentionActions {
     openBilling: vi.fn(),
     openAccounts: vi.fn(),
     requestDrivePermissions: vi.fn(),
-    turnOffDrive: vi.fn()
+    turnOffDrive: vi.fn(),
+    openDriveApproval: vi.fn()
   }
 }
 
@@ -95,6 +96,19 @@ describe('AttentionSection — drive (SOLUSDEV-319)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Ask macOS for permission' }))
     await userEvent.click(screen.getByRole('button', { name: 'Turn off mouse and keyboard' }))
     expect(a.requestDrivePermissions).toHaveBeenCalled()
+    expect(a.turnOffDrive).toHaveBeenCalled()
+  })
+
+  it('asks to allow SolusInput in Login Items and opens that pane', async () => {
+    const a = actions()
+    render(<AttentionSection items={[{ kind: 'drive_approval' }]} actions={a} />)
+    const card = screen.getByRole('group', { name: 'Allow SolusInput in Login Items' })
+    expect(card).toHaveTextContent(
+      'macOS asks you to allow SolusInput to run in the background before SOL can use your mouse and keyboard.'
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Open Login Items' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off mouse and keyboard' }))
+    expect(a.openDriveApproval).toHaveBeenCalled()
     expect(a.turnOffDrive).toHaveBeenCalled()
   })
 })

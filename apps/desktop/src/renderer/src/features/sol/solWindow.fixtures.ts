@@ -29,6 +29,8 @@ export const SOL_REGION: SolRegionPayload = {
 }
 
 export interface FakeSolBridge extends SolBridge {
+  /** Slice 3b; declared here until the preload SolBridge carries it. */
+  openDriveApproval: () => Promise<void>
   pushState: (s: SolState) => void
   pushRegion: (r: SolRegionPayload) => void
 }
@@ -50,6 +52,7 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
     setDrive: vi.fn(async () => null),
     requestDrivePermissions: vi.fn(async () => null),
     setDriving: vi.fn(async () => undefined),
+    openDriveApproval: vi.fn(async () => undefined),
     onDriveStatus: vi.fn(() => () => undefined),
     onState: vi.fn((handler: (s: SolState) => void) => {
       stateHandler = handler

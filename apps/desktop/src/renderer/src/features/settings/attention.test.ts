@@ -136,4 +136,22 @@ describe('attentionItems — drive (SOLUSDEV-319)', () => {
     )
     expect(kinds).toEqual(['capture', 'drive', 'trial'])
   })
+
+  it('asks for Login Items approval before the permissions card', () => {
+    const drive = driveStatus({
+      enabled: true,
+      agent: 'requires_approval',
+      trust: { accessibility: false, screenRecording: true }
+    })
+    expect(attentionItems({ ...base, drive }).map((i) => i.kind)).toEqual([
+      'drive_approval',
+      'drive'
+    ])
+  })
+
+  it('makes no card for a missing helper or an approved agent', () => {
+    for (const agent of ['not_found', 'enabled', 'not_registered', null] as const) {
+      expect(attentionItems({ ...base, drive: driveStatus({ enabled: true, agent }) })).toEqual([])
+    }
+  })
 })

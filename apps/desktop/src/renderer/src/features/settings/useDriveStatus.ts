@@ -18,6 +18,8 @@ export interface DriveSettings {
   setDrive: (on: boolean) => void
   /** Ask macOS for the helper's grants (`trust --prompt`). */
   requestPermissions: () => void
+  /** Open System Settings › Login Items for the agent (slice 3b). */
+  openApproval: () => void
 }
 
 export function useDriveStatus(bridge: DriveBridge | null): DriveSettings {
@@ -58,6 +60,10 @@ export function useDriveStatus(bridge: DriveBridge | null): DriveSettings {
     },
     requestPermissions: () => {
       if (bridge) run(bridge.requestDrivePermissions(), DRIVE_APPLY_ERROR)
+    },
+    // The focus reread picks up the approval when the user comes back.
+    openApproval: () => {
+      void bridge?.openDriveApproval?.().catch(() => setError(DRIVE_APPLY_ERROR))
     }
   }
 }

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { DRIVE_REASON_COPY, driveBlocked, missingGrants } from './driveCopy'
+import {
+  DRIVE_NOT_FOUND_COPY,
+  DRIVE_REASON_COPY,
+  driveBlocked,
+  driveHelperMissing,
+  driveNeedsApproval,
+  missingGrants
+} from './driveCopy'
 import { driveStatus } from './drive.fixtures'
 
 describe('drive copy (sol-drive.md §5)', () => {
@@ -37,5 +44,23 @@ describe('drive copy (sol-drive.md §5)', () => {
       )
     ).toBe(false)
     expect(driveBlocked(driveStatus({ enabled: true, trust: missing }))).toBe(true)
+  })
+
+  it('needs approval only while on and the agent asks for it', () => {
+    expect(driveNeedsApproval(null)).toBe(false)
+    expect(driveNeedsApproval(driveStatus({ agent: 'requires_approval' }))).toBe(false)
+    expect(driveNeedsApproval(driveStatus({ enabled: true }))).toBe(false)
+    expect(driveNeedsApproval(driveStatus({ enabled: true, agent: 'requires_approval' }))).toBe(
+      true
+    )
+  })
+
+  it('reports a missing helper only while on', () => {
+    expect(driveHelperMissing(driveStatus({ agent: 'not_found' }))).toBe(false)
+    expect(driveHelperMissing(driveStatus({ enabled: true, agent: 'not_found' }))).toBe(true)
+    expect(driveHelperMissing(driveStatus({ enabled: true, agent: null }))).toBe(false)
+    expect(DRIVE_NOT_FOUND_COPY).toBe(
+      'The input helper is not installed correctly; reinstall Solus.'
+    )
   })
 })

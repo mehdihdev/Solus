@@ -18,6 +18,8 @@ export interface AttentionActions {
   /** SOLUSDEV-319: run the helper's `trust --prompt`. */
   requestDrivePermissions: () => void
   turnOffDrive: () => void
+  /** Slice 3b: open System Settings › Login Items. */
+  openDriveApproval: () => void
 }
 
 const SCREEN_RECORDING_PATH = 'System Settings › Privacy & Security › Screen Recording › Solus'
@@ -99,6 +101,28 @@ function DriveCard({
   )
 }
 
+function DriveApprovalCard({ actions }: { actions: AttentionActions }): React.JSX.Element {
+  return (
+    <Callout
+      tone="warn"
+      title={`Allow ${DRIVE_HELPER_NAME} in Login Items`}
+      actions={
+        <>
+          <Button kind="primary" size="sm" onClick={actions.openDriveApproval}>
+            Open Login Items
+          </Button>
+          <Button kind="bare" size="sm" onClick={actions.turnOffDrive}>
+            Turn off mouse and keyboard
+          </Button>
+        </>
+      }
+    >
+      macOS asks you to allow {DRIVE_HELPER_NAME} to run in the background before SOL can use your
+      mouse and keyboard.
+    </Callout>
+  )
+}
+
 function AttentionCard({
   item,
   actions
@@ -109,6 +133,8 @@ function AttentionCard({
   switch (item.kind) {
     case 'capture':
       return <CaptureCard item={item} actions={actions} />
+    case 'drive_approval':
+      return <DriveApprovalCard actions={actions} />
     case 'drive':
       return <DriveCard item={item} actions={actions} />
     case 'trial':
