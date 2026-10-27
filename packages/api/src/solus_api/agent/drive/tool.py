@@ -33,7 +33,9 @@ DRIVABLE_APPS: Final[dict[str, frozenset[str]]] = {
 }
 _APP_NAMES: Final = {"kicad": "KiCad"}
 INTENT_MAX: Final = 300
-_ONE_LINE: Final = re.compile(r"^[^\x00-\x1f\x7f  ]+$")
+#: One line, and no angle brackets: the intent is fenced as `<goal>…</goal>` in
+#: the loop's prompt (executor._intro), so it must not be able to close the fence.
+_ONE_LINE: Final = re.compile("^[^\\x00-\\x1f\\x7f\\u2028\\u2029<>]+$")
 
 RunStep = Callable[[str, frozenset[str], Callable[[Progress], None]], Awaitable[StepOutcome]]
 Record = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -122,7 +124,7 @@ class DriveStepTool:
         except ValidationError:
             raise ToolException(
                 f"drive.step needs an allowlisted app and a one-line intent of at most "
-                f"{INTENT_MAX} characters",
+                f"{INTENT_MAX} characters, without < or >",
                 code=ToolErrorCode.INVALID_ARGS,
             ) from None
         # The card redacts secret-shaped text; the loop would get the raw intent.
