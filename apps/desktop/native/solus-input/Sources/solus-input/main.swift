@@ -11,5 +11,13 @@ let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(
 terminate.setEventHandler { StopFlag.shared.raise() }
 terminate.resume()
 
-print(Runner(port: MacSystem()).run(Array(CommandLine.arguments.dropFirst())))
+// The caller check (ADR-041 amendment 2026-10-27) is skipped only in debug
+// builds, where Package.swift defines SOLUS_INPUT_UNSIGNED_DEV; release has no skip path.
+#if SOLUS_INPUT_UNSIGNED_DEV
+let caller = CallerPolicy.unsignedDevelopment
+#else
+let caller = CallerPolicy(teamId: Signing.teamId)
+#endif
+
+print(Runner(port: MacSystem(), caller: caller).run(Array(CommandLine.arguments.dropFirst())))
 exit(0)

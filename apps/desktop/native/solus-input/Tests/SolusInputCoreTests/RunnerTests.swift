@@ -26,6 +26,18 @@ final class FakePort: SystemPort {
     var cwd: [Int: String] = [42: "/work/board"]
     /// `realpath` of a path the caller passes; nil = it does not resolve.
     var resolve: (String) -> String? = { $0 }
+    /// Caller chain (ADR-041 amendment 2026-10-27): self → companion (500) → Solus.app (400).
+    var ownParent = 500
+    var parents: [Int: Int] = [500: 400]
+    var argc: [Int: Int] = [500: 1]
+    /// pid → signing identifier; a pid absent here satisfies no requirement.
+    var signedAs: [Int: String] = [500: Signing.companionIdentifier, 400: Signing.appIdentifier]
+    var signedTeam = FakePort.team
+    var selfValid = true
+    var trustPrompts = 0
+    /// Lets a test change the world after a requirement is checked (a parent dying).
+    var afterSatisfies: (FakePort) -> Void = { _ in }
+    static let team = "ABCDE12345"
 
     static let kicadWindow = WindowInfo(
         id: 7, title: "board — Schematic Editor",
@@ -52,6 +64,16 @@ final class FakePort: SystemPort {
     func topWindow(at point: Point) -> UInt32? { windowAt(point) ?? front?.window?.id }
     func workingDirectory(pid: Int) -> String? { cwd[pid] }
     func resolvedPath(_ path: String) -> String? { resolve(path) }
+    func ownParentPid() -> Int { ownParent }
+    func parentPid(of pid: Int) -> Int? { parents[pid] }
+    func argumentCount(pid: Int) -> Int? { argc[pid] }
+    func satisfies(pid: Int, requirement: String) -> Bool {
+        defer { afterSatisfies(self) }
+        guard let identifier = signedAs[pid] else { return false }
+        return requirement == Signing.requirement(teamId: signedTeam, identifier: identifier)
+    }
+    func ownSignatureIsValid() -> Bool { selfValid }
+    func requestTrust() { trustPrompts += 1 }
     func post(_ event: SyntheticEvent, toPid pid: Int?) {
         posted.append(event)
         postedPids.append(pid)
@@ -60,19 +82,23 @@ final class FakePort: SystemPort {
 }
 
 /// Every command runs bound to the linked workspace `/work` unless a test says otherwise.
-private func invoke(_ port: FakePort, _ argv: [String], within: String? = "/work") -> [String: Any] {
-    let line = Runner(port: port).run(argv + (within.map { ["--within", $0] } ?? []))
+/// The caller check runs for real against the fake's signed chain (team `FakePort.team`).
+let trustedCaller = CallerPolicy(teamId: FakePort.team)
+
+func invoke(_ port: FakePort, _ argv: [String], within: String? = "/work",
+            caller: CallerPolicy = trustedCaller) -> [String: Any] {
+    let line = Runner(port: port, caller: caller).run(argv + (within.map { ["--within", $0] } ?? []))
     XCTAssertFalse(line.contains("\n"), "exactly one JSON line")
     let object = try? JSONSerialization.jsonObject(with: Data(line.utf8))
     return object as? [String: Any] ?? [:]
 }
 
-private func act(_ port: FakePort, _ verb: [String], bundle: String = "org.kicad.kicad",
+func act(_ port: FakePort, _ verb: [String], bundle: String = "org.kicad.kicad",
                  window: String = "7", since: String = "990") -> [String: Any] {
     invoke(port, ["act", "--bundle", bundle, "--window", window, "--since", since] + verb)
 }
 
-private func code(_ result: [String: Any]) -> String? { result["code"] as? String }
+func code(_ result: [String: Any]) -> String? { result["code"] as? String }
 
 final class IdentifyTests: XCTestCase {
     func testReportsTheFrontmostAppWindowTrustAndWhetherItIsDrivable() {
@@ -110,6 +136,7 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(r["imageWidth"] as? Int, 1568)
         XCTAssertEqual(r["pointsWidth"] as? Int, 800)
         XCTAssertEqual(r["pointsHeight"] as? Int, 600)
+        XCTAssertEqual(r["bounds"] as? [String: Int], ["x": 100, "y": 50, "width": 800, "height": 600])
     }
 
     func testRefusesAnAppOffTheDrivableList() {

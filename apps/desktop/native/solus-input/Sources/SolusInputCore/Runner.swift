@@ -34,13 +34,23 @@ public struct Runner {
     /// A capture's aspect may differ from the window's by rounding only.
     static let aspectTolerance = 0.02
 
-    let port: SystemPort
+    /// Fixed: no pid or path of the caller ever appears in the output.
+    public static let callerUntrustedMessage = "solus-input was not started by Solus"
+    static let callerChecked: Set<String> = ["identify", "capture", "act"]
 
-    public init(port: SystemPort) { self.port = port }
+    let port: SystemPort
+    let caller: CallerPolicy
+
+    public init(port: SystemPort, caller: CallerPolicy) { self.port = port; self.caller = caller }
 
     public func run(_ argv: [String]) -> String {
         let result: Result<[String: Any], Refusal>
-        if let args = Arguments(argv) {
+        // Before anything else, argument checks included (ADR-041 amendment 2026-10-27).
+        if let command = argv.first, Self.callerChecked.contains(command), !caller.admits(port) {
+            result = .failure(refuse("caller_untrusted", Self.callerUntrustedMessage))
+        } else if argv.first == "trust" {
+            result = trust(Array(argv.dropFirst()))
+        } else if let args = Arguments(argv) {
             switch args.command {
             case "identify": result = identify(args)
             case "capture": result = capture(args)
@@ -59,51 +69,67 @@ public struct Runner {
         }
     }
 
+    // MARK: trust
+
+    /// Posts nothing and captures nothing, so it skips the caller check.
+    private func trust(_ options: [String]) -> Result<[String: Any], Refusal> {
+        guard options.isEmpty || options == ["--prompt"] else { return .failure(refuse("usage", "trust [--prompt]")) }
+        if !options.isEmpty { port.requestTrust() }
+        return .success(["trust": trustJSON(), "unsignedDev": caller.unsignedDev])
+    }
+
+    private func trustJSON() -> [String: Any] {
+        ["accessibility": port.accessibilityTrusted(), "screenRecording": port.screenRecordingAllowed()]
+    }
+
     // MARK: identify
 
     private func identify(_ args: Arguments) -> Result<[String: Any], Refusal> {
         guard args.verb == nil, args.has(only: ["within"]), let root = workspace(args) else {
             return .failure(refuse("usage", "identify --within WORKSPACE"))
         }
+        let body = identifyBody(root)
+        return .success(body.merging(["unsignedDev": caller.unsignedDev]) { $1 })
+    }
+
+    private func identifyBody(_ root: String) -> [String: Any] {
         let front = port.frontmost()
-        let trust: [String: Any] = [
-            "accessibility": port.accessibilityTrusted(),
-            "screenRecording": port.screenRecordingAllowed(),
-        ]
+        let trust = trustJSON()
         // `now` is the helper's clock: the caller passes it back as `--since`, so
         // the kill switch never compares across machines (cloud vs local).
         guard let front else {
-            return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
+            return ["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()]
         }
         // Another app's identity and window title never leave the machine.
         guard DrivableApps.allows(front.app.bundleId) else {
-            return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
+            return ["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()]
         }
         // A drivable app working on another project is hidden like any other app.
         guard worksInside(pid: front.app.pid, root) else {
-            return .success([
+            return [
                 "app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false,
                 "outsideWorkspace": true, "now": port.now(),
-            ])
+            ]
         }
-        return .success([
+        return [
             "now": port.now(),
             "outsideWorkspace": false,
             "app": ["bundleId": front.app.bundleId, "pid": front.app.pid, "name": front.app.name],
             "window": front.window.map(Self.windowJSON) ?? NSNull(),
             "trust": trust,
             "allowed": true,
-        ])
+        ]
     }
 
     static func windowJSON(_ window: WindowInfo) -> [String: Any] {
+        ["id": Int(window.id), "title": window.title, "bounds": boundsJSON(window.bounds)]
+    }
+
+    /// Global points, top-left origin — the desktop draws the amber outline from it.
+    static func boundsJSON(_ bounds: Rect) -> [String: Int] {
         [
-            "id": Int(window.id),
-            "title": window.title,
-            "bounds": [
-                "x": Int(window.bounds.x.rounded()), "y": Int(window.bounds.y.rounded()),
-                "width": Int(window.bounds.width.rounded()), "height": Int(window.bounds.height.rounded()),
-            ],
+            "x": Int(bounds.x.rounded()), "y": Int(bounds.y.rounded()),
+            "width": Int(bounds.width.rounded()), "height": Int(bounds.height.rounded()),
         ]
     }
 
@@ -139,6 +165,7 @@ public struct Runner {
                 "imageWidth": image.imageWidth, "imageHeight": image.imageHeight,
                 "pointsWidth": Int(window.bounds.width.rounded()),
                 "pointsHeight": Int(window.bounds.height.rounded()),
+                "bounds": Self.boundsJSON(window.bounds),
             ])
         } catch let error as CaptureError {
             return .failure(refuse("capture_failed", error.message))
@@ -190,7 +217,10 @@ public struct Runner {
         if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid, root: root) {
             return .failure(lost)
         }
-        return .success(["verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now()])
+        let bounds = port.window(id: windowId)?.bounds ?? window.bounds // re-read: the step may have moved it
+        return .success([
+            "verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now(), "bounds": Self.boundsJSON(bounds),
+        ])
     }
 
     // MARK: project binding (ADR-041 amendment, M2)

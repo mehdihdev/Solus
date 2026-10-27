@@ -6,6 +6,7 @@ import ApplicationServices
 import CoreGraphics
 import ImageIO
 import ScreenCaptureKit
+import Security
 import SolusInputCore
 import UniformTypeIdentifiers
 
@@ -73,6 +74,52 @@ struct MacSystem: SystemPort {
             String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
         }
         return path.hasPrefix("/") ? resolvedPath(path) : nil
+    }
+
+    // MARK: caller check (ADR-041 amendment 2026-10-27)
+
+    func ownParentPid() -> Int { Int(getppid()) }
+
+    func parentPid(of pid: Int) -> Int? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid_t(pid), PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        return Int(info.pbi_ppid)
+    }
+
+    /// `KERN_PROCARGS2` starts with the process's argc (an Int32).
+    func argumentCount(pid: Int) -> Int? {
+        var argmaxMib: [Int32] = [CTL_KERN, KERN_ARGMAX]
+        var argmax: Int32 = 0
+        var argmaxSize = MemoryLayout<Int32>.size
+        guard sysctl(&argmaxMib, 2, &argmax, &argmaxSize, nil, 0) == 0, argmax > 0 else { return nil }
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, Int32(pid)]
+        var buffer = [UInt8](repeating: 0, count: Int(argmax))
+        var size = buffer.count
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size >= MemoryLayout<Int32>.size else { return nil }
+        return Int(buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
+    }
+
+    func satisfies(pid: Int, requirement: String) -> Bool {
+        var parsed: SecRequirement?
+        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess,
+              let parsed else { return false }
+        var code: SecCode?
+        let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, [], parsed) == errSecSuccess
+    }
+
+    func ownSignatureIsValid() -> Bool {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, [], nil) == errSecSuccess
+    }
+
+    func requestTrust() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        _ = CGRequestScreenCaptureAccess()
     }
 
     func resolvedPath(_ path: String) -> String? {

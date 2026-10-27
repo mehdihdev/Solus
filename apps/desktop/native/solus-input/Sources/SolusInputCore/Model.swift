@@ -113,6 +113,18 @@ public protocol SystemPort {
     func workingDirectory(pid: Int) -> String?
     /// `realpath`; nil when the path does not resolve.
     func resolvedPath(_ path: String) -> String?
+    /// `getppid()`.
+    func ownParentPid() -> Int
+    /// The kernel's parent pid of `pid`; nil when unreadable.
+    func parentPid(of pid: Int) -> Int?
+    /// `argc` of `pid` (`KERN_PROCARGS2`); nil when unreadable.
+    func argumentCount(pid: Int) -> Int?
+    /// The code-signing service says `pid` satisfies `requirement`.
+    func satisfies(pid: Int, requirement: String) -> Bool
+    /// The helper's own signature checks out.
+    func ownSignatureIsValid() -> Bool
+    /// Ask macOS to show the Accessibility and Screen Recording prompts.
+    func requestTrust()
     /// Keyboard/text events go to `pid` only; pointer events (pid nil) are posted
     /// globally after the hit-test.
     func post(_ event: SyntheticEvent, toPid pid: Int?)
