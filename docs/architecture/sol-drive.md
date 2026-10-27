@@ -50,14 +50,29 @@ which it is a `usage` refusal (ADR-041 amendment M2, 2026-10-26).
 | Command    | Arguments                                                                       | Result                                                                                                                                                                                                                                                                                                                                                        |
 | ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `identify` | —                                                                               | `{ok, now, trust:{accessibility,screenRecording}, allowed, app:{bundleId,pid,name}\|null, window:{id,title,bounds}\|null}`. When the frontmost app is NOT drivable, or is drivable but working outside `WS` (`outsideWorkspace: true`), `app` and `window` are null — another app's (or another project's) identity and window title never leave the machine. |
-| `capture`  | `--bundle B --window W [--max-edge N]` (256–2048, default 1568)                 | `{ok, png (base64), imageWidth, imageHeight, pointsWidth, pointsHeight}`; refuses unless W is on screen, owned by B, and B is drivable; shadow-free, and refused (`capture_failed`) if the image's shape does not match the window's (padding would skew coordinates).                                                                                        |
-| `act`      | `--bundle B --window W --since T [--expect-width w --expect-height h] <verb> …` | `{ok, verb, idleSeconds, finishedAt}` or a refusal (mid-verb refusals add `postedEvents`).                                                                                                                                                                                                                                                                    |
+| `capture`  | `--bundle B --window W [--max-edge N]` (256–2048, default 1568)                 | `{ok, png (base64), imageWidth, imageHeight, pointsWidth, pointsHeight, bounds}`; refuses unless W is on screen, owned by B, and B is drivable; shadow-free, and refused (`capture_failed`) if the image's shape does not match the window's (padding would skew coordinates).                                                                                |
+| `act`      | `--bundle B --window W --since T [--expect-width w --expect-height h] <verb> …` | `{ok, verb, idleSeconds, finishedAt, bounds}` or a refusal (mid-verb refusals add `postedEvents`).                                                                                                                                                                                                                                                            |
+| `trust`    | `[--prompt]` (no `--within`)                                                    | `{ok, trust:{accessibility,screenRecording}, unsignedDev}`. Slice 3: the desktop's permission rows. Posts nothing, captures nothing, so it skips the caller check; `--prompt` asks macOS to show both permission prompts for the helper.                                                                                                                      |
 
 `act` verbs (window-relative **points**, integers): `click --x --y [--button left\|right] [--count 1\|2]`
 (no right double-click — a right click opens a menu), `move --x --y`, `drag --x --y --to-x --to-y`,
 `scroll --x --y --dy [--dx]`, `key --chord cmd+shift+z`, `type --text "…"`, `wait --ms` (≤ 2000).
 
+`bounds` is `{x, y, width, height}` of `W` in global points (top-left origin), re-read for that reply;
+the companion forwards it to the desktop for the amber outline (§3, §5).
+
 Checks before ANY event is posted (each failure is a refusal with a code; nothing is posted):
+
+- **Caller** (identify, capture and act, before anything else — ADR-041 amendment 2026-10-27): the
+  helper's parent satisfies the companion's code requirement (Solus team ID + identifier
+  `com.solusforge.solus.companion`), that parent was started with no arguments (the top-level companion
+  takes none; read with `sysctl KERN_PROCARGS2`), and the parent's parent satisfies Solus.app's
+  (`com.solusforge.solus`); the helper's own signature must also be valid. Pids come from the kernel
+  (`getppid`, `proc_pidinfo`), requirements are checked with `SecCode` — nothing is read from argv or the
+  environment. Failure is `caller_untrusted`. A release build whose team ID is still the placeholder
+  refuses every call. Debug builds compile in `SOLUS_INPUT_UNSIGNED_DEV` (Package.swift, debug
+  configuration only), which skips this check and reports `unsignedDev: true`; release builds have no
+  such path.
 
 0. **Project binding** (capture and act): the process that owns `W` has its working directory at or below
    `WS` — read from the kernel (`proc_pidinfo` `PROC_PIDVNODEPATHINFO`, no grant needed), resolved; an
@@ -102,13 +117,14 @@ mid-verb stop reports `postedEvents`. A button still held when a verb stops is r
 the press point is still over `W` (where the window server tracks it), otherwise to the bound process
 only (a global release over a popup menu would choose an item). Keyboard and text events go to the bound
 process only (`CGEvent.postToPid`); pointer and scroll events post globally at the hit-tested point.
-Posted events carry a Solus marker in `eventSourceUserData` — not used by the helper; it is what the
-desktop's input listener filters on in slice 3 so SOL's own events never read as the user's.
+Posted events carry a Solus marker in `eventSourceUserData`. The desktop's key listener (`uiohook-napi`)
+cannot read it, so slice 3 instead quiets the hotkey and circle detectors while a step runs (§5); the
+chord policy (check 6) already means SOL never posts a `ctrl` key.
 
 Refusal codes: `usage`, `app_not_allowed`, `not_trusted`, `screen_recording_denied`, `not_frontmost`,
 `window_mismatch`, `window_not_found`, `window_resized`, `window_chrome`, `out_of_bounds`, `occluded`,
 `bad_chord`, `chord_denied`, `bad_text`, `secure_field`, `user_active`, `focus_lost`, `stopped`,
-`capture_failed`, `outside_workspace`.
+`capture_failed`, `outside_workspace`, `caller_untrusted`.
 
 Known limits (documented, not hidden): letter keys map to ANSI virtual keycodes (non-US layouts may
 differ); effects outside the app are blocked structurally — plot, export, print and close-confirm all
@@ -159,6 +175,11 @@ baseline first, so a step never inherits the previous one's. `act` refuses `not_
 `design_saved` when the baseline moved since; it also answers `design_saved` when the act failed after
 saving. Every act reply and every capture's metadata carry `designSaved` — KiCad writes a moment after a
 Save click, so the look after an act is where a save usually shows.
+
+**Outline geometry (slice 3).** After an ok `identify` (its `window.bounds`) and every ok `capture` or
+`act` (their `bounds`), the companion writes one line to its stdout for the desktop app:
+`{"type":"drive_window","bounds":{"x":…,"y":…,"width":…,"height":…}}` — numbers only, never a title, a
+bundle id or a path. Nothing else is written to stdout. The desktop ignores any other line.
 
 ## 4. API `drive.step` and the loop (slice 2)
 
@@ -216,7 +237,9 @@ Model call: `orchestration/gateway.computer_use` → `providers.AnthropicAdapter
   amendment with a dialog allowlist keyed by AX identity and those surfaces explicitly denied; window
   titles (attacker-chosen file names) never leave the port.
 - **Progress** rides the command-output channel (`STREAMING_TOOLS` includes `drive.step`): one line per
-  action, `action 3/15 · click · 12.4 s`, read by the desktop through `GET /confirmations/{id}/output`
+  action, `action 3/15 · click · 12.4 s` — a **stable format** the pill parses (slice 3):
+  `^action (\d+)/(\d+) · ([a-z]+) · (\d+\.\d) s$`, one per `\n`-terminated line; changing it is a
+  desktop-visible change, read by the desktop through `GET /confirmations/{id}/output`
   exactly like an approved `code.exec`. No typed text, coordinates or pixels.
 - **Data events** (ADR-011, consent-gated via `services/events.emit_event`): `drive.session_started`
   `{app, budget}`, `drive.action` `{index, verb, result}`, `drive.aborted` `{outcome, code}`,
@@ -233,26 +256,64 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
 
 ## 5. Desktop and packaging (slice 3)
 
-- **Helper packaging (security-critical, see §1):** `solus-input` ships as its own signed, notarised,
-  `LSUIElement` app bundle inside Solus.app; it — not Solus.app — receives the Accessibility and Screen
-  Recording grants; the companion launches it with responsibility disclaimed; it verifies the caller's
-  code signature (Solus team ID) and its own integrity. Signing identities and notarisation are human.
-- Settings → SOL: **SOL can use your mouse and keyboard** (default off; shows the helper's Accessibility
-  and Screen Recording state with the existing "Needs attention" fix card pattern). It sets
-  `SOLUS_COMPANION_DRIVE` and `SOLUS_DRIVE_HELPER` and restarts the companion when changed.
-  **It sets `SOLUS_COMPANION_DRIVE` only when the project's linked folder neither contains nor lies inside
-  another linked project's folder** (M2 security review M1): the helper's check is "at or below the
-  workspace", so with nested links a step for the outer project would pass for a KiCad working on the
-  inner one. The setting shows why driving is unavailable in that case.
-- The pill shows the A3 status line (`DRIVING KICAD · STEP k OF N`, progress, Stop) from
-  `drive_progress`; Stop and Esc cancel the step (the companion SIGTERMs the helper); any physical input
-  is caught by the helper's kill switch even if the cancel never arrives. The amber outline is edge
-  strips outside the bound window (§2 check 5). The desktop input listener ignores events carrying the
-  Solus marker.
+**Helper packaging (security-critical, see §1; ADR-041 amendments H1 and 2026-10-27).**
+
+- `scripts/build-solus-input.sh` builds `dist/solus-input/SolusInput.app`: `Contents/MacOS/solus-input`
+  (the helper, the bundle's executable) and `Contents/MacOS/solus-input-launch`, with
+  `CFBundleIdentifier` `com.solusforge.solus.input` and `LSUIElement`. Signing runs only when
+  `SOLUS_SIGN_IDENTITY` is set (hardened runtime, per-binary identifiers); otherwise the bundle is left
+  unsigned with a warning. Release builds refuse every call until the team ID placeholder in
+  `Signing.swift` is replaced (§2, caller check). Identities and notarisation are human.
+- electron-builder ships it at `<resources>/SolusInput.app`. Solus.app never requests Accessibility or
+  Screen Recording; the grants belong to the helper bundle.
+- **The launcher** (`solus-input-launch`) exists because responsibility can only be disclaimed at spawn,
+  which Python cannot do: it `posix_spawn`s its sibling `solus-input` with
+  `responsibility_spawnattrs_setdisclaim` and `POSIX_SPAWN_SETEXEC`, so the helper replaces the
+  launcher in place — same pid, so its parent is still the companion (the caller check needs that). It
+  runs only that sibling (resolved from its own executable path), passing its arguments through. If the
+  disclaim call is unavailable it exits non-zero rather than run the helper undisclaimed (the companion
+  reports `helper_crashed`).
+- **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`): a PyInstaller onefile
+  binary runs as a bootloader parent plus a child, which would put an extra process between the helper
+  and Solus.app. The packaged companion is `<resources>/companion/solus-companion/solus-companion`, with
+  `mcp/` beside it.
+- `SOLUS_DRIVE_HELPER` is the launcher in a packaged build and, in dev, the debug helper at
+  `apps/desktop/native/solus-input/.build/debug/solus-input` (unsigned mode; the grants then belong to
+  whatever launched the app, as in slices 1–2). The desktop runs `trust` with the same path.
+
+**Settings → SOL: "SOL can use your mouse and keyboard"** (`sol.drive` in `~/.solus/config.json`,
+default off).
+
+- The companion gets `SOLUS_COMPANION_DRIVE=1` and `SOLUS_DRIVE_HELPER` only when the setting is on AND
+  driving is available for the active project; otherwise both are removed, inherited values included —
+  the setting is the consent, an environment variable is not. Changing either restarts the companion.
+- **Available** means: macOS; the helper path resolves; the project has a linked folder; and that folder
+  **neither contains, lies inside nor equals another linked project's folder** (security review M1 of
+  M2/M3), compared after `realpath` by whole path segment, over every project in this machine's
+  `~/.solus` registry. The helper's check is "at or below the workspace", so with nested links a step
+  for the outer project would pass for a KiCad working on the inner one. A folder nested in a project's
+  tree but not linked to another project is fine — its files already belong to that project. Any folder
+  link change re-evaluates it.
+- The row shows why driving is unavailable (`not_macos`, `no_helper`, `no_folder`, `nested_folder`), and,
+  when on, the helper's Accessibility and Screen Recording state from `trust`. A missing grant is a
+  "Needs attention" card whose fix runs `trust --prompt`.
+
+**While a step runs.**
+
+- The pill shows the A3 strip `DRIVING KICAD · STEP k OF N` with a progress bar and **Stop**, parsed
+  from the step's progress lines (§4) while its confirmation output is incomplete. Stopping needs no
+  route: a click on Stop, Esc, or any other physical input is caught by the helper's kill switch before
+  the next event (`user_active` → `paused`). Stop also clears the strip and the outline at once.
+- The renderer tells main a step is running (`sol.setDriving`); main then draws the **amber outline** as
+  four click-through strips just OUTSIDE the latest `drive_window` bounds (§3) — never over the window,
+  which the hit-test would refuse (§2 check 5) — and quiets the double-tap-Ctrl and circle detectors,
+  plus 300 ms after. Main clears both when the renderer says the step ended, or after 150 s (the 120 s
+  budget plus margin) if it never does.
 
 ## 6. Slices
 
 1. **This doc + `solus-input` + companion `DriveServer`** (tests; not wired; no allowlist).
 2. **Done (2026-10-26):** API `exposure: internal`, `drive.step` + executor + computer-use adapter,
    events, red-team; the server wired; the allowlist drafted (human ratifies); bridge-protocol note.
-3. Desktop: helper app packaging and signing (human), setting, A3 strip, outline, listener filter.
+3. Desktop: helper app packaging (signing human), caller check, the setting with the nested-folder rule,
+   A3 strip, outline, listener quiet period.
