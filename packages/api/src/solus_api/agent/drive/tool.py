@@ -14,6 +14,7 @@ An unfinished step (the user took over, budget used, a refusal) raises a
 import asyncio
 import logging
 import re
+import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Final, Literal
@@ -102,6 +103,25 @@ def _budget_label(budget: Budget) -> str:
     return f"up to {budget.max_actions} actions · {span}"
 
 
+#: Letters that render as nothing (Hangul fillers, Khmer vowel inherents…).
+_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e")
+#: Format, private-use, unassigned, surrogate, separators and combining marks:
+#: none can be shown verbatim on a card a person reads.
+_HIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me"})
+
+
+def _visible_text(text: str) -> bool:
+    """Every character renders as itself: NFC, plain spaces only, nothing hidden."""
+    if unicodedata.normalize("NFC", text) != text:
+        return False
+    return all(
+        (ch == " " or unicodedata.category(ch) != "Zs")
+        and unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+        and ch not in _INVISIBLE_LETTERS
+        for ch in text
+    )
+
+
 @asynccontextmanager
 async def _no_lease() -> AsyncIterator[None]:
     yield
@@ -157,7 +177,7 @@ class DriveStepTool:
         # and redacts secret-shaped text, while the loop would get the raw intent.
         # Anything the card would alter is refused outright.
         intent = parsed.intent
-        if not intent.isprintable() or "  " in intent or intent != intent.strip():
+        if not _visible_text(intent) or "  " in intent or intent != intent.strip():
             raise ToolException(
                 "drive.step's intent must be plain visible text, single-spaced",
                 code=ToolErrorCode.INVALID_ARGS,
@@ -206,6 +226,11 @@ class DriveStepTool:
             except asyncio.CancelledError:
                 # The registry backstop (or a dropped request) cancelled the
                 # step: the audit trail still ends, then cancellation proceeds.
+                for progress in trail:
+                    await self._safe_record(
+                        "drive.action",
+                        {"index": progress.action, "verb": progress.verb, "result": "ok"},
+                    )
                 await self._safe_record("drive.aborted", {"outcome": "cancelled", "code": None})
                 await self._safe_record(
                     "drive.session_ended",

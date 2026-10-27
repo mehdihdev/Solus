@@ -30,18 +30,19 @@ if TYPE_CHECKING:
 
 DRIVE_TOOLS: Final = ("drive.identify", "drive.capture", "drive.act")
 
-#: One drive step at a time per (user, machine): two loops on one window would
-#: double the budget and act on each other's stale captures.
+#: One drive step at a time per user: two loops would double the budget and act
+#: on each other's stale captures. Keyed on the user alone — the companion's
+#: instance id is client-supplied (bridge contract §3: never authorization).
 # ponytail: process-local, like the in-memory bridge registry it sits beside; a
 # Redis lease (SET NX + TTL) replaces it when the API goes multi-instance.
-_ACTIVE: set[tuple[uuid.UUID, str]] = set()
+_ACTIVE: set[uuid.UUID] = set()
 
 
 @asynccontextmanager
-async def drive_lease(key: tuple[uuid.UUID, str]) -> AsyncIterator[None]:
+async def drive_lease(key: uuid.UUID) -> AsyncIterator[None]:
     if key in _ACTIVE:
         raise ToolException(
-            "Another drive step is already running on this machine; wait for it to finish.",
+            "Another drive step of yours is already running; wait for it to finish.",
             code=ToolErrorCode.TOOL_ERROR,
         )
     _ACTIVE.add(key)
@@ -125,9 +126,8 @@ def build_drive_step(
             )
             await db.commit()
 
-    key = (user_id, session.companion_instance_id)
     return DriveStepTool(
-        run_step=run_step, record=record, budget=budget, lease=lambda: drive_lease(key)
+        run_step=run_step, record=record, budget=budget, lease=lambda: drive_lease(user_id)
     )
 
 

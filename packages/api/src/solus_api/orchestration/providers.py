@@ -751,13 +751,24 @@ class AnthropicAdapter(_BaseAdapter):
             elif block.type == "tool_use" and getattr(block, "toolset_name", None) == "computer":
                 yield ToolUse(id=block.id, name=block.name, args=dict(block.input or {}))
         usage = final.usage
+        # Anthropic reports the uncached tail, cache reads and cache writes
+        # SEPARATELY; Usage.tokens_in is the whole input (tokens_cached_in is a
+        # subset of it), so the debit and the step's token cap see real volume.
+        # Writes cost 1.25x input (5-minute cache) and the catalog has no write
+        # price, so they count at that weight here — billed, never under.
+        read = getattr(usage, "cache_read_input_tokens", None) or 0
+        written = getattr(usage, "cache_creation_input_tokens", None) or 0
         yield Usage(
-            tokens_in=usage.input_tokens,
+            tokens_in=usage.input_tokens + read + math.ceil(written * _CACHE_WRITE_WEIGHT),
             tokens_out=usage.output_tokens,
-            tokens_cached_in=getattr(usage, "cache_read_input_tokens", None) or 0,
+            tokens_cached_in=read,
             provider_items=tuple(block.model_dump(exclude_none=True) for block in final.content),
             stop_reason=final.stop_reason,
         )
+
+
+#: Anthropic's 5-minute cache-write price relative to base input.
+_CACHE_WRITE_WEIGHT: Final = 1.25
 
 
 #: Error codes OpenAI reports INSIDE a stream body (not as an HTTP status), which

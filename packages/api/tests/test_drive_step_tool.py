@@ -284,7 +284,7 @@ async def test_a_second_step_on_the_same_machine_is_refused_while_one_runs() -> 
 
     from solus_api.agent.drive.wiring import drive_lease
 
-    key = (uuid.uuid4(), "machine-1")
+    key = uuid.uuid4()
     gate = asyncio.Event()
 
     class Slow(Runner):

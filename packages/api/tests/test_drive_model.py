@@ -11,7 +11,9 @@ import pytest
 from solus_api.agent.drive.actions import TOOLSET
 from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.orchestration import gateway
+from solus_api.orchestration.choice import ModelChoice
 from solus_api.orchestration.config import load_orchestration_config
+from solus_api.orchestration.enums import Complexity, RouteType
 from solus_api.orchestration.providers import (
     ANTHROPIC_API_KEY_NAME,
     AnthropicAdapter,
@@ -106,7 +108,8 @@ async def test_the_request_is_the_toolset_with_one_action_per_call(
     assert events[0] == ToolUse(id="toolu_1", name="left_click", args={"coordinate": [4, 5]})
     usage = events[-1]
     assert isinstance(usage, Usage)
-    assert (usage.tokens_in, usage.tokens_out, usage.tokens_cached_in) == (1200, 40, 1000)
+    # 1200 uncached + 1000 read; no writes in this response.
+    assert (usage.tokens_in, usage.tokens_out, usage.tokens_cached_in) == (2200, 40, 1000)
     # The assistant content replays verbatim — thinking blocks included — minus nulls.
     assert usage.provider_items == (
         {"type": "thinking", "thinking": "", "signature": "sig"},
@@ -244,3 +247,48 @@ async def test_gateway_applies_the_spend_gates_for_an_identified_user(
         session=object(),  # type: ignore[arg-type]
     )
     assert seen == ["cap", "spend", "debit"]
+
+
+async def test_cached_volume_is_counted_and_billed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from solus_api.orchestration.cost import compute_call_credits
+
+    recorder: dict[str, Any] = {}
+    response = _response([_block(type="text", text="Done.", citations=None)], "end_turn")
+    response.usage = SimpleNamespace(
+        input_tokens=2_000,
+        output_tokens=100,
+        cache_read_input_tokens=300_000,
+        cache_creation_input_tokens=20_000,
+    )
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _fake_client(recorder, response))
+    adapter = await _adapter()
+    usage = [
+        e
+        async for e in adapter.computer_use(
+            "m", system="S", messages=MESSAGES, tools=[TOOLSET], max_tokens=8, effort="high"
+        )
+    ][-1]
+    assert isinstance(usage, Usage)
+    assert (usage.tokens_in, usage.tokens_cached_in) == (327_000, 300_000)  # writes at 1.25x
+    config = load_orchestration_config()
+    entry = config.entry_for_role(gateway.COMPUTER_USE_ROLE)
+    choice = ModelChoice(
+        provider=entry.provider,
+        model_name=entry.name,
+        price_in=entry.price_in,
+        price_out=entry.price_out,
+        context_window=entry.context_window,
+        role=gateway.COMPUTER_USE_ROLE,
+        complexity=Complexity.HARD,
+        route_type=RouteType.VISUAL_LOG,
+    )
+    billed = compute_call_credits(
+        choice,
+        usage.tokens_in,
+        usage.tokens_out,
+        config.cost,
+        entry=entry,
+        tokens_cached_in=usage.tokens_cached_in,
+    )
+    uncached_only = compute_call_credits(choice, 2_000, 100, config.cost, entry=entry)
+    assert billed > 5 * uncached_only  # the cached history is billed, not dropped
