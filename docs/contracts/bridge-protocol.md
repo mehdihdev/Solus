@@ -347,6 +347,12 @@ that field anywhere fails `extra="forbid"` validation; descriptions capped at 50
 `{server}.{tool}` ≤ 128 chars. The surviving set becomes the session's inventory and the SOL
 turn's `BridgeTool`s.
 
+**Internal exposure (ADR-041, 2026-10-26).** An allowlist may declare `exposure: internal`. Its tools
+are accepted from the companion exactly like any other (same gate, same frames), but the cloud
+registers them in NO agent tool set; only Solus code dispatches them (the drive executor behind
+`drive.step`, docs/architecture/sol-drive.md §4). Like `requires_confirmation`, exposure comes ONLY from
+the allowlist — nothing a companion advertises can make an internal tool model-facing.
+
 **Deviations adopted during implementation (review with the paste):**
 
 1. "Bridge offline" currently maps to `ToolError(code=TOOL_ERROR, retryable=true)`; the
