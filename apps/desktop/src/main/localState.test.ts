@@ -193,6 +193,28 @@ describe('projectWorkspace', () => {
   })
 })
 
+describe('the /System/Volumes/Data firmlink alias (SOLUSDEV-319 review)', () => {
+  // On macOS /System/Volumes/Data/Users/me/x IS /Users/me/x, but realpath keeps
+  // the spelling — so the nested-folder rule (and the helper's --within) would
+  // compare two spellings of one folder and see them as disjoint.
+  test.each([
+    '/System/Volumes/Data/ws/rover',
+    '/system/volumes/data/ws/rover',
+    '/System/Volumes/Data'
+  ])('refuses %s on darwin, at the write and at the read', (path) => {
+    const deps = fakeDeps({ platform: 'darwin' })
+    expect(linkProjectFolder('p1', { path }, deps)).toBe(false)
+    deps.files.set(FILE, JSON.stringify({ schema_version: 1, projects: { p1: { path } } }))
+    expect(projectWorkspace('p1', deps)).toBeNull()
+    expect(linkedWorkspaces(deps)).toEqual({})
+  })
+
+  test('a look-alike sibling is not the alias', () => {
+    const deps = fakeDeps({ platform: 'darwin' })
+    expect(linkProjectFolder('p1', { path: '/System/Volumes/DataX/ws' }, deps)).toBe(true)
+  })
+})
+
 describe('linkedWorkspaces (SOLUSDEV-319 nested-folder rule)', () => {
   test('every project with a valid linked folder, re-validated at the read', () => {
     const deps = fakeDeps()

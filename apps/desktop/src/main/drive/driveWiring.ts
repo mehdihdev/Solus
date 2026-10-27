@@ -14,7 +14,13 @@ import type { SolSettings } from '../solSettings'
 import type { SolWindowIpc, SolWindowManager } from '../sol-window/solWindow'
 import { SOL_WINDOW_CHANNELS } from '../sol-window/solWindow.constants'
 import { createDriveController } from './driveController'
-import { isExecutableFile, realTrustExec, resolveDriveHelper, runDriveTrust } from './driveHelper'
+import {
+  isSafeHelperPath,
+  realHelperFs,
+  realTrustExec,
+  resolveDriveHelper,
+  runDriveTrust
+} from './driveHelper'
 import { registerDriveIpcHandlers } from './driveIpc'
 import { createDriveSession } from './driveOutline'
 import { createOutlineStrip } from './driveOutlineWindow'
@@ -34,6 +40,8 @@ export function startDrive(opts: {
   settings: SolSettings
   windows: Pick<SolWindowManager, 'broadcast'>
   isAllowedSender: (event: IpcMainInvokeEvent) => boolean
+  /** The main renderer only — consent actions (drive on, `trust --prompt`). */
+  isMainSender: (event: IpcMainInvokeEvent) => boolean
 }): DriveHandle {
   const session = createDriveSession({
     createStrip: createOutlineStrip,
@@ -51,7 +59,7 @@ export function startDrive(opts: {
         exists: existsSync,
         realpath: realLocalStateDeps.realpath
       }),
-    isExecutable: isExecutableFile,
+    isExecutable: (path) => isSafeHelperPath(path, realHelperFs),
     linkedFolders: () => linkedWorkspaces(realLocalStateDeps),
     realpath: realLocalStateDeps.realpath,
     runTrust: (helper, prompt) => runDriveTrust(helper, prompt, realTrustExec),
@@ -68,9 +76,10 @@ export function startDrive(opts: {
       status: () => controller.status(),
       setDrive: (on) => controller.setDrive(on),
       requestPermissions: () => controller.requestPermissions(),
-      setDriving: (active) => session.setDriving(active)
+      setDriving: (senderId, active) => session.setDriving(senderId, active),
+      releaseSender: (senderId) => session.releaseSender(senderId)
     },
-    opts.isAllowedSender
+    { isAllowedSender: opts.isAllowedSender, isMainSender: opts.isMainSender }
   )
   return {
     setProject: (projectId) => controller.setProject(projectId),

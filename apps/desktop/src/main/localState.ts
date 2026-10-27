@@ -63,6 +63,9 @@ const CONTROL_CHARS = /[\x00-\x1f]/
  */
 const WINDOWS_UNSAFE_PATH_CHARS = /["<>|&^%!*?]/
 
+/** The macOS data volume, firmlinked under `/` (SOLUSDEV-319 review). */
+const MACOS_DATA_VOLUME = '/System/Volumes/Data'
+
 export interface LocalStateDeps {
   homedir: () => string
   /** Read a whole file as UTF-8; throws when missing/unreadable. */
@@ -231,6 +234,12 @@ function safeWorkspacePath(path: string, deps: LocalStateDeps): string | null {
   // reach the registry and other projects' private paths (review C1-a final).
   if (isAtOrUnder(real, deps.homedir(), deps)) return null
   if (isAtOrUnder(solusHomePath(deps), real, deps)) return null // ~/.solus and its subtree
+  // SOLUSDEV-319: macOS firmlinks make /System/Volumes/Data/<p> the same folder
+  // as /<p>, and realpath keeps whichever spelling it was given — so two links
+  // could name one folder and pass the drive nested-folder rule as disjoint.
+  // Rejected rather than mapped: proving the alias is the same inode is not
+  // worth it for a spelling no folder picker produces.
+  if (deps.platform === 'darwin' && isAtOrUnder(MACOS_DATA_VOLUME, real, deps)) return null
   return real
 }
 

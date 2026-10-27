@@ -52,6 +52,16 @@ mac:
   extraResources:
     - from: ../../dist/solus-input/SolusInput.app
       to: SolusInput.app
+  # Never let osx-sign re-sign the helper bundle or the companion: it would apply
+  # Solus.app's entitlements.mac.plist (allow-dyld-environment-variables, JIT …)
+  # to them and replace their own identifiers, which the helper's caller check
+  # and the TCC grants depend on (ADR-041). They are signed beforehand with their
+  # own identifiers and hardened runtime by scripts/build-solus-input.sh and
+  # scripts/build-companion.sh (SOLUS_SIGN_IDENTITY; identities are human —
+  # SOLUSDEV-148/149). signIgnore takes regexes matched against each file path.
+  signIgnore:
+    - '/Contents/Resources/SolusInput\.app(/|$)'
+    - '/Contents/Resources/companion(/|$)'
 dmg:
   artifactName: solus-${version}.${ext}
 linux:

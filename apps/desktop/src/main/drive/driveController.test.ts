@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createDriveController,
+  DRIVE_MISSING_GRANT_REFRESH_MS,
   DRIVE_TRUST_CACHE_MS,
   type DriveControllerDeps
 } from './driveController'
@@ -112,6 +113,32 @@ describe('status', () => {
     expect(h.runTrust).toHaveBeenCalledTimes(2)
   })
 
+  it('a missing grant is re-asked on the next status after a short floor (focus refresh)', async () => {
+    const h = harness()
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    await c.status() // TRUST lacks screenRecording
+    await c.status() // a render burst shares the cached answer
+    expect(h.runTrust).toHaveBeenCalledTimes(1)
+    h.advance(DRIVE_MISSING_GRANT_REFRESH_MS)
+    await c.status()
+    expect(h.runTrust).toHaveBeenCalledTimes(2)
+  })
+
+  it('full grants stay cached for the whole cache window', async () => {
+    const h = harness()
+    h.runTrust.mockResolvedValue({
+      ...TRUST,
+      trust: { accessibility: true, screenRecording: true }
+    })
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    await c.status()
+    h.advance(DRIVE_TRUST_CACHE_MS - 1)
+    await c.status()
+    expect(h.runTrust).toHaveBeenCalledTimes(1)
+  })
+
   it('a failed trust run reports null trust and is not cached', async () => {
     const h = harness()
     h.runTrust.mockResolvedValueOnce(null)
@@ -200,6 +227,20 @@ describe('changes', () => {
     expect(status.trust).toEqual(granted.trust)
     await flush()
     expect(h.broadcasts.at(-1)?.trust).toEqual(granted.trust)
+  })
+
+  it('the prompt answer is never cached: it predates the grant the user is about to give', async () => {
+    const h = harness()
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    await c.status()
+    const calls = h.runTrust.mock.calls.length
+    await c.requestPermissions()
+    await c.status() // same instant — still runs a plain trust
+    expect(h.runTrust.mock.calls.slice(calls)).toEqual([
+      [HELPER, true],
+      [HELPER, false]
+    ])
   })
 
   it('requestPermissions does not spawn when unavailable', async () => {

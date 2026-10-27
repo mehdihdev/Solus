@@ -420,7 +420,13 @@ function startSol(): void {
     isSolSender
   )
 
-  drive = startDrive({ ipc: ipcMain, settings, windows, isAllowedSender: isSolSender })
+  drive = startDrive({
+    ipc: ipcMain,
+    settings,
+    windows,
+    isAllowedSender: isSolSender,
+    isMainSender: isMainRendererSender
+  })
 
   startSolTray(basics, settings, windows)
 

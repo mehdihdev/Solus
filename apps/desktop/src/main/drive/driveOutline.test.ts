@@ -94,7 +94,7 @@ describe('createDriveSession', () => {
     const h = harness()
     h.session.setBounds(W)
     expect(h.strips).toHaveLength(0)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     expect(h.strips).toHaveLength(4)
     expect(h.strips.every((s) => s.shown)).toBe(true)
     expect(h.strips.map((s) => s.bounds)).toEqual(outlineStrips(W))
@@ -102,7 +102,7 @@ describe('createDriveSession', () => {
 
   it('follows the window when its bounds change', () => {
     const h = harness()
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     expect(h.strips).toHaveLength(0)
     h.session.setBounds(W)
     const moved = { ...W, x: 40 }
@@ -111,11 +111,46 @@ describe('createDriveSession', () => {
     expect(h.strips.map((s) => s.bounds)).toEqual(outlineStrips(moved))
   })
 
+  it('end() forgets the bounds: the next step does not flash the old outline', () => {
+    const h = harness()
+    h.session.setBounds(W)
+    h.session.setDriving(1, true)
+    h.session.setDriving(1, false)
+    h.session.setDriving(1, true)
+    expect(h.strips.every((s) => !s.shown)).toBe(true)
+    h.session.setBounds({ ...W, x: 7 })
+    expect(h.strips.every((s) => s.shown)).toBe(true)
+  })
+
+  it('ref-counts senders: active while any says true; a released sender counts as false', () => {
+    const h = harness()
+    h.session.setBounds(W)
+    h.session.setDriving(1, true)
+    h.session.setDriving(2, true)
+    h.session.setDriving(1, false)
+    expect(h.session.isQuiet()).toBe(true)
+    expect(h.strips.every((s) => s.shown)).toBe(true)
+    h.session.setDriving(2, true) // repeated true is idempotent
+    h.session.releaseSender(2) // its window closed
+    expect(h.strips.every((s) => !s.shown)).toBe(true)
+    h.advance(DRIVE_QUIET_TAIL_MS)
+    expect(h.session.isQuiet()).toBe(false)
+  })
+
+  it('a false from a sender that never said true changes nothing', () => {
+    const h = harness()
+    h.session.setBounds(W)
+    h.session.setDriving(1, true)
+    h.session.setDriving(9, false)
+    h.session.releaseSender(9)
+    expect(h.strips.every((s) => s.shown)).toBe(true)
+  })
+
   it('clears on setDriving(false), and bounds do not redraw it afterwards', () => {
     const h = harness()
     h.session.setBounds(W)
-    h.session.setDriving(true)
-    h.session.setDriving(false)
+    h.session.setDriving(1, true)
+    h.session.setDriving(1, false)
     expect(h.strips.every((s) => !s.shown)).toBe(true)
     h.session.setBounds({ ...W, y: 5 })
     expect(h.strips.every((s) => !s.shown)).toBe(true)
@@ -124,9 +159,9 @@ describe('createDriveSession', () => {
   it('quiet while driving and for the tail after, then not', () => {
     const h = harness()
     expect(h.session.isQuiet()).toBe(false)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     expect(h.session.isQuiet()).toBe(true)
-    h.session.setDriving(false)
+    h.session.setDriving(1, false)
     h.advance(DRIVE_QUIET_TAIL_MS - 1)
     expect(h.session.isQuiet()).toBe(true)
     h.advance(1)
@@ -136,7 +171,7 @@ describe('createDriveSession', () => {
   it('ends itself after the safety timeout if the renderer never says so', () => {
     const h = harness()
     h.session.setBounds(W)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     h.advance(DRIVE_SAFETY_TIMEOUT_MS)
     expect(h.strips.every((s) => !s.shown)).toBe(true)
     h.advance(DRIVE_QUIET_TAIL_MS)
@@ -146,9 +181,9 @@ describe('createDriveSession', () => {
   it('a renewed setDriving(true) restarts the safety clock', () => {
     const h = harness()
     h.session.setBounds(W)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     h.advance(DRIVE_SAFETY_TIMEOUT_MS - 10)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     h.advance(20)
     expect(h.strips.every((s) => s.shown)).toBe(true)
   })
@@ -156,7 +191,7 @@ describe('createDriveSession', () => {
   it('dispose destroys the strips and ends the session', () => {
     const h = harness()
     h.session.setBounds(W)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     h.session.dispose()
     expect(h.strips.every((s) => s.destroyed)).toBe(true)
   })
@@ -164,7 +199,7 @@ describe('createDriveSession', () => {
   it('a strip destroyed from outside is recreated on the next draw', () => {
     const h = harness()
     h.session.setBounds(W)
-    h.session.setDriving(true)
+    h.session.setDriving(1, true)
     h.strips[0].destroy()
     h.session.setBounds({ ...W, x: 1 })
     expect(h.strips).toHaveLength(5)
@@ -188,6 +223,6 @@ describe('session spy safety', () => {
       clearTimeout: () => undefined
     })
     session.setBounds(W)
-    expect(() => session.setDriving(true)).not.toThrow()
+    expect(() => session.setDriving(1, true)).not.toThrow()
   })
 })

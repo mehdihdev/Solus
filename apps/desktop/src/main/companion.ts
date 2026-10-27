@@ -13,6 +13,11 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { companionEnv, findIntegrationsRoot } from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
 import { createDriveWindowReader } from './drive/driveWindow'
+import {
+  createDriveGeometryRelay,
+  driveRespawnNeeded,
+  folderChangeAction
+} from './drive/companionDrive'
 import type { Rect } from './capture/screenCapture'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
@@ -179,8 +184,8 @@ let driveResolver: DriveResolver | null = null
 /** The helper baked into the CURRENT child (null: drive off). `undefined` ⇒
  *  no child spawned yet. */
 let activeDriveHelper: string | null | undefined
-/** Main's outline hears the latest drive_window bounds (null: none / gone). */
-let driveWindowListener: ((bounds: Rect | null) => void) | null = null
+/** drive_window bounds → main's outline: current child, spawned with drive, only. */
+const driveGeometry = createDriveGeometryRelay()
 
 function resolveDrive(): { helper: string } | null {
   try {
@@ -334,9 +339,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
   })
   // Geometry from a child spawned without drive is ignored outright.
-  const reader = createDriveWindowReader((bounds) => {
-    if (child === c && drive !== null) driveWindowListener?.(bounds)
-  })
+  const reader = createDriveWindowReader(driveGeometry.attach(c, drive !== null))
   c.stdout?.on('data', (chunk: Buffer) => reader.push(chunk))
   child = c
   spawnedAt = Date.now()
@@ -353,10 +356,8 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   const onDown = (): void => {
     if (down) return
     down = true
-    if (child === c) {
-      child = null
-      driveWindowListener?.(null)
-    }
+    if (child === c) child = null
+    driveGeometry.detach(c)
     if (stopped) return
     attempt = nextRestartAttempt(attempt, Date.now() - spawnedAt)
     restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
@@ -419,12 +420,14 @@ export function setCompanionProject(projectId: string | null): void {
  * untouched, must not churn the process and its whole MCP fork tree.
  */
 export function notifyProjectFolderChanged(projectId: string): void {
-  if (activeProjectId === null) return
-  const workspaceChanged =
-    projectId === activeProjectId &&
-    projectWorkspace(activeProjectId, realLocalStateDeps) !== activeWorkspace
-  if (workspaceChanged) replaceChild()
-  else notifyCompanionDriveChanged()
+  const action = folderChangeAction({
+    changedProjectId: projectId,
+    activeProjectId,
+    workspaceNow: projectWorkspace(activeProjectId, realLocalStateDeps),
+    workspaceBaked: activeWorkspace
+  })
+  if (action === 'respawn') replaceChild()
+  else if (action === 'recheck_drive') notifyCompanionDriveChanged()
 }
 
 /** SOLUSDEV-319: install the drive decision (main's DriveController). */
@@ -436,14 +439,14 @@ export function setCompanionDriveResolver(resolver: DriveResolver | null): void 
  *  child only when its baked helper differs. A child not yet (re)spawned reads
  *  the fresh decision at spawn anyway. */
 export function notifyCompanionDriveChanged(): void {
-  if (child === null || activeDriveHelper === undefined) return
-  if ((resolveDrive()?.helper ?? null) !== activeDriveHelper) replaceChild()
+  const state = { hasChild: child !== null, bakedHelper: activeDriveHelper }
+  if (driveRespawnNeeded(state, resolveDrive()?.helper ?? null)) replaceChild()
 }
 
 /** Main's outline hears the latest drive_window bounds; null when the child
  *  that reported them is gone. */
 export function onCompanionDriveWindow(listener: ((bounds: Rect | null) => void) | null): void {
-  driveWindowListener = listener
+  driveGeometry.setListener(listener)
 }
 
 /** Kill the current child (if any) and spawn a fresh one against the current
@@ -461,7 +464,7 @@ function replaceChild(): void {
   child = null // detach first: onDown must not schedule a restart for the old config
   if (previous) {
     retire(previous)
-    driveWindowListener?.(null)
+    driveGeometry.detach(previous)
   }
   attempt = -1
   if (!started) return
@@ -546,7 +549,7 @@ export async function stopCompanion(): Promise<void> {
   }
   const c = child
   child = null
-  driveWindowListener?.(null)
+  if (c) driveGeometry.detach(c)
   if (c?.pid && c.exitCode === null && c.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       c.once('exit', () => resolve())

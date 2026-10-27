@@ -47,6 +47,8 @@ function settings(): SolSettings {
   }
 }
 
+const PILL = { sender: { id: 3, once: () => undefined } }
+
 describe('startDrive', () => {
   it('wires the resolver, the invokes and the quiet period', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -55,7 +57,8 @@ describe('startDrive', () => {
       ipc: { handle: (c, l) => void handlers.set(c, l as (...args: unknown[]) => unknown) },
       settings: settings(),
       windows: { broadcast },
-      isAllowedSender: () => true
+      isAllowedSender: () => true,
+      isMainSender: () => true
     })
     // No dev helper under /nowhere (and not macOS on CI): never drive.
     expect(companion.resolver?.('p')).toBeNull()
@@ -67,9 +70,9 @@ describe('startDrive', () => {
     expect(broadcast).toHaveBeenCalledWith(SOL_WINDOW_CHANNELS.driveStatus, status)
 
     expect(drive.isQuiet()).toBe(false)
-    handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.({}, true)
+    handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.(PILL, true)
     expect(drive.isQuiet()).toBe(true)
-    handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.({}, false)
+    handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.(PILL, false)
     drive.dispose()
   })
 })

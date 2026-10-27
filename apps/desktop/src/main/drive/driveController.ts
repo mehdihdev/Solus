@@ -10,6 +10,11 @@ import type { DriveStatus, DriveUnavailable } from './driveStatus'
 
 /** `getDriveStatus` runs on render; this keeps it from spawning the helper each time. */
 export const DRIVE_TRUST_CACHE_MS = 10_000
+/** While a grant is missing the user is likely in System Settings granting it:
+ *  getDriveStatus (the renderer calls it on window focus) asks again after
+ *  this floor rather than serving a stale "missing" for the full window. The
+ *  floor only absorbs a render burst. */
+export const DRIVE_MISSING_GRANT_REFRESH_MS = 1_000
 
 export interface DriveSettingsPort {
   get(): { drive: boolean }
@@ -45,6 +50,11 @@ export interface DriveController {
   refresh(): void
 }
 
+const cacheLifetime = (result: DriveTrustResult): number =>
+  result.trust.accessibility && result.trust.screenRecording
+    ? DRIVE_TRUST_CACHE_MS
+    : DRIVE_MISSING_GRANT_REFRESH_MS
+
 interface Availability {
   helper: string | null
   reason: DriveUnavailable | null
@@ -69,7 +79,7 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
   }
 
   const trustFor = async (helper: string): Promise<DriveTrustResult | null> => {
-    if (cache && cache.helper === helper && deps.now() - cache.at < DRIVE_TRUST_CACHE_MS) {
+    if (cache && cache.helper === helper && deps.now() - cache.at < cacheLifetime(cache.result)) {
       return cache.result
     }
     // One run at a time: a render burst shares the spawn in flight.
@@ -134,7 +144,9 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
       if (a.helper === null) return publish(compose(a, null))
       inflight = null // a plain run finishing later must not overwrite the prompt's answer
       const result = await deps.runTrust(a.helper, true)
-      cache = result ? { helper: a.helper, at: deps.now(), result } : null
+      // Not cached: `--prompt` answers before the user acts on the prompt, so
+      // the next status (focus back from System Settings) must ask again.
+      cache = null
       return publish(compose(a, result))
     },
     refresh

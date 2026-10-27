@@ -46,8 +46,11 @@ export interface DriveSessionDeps {
 }
 
 export interface DriveSession {
-  /** The renderer's sol.setDriving. */
-  setDriving(active: boolean): void
+  /** A renderer's sol.setDriving, keyed by its webContents id: driving while
+   *  ANY sender says true. */
+  setDriving(senderId: number, active: boolean): void
+  /** The sender's window went away — counts as its false. */
+  releaseSender(senderId: number): void
   /** The latest drive_window bounds (null: unknown, e.g. the companion restarted). */
   setBounds(bounds: Rect | null): void
   /** The hotkey detectors ignore input while this is true. */
@@ -66,6 +69,7 @@ function attempt(fn: () => void): boolean {
 }
 
 export function createDriveSession(deps: DriveSessionDeps): DriveSession {
+  const senders = new Set<number>()
   let driving = false
   let endedAt = Number.NEGATIVE_INFINITY
   let bounds: Rect | null = null
@@ -90,22 +94,33 @@ export function createDriveSession(deps: DriveSessionDeps): DriveSession {
     })
   }
 
+  /** Every sender's session ends; the bounds go too, so the next step never
+   *  flashes the previous step's outline before its first drive_window. */
   const end = (): void => {
     if (safety !== null) deps.clearTimeout(safety)
     safety = null
+    senders.clear()
     if (driving) endedAt = deps.now()
     driving = false
+    bounds = null
     draw()
   }
 
+  const release = (senderId: number): void => {
+    if (!senders.delete(senderId)) return
+    if (senders.size === 0) end()
+  }
+
   return {
-    setDriving(active) {
-      if (!active) return end()
+    setDriving(senderId, active) {
+      if (!active) return release(senderId)
+      senders.add(senderId)
       if (safety !== null) deps.clearTimeout(safety)
       safety = deps.setTimeout(end, DRIVE_SAFETY_TIMEOUT_MS)
       driving = true
       draw()
     },
+    releaseSender: release,
     setBounds(next) {
       bounds = next
       draw()

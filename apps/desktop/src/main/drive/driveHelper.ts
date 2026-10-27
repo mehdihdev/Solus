@@ -4,8 +4,8 @@
 // still a subprocess: argument list, no shell, a PATH-only environment, one
 // deadline, a stdout cap — and its output is untrusted until parsed.
 import { execFile } from 'node:child_process'
-import { accessSync, constants, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { accessSync, constants, lstatSync } from 'node:fs'
+import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { findAncestorPath } from '../companionEnv'
 import type { DriveTrust } from './driveStatus'
 
@@ -119,15 +119,81 @@ export function runDriveTrust(
   })
 }
 
-/** A regular file this user may execute (`no_helper` otherwise). The companion
- *  re-checks the path's ownership and modes before every run (§3). */
-export function isExecutableFile(path: string): boolean {
-  try {
-    if (!statSync(path).isFile()) return false
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
+export interface HelperStat {
+  isFile: boolean
+  isDirectory: boolean
+  isSymbolicLink: boolean
+  mode: number
+  uid: number
+}
+
+/** lstat (never follows a link) + an X_OK check; injected for tests. */
+export interface HelperFs {
+  lstat(path: string): HelperStat | null
+  canExecute(path: string): boolean
+}
+
+const S_IWGRP = 0o020
+const S_IWOTH = 0o002
+const S_ISVTX = 0o1000
+
+/** A directory whose entries someone other than its owner (or root) could replace. */
+function replaceableDir(info: HelperStat): boolean {
+  if (info.mode & S_ISVTX) return false // sticky: others cannot replace our entry
+  if (info.mode & S_IWOTH) return true
+  return (info.mode & S_IWGRP) !== 0 && info.uid !== 0 // root:admin 0775 (/Applications) is fine
+}
+
+/** The path's ancestors, nearest first, ending at `/`. */
+function ancestors(path: string): string[] {
+  const out: string[] = []
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    out.push(dir)
+    if (dirname(dir) === dir) return out
+  }
+}
+
+/**
+ * Whether the companion would accept `path` as SOLUS_DRIVE_HELPER (mirrors
+ * packages/companion drive/helper.py `resolve_helper`), so Settings never says
+ * "available" for a helper the companion then refuses: absolute and normal; no
+ * symlink anywhere on it; a regular executable file that is neither group- nor
+ * other-writable; every ancestor directory not other-writable (sticky
+ * excepted) and group-writable only when owned by root.
+ */
+export function isSafeHelperPath(path: string, fs: HelperFs): boolean {
+  if (!isAbsolute(path) || normalize(path) !== path || path.endsWith(sep)) return false
+  const file = fs.lstat(path)
+  if (file === null || file.isSymbolicLink || !file.isFile) return false
+  if (file.mode & (S_IWGRP | S_IWOTH) || !fs.canExecute(path)) return false
+  return ancestors(path).every((dir) => {
+    const info = fs.lstat(dir)
+    return info !== null && !info.isSymbolicLink && info.isDirectory && !replaceableDir(info)
+  })
+}
+
+export const realHelperFs: HelperFs = {
+  lstat: (path) => {
+    try {
+      const st = lstatSync(path)
+      return {
+        isFile: st.isFile(),
+        isDirectory: st.isDirectory(),
+        isSymbolicLink: st.isSymbolicLink(),
+        mode: st.mode,
+        uid: st.uid
+      }
+    } catch {
+      return null
+    }
+  },
+  canExecute: (path) => {
+    try {
+      accessSync(path, constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

@@ -1,14 +1,13 @@
 // SOLUSDEV-319 drive slice 3 (sol-drive.md §5): where the helper lives, and
 // the desktop's own `trust` call — argument list, no shell, bounded, parsed
 // defensively.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DRIVE_TRUST_MAX_STDOUT,
   DRIVE_TRUST_TIMEOUT_MS,
-  isExecutableFile,
+  isSafeHelperPath,
+  realHelperFs,
+  type HelperFs,
   parseTrustOutput,
   resolveDriveHelper,
   runDriveTrust,
@@ -172,20 +171,77 @@ describe('runDriveTrust', () => {
   })
 })
 
-describe('isExecutableFile', () => {
-  it('true only for a regular file with an execute bit', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'solus-drive-'))
-    try {
-      const exe = join(dir, 'exe')
-      const plain = join(dir, 'plain')
-      writeFileSync(exe, '#!/bin/sh\n', { mode: 0o755 })
-      writeFileSync(plain, 'x', { mode: 0o644 })
-      expect(isExecutableFile(exe)).toBe(true)
-      expect(isExecutableFile(plain)).toBe(false)
-      expect(isExecutableFile(dir)).toBe(false)
-      expect(isExecutableFile(join(dir, 'missing'))).toBe(false)
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
+// Mirrors the companion's helper rule (drive/helper.py resolve_helper) so
+// Settings never says "available" for a path the companion would refuse.
+describe('isSafeHelperPath', () => {
+  type Node = { kind: 'file' | 'dir' | 'link'; mode: number; uid: number }
+  const fsWith = (nodes: Record<string, Node>, executable = true): HelperFs => ({
+    lstat: (p) => {
+      const n = nodes[p]
+      if (!n) return null
+      return {
+        isFile: n.kind === 'file',
+        isDirectory: n.kind === 'dir',
+        isSymbolicLink: n.kind === 'link',
+        mode: n.mode,
+        uid: n.uid
+      }
+    },
+    canExecute: () => executable
+  })
+  const root = { kind: 'dir', mode: 0o755, uid: 0 } as const
+  const HELPER = '/Applications/Solus.app/Contents/MacOS/solus-input-launch'
+  const tree = (over: Record<string, Partial<Node>> = {}): Record<string, Node> => {
+    const base: Record<string, Node> = {
+      '/': { ...root },
+      // /Applications is root:admin 0775 on a stock Mac.
+      '/Applications': { kind: 'dir', mode: 0o775, uid: 0 },
+      '/Applications/Solus.app': { kind: 'dir', mode: 0o755, uid: 501 },
+      '/Applications/Solus.app/Contents': { kind: 'dir', mode: 0o755, uid: 501 },
+      '/Applications/Solus.app/Contents/MacOS': { kind: 'dir', mode: 0o755, uid: 501 },
+      [HELPER]: { kind: 'file', mode: 0o755, uid: 501 }
     }
+    for (const [p, n] of Object.entries(over)) base[p] = { ...base[p], ...n } as Node
+    return base
+  }
+
+  it('accepts a stock install, a root-owned group-writable ancestor included', () => {
+    expect(isSafeHelperPath(HELPER, fsWith(tree()))).toBe(true)
+  })
+
+  it('refuses a user-owned group-writable ancestor', () => {
+    const fs = fsWith(tree({ '/Applications/Solus.app/Contents': { mode: 0o775 } }))
+    expect(isSafeHelperPath(HELPER, fs)).toBe(false)
+  })
+
+  it('refuses an other-writable ancestor, but not a sticky one', () => {
+    expect(isSafeHelperPath(HELPER, fsWith(tree({ '/Applications': { mode: 0o777 } })))).toBe(false)
+    expect(isSafeHelperPath(HELPER, fsWith(tree({ '/Applications': { mode: 0o1777 } })))).toBe(true)
+  })
+
+  it('refuses a group- or other-writable helper file', () => {
+    expect(isSafeHelperPath(HELPER, fsWith(tree({ [HELPER]: { mode: 0o775 } })))).toBe(false)
+    expect(isSafeHelperPath(HELPER, fsWith(tree({ [HELPER]: { mode: 0o757 } })))).toBe(false)
+  })
+
+  it('refuses a symlink anywhere on the path', () => {
+    expect(isSafeHelperPath(HELPER, fsWith(tree({ [HELPER]: { kind: 'link' } })))).toBe(false)
+    const fs = fsWith(tree({ '/Applications/Solus.app/Contents': { kind: 'link' } }))
+    expect(isSafeHelperPath(HELPER, fs)).toBe(false)
+  })
+
+  it('refuses a relative, non-normal, missing, non-file or non-executable path', () => {
+    const fs = fsWith(tree())
+    expect(isSafeHelperPath('Applications/x', fs)).toBe(false)
+    expect(
+      isSafeHelperPath('/Applications/Solus.app/../Solus.app/Contents/MacOS/solus-input-launch', fs)
+    ).toBe(false)
+    expect(isSafeHelperPath('/Applications/Solus.app/Contents/MacOS/missing', fs)).toBe(false)
+    expect(isSafeHelperPath('/Applications/Solus.app/Contents/MacOS', fs)).toBe(false)
+    expect(isSafeHelperPath(HELPER, fsWith(tree(), false))).toBe(false)
+  })
+
+  it('the real fs answers false for a missing path without throwing', () => {
+    expect(isSafeHelperPath('/definitely/not/here/solus-input', realHelperFs)).toBe(false)
   })
 })
