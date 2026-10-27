@@ -34,8 +34,9 @@ final class CallerCheckTests: XCTestCase {
     func testTheRequirementPinsAppleAnchorTeamAndIdentifier() {
         XCTAssertEqual(
             Signing.requirement(teamId: "ABCDE12345", identifier: "com.solusforge.solus.companion"),
-            #"anchor apple generic and certificate leaf[subject.OU] = "ABCDE12345" and identifier "com.solusforge.solus.companion""#)
+            #"anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "ABCDE12345" and identifier "com.solusforge.solus.companion""#)
         XCTAssertEqual(Signing.companionIdentifier, "com.solusforge.solus.companion")
+        XCTAssertEqual(Signing.helperIdentifier, "com.solusforge.solus.input")
         XCTAssertEqual(Signing.appIdentifier, "com.solusforge.solus")
     }
 
@@ -98,6 +99,29 @@ final class CallerCheckTests: XCTestCase {
         let port = FakePort()
         port.selfValid = false
         assertUntrusted(port)
+    }
+
+    func testTheHelperMustBeSignedAsItselfByTheTeam() {
+        // The helper's own requirement is pinned: valid but signed as something else fails.
+        let port = FakePort()
+        port.selfSignedAs = "com.solusforge.solus.companion"
+        assertUntrusted(port)
+    }
+
+    /// Residual pending ADR decision (security review C1): the port reads identity
+    /// by pid, so a parent that keeps its pid but exec()s into a different (still
+    /// validly signed Solus) program between our checks is indistinguishable here.
+    /// This test pins today's behaviour — it is ADMITTED — so a fix shows up as a
+    /// deliberate change to this test, not a silent one.
+    func testResidualAParentThatExecsAtTheSamePidIsIndistinguishable() {
+        let port = FakePort()
+        var execed = false
+        port.afterSatisfies = { p in
+            guard !execed else { return }
+            execed = true
+            p.argc[500] = 1 // the "new" program also takes no arguments; same pid, same ppid
+        }
+        XCTAssertEqual(invoke(port, ["identify"])["ok"] as? Bool, true, "residual C1: admitted")
     }
 
     func testTheParentDyingDuringTheCheckIsRefused() {
@@ -205,6 +229,11 @@ final class BoundsTests: XCTestCase {
 }
 
 final class LauncherPathTests: XCTestCase {
+    func testTheHelperRunsWithAFixedMinimalEnvironment() {
+        // Nothing from the caller's environment (DYLD_*, SOLUS_*, …) reaches the helper.
+        XCTAssertEqual(Launcher.environment, ["PATH=/usr/bin:/bin"])
+    }
+
     func testTheSiblingIsTheHelperInTheSameDirectory() {
         XCTAssertEqual(Launcher.sibling(of: "/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input-launch"),
                        "/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input")
@@ -216,5 +245,43 @@ final class LauncherPathTests: XCTestCase {
                      "/x/./solus-input-launch", "/x//solus-input-launch", "/x/solus-input-launch/"] {
             XCTAssertNil(Launcher.sibling(of: path), path)
         }
+    }
+}
+
+// The workspace may never be the home directory or above it: a KiCad working
+// anywhere in the user's files would then count as "inside".
+final class WorkspaceHomeTests: XCTestCase {
+    private let identify = ["identify"]
+
+    func testHomeAndItsAncestorsAreRefused() {
+        for within in ["/Users/me", "/Users", "/Users/me/"] {
+            let port = FakePort()
+            port.resolve = { $0.count > 1 && $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+            XCTAssertEqual(code(invoke(port, identify, within: within)), "usage", within)
+        }
+    }
+
+    func testHomeIsComparedResolved() {
+        let port = FakePort()
+        port.home = "/var/home-link"
+        port.resolve = { $0 == "/var/home-link" ? "/Users/me" : $0 }
+        XCTAssertEqual(code(invoke(port, identify, within: "/Users/me")), "usage")
+        XCTAssertEqual(code(invoke(port, identify, within: "/Users")), "usage")
+    }
+
+    func testFoldersInsideHomeAndPrefixSiblingsAreFine() {
+        let port = FakePort()
+        port.cwd[42] = "/Users/me/board"
+        XCTAssertEqual(invoke(port, identify, within: "/Users/me/board")["ok"] as? Bool, true)
+        XCTAssertEqual(invoke(port, identify, within: "/Users/meadow")["ok"] as? Bool, true)
+        XCTAssertEqual(invoke(port, identify, within: "/work")["ok"] as? Bool, true)
+    }
+
+    func testAnUnreadableHomeFailsClosed() {
+        let port = FakePort()
+        port.home = nil
+        XCTAssertEqual(code(invoke(port, identify)), "usage")
+        XCTAssertEqual(code(act(port, ["wait", "--ms", "1"])), "usage")
+        XCTAssertTrue(port.posted.isEmpty)
     }
 }

@@ -121,8 +121,10 @@ public protocol SystemPort {
     func argumentCount(pid: Int) -> Int?
     /// The code-signing service says `pid` satisfies `requirement`.
     func satisfies(pid: Int, requirement: String) -> Bool
-    /// The helper's own signature checks out.
-    func ownSignatureIsValid() -> Bool
+    /// The helper's own code is valid and satisfies `requirement`.
+    func ownCodeSatisfies(requirement: String) -> Bool
+    /// The user's home directory from the user database (`getpwuid`), never `$HOME`.
+    func homeDirectory() -> String?
     /// Ask macOS to show the Accessibility and Screen Recording prompts.
     func requestTrust()
     /// Keyboard/text events go to `pid` only; pointer events (pid nil) are posted

@@ -2,8 +2,8 @@
 // so the helper's parent is still the companion) with the sibling `solus-input`,
 // with responsibility disclaimed so macOS attributes the helper's Accessibility
 // and Screen Recording use to the helper bundle, not to its ancestors. Runs
-// nothing else. On any failure it exits non-zero with nothing on stdout — it
-// never runs the helper undisclaimed.
+// nothing else, with a fixed minimal environment. On any failure it exits
+// non-zero with nothing on stdout — it never runs the helper undisclaimed.
 import Darwin
 import MachO
 import SolusInputCore
@@ -40,5 +40,6 @@ else { fail("cannot disclaim responsibility") }
 let argv: [UnsafeMutablePointer<CChar>?] = ([helper] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
 var pid: pid_t = 0
 // With POSIX_SPAWN_SETEXEC this only returns on failure.
-let status = posix_spawn(&pid, helper, nil, &attributes, argv, environ)
+let envp: [UnsafeMutablePointer<CChar>?] = Launcher.environment.map { strdup($0) } + [nil]
+let status = posix_spawn(&pid, helper, nil, &attributes, argv, envp)
 fail("exec failed (\(status))")

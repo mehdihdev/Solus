@@ -11,9 +11,15 @@ public enum Signing {
     public static let teamId = teamIdPlaceholder
     public static let companionIdentifier = "com.solusforge.solus.companion"
     public static let appIdentifier = "com.solusforge.solus"
+    public static let helperIdentifier = "com.solusforge.solus.input"
+    public static let launcherIdentifier = "com.solusforge.solus.input.launch"
 
+    /// Developer ID: Apple anchor, the Developer ID intermediate (…6.2.6) and
+    /// Developer ID Application leaf (…6.1.13), pinned to the team and identifier.
     public static func requirement(teamId: String, identifier: String) -> String {
-        #"anchor apple generic and certificate leaf[subject.OU] = "\#(teamId)" and identifier "\#(identifier)""#
+        "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6]"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+            + #" and certificate leaf[subject.OU] = "\#(teamId)" and identifier "\#(identifier)""#
     }
 
     /// Apple team IDs are ten upper-case letters or digits (nothing that could
@@ -43,7 +49,9 @@ public struct CallerPolicy {
     /// that died mid-check re-parents its child, so a reused pid cannot pass.
     func admits(_ port: SystemPort) -> Bool {
         if unsignedDev { return true }
-        guard Signing.isRealTeamId(teamId), port.ownSignatureIsValid() else { return false }
+        guard Signing.isRealTeamId(teamId),
+              port.ownCodeSatisfies(requirement: Signing.requirement(teamId: teamId, identifier: Signing.helperIdentifier))
+        else { return false }
         let parent = port.ownParentPid()
         guard parent > Self.launchdPid, let grandparent = port.parentPid(of: parent),
               grandparent > Self.launchdPid,
@@ -59,6 +67,8 @@ public struct CallerPolicy {
 /// `solus-input-launch` runs only the helper beside it.
 public enum Launcher {
     public static let helperName = "solus-input"
+    /// The helper's whole environment: nothing from the caller (DYLD_*, SOLUS_*, …).
+    public static let environment = ["PATH=/usr/bin:/bin"]
 
     /// `path` must be the launcher's own absolute, resolved path.
     public static func sibling(of path: String) -> String? {

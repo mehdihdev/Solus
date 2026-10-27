@@ -225,19 +225,26 @@ public struct Runner {
 
     // MARK: project binding (ADR-041 amendment, M2)
 
-    /// `--within W`: the linked workspace — absolute, resolved, never the whole disk.
+    /// `--within W`: the linked workspace — absolute, resolved, never the whole
+    /// disk, the home directory or any folder above it (unreadable home fails closed).
     private func workspace(_ args: Arguments) -> String? {
-        guard let raw = args.string("within"), raw.hasPrefix("/"), let root = port.resolvedPath(raw), root != "/"
+        guard let raw = args.string("within"), raw.hasPrefix("/"), let root = port.resolvedPath(raw), root != "/",
+              let home = port.homeDirectory().flatMap(port.resolvedPath), !Self.isAtOrAbove(root, home)
         else { return nil }
         return root
+    }
+
+    /// `path` equals `other` or is one of its ancestors — by bytes, whole segments.
+    static func isAtOrAbove(_ path: String, _ other: String) -> Bool {
+        let base = Array(path.utf8), target = Array(other.utf8)
+        return target == base || target.starts(with: base + Array("/".utf8))
     }
 
     /// The process works in `root` or below it; unreadable counts as outside.
     private func worksInside(pid: Int, _ root: String) -> Bool {
         // Bytes, not Swift string equality (which treats NFC and NFD as equal).
-        guard let dir = port.workingDirectory(pid: pid).map({ Array($0.utf8) }) else { return false }
-        let base = Array(root.utf8)
-        return dir == base || dir.starts(with: base + Array("/".utf8))
+        guard let dir = port.workingDirectory(pid: pid) else { return false }
+        return Self.isAtOrAbove(root, dir)
     }
 
     /// No path in the message: another project's location never leaves the machine.

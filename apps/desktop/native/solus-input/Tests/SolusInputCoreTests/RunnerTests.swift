@@ -34,6 +34,9 @@ final class FakePort: SystemPort {
     var signedAs: [Int: String] = [500: Signing.companionIdentifier, 400: Signing.appIdentifier]
     var signedTeam = FakePort.team
     var selfValid = true
+    var selfSignedAs = Signing.helperIdentifier
+    /// The home directory from the user database (never $HOME); nil = unreadable.
+    var home: String? = "/Users/me"
     var trustPrompts = 0
     /// Lets a test change the world after a requirement is checked (a parent dying).
     var afterSatisfies: (FakePort) -> Void = { _ in }
@@ -72,7 +75,10 @@ final class FakePort: SystemPort {
         guard let identifier = signedAs[pid] else { return false }
         return requirement == Signing.requirement(teamId: signedTeam, identifier: identifier)
     }
-    func ownSignatureIsValid() -> Bool { selfValid }
+    func ownCodeSatisfies(requirement: String) -> Bool {
+        selfValid && requirement == Signing.requirement(teamId: signedTeam, identifier: selfSignedAs)
+    }
+    func homeDirectory() -> String? { home }
     func requestTrust() { trustPrompts += 1 }
     func post(_ event: SyntheticEvent, toPid pid: Int?) {
         posted.append(event)

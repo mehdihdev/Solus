@@ -110,10 +110,18 @@ struct MacSystem: SystemPort {
         return SecCodeCheckValidity(code, [], parsed) == errSecSuccess
     }
 
-    func ownSignatureIsValid() -> Bool {
+    func ownCodeSatisfies(requirement: String) -> Bool {
+        var parsed: SecRequirement?
         var code: SecCode?
-        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
-        return SecCodeCheckValidity(code, [], nil) == errSecSuccess
+        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess, let parsed,
+              SecCodeCopySelf([], &code) == errSecSuccess, let code else { return false }
+        return SecCodeCheckValidity(code, [], parsed) == errSecSuccess
+    }
+
+    func homeDirectory() -> String? {
+        guard let entry = getpwuid(getuid()), let dir = entry.pointee.pw_dir else { return nil }
+        let home = String(cString: dir)
+        return home.hasPrefix("/") ? home : nil
     }
 
     func requestTrust() {
