@@ -55,16 +55,27 @@ def resolve_helper(path_text: str | None) -> Path | None:
         return None
     if not stat.S_ISREG(info.st_mode) or not os.access(path, os.X_OK):
         return None
-    if _replaceable_by_others(info) or any(_replaceable_by_others(d.stat()) for d in path.parents):
+    if _file_replaceable(info) or any(_ancestor_replaceable(d.stat()) for d in path.parents):
         return None
     return path
 
 
-def _replaceable_by_others(info: os.stat_result) -> bool:
-    """Group/other-writable, except a sticky directory (others can't replace our entry)."""
-    writable = bool(info.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
-    sticky = stat.S_ISDIR(info.st_mode) and bool(info.st_mode & stat.S_ISVTX)
-    return writable and not sticky
+def _file_replaceable(info: os.stat_result) -> bool:
+    """The helper itself: never group- or other-writable."""
+    return bool(info.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+
+
+def _ancestor_replaceable(info: os.stat_result) -> bool:
+    """A directory above the helper lets someone else swap our entry.
+
+    Sticky: no (others can't replace an entry they don't own). Other-writable:
+    yes. Group-writable: only safe when root owns it — /Applications is
+    drwxrwxr-x root:admin, and an admin can already replace anything there."""
+    if bool(info.st_mode & stat.S_ISVTX):
+        return False
+    if info.st_mode & stat.S_IWOTH:
+        return True
+    return bool(info.st_mode & stat.S_IWGRP) and info.st_uid != 0
 
 
 async def _read_capped(stream: asyncio.StreamReader, cap: int) -> bytes:

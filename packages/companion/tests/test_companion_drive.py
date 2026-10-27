@@ -20,7 +20,13 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from solus_companion.__main__ import build_builtins
 from solus_companion.artifacts import ArtifactStore
 from solus_companion.dispatch import Dispatcher
-from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
+from solus_companion.drive.helper import (
+    DriveHelper,
+    DriveHelperError,
+    _ancestor_replaceable,
+    _file_replaceable,
+    resolve_helper,
+)
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
 from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
@@ -859,3 +865,71 @@ def test_saved_design_fingerprint_sees_a_project_under_build(tmp_path: Path) -> 
     before = saved_design_fingerprint(tmp_path)
     (tmp_path / "build" / "board.kicad_sch").write_text("(kicad_sch)")
     assert saved_design_fingerprint(tmp_path) != before
+
+
+# --- ancestor directory rule (Phase 4: the packaged helper under /Applications) ---
+
+
+def _stat(mode: int, uid: int) -> os.stat_result:
+    """A synthetic lstat result: (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime)."""
+    return os.stat_result((mode, 1, 1, 1, uid, 80, 0, 0, 0, 0))
+
+
+@pytest.mark.parametrize(
+    ("mode", "uid", "refused"),
+    [
+        (stat.S_IFDIR | 0o775, 0, False),  # /Applications: drwxrwxr-x root:admin
+        (stat.S_IFDIR | 0o775, 501, True),  # a user-owned group-writable folder
+        (stat.S_IFDIR | 0o777, 0, True),  # other-writable, not sticky, even root's
+        (stat.S_IFDIR | 0o777, 501, True),
+        (stat.S_IFDIR | 0o1777, 0, False),  # /tmp-like sticky: others can't replace ours
+        (stat.S_IFDIR | 0o755, 501, False),
+        (stat.S_IFDIR | 0o755, 0, False),
+    ],
+)
+def test_ancestor_directories_allow_group_write_only_when_root_owns_them(
+    mode: int, uid: int, refused: bool
+) -> None:
+    assert _ancestor_replaceable(_stat(mode, uid)) is refused
+
+
+@pytest.mark.parametrize("mode", [0o775, 0o757, 0o777])
+@pytest.mark.parametrize("uid", [0, 501])
+def test_the_helper_file_itself_is_never_group_or_other_writable(mode: int, uid: int) -> None:
+    assert _file_replaceable(_stat(stat.S_IFREG | mode, uid)) is True
+
+
+def test_a_root_owned_group_writable_ancestor_is_accepted_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`/Applications/Solus.app/...`: the real dirs are user-owned here, so the
+    one ancestor that is group-writable is presented as root's."""
+    apps = tmp_path / "Applications"
+    apps.mkdir()
+    helper = echo_helper(apps, OK_IDENTIFY)
+    apps.chmod(0o775)
+    real_stat = Path.stat
+
+    def as_root(self: Path, **kwargs: Any) -> os.stat_result:
+        info = real_stat(self, **kwargs)
+        if self == apps:
+            return _stat(info.st_mode, 0)
+        return info
+
+    try:
+        assert resolve_helper(str(helper)) is None  # user-owned 0775: refused
+        monkeypatch.setattr(Path, "stat", as_root)
+        assert resolve_helper(str(helper)) == helper  # root-owned 0775: accepted
+    finally:
+        apps.chmod(0o755)
+
+
+def test_a_helper_under_a_user_owned_group_writable_folder_is_refused(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    helper = echo_helper(shared, OK_IDENTIFY)
+    shared.chmod(0o775)
+    try:
+        assert resolve_helper(str(helper)) is None
+    finally:
+        shared.chmod(0o755)

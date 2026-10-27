@@ -53,4 +53,37 @@ uv run --package solus-companion --with pyinstaller pyinstaller \
 # Vendored MCP servers ride along; *.template.md are repo scaffolding, not payload.
 rsync -a --delete --exclude '*.template.md' integrations/mcp/ "$out/mcp/"
 
-echo "companion built: $out/solus-companion (+ $out/mcp/)"
+# macOS signing (ADR-041 amendment 2026-10-27): the drive helper requires its
+# parent to satisfy the Solus team's requirement with this exact identifier.
+# Signing is human-gated: it runs only when SOLUS_SIGN_IDENTITY is set.
+companion_id=com.solusforge.solus.companion
+if [[ "$(uname -s)" == "Darwin" && -n "${SOLUS_SIGN_IDENTITY:-}" ]]; then
+  team="${SOLUS_TEAM_ID:-}"
+  if [[ ! "$team" =~ ^[A-Z0-9]{10}$ ]]; then
+    echo "build-companion: SOLUS_TEAM_ID (10 upper-case letters/digits) is required when signing" >&2
+    exit 1
+  fi
+  # Hardened runtime, no extra entitlements (see companion-packaging.md).
+  sign() {
+    codesign --force --options runtime --timestamp --sign "$SOLUS_SIGN_IDENTITY" "$@"
+  }
+  # Nested Mach-Os first (dylibs, extension modules, the Python library), then
+  # the main binary; a parent signed before its children would not verify.
+  while IFS= read -r -d '' f; do
+    if [[ "$(file -b "$f")" == *Mach-O* ]]; then
+      sign "$f"
+    fi
+  done < <(find "$out/_internal" -type f -print0)
+  sign --identifier "$companion_id" "$out/solus-companion"
+  requirement="anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6]"
+  requirement+=" and certificate leaf[field.1.2.840.113635.100.6.1.13]"
+  requirement+=" and certificate leaf[subject.OU] = \"$team\" and identifier \"$companion_id\""
+  codesign --verify --strict -R="=$requirement" "$out/solus-companion"
+  echo "companion built and signed ($companion_id): $out/solus-companion (+ $out/mcp/)"
+else
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "WARNING: SOLUS_SIGN_IDENTITY is not set; the companion is UNSIGNED. A release drive" >&2
+    echo "         helper refuses every call from it (caller_untrusted)." >&2
+  fi
+  echo "companion built: $out/solus-companion (+ $out/mcp/)"
+fi

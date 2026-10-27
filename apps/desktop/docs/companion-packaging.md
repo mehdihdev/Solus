@@ -58,6 +58,49 @@ The latest token is remembered (in memory only) and replayed on respawn.
   (pinned for both layouts in `packages/companion/tests/test_fork_runtime.py`).
 - The script removes `dist/companion/` first, so switching modes never leaves a
   file where a folder belongs.
+
+### macOS signing (what the drive helper requires)
+
+The drive helper's caller check (ADR-041 amendment 2026-10-27) accepts only a
+parent whose signature satisfies:
+
+```
+anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6]
+  and certificate leaf[field.1.2.840.113635.100.6.1.13]
+  and certificate leaf[subject.OU] = "<SOLUS_TEAM_ID>"
+  and identifier "com.solusforge.solus.companion"
+```
+
+i.e. a Developer ID Application certificate of the Solus team, with the code
+identifier **`com.solusforge.solus.companion`**. When `SOLUS_SIGN_IDENTITY` is
+set on macOS, `build-companion.sh` signs every Mach-O under
+`solus-companion/_internal/` first, then the main binary with
+`--options runtime --timestamp --identifier com.solusforge.solus.companion`,
+and verifies the binary against the requirement above (`SOLUS_TEAM_ID`, ten
+upper-case letters/digits, is required). Unset ⇒ a warning and an unsigned
+build, whose drive calls a release helper refuses (`caller_untrusted`).
+
+Entitlements: none beyond the hardened runtime. A onedir build loads its
+extension modules and Python library from signed files on disk under one team
+signature, so library validation passes without
+`disable-library-validation`. Not yet verified with a real identity: if a
+ctypes callback ever fails under the hardened runtime, the candidate is
+`com.apple.security.cs.allow-unsigned-executable-memory` — add it only with
+that evidence and record why here.
+
+`make desktop-mac` builds the companion (`companion-bin`) and the helper bundle
+(`solus-input-app`, `scripts/build-solus-input.sh`) before
+`pnpm --filter @solus/desktop build:mac`.
+
+### Where the helper may live (`SOLUS_DRIVE_HELPER`)
+
+The companion refuses a helper path (`resolve_helper`, treated as no helper)
+unless it is an absolute, symlink-free, executable regular file that is not
+group- or other-writable. Every **ancestor directory** must also be safe:
+other-writable is refused unless the directory is sticky; group-writable is
+allowed only when the directory is owned by root (uid 0). That admits
+`/Applications` (`drwxrwxr-x root:admin` — an admin can replace anything there
+anyway) and refuses a user-owned group-writable folder.
 - PyInstaller is deliberately **not** in any pyproject: the script uses
   `uv run --package solus-companion --with pyinstaller`, layering it ephemerally
   over the companion's real environment so websockets/mcp/pydantic are visible
