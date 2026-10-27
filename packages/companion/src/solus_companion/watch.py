@@ -213,6 +213,43 @@ def fingerprint(root: Path | None) -> str:
     return digest.hexdigest()
 
 
+#: KiCad's own timed writes: local-history snapshots (`.history/`) and autosave
+#: copies. They happen with nobody touching anything, so they are not a save.
+AUTOSAVE_PREFIX = "_autosave-"
+
+
+def _saved_design(path: Path, root: Path) -> bool:
+    rel = path.relative_to(root)
+    return (
+        path.suffix.lower() in DESIGN_SUFFIXES
+        and not path.name.startswith(AUTOSAVE_PREFIX)
+        and not any(part.startswith(".") for part in rel.parts[:-1])
+    )
+
+
+def saved_design_fingerprint(root: Path | None) -> str:
+    """Like `fingerprint`, over SAVED design files only (ADR-041 drive M3): a
+    drive step ends when this changes. Source files, Git metadata and KiCad's
+    timed writes are left out so only a real save moves it. "" = cannot observe.
+    """
+    if root is None or not root.is_dir():
+        return ""
+    digest = hashlib.blake2b(digest_size=16)
+    try:
+        root = root.resolve()
+        for path in sorted(p for p in _bounded_files(root) if _saved_design(p, root)):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            rel = path.relative_to(root).as_posix()
+            digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+    except (OSError, ValueError, RuntimeError):
+        logger.warning("could not read workspace %s for the saved-design check", root)
+        return ""
+    return digest.hexdigest()
+
+
 def workspace_path(raw: str | None) -> Path | None:
     if not raw:
         return None

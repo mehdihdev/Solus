@@ -82,10 +82,11 @@ def build_builtins(
 ) -> tuple[BuiltinServer, ...]:
     """The servers the companion implements natively. `drive` (ADR-041,
     sol-drive.md §3) advertises nothing unless the desktop switched it on and
-    the pinned helper validates."""
+    the pinned helper validates, and only inside the linked workspace."""
+    linked = workspace_path(workspace)
     return (
-        MachineServer(workspace_path(workspace)),
-        drive_server_from_env(env, platform=platform),
+        MachineServer(linked),
+        drive_server_from_env(env, workspace=linked, platform=platform),
     )
 
 

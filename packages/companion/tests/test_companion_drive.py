@@ -24,6 +24,7 @@ from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
 from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
+from solus_companion.watch import saved_design_fingerprint
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
 OK_IDENTIFY = {"ok": True, "app": {"bundleId": "org.kicad.kicad"}, "allowed": True}
@@ -54,8 +55,25 @@ def echo_helper(tmp_path: Path, reply: dict[str, Any]) -> Path:
     return make_helper(tmp_path, f"print(json.dumps({reply!r}))\n")
 
 
-def server_with(path: Path, **kwargs: Any) -> DriveServer:
-    return DriveServer(DriveHelper(path, **kwargs), enabled=True, platform="darwin")
+def workspace_of(helper: Path) -> Path:
+    """The linked project folder beside the stand-in helper (never inside it)."""
+    ws = helper.parent / "ws"
+    ws.mkdir(exist_ok=True)
+    return ws
+
+
+def server_with(path: Path, *, bound: bool = True, **kwargs: Any) -> DriveServer:
+    """`bound`: as after the step's identify — the saved-design baseline is taken."""
+    server = DriveServer(
+        DriveHelper(path, **kwargs), enabled=True, workspace=workspace_of(path), platform="darwin"
+    )
+    if bound:
+        server._designs_at_bind = saved_design_fingerprint(server.workspace)
+    return server
+
+
+def within(tmp_path: Path) -> list[str]:
+    return ["--within", str((tmp_path / "ws").resolve())]
 
 
 def text_of(result: CallToolResult) -> str:
@@ -85,21 +103,27 @@ def test_resolve_helper_accepts_only_an_absolute_executable_regular_file(tmp_pat
 def test_from_env_needs_the_switch_the_helper_and_macos(tmp_path: Path) -> None:
     good = str(echo_helper(tmp_path, OK_IDENTIFY))
     on = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": good}
-    assert drive_server_from_env(on, platform="darwin").inventory() is not None
+    assert drive_server_from_env(on, workspace=tmp_path, platform="darwin").inventory() is not None
+    assert drive_server_from_env(on, workspace=None, platform="darwin").inventory() is None
     assert (
         drive_server_from_env(
-            {**on, "SOLUS_COMPANION_DRIVE": "true"}, platform="darwin"
+            {**on, "SOLUS_COMPANION_DRIVE": "true"}, workspace=tmp_path, platform="darwin"
         ).inventory()
         is None
     )
     assert (
-        drive_server_from_env({"SOLUS_DRIVE_HELPER": good}, platform="darwin").inventory() is None
-    )
-    assert (
-        drive_server_from_env({**on, "SOLUS_DRIVE_HELPER": "rel"}, platform="darwin").inventory()
+        drive_server_from_env(
+            {"SOLUS_DRIVE_HELPER": good}, workspace=tmp_path, platform="darwin"
+        ).inventory()
         is None
     )
-    assert drive_server_from_env(on, platform="linux").inventory() is None
+    assert (
+        drive_server_from_env(
+            {**on, "SOLUS_DRIVE_HELPER": "rel"}, workspace=tmp_path, platform="darwin"
+        ).inventory()
+        is None
+    )
+    assert drive_server_from_env(on, workspace=tmp_path, platform="linux").inventory() is None
 
 
 # --- advertising -----------------------------------------------------------------
@@ -109,11 +133,21 @@ def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> Non
     helper = DriveHelper(echo_helper(tmp_path, OK_IDENTIFY))
     for server, detail in [
         (
-            DriveServer(helper, enabled=False, platform="darwin"),
+            DriveServer(helper, enabled=False, workspace=tmp_path, platform="darwin"),
             "SOL can't use your mouse and keyboard (off)",
         ),
-        (DriveServer(None, enabled=True, platform="darwin"), "the input helper is missing"),
-        (DriveServer(helper, enabled=True, platform="win32"), "driving apps needs macOS"),
+        (
+            DriveServer(None, enabled=True, workspace=tmp_path, platform="darwin"),
+            "the input helper is missing",
+        ),
+        (
+            DriveServer(helper, enabled=True, workspace=tmp_path, platform="win32"),
+            "driving apps needs macOS",
+        ),
+        (
+            DriveServer(helper, enabled=True, workspace=None, platform="darwin"),
+            "no project workspace is linked",
+        ),
     ]:
         assert server.inventory() is None
         entry = server.status_entry()
@@ -124,7 +158,10 @@ def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> Non
 
 async def test_off_server_refuses_calls_without_running_the_helper(tmp_path: Path) -> None:
     server = DriveServer(
-        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)), enabled=False, platform="darwin"
+        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)),
+        enabled=False,
+        workspace=tmp_path,
+        platform="darwin",
     )
     result = await server.call_tool("identify", {})
     assert result.isError
@@ -152,7 +189,7 @@ async def test_identify_runs_the_helper_and_returns_its_json(tmp_path: Path) -> 
     result = await server.call_tool("identify", {})
     assert not result.isError
     assert result.structuredContent == OK_IDENTIFY
-    assert calls(tmp_path) == [["identify"]]
+    assert calls(tmp_path) == [["identify", *within(tmp_path)]]
 
 
 async def test_act_builds_the_argument_list_in_a_fixed_order(tmp_path: Path) -> None:
@@ -170,6 +207,7 @@ async def test_act_builds_the_argument_list_in_a_fixed_order(tmp_path: Path) -> 
     assert calls(tmp_path) == [
         [
             "act",
+            *within(tmp_path),
             "--bundle",
             "org.kicad.kicad",
             "--window",
@@ -275,7 +313,16 @@ async def test_capture_returns_the_image_as_content_and_metadata_without_the_pix
         "pointsHeight": 600,
     }
     assert calls(tmp_path) == [
-        ["capture", "--bundle", "org.kicad.kicad", "--window", "7", "--max-edge", "1568"]
+        [
+            "capture",
+            *within(tmp_path),
+            "--bundle",
+            "org.kicad.kicad",
+            "--window",
+            "7",
+            "--max-edge",
+            "1568",
+        ]
     ]
 
 
@@ -437,7 +484,7 @@ async def test_an_int_since_is_accepted_and_sent_as_a_float(tmp_path: Path) -> N
     await server.call_tool(
         "act", {"bundle": "org.kicad.kicad", "window": 7, "since": 5, "verb": "wait", "ms": 0}
     )
-    assert calls(tmp_path)[0][5:7] == ["--since", "5.0"]
+    assert calls(tmp_path)[0][7:9] == ["--since", "5.0"]
 
 
 @pytest.mark.parametrize("since", [-1.0, float("nan"), float("inf")])
@@ -623,7 +670,8 @@ def test_builtins_include_drive_switched_off_by_default(tmp_path: Path) -> None:
 def test_builtins_switch_drive_on_from_the_environment(tmp_path: Path) -> None:
     helper = echo_helper(tmp_path, OK_IDENTIFY)
     env = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": str(helper)}
-    drive = build_builtins(None, env=env, platform="darwin")[1]
+    assert build_builtins(None, env=env, platform="darwin")[1].inventory() is None  # no project
+    drive = build_builtins(str(tmp_path), env=env, platform="darwin")[1]
     inventory = drive.inventory()
     assert inventory is not None
     assert {tool["name"] for tool in inventory["tools"]} == set(TOOL_NAMES)
@@ -638,3 +686,114 @@ def test_a_fetch_once_artifact_nobody_pulls_expires() -> None:
     assert store.get(staged.artifact_id) is None
     assert store.get(kept.artifact_id) == PNG  # ordinary artifacts do not expire
     assert len(store) == 1
+
+
+# --- ADR-041 amendment (M2/M3): bound to the project; a save ends the step -------------
+
+#: The helper "saves": an act writes the schematic inside the workspace it was given.
+SAVING_HELPER = (
+    "if argv[0] == 'act':\n"
+    "    pathlib.Path(argv[2], 'board.kicad_sch').write_text('saved by the act')\n"
+    "print(json.dumps({'ok': True, 'verb': 'click', 'finishedAt': 2.0}))\n"
+)
+ACT = {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "click", "x": 1, "y": 40}
+
+
+def _schematic(ws: Path, text: str = "(kicad_sch)") -> Path:
+    path = ws / "board.kicad_sch"
+    path.write_text(text)
+    return path
+
+
+async def test_no_linked_workspace_refuses_without_running_the_helper(tmp_path: Path) -> None:
+    server = DriveServer(
+        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)),
+        enabled=True,
+        workspace=None,
+        platform="darwin",
+    )
+    result = await server.call_tool("identify", {})
+    assert result.isError and "no project workspace" in text_of(result)
+    assert calls(tmp_path) == []
+
+
+async def test_the_workspace_is_sent_resolved(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, OK_IDENTIFY)
+    real = workspace_of(helper)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    server = DriveServer(DriveHelper(helper), enabled=True, workspace=link, platform="darwin")
+    await server.call_tool("identify", {})
+    assert calls(tmp_path) == [["identify", "--within", str(real.resolve())]]
+
+
+async def test_an_act_before_identify_is_refused(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True, "finishedAt": 2.0}), bound=False)
+    result = await server.call_tool("act", ACT)
+    assert result.isError and text_of(result).startswith("not_bound: ")
+    assert calls(tmp_path) == []
+
+
+async def test_identify_takes_the_saved_design_baseline(tmp_path: Path) -> None:
+    helper = make_helper(tmp_path, SAVING_HELPER.replace("'click'", "'x', 'now': 1.0"))
+    ws = workspace_of(helper)
+    _schematic(ws)
+    server = server_with(helper, bound=False)
+    assert not (await server.call_tool("identify", {})).isError
+    assert server._designs_at_bind == saved_design_fingerprint(server.workspace)
+
+
+async def test_an_act_that_saves_reports_it(tmp_path: Path) -> None:
+    helper = make_helper(tmp_path, SAVING_HELPER)
+    _schematic(workspace_of(helper))
+    server = server_with(helper)
+    result = await server.call_tool("act", ACT)
+    assert not result.isError
+    assert result.structuredContent is not None
+    assert result.structuredContent["designSaved"] is True
+
+
+async def test_an_act_that_does_not_save_says_so(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True, "finishedAt": 2.0}))
+    result = await server.call_tool("act", ACT)
+    assert result.structuredContent is not None
+    assert result.structuredContent["designSaved"] is False
+
+
+async def test_a_design_changed_since_bind_stops_before_the_next_act(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, {"ok": True, "finishedAt": 2.0})
+    schematic = _schematic(workspace_of(helper))
+    server = server_with(helper)
+    schematic.write_text("(kicad_sch saved)")
+    result = await server.call_tool("act", ACT)
+    assert result.isError and text_of(result).startswith("design_saved: ")
+    assert calls(tmp_path) == []  # nothing ran
+
+
+async def test_kicads_timed_writes_are_not_a_save(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, {"ok": True, "finishedAt": 2.0})
+    ws = workspace_of(helper)
+    _schematic(ws)
+    server = server_with(helper)
+    (ws / ".history").mkdir()
+    (ws / ".history" / "board.kicad_sch").write_text("snapshot")
+    (ws / "_autosave-board.kicad_sch").write_text("autosave")
+    (ws / "board.kicad_sch.lck").write_text("{}")
+    (ws / "notes.txt").write_text("not a design")
+    result = await server.call_tool("act", ACT)
+    assert not result.isError
+    assert result.structuredContent is not None
+    assert result.structuredContent["designSaved"] is False
+
+
+def test_saved_design_fingerprint_sees_saves_in_subfolders_only_of_design_files(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "sub").mkdir()
+    before = saved_design_fingerprint(tmp_path)
+    (tmp_path / "sub" / "power.kicad_sch").write_text("(kicad_sch)")
+    after = saved_design_fingerprint(tmp_path)
+    assert before and after and before != after
+    (tmp_path / "main.py").write_text("print()")  # source is not a design save
+    assert saved_design_fingerprint(tmp_path) == after
+    assert saved_design_fingerprint(None) == ""

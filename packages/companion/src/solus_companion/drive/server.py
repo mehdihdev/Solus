@@ -15,12 +15,14 @@ import logging
 import sys
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
+from solus_companion.watch import saved_design_fingerprint
 
 logger = logging.getLogger("solus.companion.drive")
 
@@ -29,6 +31,7 @@ ENV_HELPER = "SOLUS_DRIVE_HELPER"
 OFF = "SOL can't use your mouse and keyboard (off)"
 NO_HELPER = "the input helper is missing"
 NOT_MACOS = "driving apps needs macOS"
+NO_WORKSPACE = "no project workspace is linked"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SUMMARY_CAP = 2000
 _COORD = 100_000
@@ -139,11 +142,20 @@ class DriveServer:
     tool_names = TOOL_NAMES
 
     def __init__(
-        self, helper: DriveHelper | None, *, enabled: bool, platform: str = sys.platform
+        self,
+        helper: DriveHelper | None,
+        *,
+        enabled: bool,
+        workspace: Path | None,
+        platform: str = sys.platform,
     ) -> None:
         self.helper = helper
         self.enabled = enabled
+        #: ADR-041 amendment (M2): every helper command is bound to this folder.
+        self.workspace = workspace.resolve() if workspace is not None else None
         self.platform = platform
+        #: Saved design files at the step's identify (M3): a change ends the step.
+        self._designs_at_bind: str | None = None
         self._since = datetime.now(UTC).isoformat()
         # One helper at a time: two acts must never interleave events in a window.
         self._one_at_a_time = asyncio.Lock()
@@ -155,6 +167,8 @@ class DriveServer:
             return OFF
         if self.helper is None:
             return NO_HELPER
+        if self.workspace is None:
+            return NO_WORKSPACE
         return None
 
     def inventory(self) -> dict[str, Any] | None:
@@ -180,7 +194,7 @@ class DriveServer:
         if spec is None:
             return _error(f"unknown_tool: drive.{tool}")
         reason = self._off_reason()
-        if reason is not None or self.helper is None:
+        if reason is not None or self.helper is None or self.workspace is None:
             return _error(f"drive_off: {reason or NO_HELPER}")
         try:
             parsed = spec[0].model_validate(args)
@@ -189,12 +203,42 @@ class DriveServer:
             return _error(f"invalid_arguments: {detail}")
         try:
             async with self._one_at_a_time:
-                return await self._run(self.helper, tool, parsed)
+                return await self._run(self.helper, self.workspace, tool, parsed)
         except DriveHelperError as exc:
             logger.warning("drive.%s helper failure: %s", tool, exc.code)
             return _error(str(exc))
 
-    async def _run(self, helper: DriveHelper, tool: str, args: _Args) -> CallToolResult:
+    async def _run(
+        self, helper: DriveHelper, workspace: Path, tool: str, args: _Args
+    ) -> CallToolResult:
+        if isinstance(args, ActArgs):
+            stop = await self._saved_since_bind(workspace)
+            if stop is not None:
+                return _error(stop)
+        reply = await self._helper(helper, workspace, tool, args)
+        if not reply["ok"]:
+            return _error(f"{reply.get('code', 'refused')}: {reply.get('message', '')}")
+        if tool == "capture":
+            return _capture_result(reply)
+        if tool == "identify":
+            self._designs_at_bind = await asyncio.to_thread(saved_design_fingerprint, workspace)
+        if tool == "act":
+            now = await asyncio.to_thread(saved_design_fingerprint, workspace)
+            reply = {**reply, "designSaved": not now or now != self._designs_at_bind}
+        return _ok(reply)
+
+    async def _saved_since_bind(self, workspace: Path) -> str | None:
+        """Why an act must not run: not bound yet, or a design was saved since."""
+        if self._designs_at_bind is None:
+            return "not_bound: identify the window first"
+        now = await asyncio.to_thread(saved_design_fingerprint, workspace)
+        if not now or now != self._designs_at_bind:
+            return "design_saved: a design file in this project changed; SOL stopped"
+        return None
+
+    async def _helper(
+        self, helper: DriveHelper, workspace: Path, tool: str, args: _Args
+    ) -> dict[str, Any]:
         if isinstance(args, CaptureArgs):
             argv = [
                 "capture",
@@ -209,13 +253,11 @@ class DriveServer:
             argv = act_argv(args)
         else:
             argv = ["identify"]
+        argv[1:1] = ["--within", str(workspace)]
         extra = (args.ms or 0) / 1000 if isinstance(args, ActArgs) else 0.0
-        reply = await helper.run(
+        return await helper.run(
             argv, timeout=helper.timeout_for(tool, DEFAULT_TIMEOUTS[tool]) + extra
         )
-        if not reply["ok"]:
-            return _error(f"{reply.get('code', 'refused')}: {reply.get('message', '')}")
-        return _capture_result(reply) if tool == "capture" else _ok(reply)
 
 
 def _capture_result(reply: dict[str, Any]) -> CallToolResult:
@@ -242,12 +284,15 @@ def _capture_result(reply: dict[str, Any]) -> CallToolResult:
     )
 
 
-def drive_server_from_env(env: Mapping[str, str], *, platform: str = sys.platform) -> DriveServer:
+def drive_server_from_env(
+    env: Mapping[str, str], *, workspace: Path | None, platform: str = sys.platform
+) -> DriveServer:
     """What the companion builds at start (slice 2): the desktop app sets the
     switch to exactly "1" and the helper to its packaged absolute path."""
     path = resolve_helper(env.get(ENV_HELPER))
     return DriveServer(
         DriveHelper(path) if path is not None else None,
         enabled=env.get(ENV_SWITCH) == "1",
+        workspace=workspace,
         platform=platform,
     )
