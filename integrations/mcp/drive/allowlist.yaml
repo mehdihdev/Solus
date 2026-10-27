@@ -1,0 +1,25 @@
+# integrations/mcp/drive/allowlist.yaml — DRAFT (SOLUSDEV-319 drive slice 2),
+# awaiting human ratification per integrations/mcp/CLAUDE.md rule 2.
+#
+# The Solus-owned allowlist for the companion's BUILT-IN `drive` server (ADR-041;
+# docs/architecture/sol-drive.md §3): it runs the pinned, Solus-built
+# `solus-input` helper. No upstream, no bin/launch — there is no third-party code
+# for the ADR-031 fork gate to apply to.
+#
+# `exposure: internal` is the point of this file: the cloud accepts these tools
+# from the companion but registers them in NO agent tool set. Only the drive
+# executor (Solus code, after the user approves a `drive.step` card) dispatches
+# them. The model can never call `drive.act` directly.
+server: drive
+launched_by: builtin
+exposure: internal
+tools:
+  - name: identify
+    requires_confirmation: false
+    reason: reads which app and window are in front, only for allowlisted apps; no input
+  - name: capture
+    requires_confirmation: false
+    reason: captures one allowlisted app window as an image for the approved step; never stored
+  - name: act
+    requires_confirmation: true
+    reason: moves your mouse and types in the one window you approved, within the step's budget

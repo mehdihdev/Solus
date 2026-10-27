@@ -124,3 +124,12 @@ def test_internal_tools_never_reach_the_agent_tool_set(tmp_path: Path) -> None:
     names = {d.name for d in registry.list()}
     assert "mock.echo" in names
     assert not {n for n in names if n.startswith("drive.") and n != "drive.step"}
+
+
+def test_the_real_drive_allowlist_is_internal_and_gates_act() -> None:
+    root = Path(__file__).resolve().parents[3] / "integrations" / "mcp"
+    loaded = load_allowlist(root)
+    assert "drive" in loaded.internal
+    act = loaded.get("drive", "act")
+    assert act is not None and act.requires_confirmation is True
+    assert loaded.internal == {"drive"}

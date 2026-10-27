@@ -9,8 +9,10 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import os
 import signal
 import sys
+from collections.abc import Mapping
 
 from solus_companion.channel import run_channel
 from solus_companion.config import (
@@ -21,8 +23,9 @@ from solus_companion.config import (
     config_from_env,
     discover_servers,
 )
+from solus_companion.drive.server import drive_server_from_env
 from solus_companion.machine.server import MachineServer
-from solus_companion.supervisor import Supervisor
+from solus_companion.supervisor import BuiltinServer, Supervisor
 from solus_companion.watch import workspace_path
 
 logger = logging.getLogger("solus.companion")
@@ -74,6 +77,18 @@ async def _stdin_token_loop(box: TokenBox) -> None:
     await _consume_token_lines(reader, box)
 
 
+def build_builtins(
+    workspace: str | None, *, env: Mapping[str, str], platform: str = sys.platform
+) -> tuple[BuiltinServer, ...]:
+    """The servers the companion implements natively. `drive` (ADR-041,
+    sol-drive.md §3) advertises nothing unless the desktop switched it on and
+    the pinned helper validates."""
+    return (
+        MachineServer(workspace_path(workspace)),
+        drive_server_from_env(env, platform=platform),
+    )
+
+
 async def _amain(config: CompanionConfig) -> int:
     # S5: the built-in `machine` server — advertises nothing (and fails closed)
     # until a project workspace is linked (SOLUS_COMPANION_WORKSPACE).
@@ -81,8 +96,9 @@ async def _amain(config: CompanionConfig) -> int:
     # unset OR non-existent SOLUS_COMPANION_WORKSPACE means NO workspace, so the
     # server advertises nothing rather than confining to a directory that is not
     # there.
-    machine = MachineServer(workspace_path(config.workspace))
-    supervisor = Supervisor(config.servers, builtins=(machine,))
+    supervisor = Supervisor(
+        config.servers, builtins=build_builtins(config.workspace, env=os.environ)
+    )
     await supervisor.start_all()
     channel = asyncio.create_task(run_channel(config, supervisor))
     side_tasks = [asyncio.create_task(_health_loop(supervisor))]

@@ -79,12 +79,15 @@ class ArtifactStore:
         self._max_total_bytes = max_total_bytes
         self._max_artifacts = max_artifacts
         self._items: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+        #: Ids served at most once, then dropped (ADR-041 §6: a drive capture
+        #: lives only as long as the step that pulls it).
+        self._fetch_once: set[str] = set()
         self._total = 0
 
     def __len__(self) -> int:
         return len(self._items)
 
-    def stage(self, payload: bytes, *, media_type: str) -> StagedArtifact:
+    def stage(self, payload: bytes, *, media_type: str, fetch_once: bool = False) -> StagedArtifact:
         """Hold `payload` and return the handle to advertise to the cloud.
 
         Raises `ValueError` when the artifact alone exceeds the per-artifact
@@ -98,6 +101,8 @@ class ArtifactStore:
             )
         artifact_id = uuid.uuid4().hex
         self._items[artifact_id] = (payload, media_type)
+        if fetch_once:
+            self._fetch_once.add(artifact_id)
         self._total += len(payload)
         self._evict()
         return StagedArtifact(
@@ -108,7 +113,8 @@ class ArtifactStore:
         while self._items and (
             self._total > self._max_total_bytes or len(self._items) > self._max_artifacts
         ):
-            _oldest, (payload, _media) = self._items.popitem(last=False)
+            oldest, (payload, _media) = self._items.popitem(last=False)
+            self._fetch_once.discard(oldest)
             self._total -= len(payload)
 
     def get(self, artifact_id: str) -> bytes | None:
@@ -124,6 +130,9 @@ class ArtifactStore:
         payload = self.get(artifact_id)
         if payload is None:
             return
+        if artifact_id in self._fetch_once:
+            # Dropped as the fetch starts: a second fetch finds nothing.
+            self._drop(artifact_id)
         if not payload:
             yield b"", True
             return
@@ -131,8 +140,14 @@ class ArtifactStore:
             chunk = payload[offset : offset + chunk_bytes]
             yield chunk, offset + chunk_bytes >= len(payload)
 
+    def _drop(self, artifact_id: str) -> None:
+        payload, _media = self._items.pop(artifact_id)
+        self._fetch_once.discard(artifact_id)
+        self._total -= len(payload)
+
     def clear(self) -> None:
         self._items.clear()
+        self._fetch_once.clear()
         self._total = 0
 
 

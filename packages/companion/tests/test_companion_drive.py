@@ -6,6 +6,7 @@ The helper here is a real executable script, so the subprocess path (argv, no
 shell, timeouts, output caps) is exercised for real.
 """
 
+import asyncio
 import base64
 import json
 import os
@@ -16,10 +17,12 @@ from typing import Any
 
 import pytest
 from mcp.types import CallToolResult, ImageContent, TextContent
+from solus_companion.__main__ import build_builtins
+from solus_companion.artifacts import ArtifactStore
 from solus_companion.dispatch import Dispatcher
 from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
-from solus_companion.frames import ToolCallIn
+from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
@@ -517,6 +520,7 @@ async def test_unicode_line_separators_inside_json_strings_still_parse(tmp_path:
     )
     result = await server.call_tool("identify", {})
     assert not result.isError
+    assert result.structuredContent is not None
     assert result.structuredContent["window"]["title"] == "board\u2028sheet\u0085x"
 
 
@@ -548,3 +552,78 @@ async def test_act_passes_the_expected_window_size_through(tmp_path: Path) -> No
     }
     await server.call_tool("act", args)
     assert calls(tmp_path)[0][-4:] == ["--expect-width", "800", "--expect-height", "600"]
+
+
+# --- slice 2: captures are fetched once, then gone (ADR-041 §6) ----------------------------
+
+
+def test_a_fetch_once_artifact_is_served_once_then_dropped() -> None:
+    store = ArtifactStore()
+    staged = store.stage(PNG, media_type="image/png", fetch_once=True)
+    assert (
+        b"".join(chunk for chunk, _final in store.chunks(staged.artifact_id, chunk_bytes=8)) == PNG
+    )
+    assert list(store.chunks(staged.artifact_id, chunk_bytes=8)) == []
+    assert store.get(staged.artifact_id) is None
+    assert len(store) == 0
+
+
+def test_ordinary_artifacts_can_still_be_fetched_again() -> None:
+    store = ArtifactStore()
+    staged = store.stage(PNG, media_type="image/png")
+    for _ in range(2):
+        assert list(store.chunks(staged.artifact_id, chunk_bytes=1024)) == [(PNG, True)]
+
+
+async def test_a_drive_capture_can_be_pulled_exactly_once(tmp_path: Path) -> None:
+    encoded = base64.b64encode(PNG).decode()
+    sup = Supervisor((), builtins=(server_with(echo_helper(tmp_path, capture_reply(encoded))),))
+    sent: list[dict[str, Any]] = []
+
+    async def send(raw: str) -> None:
+        sent.append(json.loads(raw))
+
+    dispatcher = Dispatcher(sup, send)
+    dispatcher.handle_tool_call(
+        ToolCallIn(
+            tool="drive.capture", args={"bundle": "org.kicad.kicad", "window": 7}, call_id="c1"
+        )
+    )
+    await dispatcher.wait_idle()
+    blocks = sent[0]["data"]["value"]["content"]
+    artifact_id = next(b for b in blocks if b["type"] == "image")["artifact_id"]
+
+    async def fetch(fetch_id: str) -> dict[str, Any]:
+        before = len(sent)
+        dispatcher.handle_artifact_fetch(
+            ArtifactFetchIn(artifact_id=artifact_id, fetch_id=fetch_id)
+        )
+        for _ in range(200):
+            if len(sent) > before:
+                break
+            await asyncio.sleep(0.005)
+        data: dict[str, Any] = sent[-1]["data"]
+        return data
+
+    first = await fetch("f1")
+    assert first["final"] is True and not first.get("error")
+    second = await fetch("f2")
+    assert second["error"] == "unknown artifact"
+
+
+# --- slice 2: the companion builds drive beside machine ------------------------------------
+
+
+def test_builtins_include_drive_switched_off_by_default(tmp_path: Path) -> None:
+    builtins = build_builtins(None, env={})
+    assert [server.name for server in builtins] == ["machine", "drive"]
+    assert builtins[1].inventory() is None
+
+
+def test_builtins_switch_drive_on_from_the_environment(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, OK_IDENTIFY)
+    env = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": str(helper)}
+    drive = build_builtins(None, env=env, platform="darwin")[1]
+    inventory = drive.inventory()
+    assert inventory is not None
+    assert {tool["name"] for tool in inventory["tools"]} == set(TOOL_NAMES)

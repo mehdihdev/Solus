@@ -72,7 +72,13 @@ class ArtifactUpload(Protocol):
     ) -> dict[str, Any]: ...
 
 
-def map_result(call_id: str, result: CallToolResult, store: ArtifactStore | None = None) -> str:
+def map_result(
+    call_id: str,
+    result: CallToolResult,
+    store: ArtifactStore | None = None,
+    *,
+    fetch_once: bool = False,
+) -> str:
     """Mirror the cloud MCPTool's `_map_result` into a tool_result frame.
 
     Non-text content is never inlined (W0-04). With a `store`, the bytes are
@@ -94,16 +100,20 @@ def map_result(call_id: str, result: CallToolResult, store: ArtifactStore | None
         else:
             # Binary/non-text payloads are NEVER inlined (W0-04 ArtifactRef rule)
             # — they are staged here and pulled on demand.
-            blocks.append(_artifact_block(block, store))
+            blocks.append(_artifact_block(block, store, fetch_once=fetch_once))
     return tool_result_ok(call_id, {"content": blocks})
 
 
-def _artifact_block(block: Any, store: ArtifactStore | None) -> dict[str, Any]:
+def _artifact_block(
+    block: Any, store: ArtifactStore | None, *, fetch_once: bool = False
+) -> dict[str, Any]:
     payload = _raw_bytes(block)
     if store is None or payload is None:
         return {"type": block.type, "inlined": False, "note": NON_TEXT_NOTE}
     try:
-        staged = store.stage(payload, media_type=getattr(block, "mimeType", "") or "")
+        staged = store.stage(
+            payload, media_type=getattr(block, "mimeType", "") or "", fetch_once=fetch_once
+        )
     except ValueError as exc:
         # Too big to stage: the CALL still succeeded, so report the block
         # honestly rather than failing the tool.
@@ -200,7 +210,8 @@ class Dispatcher:
             and value.get("artifact_path") is not None
         ):
             return await self._artifact_result(call, server, value)
-        return map_result(call.call_id, result, self._artifacts)
+        # ADR-041 §6: a drive capture is pulled once by the step, then dropped.
+        return map_result(call.call_id, result, self._artifacts, fetch_once=server == "drive")
 
     async def _command_call(self, call: ToolCallIn, server: str, tool: str) -> CallToolResult:
         sequence = 0
