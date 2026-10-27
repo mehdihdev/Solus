@@ -319,7 +319,7 @@ async def test_dispatch_stages_the_capture_as_an_artifact_never_inline(tmp_path:
         ("print(json.dumps({'no_ok': 1}))\n", "helper_output: "),
         ("print('{}'); print('{}')\n", "helper_output: "),
         ("sys.exit(3)\n", "helper_crashed: "),
-        ("sys.stdout.write('x' * (13 * 1024 * 1024))\n", "helper_output: "),
+        ("sys.stdout.write('x' * (25 * 1024 * 1024))\n", "helper_output: "),
     ],
 )
 async def test_bad_helper_output_is_an_error_not_a_guess(
@@ -356,3 +356,191 @@ async def test_helper_errors_carry_a_code(tmp_path: Path) -> None:
     with pytest.raises(DriveHelperError) as caught:
         await DriveHelper(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
     assert caught.value.code == "helper_crashed"
+
+
+# --- review fixes: cancellation, one deadline, path re-check, one call at a time ------------
+
+
+async def _wait_for(path: Path) -> None:
+    import asyncio
+
+    for _ in range(200):
+        if path.exists() and path.read_text():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"{path} never appeared")
+
+
+async def test_a_cancelled_call_kills_the_helper(tmp_path: Path) -> None:
+    import asyncio
+
+    pidfile = tmp_path / "pid"
+    body = f"open({str(pidfile)!r}, 'w').write(str(__import__('os').getpid()))\ntime.sleep(30)\n"
+    server = server_with(make_helper(tmp_path, body))
+    task = asyncio.create_task(server.call_tool("identify", {}))
+    await _wait_for(pidfile)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    pid = int(pidfile.read_text())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+async def test_one_deadline_covers_reading_and_exiting(tmp_path: Path) -> None:
+    import time as clock
+
+    # Closes stdout at once, then lingers: the whole run still ends at the timeout.
+    body = "import os\nprint(json.dumps({'ok': True}))\nsys.stdout.flush(); os.close(1)\ntime.sleep(30)\n"
+    server = server_with(make_helper(tmp_path, body), timeouts={"identify": 0.6})
+    started = clock.monotonic()
+    result = await server.call_tool("identify", {})
+    assert text_of(result).startswith("helper_timeout: ")
+    assert clock.monotonic() - started < 1.0
+
+
+async def test_a_helper_replaced_by_a_symlink_after_start_is_refused(tmp_path: Path) -> None:
+    good = echo_helper(tmp_path, OK_IDENTIFY)
+    server = server_with(good)
+    moved = tmp_path / "real-helper"
+    good.rename(moved)
+    good.symlink_to(moved)
+    result = await server.call_tool("identify", {})
+    assert result.isError
+    assert text_of(result).startswith("helper_missing: ")
+
+
+async def test_calls_run_one_at_a_time_never_interleaved(tmp_path: Path) -> None:
+    import asyncio
+
+    log = tmp_path / "spans"
+    body = (
+        f"open({str(log)!r}, 'a').write('start\\n')\n"
+        "time.sleep(0.3)\n"
+        f"open({str(log)!r}, 'a').write('end\\n')\n"
+        "print(json.dumps({'ok': True}))\n"
+    )
+    server = server_with(make_helper(tmp_path, body))
+    act = {"bundle": "org.kicad.kicad", "window": 7, "since": 1.0, "verb": "wait", "ms": 1}
+    await asyncio.gather(server.call_tool("act", act), server.call_tool("act", act))
+    assert log.read_text().split() == ["start", "end", "start", "end"]
+
+
+async def test_an_int_since_is_accepted_and_sent_as_a_float(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    await server.call_tool(
+        "act", {"bundle": "org.kicad.kicad", "window": 7, "since": 5, "verb": "wait", "ms": 0}
+    )
+    assert calls(tmp_path)[0][5:7] == ["--since", "5.0"]
+
+
+@pytest.mark.parametrize("since", [-1.0, float("nan"), float("inf")])
+async def test_since_must_be_a_finite_non_negative_time(tmp_path: Path, since: float) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    result = await server.call_tool(
+        "act", {"bundle": "org.kicad.kicad", "window": 7, "since": since, "verb": "wait", "ms": 0}
+    )
+    assert text_of(result).startswith("invalid_arguments: ")
+    assert calls(tmp_path) == []
+
+
+async def test_a_well_formed_but_undrivable_bundle_is_left_to_the_helper(tmp_path: Path) -> None:
+    refusal = {"ok": False, "code": "app_not_allowed", "message": "not a drivable app"}
+    server = server_with(echo_helper(tmp_path, refusal))
+    result = await server.call_tool("capture", {"bundle": "com.apple.Terminal", "window": 7})
+    assert text_of(result) == "app_not_allowed: not a drivable app"
+
+
+async def test_identify_takes_no_arguments(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, OK_IDENTIFY))
+    assert (await server.call_tool("identify", {"x": 1})).isError
+    assert calls(tmp_path) == []
+
+
+def test_capture_max_edge_stays_within_the_output_cap() -> None:
+    from solus_companion.drive.helper import STDOUT_CAP_BYTES
+    from solus_companion.drive.server import CaptureArgs
+
+    schema = CaptureArgs.model_json_schema()["properties"]["max_edge"]
+    assert schema["maximum"] == 2048
+    # Worst case: an incompressible RGBA PNG (4 bytes/px) as base64 (x4/3) still fits.
+    assert 2048 * 2048 * 4 * 4 // 3 < STDOUT_CAP_BYTES
+
+
+async def test_termination_is_sigterm_first_so_the_helper_can_release_a_held_button(
+    tmp_path: Path,
+) -> None:
+    import asyncio
+
+    marker = tmp_path / "got-term"
+    pidfile = tmp_path / "pid"
+    body = (
+        "import signal, os\n"
+        f"signal.signal(signal.SIGTERM, lambda *_: (open({str(marker)!r}, 'w').write('1'), sys.exit(0)))\n"
+        f"open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(30)\n"
+    )
+    server = server_with(make_helper(tmp_path, body))
+    task = asyncio.create_task(server.call_tool("identify", {}))
+    await _wait_for(pidfile)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert marker.read_text() == "1"
+
+
+async def test_a_nul_byte_is_an_argument_error_not_an_exception(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    for field, value in [("text", "a\x00b"), ("chord", "cmd+\x00")]:
+        args = {
+            "bundle": "org.kicad.kicad",
+            "window": 7,
+            "since": 1.0,
+            "verb": "type",
+            field: value,
+        }
+        result = await server.call_tool("act", args)
+        assert text_of(result).startswith("invalid_arguments: ")
+    assert calls(tmp_path) == []
+
+
+async def test_unicode_line_separators_inside_json_strings_still_parse(tmp_path: Path) -> None:
+    reply = {"ok": True, "allowed": True, "window": {"title": "board\u2028sheet\u0085x"}}
+    server = server_with(
+        make_helper(
+            tmp_path, f"sys.stdout.write(json.dumps({reply!r}, ensure_ascii=False) + '\\n')\n"
+        )
+    )
+    result = await server.call_tool("identify", {})
+    assert not result.isError
+    assert result.structuredContent["window"]["title"] == "board\u2028sheet\u0085x"
+
+
+def test_a_helper_in_a_group_or_world_writable_directory_is_refused(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    helper = echo_helper(shared, OK_IDENTIFY)
+    assert resolve_helper(str(helper)) == helper
+    shared.chmod(0o777)
+    try:
+        assert resolve_helper(str(helper)) is None
+    finally:
+        shared.chmod(0o755)
+    helper.chmod(0o775)
+    assert resolve_helper(str(helper)) is None
+
+
+async def test_act_passes_the_expected_window_size_through(tmp_path: Path) -> None:
+    server = server_with(echo_helper(tmp_path, {"ok": True}))
+    args = {
+        "bundle": "org.kicad.kicad",
+        "window": 7,
+        "since": 1.0,
+        "verb": "click",
+        "x": 1,
+        "y": 40,
+        "expect_width": 800,
+        "expect_height": 600,
+    }
+    await server.call_tool("act", args)
+    assert calls(tmp_path)[0][-4:] == ["--expect-width", "800", "--expect-height", "600"]

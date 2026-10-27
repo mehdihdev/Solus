@@ -7,6 +7,7 @@ switched driving on. Arguments are checked strictly here; the helper re-checks
 everything that matters for safety itself.
 """
 
+import asyncio
 import base64
 import binascii
 import json
@@ -37,6 +38,8 @@ DEFAULT_TIMEOUTS = {"identify": 5.0, "capture": 15.0, "act": 10.0}
 Bundle = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$")
 WindowId = Field(ge=0, le=2**32 - 1)
 Coord = Field(default=None, ge=-_COORD, le=_COORD)
+#: Text a helper argument may carry: no NUL (it cannot cross argv).
+_NO_NUL = r"^[^\x00]*$"
 
 
 class _Args(BaseModel):
@@ -50,7 +53,7 @@ class IdentifyArgs(_Args):
 class CaptureArgs(_Args):
     bundle: str = Bundle
     window: int = WindowId
-    max_edge: int = Field(default=1568, ge=256, le=4096)
+    max_edge: int = Field(default=1568, ge=256, le=2048)
 
 
 class ActArgs(_Args):
@@ -67,9 +70,12 @@ class ActArgs(_Args):
     dy: int | None = Coord
     button: Literal["left", "right"] | None = None
     count: int | None = Field(default=None, ge=1, le=2)
-    chord: str | None = Field(default=None, min_length=1, max_length=64)
-    text: str | None = Field(default=None, min_length=1, max_length=200)
+    chord: str | None = Field(default=None, min_length=1, max_length=64, pattern=_NO_NUL)
+    text: str | None = Field(default=None, min_length=1, max_length=200, pattern=_NO_NUL)
     ms: int | None = Field(default=None, ge=0, le=2000)
+    #: The window size (points) the caller last captured: a resize since refuses.
+    expect_width: int | None = Field(default=None, ge=1, le=_COORD)
+    expect_height: int | None = Field(default=None, ge=1, le=_COORD)
 
 
 #: Helper flags in a fixed order, so the argument list is deterministic.
@@ -85,6 +91,8 @@ _ACT_FLAGS = (
     ("chord", "--chord"),
     ("text", "--text"),
     ("ms", "--ms"),
+    ("expect_width", "--expect-width"),
+    ("expect_height", "--expect-height"),
 )
 
 _TOOLS: dict[str, tuple[type[_Args], str]] = {
@@ -137,6 +145,8 @@ class DriveServer:
         self.enabled = enabled
         self.platform = platform
         self._since = datetime.now(UTC).isoformat()
+        # One helper at a time: two acts must never interleave events in a window.
+        self._one_at_a_time = asyncio.Lock()
 
     def _off_reason(self) -> str | None:
         if self.platform != "darwin":
@@ -178,7 +188,8 @@ class DriveServer:
             detail = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors())
             return _error(f"invalid_arguments: {detail}")
         try:
-            return await self._run(self.helper, tool, parsed)
+            async with self._one_at_a_time:
+                return await self._run(self.helper, tool, parsed)
         except DriveHelperError as exc:
             logger.warning("drive.%s helper failure: %s", tool, exc.code)
             return _error(str(exc))
