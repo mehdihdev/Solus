@@ -224,7 +224,9 @@ async def test_act_reports_whether_the_design_was_saved(reply: Any, saved: bool)
     assert done.design_saved is saved
 
 
-@pytest.mark.parametrize("code", ["outside_workspace", "design_saved", "not_bound"])
+@pytest.mark.parametrize(
+    "code", ["outside_workspace", "design_saved", "not_bound", "caller_untrusted"]
+)
 async def test_the_binding_codes_are_known(code: str) -> None:
     act = FakeTool(error=ToolException(f"{code}: nope"))
     with pytest.raises(DriveRefusal) as caught:

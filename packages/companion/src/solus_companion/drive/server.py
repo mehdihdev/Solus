@@ -22,6 +22,7 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
+from solus_companion.drive.outline import Emit, outline_line, stdout_writer
 from solus_companion.watch import saved_design_fingerprint
 
 logger = logging.getLogger("solus.companion.drive")
@@ -149,8 +150,11 @@ class DriveServer:
         enabled: bool,
         workspace: Path | None,
         platform: str = sys.platform,
+        emit: Emit | None = None,
     ) -> None:
         self.helper = helper
+        #: Slice 3: where `drive_window` outline lines go (the companion's stdout).
+        self.emit = emit if emit is not None else stdout_writer()
         self.enabled = enabled
         #: ADR-041 amendment (M2): every helper command is bound to this folder.
         self.workspace = workspace.resolve() if workspace is not None else None
@@ -228,10 +232,21 @@ class DriveServer:
             return _error(f"{reply.get('code', 'refused')}: {reply.get('message', '')}")
         if tool == "identify":
             self._designs_at_bind = await asyncio.to_thread(saved_design_fingerprint, workspace)
+            window = reply.get("window")
+            self._outline(window.get("bounds") if isinstance(window, dict) else None)
             return _ok(reply)
         if tool == "capture":
-            return _capture_result(reply, design_saved=saved)
+            result = _capture_result(reply, design_saved=saved)
+            self._outline(reply.get("bounds"))
+            return result
+        self._outline(reply.get("bounds"))
         return _ok({**reply, "designSaved": saved})
+
+    def _outline(self, bounds: Any) -> None:
+        """One `drive_window` line for valid bounds; nothing otherwise (§3)."""
+        line = outline_line(bounds)
+        if line is not None:
+            self.emit(line)
 
     async def _saved(self, workspace: Path) -> bool:
         """A design file changed since the step's bind (or it cannot be seen)."""

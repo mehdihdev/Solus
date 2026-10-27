@@ -10,7 +10,9 @@ The main process resolves the companion via `resolveCompanionCommand`
 (`src/main/companion.ts`):
 
 - **Packaged app**: `<resources>/companion/solus-companion` (`.exe` on Windows),
-  no args.
+  no args. On macOS the binary is one level deeper,
+  `<resources>/companion/solus-companion/solus-companion` (onedir — see below);
+  `resolveCompanionCommand` must resolve that path on darwin.
 - **Dev** (`app.isPackaged === false`): the `SOLUS_COMPANION_DEV_CMD` env var,
   split on whitespace, e.g.
 
@@ -35,16 +37,34 @@ The latest token is remembered (in memory only) and replayed on respawn.
 ./scripts/build-companion.sh
 ```
 
-- Runs PyInstaller (`--onefile`) over
-  `packages/companion/src/solus_companion/__main__.py` with
-  `-p packages/companion/src`, producing repo-root `dist/companion/solus-companion`.
+- Runs PyInstaller over `packages/companion/src/solus_companion/__main__.py`
+  with `-p packages/companion/src`. The mode depends on the host:
+  - **Linux / Windows — `--onefile`**: repo-root `dist/companion/solus-companion`
+    (`.exe` on Windows), with the MCP tree at `dist/companion/mcp/`.
+  - **macOS — `--onedir`** (sol-drive.md §5, ADR-041 amendment 2026-10-27):
+    `dist/companion/solus-companion/solus-companion` plus PyInstaller's
+    `_internal/`, with the MCP tree at `dist/companion/solus-companion/mcp/`.
+    Packaged, that is `<resources>/companion/solus-companion/solus-companion`.
+- **Why macOS is onedir.** A onefile binary is a bootloader that unpacks to a
+  temp dir and runs the real interpreter as a *child* process. The SOL drive
+  helper (`solus-input`) checks its caller: its parent must be the signed
+  companion started with no arguments, and that parent's parent must be
+  Solus.app. Under onefile the helper's parent is the unpacked child and
+  its grandparent is the bootloader, not Solus.app, so every drive call would
+  fail `caller_untrusted`. Onedir runs the interpreter in the one process
+  Solus.app spawned.
+- The MCP tree always sits beside the binary because
+  `config.default_integrations_root` looks for `mcp/` next to `sys.executable`
+  (pinned for both layouts in `packages/companion/tests/test_fork_runtime.py`).
+- The script removes `dist/companion/` first, so switching modes never leaves a
+  file where a folder belongs.
 - PyInstaller is deliberately **not** in any pyproject: the script uses
   `uv run --package solus-companion --with pyinstaller`, layering it ephemerally
   over the companion's real environment so websockets/mcp/pydantic are visible
   to its analysis. (Verified working with PyInstaller 6.21.0 on Linux ARM;
   the binary boots to companion config validation.)
-- Copies the vendored MCP tree to `dist/companion/mcp/` (excluding
-  `*.template.md` scaffolding).
+- Copies the vendored MCP tree beside the binary (excluding `*.template.md`
+  scaffolding).
 - Build per-platform — PyInstaller does not cross-compile.
 - If a future dependency hides imports from the analyzer, add
   `--hidden-import` / `--copy-metadata` flags in the script.

@@ -53,6 +53,7 @@ KNOWN_CODES: Final = frozenset(
         "helper_timeout",
         "helper_crashed",
         "helper_output",
+        "caller_untrusted",
         "bridge",
     }
 )

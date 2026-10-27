@@ -4,6 +4,7 @@ the card cannot go stale while the pill is in front); on approval it runs one
 bounded loop, streams progress through the command-output channel, and records
 ADR-011 events without typed text or pixels."""
 
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +13,7 @@ from typing import Any
 import pytest
 from solus_api.agent.command_output import STREAMING_TOOLS, current_output
 from solus_api.agent.drive.executor import Budget, Progress, StepOutcome
-from solus_api.agent.drive.tool import DRIVABLE_APPS, DriveStepTool
+from solus_api.agent.drive.tool import DRIVABLE_APPS, DriveStepTool, progress_line
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.tool import ToolException
 from solus_api.bridge.allowlist import load_allowlist, validate_inventory
@@ -148,6 +149,7 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("saved", "design_saved", "saved the design"),
         ("refused", "outside_workspace", "stopped — the KiCad in front has a project outside"),
         ("refused", "not_bound", "not_bound"),
+        ("refused", "caller_untrusted", "did not recognise the Solus companion; reinstall Solus"),
     ],
 )
 async def test_an_unfinished_step_fails_so_the_plan_stops(kind: str, code: str, words: str) -> None:
@@ -166,6 +168,34 @@ async def test_progress_lines_go_to_the_command_output_channel() -> None:
     finally:
         current_output.reset(token)
     assert sink.lines == ["action 1/15 · type · 3.0 s\n"]
+
+
+#: The pill parses these lines (sol-drive.md §4): changing them is desktop-visible.
+PILL_PATTERN = re.compile(r"^action (\d+)/(\d+) · ([a-z]+) · (\d+\.\d) s$")
+
+
+@pytest.mark.parametrize(
+    ("progress", "groups"),
+    [
+        (
+            Progress(action=3, max_actions=15, verb="click", elapsed=12.44),
+            ("3", "15", "click", "12.4"),
+        ),
+        (
+            Progress(action=1, max_actions=1, verb="unsupported", elapsed=0.0),
+            ("1", "1", "unsupported", "0.0"),
+        ),
+        (
+            Progress(action=15, max_actions=15, verb="key", elapsed=119.96),
+            ("15", "15", "key", "120.0"),
+        ),
+    ],
+)
+def test_the_progress_line_format_is_pinned(progress: Progress, groups: tuple[str, ...]) -> None:
+    line = progress_line(progress)
+    assert line.endswith("\n") and line.count("\n") == 1
+    match = PILL_PATTERN.match(line.removesuffix("\n"))
+    assert match is not None and match.groups() == groups
 
 
 async def test_events_record_verbs_and_outcomes_never_text() -> None:

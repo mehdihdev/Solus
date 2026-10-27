@@ -98,7 +98,19 @@ _BY_CODE: Final = {
     "outside_workspace": (
         "stopped — the KiCad in front has a project outside this Solus project open"
     ),
+    "caller_untrusted": (
+        "stopped — the input helper did not recognise the Solus companion; reinstall Solus"
+    ),
 }
+
+
+def progress_line(progress: Progress) -> str:
+    """One progress line on the command-output channel. A STABLE format the pill
+    parses (sol-drive.md §4): `^action (\\d+)/(\\d+) · ([a-z]+) · (\\d+\\.\\d) s$`."""
+    return (
+        f"action {progress.action}/{progress.max_actions} · {progress.verb} · "
+        f"{progress.elapsed:.1f} s\n"
+    )
 
 
 def _budget_label(budget: Budget) -> str:
@@ -215,11 +227,7 @@ class DriveStepTool:
         def on_progress(progress: Progress) -> None:
             trail.append(progress)
             if sink is not None:
-                sink.append(
-                    "stdout",
-                    f"action {progress.action}/{progress.max_actions} · {progress.verb} · "
-                    f"{progress.elapsed:.1f} s\n",
-                )
+                sink.append("stdout", progress_line(progress))
 
         async with self._lease():
             await self._safe_record(
