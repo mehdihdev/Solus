@@ -78,6 +78,18 @@ catalog:
     context_window: 1000000 # full 1M window at standard pricing (verified)
     roles: [anthropic_hard] # bench role — unreferenced since SOLUSDEV-252
 
+  - provider: anthropic
+    name: claude-opus-5-5
+    # $4/$20, cache reads $0.20 (claude-api skill model table, cached 2026-10-06).
+    price_in: 4.0
+    price_out: 20.0
+    price_cached_in: 0.2
+    context_window: 1000000
+    # The ADR-041 drive loop only (gateway.computer_use) — no matrix cell routes
+    # here. Effort high: click accuracy on dense KiCad UIs (Opus 5.5 defaults to medium).
+    reasoning_effort: high
+    roles: [computer_use]
+
   - provider: google
     name: gemini-3.1-flash-lite
     price_in: 0.25 # cheapest model in the catalog, ~1M window: the trivial

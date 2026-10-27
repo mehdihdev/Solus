@@ -60,6 +60,7 @@ from solus_api.orchestration.providers import (
     ProviderCredentialsMissingError,
     ProviderError,
     ProviderTransientError,
+    ToolCallingUnsupportedError,
     ToolConversation,
     ToolUse,
     UnknownProviderError,
@@ -140,6 +141,8 @@ class Completion(BaseModel):
     #: Opaque provider replay items (see `providers.Usage.provider_items`). The
     #: runner copies them onto the next assistant `Turn`; nothing else reads them.
     provider_items: tuple[dict[str, Any], ...] = ()
+    #: The provider stop reason, when the adapter reports one (computer use).
+    stop_reason: str | None = None
 
 
 def _select_adapter(provider: str, adapters: Mapping[str, ProviderAdapter]) -> ProviderAdapter:
@@ -340,6 +343,7 @@ class CompletionStream:
             tool_calls=tuple(self._tool_uses),
             tokens_cached_in=usage.tokens_cached_in,
             provider_items=tuple(usage.provider_items),
+            stop_reason=usage.stop_reason,
         )
         logger.info(
             "model call done call_id=%s provider=%s model=%s role=%s "
@@ -529,4 +533,79 @@ async def complete(
         pass
     if completion_stream.completion is None:  # pragma: no cover - defensive
         raise ProviderError("stream finished without producing a completion")
+    return completion_stream.completion
+
+
+#: The catalog role the ADR-041 drive loop runs on (models.yaml).
+COMPUTER_USE_ROLE = "computer_use"
+COMPUTER_USE_MAX_TOKENS = 8192
+
+
+async def computer_use(
+    *,
+    system: str,
+    messages: Sequence[dict[str, Any]],
+    tools: Sequence[dict[str, Any]],
+    secret_store: SecretStore,
+    config: OrchestrationConfig | None = None,
+    adapters: Mapping[str, ProviderAdapter] | None = None,
+    user_id: uuid.UUID | None = None,
+    session: AsyncSession | None = None,
+    redis: RedisLike | None = None,
+    enqueue: EnqueueFn | None = None,
+    max_tokens: int = COMPUTER_USE_MAX_TOKENS,
+) -> Completion:
+    """One drive-loop model round (ADR-041 §6) through the same MO-03 path as
+    every other call: frequency cap → spend gate → provider call with transient
+    retry and the per-provider breaker → debit. The model is FIXED by the
+    `computer_use` catalog role rather than routed: computer use exists on one
+    provider's toolset, and a routed text model could not hold the loop."""
+    resolved_config = config if config is not None else _default_orchestration_config()
+    entry = resolved_config.entry_for_role(COMPUTER_USE_ROLE)
+    choice = ModelChoice(
+        provider=entry.provider,
+        model_name=entry.name,
+        price_in=entry.price_in,
+        price_out=entry.price_out,
+        context_window=entry.context_window,
+        role=COMPUTER_USE_ROLE,
+        complexity=Complexity.HARD,
+        route_type=RouteType.VISUAL_LOG,
+        rationale="ADR-041 drive loop: fixed computer-use role",
+        reasoning_effort=entry.reasoning_effort,
+    )
+    registry = adapters if adapters is not None else build_adapter_registry(secret_store)
+    adapter = _select_adapter(choice.provider, registry)
+    run = getattr(adapter, "computer_use", None)
+    if run is None:
+        raise ToolCallingUnsupportedError(f"{choice.provider} has no computer-use adapter")
+    call_id = str(uuid.uuid4())
+    logger.info(
+        "model call start call_id=%s provider=%s model=%s role=%s",
+        call_id,
+        choice.provider,
+        choice.model_name,
+        choice.role,
+    )
+    completion_stream = CompletionStream(
+        lambda: run(
+            choice.model_name,
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            effort=choice.reasoning_effort,
+        ),
+        call_id=call_id,
+        model=choice,
+        config=resolved_config,
+        user_id=user_id,
+        session=session,
+        redis=redis,
+        enqueue=enqueue,
+    )
+    async for _ in completion_stream:
+        pass
+    if completion_stream.completion is None:  # pragma: no cover - defensive
+        raise ProviderError("computer-use round finished without a completion")
     return completion_stream.completion

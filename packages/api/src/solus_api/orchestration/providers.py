@@ -78,6 +78,9 @@ class Usage(NamedTuple):
     tokens_out: int
     tokens_cached_in: int = 0
     provider_items: tuple[dict[str, Any], ...] = ()
+    #: The provider's stop reason when a caller must act on it (a computer-use
+    #: `refusal` ends a drive step); None where nothing reads it.
+    stop_reason: str | None = None
 
 
 class ProviderCredentialsMissingError(RuntimeError):
@@ -695,6 +698,63 @@ class AnthropicAdapter(_BaseAdapter):
                 )
         except anthropic.APIError as exc:
             raise normalize_provider_error(self.provider, model_name, exc) from None
+
+    async def computer_use(
+        self,
+        model_name: str,
+        *,
+        system: str,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        max_tokens: int,
+        effort: str | None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
+        """One round of Anthropic computer use (ADR-041 §6, 2026-10-26 amendment).
+
+        `messages` are already in Messages-API shape (screenshots ride as images
+        on `tool_result` blocks, which the generic `Turn` path refuses). At most
+        one action per call: parallel tool use is off. Only member calls of the
+        computer toolset are proposed; the whole assistant content is returned as
+        `provider_items` so the next round replays it verbatim — Opus 5.5 thinking
+        blocks must come back unchanged. Thinking is left at the model default
+        (always on for Opus 5.5; sending `disabled` is a 400).
+        """
+        api_key = await self._api_key()
+        import anthropic  # lazy: keyless environments never touch provider SDKs
+
+        request: dict[str, Any] = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": list(messages),
+            "tools": list(tools),
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+        }
+        if effort is not None:
+            request["output_config"] = {"effort": effort}
+        client = anthropic.AsyncAnthropic(
+            api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS, max_retries=0
+        )
+        try:
+            async with client:
+                # SDK boundary: the toolset and its result blocks postdate this
+                # SDK's typed params; plain dicts are accepted at runtime.
+                final = await client.messages.create(**cast("Any", request))
+        except anthropic.APIError as exc:
+            raise normalize_provider_error(self.provider, model_name, exc) from None
+        for block in final.content:
+            if block.type == "text" and block.text:
+                yield block.text
+            elif block.type == "tool_use" and getattr(block, "toolset_name", None) == "computer":
+                yield ToolUse(id=block.id, name=block.name, args=dict(block.input or {}))
+        usage = final.usage
+        yield Usage(
+            tokens_in=usage.input_tokens,
+            tokens_out=usage.output_tokens,
+            tokens_cached_in=getattr(usage, "cache_read_input_tokens", None) or 0,
+            provider_items=tuple(block.model_dump(exclude_none=True) for block in final.content),
+            stop_reason=final.stop_reason,
+        )
 
 
 #: Error codes OpenAI reports INSIDE a stream body (not as an HTTP status), which
