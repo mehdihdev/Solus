@@ -63,6 +63,24 @@ struct MacSystem: SystemPort {
             window: windowInfo(front))
     }
 
+    /// The kernel's record of the process's cwd (PROC_PIDVNODEPATHINFO) — the
+    /// same answer `lsof` gives, without running it. Same-user processes only.
+    func workingDirectory(pid: Int) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        guard proc_pidinfo(pid_t(pid), PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let path = withUnsafeBytes(of: info.pvi_cdir.vip_path) { raw in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        return path.hasPrefix("/") ? resolvedPath(path) : nil
+    }
+
+    func resolvedPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     func window(id: UInt32) -> WindowInfo? {
         windowList([.optionIncludingWindow], CGWindowID(id)).first.flatMap(windowInfo)
     }
@@ -236,6 +254,7 @@ struct MacSystem: SystemPort {
             title: entry[kCGWindowName as String] as? String ?? "",
             bounds: Rect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
             ownerBundleId: NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? "",
+            ownerPid: Int(pid),
             onScreen: entry[kCGWindowIsOnscreen as String] as? Bool ?? false)
     }
 

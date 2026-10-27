@@ -22,11 +22,15 @@ final class FakePort: SystemPort {
     /// Called after each post — lets a test change the world mid-verb.
     var afterPost: (FakePort) -> Void = { _ in }
     var image = CapturedImage(png: Data([0x89, 0x50]), imageWidth: 1568, imageHeight: 1176)
+    /// Each process's working directory (already resolved); KiCad's is its project folder.
+    var cwd: [Int: String] = [42: "/work/board"]
+    /// `realpath` of a path the caller passes; nil = it does not resolve.
+    var resolve: (String) -> String? = { $0 }
 
     static let kicadWindow = WindowInfo(
         id: 7, title: "board — Schematic Editor",
         bounds: Rect(x: 100, y: 50, width: 800, height: 600),
-        ownerBundleId: "org.kicad.kicad", onScreen: true)
+        ownerBundleId: "org.kicad.kicad", ownerPid: 42, onScreen: true)
 
     init() {
         front = FrontmostInfo(
@@ -46,6 +50,8 @@ final class FakePort: SystemPort {
     func now() -> Double { clock }
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage { image }
     func topWindow(at point: Point) -> UInt32? { windowAt(point) ?? front?.window?.id }
+    func workingDirectory(pid: Int) -> String? { cwd[pid] }
+    func resolvedPath(_ path: String) -> String? { resolve(path) }
     func post(_ event: SyntheticEvent, toPid pid: Int?) {
         posted.append(event)
         postedPids.append(pid)
@@ -53,8 +59,9 @@ final class FakePort: SystemPort {
     }
 }
 
-private func invoke(_ port: FakePort, _ argv: [String]) -> [String: Any] {
-    let line = Runner(port: port).run(argv)
+/// Every command runs bound to the linked workspace `/work` unless a test says otherwise.
+private func invoke(_ port: FakePort, _ argv: [String], within: String? = "/work") -> [String: Any] {
+    let line = Runner(port: port).run(argv + (within.map { ["--within", $0] } ?? []))
     XCTAssertFalse(line.contains("\n"), "exactly one JSON line")
     let object = try? JSONSerialization.jsonObject(with: Data(line.utf8))
     return object as? [String: Any] ?? [:]
@@ -86,7 +93,7 @@ final class IdentifyTests: XCTestCase {
                                    window: nil)
         port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.mail", pid: 9, name: "Mail"),
                                    window: WindowInfo(id: 3, title: "Re: salary review", bounds: Rect(x: 0, y: 0, width: 9, height: 9),
-                                                      ownerBundleId: "com.apple.mail", onScreen: true))
+                                                      ownerBundleId: "com.apple.mail", ownerPid: 9, onScreen: true))
         let r = invoke(port, ["identify"])
         XCTAssertEqual(r["allowed"] as? Bool, false)
         XCTAssertTrue(r["window"] is NSNull, "never another app's window title")
@@ -115,7 +122,7 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "8"])),
                        "window_not_found")
         port.windows[8] = WindowInfo(id: 8, title: "", bounds: Rect(x: 0, y: 0, width: 10, height: 10),
-                                     ownerBundleId: "org.kicad.eeschema", onScreen: true)
+                                     ownerBundleId: "org.kicad.eeschema", ownerPid: 43, onScreen: true)
         XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "8"])),
                        "window_mismatch")
     }
@@ -147,7 +154,7 @@ final class ActGuardTests: XCTestCase {
                 $0.front = FrontmostInfo(app: AppInfo(bundleId: "org.kicad.kicad", pid: 42, name: "KiCad"),
                                          window: WindowInfo(id: 9, title: "x",
                                                             bounds: Rect(x: 0, y: 0, width: 50, height: 50),
-                                                            ownerBundleId: "org.kicad.kicad", onScreen: true))
+                                                            ownerBundleId: "org.kicad.kicad", ownerPid: 42, onScreen: true))
             }, ["click", "--x", "1", "--y", "40"], "window_mismatch"),
             ("x past the edge", { _ in }, ["click", "--x", "800", "--y", "1"], "out_of_bounds"),
             ("negative y", { _ in }, ["move", "--x", "1", "--y", "-1"], "out_of_bounds"),
@@ -384,5 +391,85 @@ final class ActEventTests: XCTestCase {
         XCTAssertEqual(act(port, ["wait", "--ms", "200"])["ok"] as? Bool, true)
         XCTAssertEqual(port.posted, [.sleep(milliseconds: 200)])
         XCTAssertEqual(port.postedPids, [nil])
+    }
+}
+
+// ADR-041 amendment (M2): the bound process must be working inside the linked
+// workspace, checked on every command; no path ever appears in the output.
+final class WorkspaceBindingTests: XCTestCase {
+    func testEveryCommandNeedsAnAbsoluteWorkspaceThatIsNotTheRoot() {
+        for argv in [["identify"], ["capture", "--bundle", "org.kicad.kicad", "--window", "7"],
+                     ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990", "wait", "--ms", "1"]] {
+            XCTAssertEqual(code(invoke(FakePort(), argv, within: nil)), "usage", "\(argv[0]) without --within")
+            XCTAssertEqual(code(invoke(FakePort(), argv, within: "work")), "usage", "relative")
+            XCTAssertEqual(code(invoke(FakePort(), argv, within: "/")), "usage", "the whole disk")
+            let port = FakePort()
+            port.resolve = { _ in nil }
+            XCTAssertEqual(code(invoke(port, argv)), "usage", "a workspace that does not resolve")
+        }
+    }
+
+    func testIdentifyHidesAKiCadWorkingOnAnotherProject() {
+        let port = FakePort()
+        port.cwd[42] = "/other-team/board"
+        let r = invoke(port, ["identify"])
+        XCTAssertEqual(r["ok"] as? Bool, true)
+        XCTAssertEqual(r["allowed"] as? Bool, false)
+        XCTAssertEqual(r["outsideWorkspace"] as? Bool, true)
+        XCTAssertTrue(r["app"] is NSNull && r["window"] is NSNull, "another project's title never leaves")
+        XCTAssertNotNil(r["now"])
+    }
+
+    func testIdentifyAllowsTheWorkspaceItselfAndAnythingBelowIt() {
+        for dir in ["/work", "/work/board", "/work/a/b"] {
+            let port = FakePort()
+            port.cwd[42] = dir
+            let r = invoke(port, ["identify"])
+            XCTAssertEqual(r["allowed"] as? Bool, true, dir)
+            XCTAssertEqual(r["outsideWorkspace"] as? Bool, false, dir)
+        }
+    }
+
+    func testAPrefixSiblingIsNotInside() {
+        let port = FakePort()
+        port.cwd[42] = "/work-other/board"
+        XCTAssertEqual(invoke(port, ["identify"])["allowed"] as? Bool, false)
+    }
+
+    func testTheWorkspaceIsComparedResolved() {
+        let port = FakePort()
+        port.resolve = { $0 == "/link" ? "/work" : $0 }
+        XCTAssertEqual(invoke(port, ["identify"], within: "/link")["allowed"] as? Bool, true)
+    }
+
+    func testAnUnreadableWorkingDirectoryFailsClosed() {
+        let port = FakePort()
+        port.cwd = [:]
+        XCTAssertEqual(invoke(port, ["identify"])["allowed"] as? Bool, false)
+        XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])),
+                       "outside_workspace")
+        XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40"])), "outside_workspace")
+        XCTAssertTrue(port.posted.isEmpty)
+    }
+
+    func testCaptureAndActRefuseAnotherProjectAndPostNothing() {
+        let port = FakePort()
+        port.cwd[42] = "/other-team/board"
+        let capture = invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])
+        XCTAssertEqual(code(capture), "outside_workspace")
+        XCTAssertNil(capture["png"])
+        let acted = act(port, ["type", "--text", "R1"])
+        XCTAssertEqual(code(acted), "outside_workspace")
+        XCTAssertFalse("\(acted)".contains("/other-team"), "no path in the refusal")
+        XCTAssertTrue(port.posted.isEmpty)
+    }
+
+    func testCaptureChecksTheProcessThatOwnsTheWindow() {
+        let port = FakePort()
+        port.cwd[43] = "/other-team/board"
+        port.windows[7] = WindowInfo(id: 7, title: "x", bounds: FakePort.kicadWindow.bounds,
+                                     ownerBundleId: "org.kicad.kicad", ownerPid: 43, onScreen: true)
+        XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])),
+                       "outside_workspace")
     }
 }

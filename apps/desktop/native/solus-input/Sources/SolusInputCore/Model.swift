@@ -33,10 +33,11 @@ public struct WindowInfo: Equatable {
     public let title: String
     public let bounds: Rect
     public let ownerBundleId: String
+    public let ownerPid: Int
     public let onScreen: Bool
-    public init(id: UInt32, title: String, bounds: Rect, ownerBundleId: String, onScreen: Bool) {
+    public init(id: UInt32, title: String, bounds: Rect, ownerBundleId: String, ownerPid: Int, onScreen: Bool) {
         self.id = id; self.title = title; self.bounds = bounds
-        self.ownerBundleId = ownerBundleId; self.onScreen = onScreen
+        self.ownerBundleId = ownerBundleId; self.ownerPid = ownerPid; self.onScreen = onScreen
     }
 }
 
@@ -107,6 +108,11 @@ public protocol SystemPort {
     func capture(window: WindowInfo, maxEdge: Int) throws -> CapturedImage
     /// The id of the topmost visible on-screen window containing `point`, any layer.
     func topWindow(at point: Point) -> UInt32?
+    /// The process's current working directory, resolved; nil when unreadable.
+    /// KiCad works in its open project's folder.
+    func workingDirectory(pid: Int) -> String?
+    /// `realpath`; nil when the path does not resolve.
+    func resolvedPath(_ path: String) -> String?
     /// Keyboard/text events go to `pid` only; pointer events (pid nil) are posted
     /// globally after the hit-test.
     func post(_ event: SyntheticEvent, toPid pid: Int?)

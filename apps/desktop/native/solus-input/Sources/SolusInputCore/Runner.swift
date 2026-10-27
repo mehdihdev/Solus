@@ -62,7 +62,9 @@ public struct Runner {
     // MARK: identify
 
     private func identify(_ args: Arguments) -> Result<[String: Any], Refusal> {
-        guard args.verb == nil, args.has(only: []) else { return .failure(refuse("usage", "identify takes no arguments")) }
+        guard args.verb == nil, args.has(only: ["within"]), let root = workspace(args) else {
+            return .failure(refuse("usage", "identify --within WORKSPACE"))
+        }
         let front = port.frontmost()
         let trust: [String: Any] = [
             "accessibility": port.accessibilityTrusted(),
@@ -77,8 +79,16 @@ public struct Runner {
         guard DrivableApps.allows(front.app.bundleId) else {
             return .success(["app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false, "now": port.now()])
         }
+        // A drivable app working on another project is hidden like any other app.
+        guard worksInside(pid: front.app.pid, root) else {
+            return .success([
+                "app": NSNull(), "window": NSNull(), "trust": trust, "allowed": false,
+                "outsideWorkspace": true, "now": port.now(),
+            ])
+        }
         return .success([
             "now": port.now(),
+            "outsideWorkspace": false,
             "app": ["bundleId": front.app.bundleId, "pid": front.app.pid, "name": front.app.name],
             "window": front.window.map(Self.windowJSON) ?? NSNull(),
             "trust": trust,
@@ -100,9 +110,9 @@ public struct Runner {
     // MARK: capture
 
     private func capture(_ args: Arguments) -> Result<[String: Any], Refusal> {
-        guard args.verb == nil, args.has(only: ["bundle", "window", "max-edge"]),
-              let bundle = args.string("bundle"), let windowId = args.windowId("window")
-        else { return .failure(refuse("usage", "capture --bundle B --window W [--max-edge N]")) }
+        guard args.verb == nil, args.has(only: ["bundle", "window", "max-edge", "within"]),
+              let bundle = args.string("bundle"), let windowId = args.windowId("window"), let root = workspace(args)
+        else { return .failure(refuse("usage", "capture --bundle B --window W --within WORKSPACE [--max-edge N]")) }
         let maxEdge = args.string("max-edge") == nil ? Self.defaultMaxEdge : (args.int("max-edge") ?? -1)
         guard (256...2048).contains(maxEdge) else { return .failure(refuse("usage", "max-edge must be 256-2048")) }
         guard DrivableApps.allows(bundle) else { return .failure(refuse("app_not_allowed", "not a drivable app")) }
@@ -115,6 +125,7 @@ public struct Runner {
         guard window.ownerBundleId == bundle else {
             return .failure(refuse("window_mismatch", "the window belongs to another app"))
         }
+        guard worksInside(pid: window.ownerPid, root) else { return .failure(outsideWorkspace) }
         do {
             let image = try port.capture(window: window, maxEdge: maxEdge)
             // A padded image (a window shadow) would skew every coordinate mapped from it.
@@ -140,8 +151,8 @@ public struct Runner {
 
     private func act(_ args: Arguments) -> Result<[String: Any], Refusal> {
         guard let bundle = args.string("bundle"), let windowId = args.windowId("window"),
-              let since = args.double("since"), let verb = args.verb
-        else { return .failure(refuse("usage", "act --bundle B --window W --since T <verb> ...")) }
+              let since = args.double("since"), let verb = args.verb, let root = workspace(args)
+        else { return .failure(refuse("usage", "act --bundle B --window W --since T --within WORKSPACE <verb> ...")) }
         let plan: Plan
         switch Self.plan(verb, args) {
         case .success(let p): plan = p
@@ -157,6 +168,7 @@ public struct Runner {
         guard let window = front.window, window.id == windowId else {
             return .failure(refuse("window_mismatch", "the bound window is not in front"))
         }
+        guard worksInside(pid: front.app.pid, root) else { return .failure(outsideWorkspace) }
         let now = port.now()
         guard since.isFinite, since <= now + Self.ownActionSlack, now - since <= Self.maxSinceAge else {
             return .failure(refuse("usage", "--since must be a recent time from this helper's clock"))
@@ -177,6 +189,26 @@ public struct Runner {
         }
         if let lost = post(events, bundle: bundle, windowId: windowId, pid: front.app.pid) { return .failure(lost) }
         return .success(["verb": plan.verb, "idleSeconds": idle, "finishedAt": port.now()])
+    }
+
+    // MARK: project binding (ADR-041 amendment, M2)
+
+    /// `--within W`: the linked workspace — absolute, resolved, never the whole disk.
+    private func workspace(_ args: Arguments) -> String? {
+        guard let raw = args.string("within"), raw.hasPrefix("/"), let root = port.resolvedPath(raw), root != "/"
+        else { return nil }
+        return root
+    }
+
+    /// The process works in `root` or below it; unreadable counts as outside.
+    private func worksInside(pid: Int, _ root: String) -> Bool {
+        guard let dir = port.workingDirectory(pid: pid) else { return false }
+        return dir == root || dir.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    /// No path in the message: another project's location never leaves the machine.
+    private var outsideWorkspace: Refusal {
+        refuse("outside_workspace", "KiCad in front has a project outside this Solus project open")
     }
 
     /// `--expect-width/--expect-height`: the size the caller captured. A resize
@@ -281,7 +313,7 @@ public struct Runner {
     }
 
     private static func plan(_ verb: String, _ args: Arguments) -> Result<Plan, Refusal> {
-        let common: Set<String> = ["bundle", "window", "since", "expect-width", "expect-height"]
+        let common: Set<String> = ["bundle", "window", "since", "expect-width", "expect-height", "within"]
         let usage = refuse("usage", "bad arguments for \(verb)")
         func point(_ xKey: String, _ yKey: String) -> (Int, Int)? {
             guard let x = args.int(xKey), let y = args.int(yKey) else { return nil }
