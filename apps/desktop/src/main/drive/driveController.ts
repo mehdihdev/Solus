@@ -1,14 +1,15 @@
-// SOLUSDEV-319 drive slice 3 (docs/architecture/sol-drive.md §5): owns the
+// SOLUSDEV-319 drive slices 3/3b (docs/architecture/sol-drive.md §5): owns the
 // DriveStatus main hands the renderer (Settings › SOL "SOL can use your mouse
-// and keyboard") and decides what the companion may get. The setting is the
-// consent; availability is re-evaluated on every setting, project or folder
-// link change, and the companion is told to re-check each time (it respawns
+// and keyboard") and decides what the companion and the agent may get. The
+// setting is the consent; availability is re-evaluated on every setting,
+// project or folder link change. Each time, the agent is (un)registered — or
+// the dev helper started/stopped — and the companion re-checks (it respawns
 // only when what it baked actually differs).
 import { driveUnavailable } from './driveAvailability'
 import type { DriveTrustResult } from './driveHelper'
-import type { DriveStatus, DriveUnavailable } from './driveStatus'
+import type { DriveAgentState, DriveStatus, DriveUnavailable } from './driveStatus'
 
-/** `getDriveStatus` runs on render; this keeps it from spawning the helper each time. */
+/** `getDriveStatus` runs on render; this keeps it from asking the agent each time. */
 export const DRIVE_TRUST_CACHE_MS = 10_000
 /** While a grant is missing the user is likely in System Settings granting it:
  *  getDriveStatus (the renderer calls it on window focus) asks again after
@@ -24,14 +25,22 @@ export interface DriveSettingsPort {
 
 export interface DriveControllerDeps {
   platform: NodeJS.Platform
-  /** The resolved helper path (packaged launcher / dev debug build), or null. */
-  helperPath(): string | null
-  /** A regular file the user may execute. */
-  isExecutable(path: string): boolean
+  /** The agent is installed: packaged — SolusInput.app's helper and the
+   *  LaunchAgents plist are in the bundle; dev — the debug helper resolves and
+   *  passes the helper path rule. False ⇒ `no_helper`. */
+  installed(): boolean
+  /** The agent's socket (packaged `…/Solus/drive/`, dev `…/Solus/drive-dev/`). */
+  socketPath(): string
+  /** The agent's `trust` op. */
+  trust(prompt: boolean): Promise<DriveTrustResult | null>
+  /** The SMAppService registration (null in dev, where main runs the helper). */
+  agentState(): DriveAgentState | null
+  /** Drive is on AND available: register the agent / run the dev helper (true),
+   *  or unregister / stop it (false). Called on every re-evaluation. */
+  onAgentWanted(wanted: boolean): void
   /** Every project's validated linked folder (localState.linkedWorkspaces). */
   linkedFolders(): Record<string, string>
   realpath(path: string): string | null
-  runTrust(helper: string, prompt: boolean): Promise<DriveTrustResult | null>
   settings: DriveSettingsPort
   now(): number
   broadcast(status: DriveStatus): void
@@ -42,7 +51,7 @@ export interface DriveControllerDeps {
 export interface DriveController {
   setProject(projectId: string | null): void
   /** What the companion for `projectId` may get: on AND available, else null. */
-  companionDrive(projectId: string | null): { helper: string } | null
+  companionDrive(projectId: string | null): { socket: string } | null
   status(): Promise<DriveStatus>
   setDrive(on: boolean): Promise<DriveStatus>
   requestPermissions(): Promise<DriveStatus>
@@ -55,57 +64,60 @@ const cacheLifetime = (result: DriveTrustResult): number =>
     ? DRIVE_TRUST_CACHE_MS
     : DRIVE_MISSING_GRANT_REFRESH_MS
 
-interface Availability {
-  helper: string | null
-  reason: DriveUnavailable | null
-}
-
 export function createDriveController(deps: DriveControllerDeps): DriveController {
   let projectId: string | null = null
-  let cache: { helper: string; at: number; result: DriveTrustResult } | null = null
+  let cache: { at: number; result: DriveTrustResult } | null = null
   let lastBroadcast: string | null = null
-  let inflight: { helper: string; run: Promise<DriveTrustResult | null> } | null = null
+  let inflight: Promise<DriveTrustResult | null> | null = null
 
-  const availability = (id: string | null): Availability => {
-    const helper = deps.platform === 'darwin' ? deps.helperPath() : null
-    const reason = driveUnavailable({
+  const reasonFor = (id: string | null): DriveUnavailable | null =>
+    driveUnavailable({
       platform: deps.platform,
-      helperOk: helper !== null && deps.isExecutable(helper),
+      helperOk: deps.platform === 'darwin' && deps.installed(),
       projectId: id,
       folders: deps.linkedFolders(),
       realpath: deps.realpath
     })
-    return { helper: reason === null ? helper : null, reason }
-  }
 
-  const trustFor = async (helper: string): Promise<DriveTrustResult | null> => {
-    if (cache && cache.helper === helper && deps.now() - cache.at < cacheLifetime(cache.result)) {
-      return cache.result
-    }
-    // One run at a time: a render burst shares the spawn in flight.
-    if (inflight?.helper !== helper) {
-      const run = deps.runTrust(helper, false).then((result) => {
-        if (inflight?.run !== run) return result
+  const wanted = (reason: DriveUnavailable | null): boolean =>
+    reason === null && deps.settings.get().drive
+  /** The agent depends only on the setting and the install (ADR-041 amendment 3b:
+   *  "registered only while the setting is on"), never on the active project —
+   *  switching to a project without a usable folder must not unregister it. */
+  const agentWanted = (reason: DriveUnavailable | null): boolean =>
+    deps.settings.get().drive && reason !== 'not_macos' && reason !== 'no_helper'
+
+  const cachedTrust = async (): Promise<DriveTrustResult | null> => {
+    if (cache && deps.now() - cache.at < cacheLifetime(cache.result)) return cache.result
+    // One request at a time: a render burst shares the one in flight.
+    if (inflight === null) {
+      const run = deps.trust(false).then((result) => {
+        if (inflight !== run) return result
         inflight = null
-        cache = result ? { helper, at: deps.now(), result } : null
+        cache = result ? { at: deps.now(), result } : null
         return result
       })
-      inflight = { helper, run }
+      inflight = run
     }
-    return inflight.run
+    return inflight
   }
 
-  const compose = (a: Availability, trust: DriveTrustResult | null): DriveStatus => ({
+  const compose = (
+    reason: DriveUnavailable | null,
+    trust: DriveTrustResult | null
+  ): DriveStatus => ({
     enabled: deps.settings.get().drive,
-    available: a.reason === null,
-    reason: a.reason,
+    available: reason === null,
+    reason,
     trust: trust?.trust ?? null,
-    unsignedDev: trust?.unsignedDev ?? false
+    unsignedDev: trust?.unsignedDev ?? false,
+    agent: reason === null ? deps.agentState() : null
   })
 
+  /** Trust is asked only while the agent should be running (on AND available). */
   const status = async (): Promise<DriveStatus> => {
-    const a = availability(projectId)
-    return compose(a, a.helper === null ? null : await trustFor(a.helper))
+    const reason = reasonFor(projectId)
+    return compose(reason, wanted(reason) ? await cachedTrust() : null)
   }
 
   const publish = (next: DriveStatus): DriveStatus => {
@@ -118,6 +130,7 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
   }
 
   const refresh = (): void => {
+    deps.onAgentWanted(agentWanted(reasonFor(projectId)))
     deps.onCompanionDriveChanged()
     void status().then(publish)
   }
@@ -130,24 +143,22 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
       refresh()
     },
     companionDrive(id) {
-      if (!deps.settings.get().drive) return null
-      const { helper } = availability(id)
-      return helper === null ? null : { helper }
+      return wanted(reasonFor(id)) ? { socket: deps.socketPath() } : null
     },
     status: () => status().then(publish),
     async setDrive(on) {
-      deps.settings.setDrive(on) // onChange → refresh (companion + broadcast)
+      deps.settings.setDrive(on) // onChange → refresh (agent, companion, broadcast)
       return status().then(publish)
     },
     async requestPermissions() {
-      const a = availability(projectId)
-      if (a.helper === null) return publish(compose(a, null))
-      inflight = null // a plain run finishing later must not overwrite the prompt's answer
-      const result = await deps.runTrust(a.helper, true)
-      // Not cached: `--prompt` answers before the user acts on the prompt, so
-      // the next status (focus back from System Settings) must ask again.
+      const reason = reasonFor(projectId)
+      if (!wanted(reason)) return publish(compose(reason, null))
+      inflight = null // a plain request finishing later must not overwrite the prompt's answer
+      const result = await deps.trust(true)
+      // Not cached: the prompt answers before the user acts on it, so the next
+      // status (focus back from System Settings) must ask again.
       cache = null
-      return publish(compose(a, result))
+      return publish(compose(reason, result))
     },
     refresh
   }

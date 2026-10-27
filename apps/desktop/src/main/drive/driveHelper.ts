@@ -1,20 +1,12 @@
-// SOLUSDEV-319 drive slice 3 (docs/architecture/sol-drive.md §5): the helper's
-// pinned path, and the desktop's own `solus-input trust [--prompt]` call for
-// the Settings permission rows. Posts nothing, captures nothing (§2), but it is
-// still a subprocess: argument list, no shell, a PATH-only environment, one
-// deadline, a stdout cap — and its output is untrusted until parsed.
-import { execFile } from 'node:child_process'
+// SOLUSDEV-319 drive slices 3/3b (docs/architecture/sol-drive.md §2.1, §5):
+// where the helper, the launch agent plist and the agent socket live; the
+// helper path rule the dev helper must pass; and the `trust` reply parsing
+// (the agent's `trust` op answers the slice 3 shape). Pure except realHelperFs.
 import { accessSync, constants, lstatSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { findAncestorPath } from '../companionEnv'
 import type { DriveTrust } from './driveStatus'
 
-export const DRIVE_TRUST_TIMEOUT_MS = 5_000
-export const DRIVE_TRUST_MAX_STDOUT = 64 * 1024
-const TRUST_ENV = { PATH: '/usr/bin:/bin' } as const
-
-/** Packaged: the launcher, which disclaims responsibility before exec'ing the helper. */
-const PACKAGED_HELPER = ['SolusInput.app', 'Contents', 'MacOS', 'solus-input-launch'] as const
 /** Dev: the unsigned debug helper (grants belong to whatever launched the app). */
 const DEV_HELPER = [
   'apps',
@@ -26,26 +18,46 @@ const DEV_HELPER = [
   'solus-input'
 ] as const
 
-export interface DriveHelperRuntime {
-  isPackaged: boolean
-  resourcesPath: string
+export const DRIVE_AGENT_PLIST = 'com.solusforge.solus.input.agent.plist'
+
+export interface DevHelperRuntime {
   /** `app.getAppPath()` — `<repo>/apps/desktop` or a build output under it. */
   appPath: string
   exists: (path: string) => boolean
-  /** Canonical path or null. The dev `.build/debug` is a symlink into
-   *  `.build/out/Products/Debug`, and the companion refuses any symlink on the
-   *  helper path (§3), so the dev path is resolved first. */
+  /** Canonical path or null. `.build/debug` is a symlink into
+   *  `.build/out/Products/Debug`, and the helper path rule refuses symlinks. */
   realpath: (path: string) => string | null
 }
 
-/** The helper path the companion gets as SOLUS_DRIVE_HELPER and `trust` runs,
- *  or null when a dev run has no (resolvable) debug build. Packaged, the path
- *  is returned as-is — never realpath-ed, so a planted symlink still trips the
- *  companion's check; the caller's executable check decides `no_helper`. */
-export function resolveDriveHelper(rt: DriveHelperRuntime): string | null {
-  if (rt.isPackaged) return join(rt.resourcesPath, ...PACKAGED_HELPER)
+/** The dev debug helper main runs as `serve`, or null when there is none. */
+export function resolveDevHelper(rt: DevHelperRuntime): string | null {
   const dev = findAncestorPath(rt.appPath, DEV_HELPER, rt.exists)
   return dev === null ? null : rt.realpath(dev)
+}
+
+/** What a packaged Solus.app must contain for the agent to be installable:
+ *  launchd runs `BundleProgram` (the helper) from the plist SMAppService registers. */
+export function packagedDriveFiles(resourcesPath: string): { helper: string; plist: string } {
+  return {
+    helper: join(resourcesPath, 'SolusInput.app', 'Contents', 'MacOS', 'solus-input'),
+    plist: join(dirname(resourcesPath), 'Library', 'LaunchAgents', DRIVE_AGENT_PLIST)
+  }
+}
+
+/** The agent's socket directory and path (§2.1). Dev uses `drive-dev/`, so a
+ *  dev run never collides with an installed agent. */
+export function driveSocketPaths(rt: { isPackaged: boolean; home: string }): {
+  dir: string
+  socket: string
+} {
+  const dir = join(
+    rt.home,
+    'Library',
+    'Application Support',
+    'Solus',
+    rt.isPackaged ? 'drive' : 'drive-dev'
+  )
+  return { dir, socket: join(dir, 'agent.sock') }
 }
 
 export interface DriveTrustResult {
@@ -73,50 +85,6 @@ export function parseTrustOutput(stdout: string): DriveTrustResult | null {
   const unsignedDev = value.unsignedDev ?? false
   if (typeof unsignedDev !== 'boolean') return null
   return { trust: { accessibility, screenRecording }, unsignedDev }
-}
-
-export interface TrustExecOptions {
-  env: Record<string, string>
-  timeout: number
-  maxBuffer: number
-  killSignal: 'SIGKILL'
-  shell: false
-  windowsHide: true
-}
-
-/** The slice of `child_process.execFile` the runner needs (injected for tests). */
-export type TrustExec = (
-  file: string,
-  args: string[],
-  options: TrustExecOptions,
-  callback: (error: Error | null, stdout: string) => void
-) => void
-
-/** Run `trust` (or `trust --prompt`); null on any failure — the row then shows
- *  no grants rather than a guess. */
-export function runDriveTrust(
-  helper: string,
-  prompt: boolean,
-  exec: TrustExec
-): Promise<DriveTrustResult | null> {
-  const args = prompt ? ['trust', '--prompt'] : ['trust']
-  const options: TrustExecOptions = {
-    env: { ...TRUST_ENV },
-    timeout: DRIVE_TRUST_TIMEOUT_MS,
-    maxBuffer: DRIVE_TRUST_MAX_STDOUT,
-    killSignal: 'SIGKILL',
-    shell: false,
-    windowsHide: true
-  }
-  return new Promise((resolve) => {
-    try {
-      exec(helper, args, options, (error, stdout) =>
-        resolve(error ? null : parseTrustOutput(String(stdout)))
-      )
-    } catch {
-      resolve(null)
-    }
-  })
 }
 
 export interface HelperStat {
@@ -154,9 +122,8 @@ function ancestors(path: string): string[] {
 }
 
 /**
- * Whether the companion would accept `path` as SOLUS_DRIVE_HELPER (mirrors
- * packages/companion drive/helper.py `resolve_helper`), so Settings never says
- * "available" for a helper the companion then refuses: absolute and normal; no
+ * The helper path rule (mirrors packages/companion drive/helper.py, slice 3),
+ * kept for the dev helper main runs as the agent: absolute and normal; no
  * symlink anywhere on it; a regular executable file that is neither group- nor
  * other-writable; every ancestor directory not other-writable (sticky
  * excepted) and group-writable only when owned by root.
@@ -195,11 +162,4 @@ export const realHelperFs: HelperFs = {
       return false
     }
   }
-}
-
-/** The real `execFile`, narrowed to the runner's shape. */
-export const realTrustExec: TrustExec = (file, args, options, callback) => {
-  execFile(file, args, { ...options, encoding: 'utf8' }, (error, stdout) =>
-    callback(error, String(stdout))
-  )
 }

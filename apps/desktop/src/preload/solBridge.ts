@@ -7,7 +7,7 @@ import type { ToolWindowRef } from '@solus/shared-types'
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 import type { SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 import type { SolActionMode } from '../main/solSettings'
-import { DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
+import { DRIVE_AGENT_STATES, DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
 
 /** Structural slice of ipcRenderer — just what the bridge needs. */
 export interface SolBridgeIpc {
@@ -40,6 +40,8 @@ export interface SolBridge {
   requestDrivePermissions(): Promise<DriveStatus | null>
   /** The renderer says a drive.step is running (true) or ended (false). */
   setDriving(active: boolean): Promise<void>
+  /** Slice 3b: open System Settings › Login Items so the user can approve the agent. */
+  openDriveApproval(): Promise<void>
   onDriveStatus(handler: (status: DriveStatus) => void): () => void
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
@@ -79,7 +81,8 @@ export function isDriveStatus(raw: unknown): raw is DriveStatus {
     reasonOk &&
     typeof raw.enabled === 'boolean' &&
     typeof raw.unsignedDev === 'boolean' &&
-    isTrust(raw.trust)
+    isTrust(raw.trust) &&
+    (raw.agent === null || (DRIVE_AGENT_STATES as readonly unknown[]).includes(raw.agent))
   )
 }
 
@@ -145,6 +148,7 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     setDrive: (on) => callDrive(c.setDrive, on),
     requestDrivePermissions: () => callDrive(c.requestDrivePermissions),
     setDriving: (active) => ipc.invoke(c.setDriving, active).then(() => undefined),
+    openDriveApproval: () => ipc.invoke(c.openDriveApproval).then(() => undefined),
     onDriveStatus: (handler) => subscribe(c.driveStatus, isDriveStatus, handler),
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler)

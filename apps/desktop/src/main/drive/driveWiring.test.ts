@@ -9,13 +9,21 @@ const companion = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({
-  app: { isPackaged: false, getAppPath: () => '/nowhere', getPath: () => '/tmp' },
+  app: {
+    isPackaged: false,
+    getAppPath: () => '/nowhere',
+    getPath: () => '/tmp',
+    setLoginItemSettings: vi.fn(),
+    getLoginItemSettings: () => ({ status: 'not-registered' })
+  },
+  shell: { openExternal: vi.fn(async () => undefined) },
   BrowserWindow: vi.fn()
 }))
 vi.mock('../companion', () => ({
   notifyCompanionDriveChanged: companion.notify,
   setCompanionDriveResolver: (r: (id: string | null) => unknown) => void (companion.resolver = r),
-  onCompanionDriveWindow: (l: (b: unknown) => void) => void (companion.window = l)
+  onCompanionDriveWindow: (l: (b: unknown) => void) => void (companion.window = l),
+  setCompanionDriveSessionSource: vi.fn()
 }))
 
 import { SOL_WINDOW_CHANNELS } from '../sol-window/solWindow.constants'
@@ -60,7 +68,9 @@ describe('startDrive', () => {
       isAllowedSender: () => true,
       isMainSender: () => true
     })
-    // No dev helper under /nowhere (and not macOS on CI): never drive.
+    // No dev helper under /nowhere (and not macOS on CI): never drive; the
+    // boot evaluation already ran.
+    expect(companion.notify).toHaveBeenCalled()
     expect(companion.resolver?.('p')).toBeNull()
     expect(handlers.has(SOL_WINDOW_CHANNELS.getDriveStatus)).toBe(true)
     const status = (await handlers.get(SOL_WINDOW_CHANNELS.getDriveStatus)?.({})) as {

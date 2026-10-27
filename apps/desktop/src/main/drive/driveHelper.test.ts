@@ -1,40 +1,23 @@
-// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): where the helper lives, and
-// the desktop's own `trust` call — argument list, no shell, bounded, parsed
-// defensively.
-import { describe, expect, it, vi } from 'vitest'
+// SOLUSDEV-319 drive slices 3/3b (sol-drive.md §2.1, §5): where the helper,
+// the agent plist and the socket live, the helper path rule, and the `trust`
+// reply parsing (the agent's `trust` op answers the same shape).
+import { describe, expect, it } from 'vitest'
 import {
-  DRIVE_TRUST_MAX_STDOUT,
-  DRIVE_TRUST_TIMEOUT_MS,
+  driveSocketPaths,
   isSafeHelperPath,
-  realHelperFs,
-  type HelperFs,
+  packagedDriveFiles,
   parseTrustOutput,
-  resolveDriveHelper,
-  runDriveTrust,
-  type TrustExec
+  realHelperFs,
+  resolveDevHelper,
+  type HelperFs
 } from './driveHelper'
 
-describe('resolveDriveHelper', () => {
-  it('packaged: the launcher inside <resources>/SolusInput.app', () => {
-    expect(
-      resolveDriveHelper({
-        isPackaged: true,
-        resourcesPath: '/Applications/Solus.app/Contents/Resources',
-        appPath: '/ignored',
-        exists: () => false,
-        realpath: (p) => p
-      })
-    ).toBe(
-      '/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input-launch'
-    )
-  })
+describe('resolveDevHelper', () => {
+  const dev = '/repo/apps/desktop/native/solus-input/.build/debug/solus-input'
 
-  it('dev: the debug helper found by walking up from the app path', () => {
-    const dev = '/repo/apps/desktop/native/solus-input/.build/debug/solus-input'
+  it('the debug helper found by walking up from the app path', () => {
     expect(
-      resolveDriveHelper({
-        isPackaged: false,
-        resourcesPath: '/ignored',
+      resolveDevHelper({
         appPath: '/repo/apps/desktop/out/main',
         exists: (p) => p === dev,
         realpath: (p) => p
@@ -42,13 +25,10 @@ describe('resolveDriveHelper', () => {
     ).toBe(dev)
   })
 
-  it('dev: resolves the .build/debug symlink, since the companion refuses any symlinked path', () => {
-    const dev = '/repo/apps/desktop/native/solus-input/.build/debug/solus-input'
+  it('resolves the .build/debug symlink, since the helper path rule refuses any symlink', () => {
     const real = '/repo/apps/desktop/native/solus-input/.build/out/Products/Debug/solus-input'
     expect(
-      resolveDriveHelper({
-        isPackaged: false,
-        resourcesPath: '',
+      resolveDevHelper({
         appPath: '/repo/apps/desktop',
         exists: (p) => p === dev,
         realpath: (p) => (p === dev ? real : p)
@@ -56,42 +36,35 @@ describe('resolveDriveHelper', () => {
     ).toBe(real)
   })
 
-  it('dev: null when the debug build does not resolve', () => {
-    expect(
-      resolveDriveHelper({
-        isPackaged: false,
-        resourcesPath: '',
-        appPath: '/repo',
-        exists: () => true,
-        realpath: () => null
-      })
-    ).toBeNull()
+  it('null when no debug build exists or it does not resolve', () => {
+    expect(resolveDevHelper({ appPath: '/x', exists: () => false, realpath: (p) => p })).toBeNull()
+    expect(resolveDevHelper({ appPath: '/x', exists: () => true, realpath: () => null })).toBeNull()
   })
+})
 
-  it('packaged: never realpath-ed — a planted symlink stays visible to the companion check', () => {
-    const realpath = vi.fn((p: string) => `/elsewhere${p}`)
-    expect(
-      resolveDriveHelper({
-        isPackaged: true,
-        resourcesPath: '/R',
-        appPath: '',
-        exists: () => true,
-        realpath
-      })
-    ).toBe('/R/SolusInput.app/Contents/MacOS/solus-input-launch')
-    expect(realpath).not.toHaveBeenCalled()
+// Slice 3b (sol-drive.md §5 "Available"): `no_helper` means the agent is not
+// installed — packaged: SolusInput.app's helper or the LaunchAgents plist is
+// missing from the bundle; dev: the debug helper is missing or fails the rule.
+describe('packagedDriveFiles', () => {
+  it('the helper inside Resources and the plist in Contents/Library/LaunchAgents', () => {
+    expect(packagedDriveFiles('/Applications/Solus.app/Contents/Resources')).toEqual({
+      helper:
+        '/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input',
+      plist:
+        '/Applications/Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist'
+    })
   })
+})
 
-  it('dev: null when no debug build exists', () => {
-    expect(
-      resolveDriveHelper({
-        isPackaged: false,
-        resourcesPath: '',
-        appPath: '/x',
-        exists: () => false,
-        realpath: (p) => p
-      })
-    ).toBeNull()
+describe('driveSocketPaths', () => {
+  it('packaged uses drive/, dev uses drive-dev/ so the two never collide', () => {
+    expect(driveSocketPaths({ isPackaged: true, home: '/Users/me' })).toEqual({
+      dir: '/Users/me/Library/Application Support/Solus/drive',
+      socket: '/Users/me/Library/Application Support/Solus/drive/agent.sock'
+    })
+    expect(driveSocketPaths({ isPackaged: false, home: '/Users/me' }).socket).toBe(
+      '/Users/me/Library/Application Support/Solus/drive-dev/agent.sock'
+    )
   })
 })
 
@@ -128,46 +101,6 @@ describe('parseTrustOutput', () => {
     ['a non-boolean unsignedDev', JSON.stringify({ ...good, unsignedDev: 'true' })]
   ])('null for %s', (_label, raw) => {
     expect(parseTrustOutput(raw)).toBeNull()
-  })
-})
-
-describe('runDriveTrust', () => {
-  const OUT = JSON.stringify({ ok: true, trust: { accessibility: false, screenRecording: false } })
-
-  it('spawns the helper with an argument list, a PATH-only env and the caps', async () => {
-    const exec = vi.fn<TrustExec>((_f, _a, _o, cb) => cb(null, OUT))
-    const result = await runDriveTrust('/h/solus-input', false, exec)
-
-    expect(result).toEqual({
-      trust: { accessibility: false, screenRecording: false },
-      unsignedDev: false
-    })
-    const [file, args, options] = exec.mock.calls[0]
-    expect(file).toBe('/h/solus-input')
-    expect(args).toEqual(['trust'])
-    expect(options).toEqual({
-      env: { PATH: '/usr/bin:/bin' },
-      timeout: DRIVE_TRUST_TIMEOUT_MS,
-      maxBuffer: DRIVE_TRUST_MAX_STDOUT,
-      killSignal: 'SIGKILL',
-      shell: false,
-      windowsHide: true
-    })
-  })
-
-  it('passes --prompt only when asked', async () => {
-    const exec = vi.fn<TrustExec>((_f, _a, _o, cb) => cb(null, OUT))
-    await runDriveTrust('/h', true, exec)
-    expect(exec.mock.calls[0][1]).toEqual(['trust', '--prompt'])
-  })
-
-  it('null on an exec error (timeout, cap, non-zero exit) or a throwing spawn', async () => {
-    expect(await runDriveTrust('/h', false, (_f, _a, _o, cb) => cb(new Error('x'), OUT))).toBeNull()
-    expect(
-      await runDriveTrust('/h', false, () => {
-        throw new Error('EACCES')
-      })
-    ).toBeNull()
   })
 })
 

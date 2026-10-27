@@ -12,9 +12,10 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { companionEnv, findIntegrationsRoot } from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
-import { createDriveWindowReader } from './drive/driveWindow'
+import { createCompanionStdoutReader } from './drive/driveWindow'
 import {
   createDriveGeometryRelay,
+  createSessionCourier,
   driveRespawnNeeded,
   folderChangeAction
 } from './drive/companionDrive'
@@ -176,18 +177,33 @@ let activeProjectId: string | null = null
  *  write. `undefined` ⇒ no child has been spawned yet. */
 let activeWorkspace: string | null | undefined
 
-/** SOLUSDEV-319 drive slice 3 (sol-drive.md §5): what this project's
- *  companion may get for drive — on AND available, else null. Read at every
- *  spawn, like the workspace; no resolver ⇒ never. */
-type DriveResolver = (projectId: string | null) => { helper: string } | null
+/** SOLUSDEV-319 drive slices 3/3b (sol-drive.md §3, §5): what this project's
+ *  companion may get for drive — the agent socket when on AND available, else
+ *  null. Read at every spawn, like the workspace; no resolver ⇒ never. */
+type DriveResolver = (projectId: string | null) => { socket: string } | null
 let driveResolver: DriveResolver | null = null
-/** The helper baked into the CURRENT child (null: drive off). `undefined` ⇒
- *  no child spawned yet. */
-let activeDriveHelper: string | null | undefined
+/** The agent socket baked into the CURRENT child (null: drive off).
+ *  `undefined` ⇒ no child spawned yet. */
+let activeDriveSocket: string | null | undefined
+/** Main's agent client: a fresh session token for that socket (slice 3b). */
+let driveSessionSource: ((socket: string) => Promise<string | null>) | null = null
+/** Sessions reach only the current drive child, over the token-line writer. */
+const driveSessions = createSessionCourier({
+  fetch: async () => {
+    const socket = activeDriveSocket
+    if (!socket || !driveSessionSource) return null
+    const token = await driveSessionSource(socket)
+    return token === null ? null : { socket, token }
+  },
+  write: (target, line) => writeStdin(target as ChildProcess, line),
+  now: Date.now,
+  setTimeout: (cb, ms) => setTimeout(cb, ms),
+  clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout)
+})
 /** drive_window bounds → main's outline: current child, spawned with drive, only. */
 const driveGeometry = createDriveGeometryRelay()
 
-function resolveDrive(): { helper: string } | null {
+function resolveDrive(): { socket: string } | null {
   try {
     return driveResolver?.(activeProjectId) ?? null
   } catch {
@@ -297,7 +313,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
   activeWorkspace = workspace
   const drive = resolveDrive()
-  activeDriveHelper = drive?.helper ?? null
+  activeDriveSocket = drive?.socket ?? null
   let c: ChildProcess
   try {
     c = spawn(cmd.command, cmd.args, {
@@ -305,7 +321,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
       // stderr is PIPED, not ignored. The companion validates its own config and
       // exits; with stderr discarded that surfaced as a silent restart loop and
       // was why the bridge never came up (CAD-02).
-      // stdout carries only the drive server's outline geometry (sol-drive.md
+      // stdout carries only the drive server's geometry and session requests (sol-drive.md
       // §3); it is read through a bounded, strictly-validating reader.
       stdio: ['pipe', 'pipe', 'pipe'],
       // Inherited PLUS the variables the companion cannot start without.
@@ -321,7 +337,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
           : findIntegrationsRoot(app.getAppPath(), existsSync),
         projectId: activeProjectId,
         workspace,
-        drive
+        drive: drive !== null
       })
     })
   } catch (error) {
@@ -339,7 +355,13 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
   })
   // Geometry from a child spawned without drive is ignored outright.
-  const reader = createDriveWindowReader(driveGeometry.attach(c, drive !== null))
+  const reader = createCompanionStdoutReader({
+    onBounds: driveGeometry.attach(c, drive !== null),
+    // bad_token in the companion's agent client: issue a fresh session.
+    onSessionNeeded: () => {
+      if (drive !== null) driveSessions.needed(c)
+    }
+  })
   c.stdout?.on('data', (chunk: Buffer) => reader.push(chunk))
   child = c
   spawnedAt = Date.now()
@@ -351,6 +373,8 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     }
   }
   if (latestToken !== undefined) writeStdin(c, tokenLine(latestToken))
+  // Slice 3b: a drive child reaches the agent only with a session main sends.
+  if (drive !== null) driveSessions.start(c)
 
   let down = false
   const onDown = (): void => {
@@ -358,6 +382,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     down = true
     if (child === c) child = null
     driveGeometry.detach(c)
+    driveSessions.stop(c)
     if (stopped) return
     attempt = nextRestartAttempt(attempt, Date.now() - spawnedAt)
     restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
@@ -415,7 +440,7 @@ export function setCompanionProject(projectId: string | null): void {
  * rule: another project linked inside or around the active folder turns drive
  * off), so the drive decision is re-checked for every link event too.
  *
- * Respawn only when the resolved workspace or drive helper ACTUALLY changed
+ * Respawn only when the resolved workspace or drive socket ACTUALLY changed
  * (review M5): a re-link to the same path, or any link event that leaves both
  * untouched, must not churn the process and its whole MCP fork tree.
  */
@@ -430,17 +455,24 @@ export function notifyProjectFolderChanged(projectId: string): void {
   else if (action === 'recheck_drive') notifyCompanionDriveChanged()
 }
 
+/** SOLUSDEV-319 slice 3b: main's agent `session` op. Tokens never touch a log. */
+export function setCompanionDriveSessionSource(
+  source: ((socket: string) => Promise<string | null>) | null
+): void {
+  driveSessionSource = source
+}
+
 /** SOLUSDEV-319: install the drive decision (main's DriveController). */
 export function setCompanionDriveResolver(resolver: DriveResolver | null): void {
   driveResolver = resolver
 }
 
 /** The drive setting or availability may have changed: respawn the RUNNING
- *  child only when its baked helper differs. A child not yet (re)spawned reads
+ *  child only when its baked agent socket differs. A child not yet (re)spawned reads
  *  the fresh decision at spawn anyway. */
 export function notifyCompanionDriveChanged(): void {
-  const state = { hasChild: child !== null, bakedHelper: activeDriveHelper }
-  if (driveRespawnNeeded(state, resolveDrive()?.helper ?? null)) replaceChild()
+  const state = { hasChild: child !== null, bakedSocket: activeDriveSocket }
+  if (driveRespawnNeeded(state, resolveDrive()?.socket ?? null)) replaceChild()
 }
 
 /** Main's outline hears the latest drive_window bounds; null when the child
@@ -465,6 +497,7 @@ function replaceChild(): void {
   if (previous) {
     retire(previous)
     driveGeometry.detach(previous)
+    driveSessions.stop(previous)
   }
   attempt = -1
   if (!started) return
@@ -549,7 +582,10 @@ export async function stopCompanion(): Promise<void> {
   }
   const c = child
   child = null
-  if (c) driveGeometry.detach(c)
+  if (c) {
+    driveGeometry.detach(c)
+    driveSessions.stop(c)
+  }
   if (c?.pid && c.exitCode === null && c.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       c.once('exit', () => resolve())

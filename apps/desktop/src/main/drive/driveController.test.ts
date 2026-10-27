@@ -1,5 +1,5 @@
-// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): the DriveStatus main hands
-// the renderer, what the companion is allowed to get, and when both change.
+// SOLUSDEV-319 drive slices 3/3b (sol-drive.md §5): the DriveStatus main
+// hands the renderer, what the companion and the agent may get, and when.
 import { describe, expect, it, vi } from 'vitest'
 import {
   createDriveController,
@@ -14,7 +14,7 @@ const TRUST: DriveTrustResult = {
   trust: { accessibility: true, screenRecording: false },
   unsignedDev: true
 }
-const HELPER = '/h/solus-input'
+const SOCKET = '/Users/me/Library/Application Support/Solus/drive/agent.sock'
 
 function harness(over: Partial<DriveControllerDeps> = {}): {
   deps: DriveControllerDeps
@@ -22,23 +22,27 @@ function harness(over: Partial<DriveControllerDeps> = {}): {
   folders: Record<string, string>
   advance(ms: number): void
   broadcasts: DriveStatus[]
-  runTrust: ReturnType<typeof vi.fn>
+  trust: ReturnType<typeof vi.fn>
   companion: ReturnType<typeof vi.fn>
+  agentWanted: ReturnType<typeof vi.fn>
 } {
   let t = 0
-  const setting = { drive: false }
+  const setting = { drive: true }
   const listeners = new Set<() => void>()
   const folders: Record<string, string> = { p: '/w/p' }
   const broadcasts: DriveStatus[] = []
-  const runTrust = vi.fn(async () => TRUST)
+  const trust = vi.fn<(prompt: boolean) => Promise<DriveTrustResult | null>>(async () => TRUST)
   const companion = vi.fn()
+  const agentWanted = vi.fn()
   const deps: DriveControllerDeps = {
     platform: 'darwin',
-    helperPath: () => HELPER,
-    isExecutable: (p) => p === HELPER,
+    installed: () => true,
+    socketPath: () => SOCKET,
+    trust,
+    agentState: () => 'enabled',
+    onAgentWanted: agentWanted,
     linkedFolders: () => ({ ...folders }),
     realpath: (p) => p,
-    runTrust,
     settings: {
       get: () => ({ drive: setting.drive }),
       setDrive: (on) => {
@@ -62,55 +66,69 @@ function harness(over: Partial<DriveControllerDeps> = {}): {
     folders,
     advance: (ms) => void (t += ms),
     broadcasts,
-    runTrust,
-    companion
+    trust,
+    companion,
+    agentWanted
   }
 }
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 describe('status', () => {
-  it('available: runs trust and reports the grants', async () => {
+  it('on and available: the agent state and the grants from the agent trust op', async () => {
     const h = harness()
     const c = createDriveController(h.deps)
     c.setProject('p')
     expect(await c.status()).toEqual({
-      enabled: false,
+      enabled: true,
       available: true,
       reason: null,
       trust: TRUST.trust,
-      unsignedDev: true
+      unsignedDev: true,
+      agent: 'enabled'
     })
-    expect(h.runTrust).toHaveBeenCalledWith(HELPER, false)
+    expect(h.trust).toHaveBeenCalledWith(false)
   })
 
-  it('unavailable: the reason, no trust, no spawn', async () => {
+  it('off: available, agent state shown, but the agent is not asked for trust', async () => {
+    const h = harness()
+    h.setting.drive = false
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    expect(await c.status()).toMatchObject({ enabled: false, available: true, trust: null })
+    expect(h.trust).not.toHaveBeenCalled()
+  })
+
+  it('unavailable: the reason, no trust, no agent state', async () => {
     const h = harness({ platform: 'linux' })
     const c = createDriveController(h.deps)
     c.setProject('p')
-    expect(await c.status()).toMatchObject({ available: false, reason: 'not_macos', trust: null })
-    expect(h.runTrust).not.toHaveBeenCalled()
+    expect(await c.status()).toMatchObject({
+      available: false,
+      reason: 'not_macos',
+      trust: null,
+      agent: null
+    })
+    expect(h.trust).not.toHaveBeenCalled()
   })
 
-  it('no_helper when the path is missing or not executable', async () => {
-    const missing = createDriveController(harness({ helperPath: () => null }).deps)
-    missing.setProject('p')
-    expect((await missing.status()).reason).toBe('no_helper')
-    const notExec = createDriveController(harness({ isExecutable: () => false }).deps)
-    notExec.setProject('p')
-    expect((await notExec.status()).reason).toBe('no_helper')
+  it('no_helper when the agent is not installed', async () => {
+    const c = createDriveController(harness({ installed: () => false }).deps)
+    c.setProject('p')
+    expect((await c.status()).reason).toBe('no_helper')
   })
 
   it('caches trust briefly, then asks again', async () => {
     const h = harness()
+    h.trust.mockResolvedValue({ ...TRUST, trust: { accessibility: true, screenRecording: true } })
     const c = createDriveController(h.deps)
     c.setProject('p')
     await c.status()
     await c.status()
-    expect(h.runTrust).toHaveBeenCalledTimes(1)
+    expect(h.trust).toHaveBeenCalledTimes(1)
     h.advance(DRIVE_TRUST_CACHE_MS)
     await c.status()
-    expect(h.runTrust).toHaveBeenCalledTimes(2)
+    expect(h.trust).toHaveBeenCalledTimes(2)
   })
 
   it('a missing grant is re-asked on the next status after a short floor (focus refresh)', async () => {
@@ -119,53 +137,69 @@ describe('status', () => {
     c.setProject('p')
     await c.status() // TRUST lacks screenRecording
     await c.status() // a render burst shares the cached answer
-    expect(h.runTrust).toHaveBeenCalledTimes(1)
+    expect(h.trust).toHaveBeenCalledTimes(1)
     h.advance(DRIVE_MISSING_GRANT_REFRESH_MS)
     await c.status()
-    expect(h.runTrust).toHaveBeenCalledTimes(2)
+    expect(h.trust).toHaveBeenCalledTimes(2)
   })
 
-  it('full grants stay cached for the whole cache window', async () => {
+  it('a failed trust request reports null trust and is not cached', async () => {
     const h = harness()
-    h.runTrust.mockResolvedValue({
-      ...TRUST,
-      trust: { accessibility: true, screenRecording: true }
-    })
+    h.trust.mockResolvedValue(null)
     const c = createDriveController(h.deps)
-    c.setProject('p')
-    await c.status()
-    h.advance(DRIVE_TRUST_CACHE_MS - 1)
-    await c.status()
-    expect(h.runTrust).toHaveBeenCalledTimes(1)
-  })
-
-  it('a failed trust run reports null trust and is not cached', async () => {
-    const h = harness()
-    h.runTrust.mockResolvedValueOnce(null)
-    const c = createDriveController(h.deps)
-    c.setProject('p')
+    c.setProject('p') // refresh asks once
+    await flush()
     expect(await c.status()).toMatchObject({ available: true, trust: null, unsignedDev: false })
     await c.status()
-    expect(h.runTrust).toHaveBeenCalledTimes(2)
+    expect(h.trust).toHaveBeenCalledTimes(3)
   })
 })
 
 describe('companionDrive', () => {
-  it('only when the setting is on AND driving is available for that project', () => {
+  it('the socket only when the setting is on AND driving is available for that project', () => {
     const h = harness()
     const c = createDriveController(h.deps)
-    expect(c.companionDrive('p')).toBeNull() // setting off
-    h.setting.drive = true
-    expect(c.companionDrive('p')).toEqual({ helper: HELPER })
+    expect(c.companionDrive('p')).toEqual({ socket: SOCKET })
     expect(c.companionDrive(null)).toBeNull()
     h.folders.q = '/w/p/inner'
     expect(c.companionDrive('p')).toBeNull() // nested_folder
+    delete h.folders.q
+    h.setting.drive = false
+    expect(c.companionDrive('p')).toBeNull()
+  })
+})
+
+describe('the agent', () => {
+  it('wanted while the setting is on and the helper is installed, whatever the project', () => {
+    const h = harness()
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    expect(h.agentWanted).toHaveBeenLastCalledWith(true)
+    h.deps.settings.setDrive(false)
+    expect(h.agentWanted).toHaveBeenLastCalledWith(false)
+    h.deps.settings.setDrive(true)
+    h.folders.q = '/w'
+    c.refresh()
+    expect(h.agentWanted).toHaveBeenLastCalledWith(true) // nested_folder: the project, not the agent
+    c.setProject('none')
+    expect(h.agentWanted).toHaveBeenLastCalledWith(true) // no_folder: likewise
+    expect(c.companionDrive('none')).toBeNull() // …but that project's companion never drives
+  })
+
+  it('not wanted when the helper is not installed or not on macOS', () => {
+    const missing = harness()
+    createDriveController({ ...missing.deps, installed: () => false }).setProject('p')
+    expect(missing.agentWanted).toHaveBeenLastCalledWith(false)
+    const linux = harness()
+    createDriveController({ ...linux.deps, platform: 'linux' }).setProject('p')
+    expect(linux.agentWanted).toHaveBeenLastCalledWith(false)
   })
 })
 
 describe('changes', () => {
   it('setDrive persists, re-evaluates the companion and broadcasts', async () => {
     const h = harness()
+    h.setting.drive = false
     const c = createDriveController(h.deps)
     c.setProject('p')
     const status = await c.setDrive(true)
@@ -178,6 +212,7 @@ describe('changes', () => {
 
   it('a setting change from elsewhere (the tray, a file) also propagates', async () => {
     const h = harness()
+    h.setting.drive = false
     const c = createDriveController(h.deps)
     c.setProject('p')
     h.deps.settings.setDrive(true)
@@ -190,7 +225,6 @@ describe('changes', () => {
     const h = harness()
     const c = createDriveController(h.deps)
     c.setProject('p')
-    c.refresh()
     await flush()
     c.refresh()
     await flush()
@@ -211,8 +245,10 @@ describe('changes', () => {
     await flush()
     expect(h.broadcasts.at(-1)?.reason).toBe('no_folder')
   })
+})
 
-  it('requestPermissions runs trust --prompt, refreshes the cache and broadcasts', async () => {
+describe('permissions', () => {
+  it('requestPermissions asks the agent with prompt and broadcasts its answer', async () => {
     const h = harness()
     const c = createDriveController(h.deps)
     c.setProject('p')
@@ -221,9 +257,9 @@ describe('changes', () => {
       ...TRUST,
       trust: { accessibility: true, screenRecording: true }
     }
-    h.runTrust.mockResolvedValueOnce(granted)
+    h.trust.mockResolvedValueOnce(granted)
     const status = await c.requestPermissions()
-    expect(h.runTrust).toHaveBeenLastCalledWith(HELPER, true)
+    expect(h.trust).toHaveBeenLastCalledWith(true)
     expect(status.trust).toEqual(granted.trust)
     await flush()
     expect(h.broadcasts.at(-1)?.trust).toEqual(granted.trust)
@@ -234,20 +270,23 @@ describe('changes', () => {
     const c = createDriveController(h.deps)
     c.setProject('p')
     await c.status()
-    const calls = h.runTrust.mock.calls.length
+    const calls = h.trust.mock.calls.length
     await c.requestPermissions()
-    await c.status() // same instant — still runs a plain trust
-    expect(h.runTrust.mock.calls.slice(calls)).toEqual([
-      [HELPER, true],
-      [HELPER, false]
-    ])
+    await c.status() // same instant — still asks again
+    expect(h.trust.mock.calls.slice(calls)).toEqual([[true], [false]])
   })
 
-  it('requestPermissions does not spawn when unavailable', async () => {
-    const h = harness({ platform: 'win32' })
-    const c = createDriveController(h.deps)
+  it('requestPermissions asks nothing while drive is off or unavailable', async () => {
+    const off = harness()
+    off.setting.drive = false
+    const c = createDriveController(off.deps)
     c.setProject('p')
-    expect((await c.requestPermissions()).reason).toBe('not_macos')
-    expect(h.runTrust).not.toHaveBeenCalled()
+    await c.requestPermissions()
+    const linux = harness({ platform: 'win32' })
+    const d = createDriveController(linux.deps)
+    d.setProject('p')
+    expect((await d.requestPermissions()).reason).toBe('not_macos')
+    expect(off.trust).not.toHaveBeenCalled()
+    expect(linux.trust).not.toHaveBeenCalled()
   })
 })

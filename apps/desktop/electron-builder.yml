@@ -62,6 +62,27 @@ mac:
   signIgnore:
     - '/Contents/Resources/SolusInput\.app(/|$)'
     - '/Contents/Resources/companion(/|$)'
+  # Slice 3b (sol-drive.md §2.1, §5): the solus-input launch agent's plist, which
+  # SMAppService registers (app.setLoginItemSettings type agentService) while
+  # drive is on. extraFiles land relative to Contents/, so this is
+  # Solus.app/Contents/Library/LaunchAgents/. The plist is staged into dist/ by
+  # scripts/build-solus-input.sh from native/solus-input/bundle/.
+  extraFiles:
+    - from: ../../dist/solus-input/com.solusforge.solus.input.agent.plist
+      to: Library/LaunchAgents/com.solusforge.solus.input.agent.plist
+# Slice 3b (sol-drive.md §5, ADR-041 amendment 3b): the agent trusts any process
+# satisfying Solus.app's code requirement, so that process must only ever run
+# Solus code — no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect, and only the
+# integrity-checked app.asar. The ASAR integrity fuse needs the app packed as
+# asar: electron-builder's default (`asar` is not disabled anywhere in this
+# config). runAsNode off also disables `process.fork` in main — main spawns its
+# children (companion, dev helper) with child_process.spawn, never fork.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 dmg:
   artifactName: solus-${version}.${ext}
 linux:

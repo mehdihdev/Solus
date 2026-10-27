@@ -247,30 +247,24 @@ describe('companionEnv — integrations root', () => {
 describe('companionEnv — drive', () => {
   const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
   const API = 'https://api.solusforge.com/api/v1'
-  const HELPER =
-    '/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input-launch'
   const INHERITED = { SOLUS_COMPANION_DRIVE: '1', SOLUS_DRIVE_HELPER: '/tmp/evil' }
 
-  it('sets the switch and the pinned helper path when drive is on', () => {
-    const env = companionEnv({}, API, { projectId: P, workspace: '/w', drive: { helper: HELPER } })
+  it('sets only the switch when drive is on (slice 3b: the helper is the agent, reached by session)', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: '/w', drive: true })
 
     expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
-    expect(env.SOLUS_DRIVE_HELPER).toBe(HELPER)
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
   })
 
-  it('the option replaces an inherited helper path rather than deferring to it', () => {
-    const env = companionEnv(INHERITED, API, {
-      projectId: P,
-      workspace: '/w',
-      drive: { helper: HELPER }
-    })
+  it('SOLUS_DRIVE_HELPER is always removed, even with drive on', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', drive: true })
 
-    expect(env.SOLUS_DRIVE_HELPER).toBe(HELPER)
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
   })
 
   it.each([
     ['omitted', {}],
-    ['null', { drive: null }]
+    ['false', { drive: false }]
   ])('deletes both variables, inherited ones included, when drive is %s', (_label, extra) => {
     const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', ...extra })
 
@@ -284,15 +278,14 @@ describe('companionEnv — drive', () => {
     const env = companionEnv({ SOLUS_COMPANION_WORKSPACE: '/elsewhere' }, API, {
       projectId: P,
       workspace: '/w',
-      drive: { helper: HELPER }
+      drive: true
     })
 
     expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
-    expect(env.SOLUS_DRIVE_HELPER).toBeUndefined()
   })
 
   it('stays off without a workspace even if asked', () => {
-    const env = companionEnv({}, API, { projectId: P, workspace: null, drive: { helper: HELPER } })
+    const env = companionEnv({}, API, { projectId: P, workspace: null, drive: true })
 
     expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
   })

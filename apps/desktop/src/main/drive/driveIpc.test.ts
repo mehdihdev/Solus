@@ -12,7 +12,8 @@ const STATUS: DriveStatus = {
   available: false,
   reason: 'no_folder',
   trust: null,
-  unsignedDev: false
+  unsignedDev: false,
+  agent: null
 }
 type Handler = (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown
 
@@ -43,7 +44,8 @@ function register(allowed = true): {
     setDrive: vi.fn(async () => STATUS),
     requestPermissions: vi.fn(async () => STATUS),
     setDriving: vi.fn(),
-    releaseSender: vi.fn()
+    releaseSender: vi.fn(),
+    openApproval: vi.fn()
   }
   registerDriveIpcHandlers({ handle: (c, l) => void handlers.set(c, l) }, deps, {
     isAllowedSender: () => allowed,
@@ -55,10 +57,16 @@ function register(allowed = true): {
 describe('registerDriveIpcHandlers', () => {
   const c = SOL_WINDOW_CHANNELS
 
-  it('registers the four invokes on the shared constants', () => {
+  it('registers the five invokes on the shared constants', () => {
     const { handlers } = register()
     expect([...handlers.keys()].sort()).toEqual(
-      [c.getDriveStatus, c.setDrive, c.requestDrivePermissions, c.setDriving].sort()
+      [
+        c.getDriveStatus,
+        c.setDrive,
+        c.requestDrivePermissions,
+        c.setDriving,
+        c.openDriveApproval
+      ].sort()
     )
   })
 
@@ -84,6 +92,14 @@ describe('registerDriveIpcHandlers', () => {
     expect(deps.setDrive.mock.calls).toEqual([[false]])
     expect(deps.requestPermissions).not.toHaveBeenCalled()
     expect(deps.setDriving.mock.calls).toEqual([[2, true]])
+  })
+
+  it('openDriveApproval opens the Login Items pane for the main window only, ignoring arguments', async () => {
+    const { handlers, deps } = register()
+    expect(await handlers.get(c.openDriveApproval)?.(PILL.event)).toBeNull()
+    expect(deps.openApproval).not.toHaveBeenCalled()
+    expect(await handlers.get(c.openDriveApproval)?.(MAIN.event, 'https://evil.example')).toBeNull()
+    expect(deps.openApproval.mock.calls).toEqual([[]])
   })
 
   it('a driving sender whose window closes is released, once', async () => {

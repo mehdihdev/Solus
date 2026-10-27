@@ -3,7 +3,8 @@
 // anything malformed or oversized, is ignored silently.
 import { describe, expect, it, vi } from 'vitest'
 import {
-  createDriveWindowReader,
+  createCompanionStdoutReader,
+  parseDriveSessionNeeded,
   createLineSplitter,
   MAX_STDOUT_LINE_BYTES,
   parseDriveWindowLine
@@ -72,12 +73,30 @@ describe('createLineSplitter', () => {
   })
 })
 
-describe('createDriveWindowReader', () => {
-  it('hands on only valid drive_window bounds from a byte stream', () => {
+describe('parseDriveSessionNeeded', () => {
+  it('accepts exactly {"type":"drive_session_needed"}', () => {
+    expect(parseDriveSessionNeeded('{"type":"drive_session_needed"}')).toBe(true)
+  })
+
+  it.each([
+    ['an extra key', '{"type":"drive_session_needed","socket":"/tmp/evil.sock"}'],
+    ['another type', '{"type":"drive_window"}'],
+    ['not JSON', 'drive_session_needed'],
+    ['an array', '["drive_session_needed"]']
+  ])('false for %s', (_label, raw) => {
+    expect(parseDriveSessionNeeded(raw)).toBe(false)
+  })
+})
+
+describe('createCompanionStdoutReader', () => {
+  it('routes valid bounds and session requests; ignores everything else', () => {
     const onBounds = vi.fn()
-    const reader = createDriveWindowReader(onBounds)
+    const onSessionNeeded = vi.fn()
+    const reader = createCompanionStdoutReader({ onBounds, onSessionNeeded })
     reader.push(Buffer.from('noise\n{"type":"drive_window","bounds":{"x":1,"y":2,'))
     reader.push(Buffer.from('"width":3,"height":4}}\n{"type":"other"}\n'))
+    reader.push(Buffer.from('{"type":"drive_session_needed"}\n'))
     expect(onBounds.mock.calls).toEqual([[{ x: 1, y: 2, width: 3, height: 4 }]])
+    expect(onSessionNeeded).toHaveBeenCalledTimes(1)
   })
 })

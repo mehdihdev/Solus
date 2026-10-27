@@ -63,10 +63,23 @@ export function createLineSplitter(onLine: (line: string) => void): LineSplitter
   }
 }
 
-/** The companion stdout reader: lines → valid bounds only. */
-export function createDriveWindowReader(onBounds: (bounds: Rect) => void): LineSplitter {
+/** Exactly `{"type":"drive_session_needed"}` — the companion's agent client
+ *  got `bad_token` (sol-drive.md §3) and needs a fresh session. */
+export function parseDriveSessionNeeded(line: string): boolean {
+  const value = parseJson(line)
+  return isRecord(value) && Object.keys(value).length === 1 && value.type === 'drive_session_needed'
+}
+
+export interface CompanionStdoutHandlers {
+  onBounds(bounds: Rect): void
+  onSessionNeeded(): void
+}
+
+/** The companion stdout reader: lines → valid bounds or session requests only. */
+export function createCompanionStdoutReader(handlers: CompanionStdoutHandlers): LineSplitter {
   return createLineSplitter((line) => {
     const bounds = parseDriveWindowLine(line)
-    if (bounds !== null) onBounds(bounds)
+    if (bounds !== null) return handlers.onBounds(bounds)
+    if (parseDriveSessionNeeded(line)) handlers.onSessionNeeded()
   })
 }

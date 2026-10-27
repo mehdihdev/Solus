@@ -169,7 +169,8 @@ describe('drive', () => {
     available: false,
     reason: 'nested_folder',
     trust: null,
-    unsignedDev: false
+    unsignedDev: false,
+    agent: null
   }
 
   function driveIpc(answer: unknown): {
@@ -201,12 +202,14 @@ describe('drive', () => {
     await expect(b.setDrive(true)).resolves.toEqual(DRIVE)
     await expect(b.requestDrivePermissions()).resolves.toEqual(DRIVE)
     await expect(b.setDriving(false)).resolves.toBeUndefined()
+    await expect(b.openDriveApproval()).resolves.toBeUndefined()
     const c = SOL_WINDOW_CHANNELS
     expect(f.invoked).toEqual([
       { channel: c.getDriveStatus, args: [] },
       { channel: c.setDrive, args: [true] },
       { channel: c.requestDrivePermissions, args: [] },
-      { channel: c.setDriving, args: [false] }
+      { channel: c.setDriving, args: [false] },
+      { channel: c.openDriveApproval, args: [] }
     ])
   })
 
@@ -216,7 +219,9 @@ describe('drive', () => {
     ['available with a reason', { ...DRIVE, available: true }],
     ['unavailable without a reason', { ...DRIVE, reason: null }],
     ['a bad trust', { ...DRIVE, trust: { accessibility: 'yes', screenRecording: true } }],
-    ['a missing flag', { ...DRIVE, unsignedDev: undefined }]
+    ['a missing flag', { ...DRIVE, unsignedDev: undefined }],
+    ['an unknown agent state', { ...DRIVE, agent: 'approved' }],
+    ['a missing agent', { ...DRIVE, agent: undefined }]
   ])('answers null for %s', async (_label, raw) => {
     await expect(createSolBridge(driveIpc(raw).ipc).getDriveStatus()).resolves.toBeNull()
   })
@@ -227,7 +232,8 @@ describe('drive', () => {
         ...DRIVE,
         available: true,
         reason: null,
-        trust: { accessibility: true, screenRecording: false }
+        trust: { accessibility: true, screenRecording: false },
+        agent: 'requires_approval'
       })
     ).toBe(true)
   })

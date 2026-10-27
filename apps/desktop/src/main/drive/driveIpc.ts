@@ -3,7 +3,8 @@
 // handler answers an allowed sender (the main renderer or the SOL window) and
 // null to anything else; arguments are validated here.
 //
-// Consent actions — turning drive ON and asking macOS for the grants — are the
+// Consent actions — turning drive ON, asking macOS for the grants, opening the
+// Login Items approval pane — are the
 // MAIN window's alone (Settings): the SOL window renders model output, so it
 // may read the status, turn drive OFF and report a running step, never more.
 import type { IpcMainInvokeEvent } from 'electron'
@@ -19,6 +20,8 @@ export interface DriveIpcDeps {
   setDriving(senderId: number, active: boolean): void
   /** That sender's window went away. */
   releaseSender(senderId: number): void
+  /** Open System Settings › Login Items (agent `requires_approval`). */
+  openApproval(): void
 }
 
 export interface DriveIpcGates {
@@ -51,6 +54,11 @@ export function registerDriveIpcHandlers(
   ipc.handle(c.requestDrivePermissions, (event) =>
     isAllowedSender(event) && isMainSender(event) ? deps.requestPermissions() : null
   )
+  // No renderer argument: main opens its own pane URL, never a supplied one.
+  ipc.handle(c.openDriveApproval, (event) => {
+    if (isAllowedSender(event) && isMainSender(event)) deps.openApproval()
+    return null
+  })
   const watched = new Set<number>()
   ipc.handle(c.setDriving, (event, active) => {
     if (!isAllowedSender(event) || typeof active !== 'boolean') return null

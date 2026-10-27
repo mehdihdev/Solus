@@ -124,10 +124,11 @@ export interface CompanionEnvOptions {
    *  the variable is then left ABSENT so workspace-gated forks (Altium) fail
    *  closed rather than confining to an arbitrary directory. */
   workspace?: string | null
-  /** SOLUSDEV-319 (sol-drive.md §5): the pinned helper path, set only while
-   *  "SOL can use your mouse and keyboard" is on AND driving is available for
-   *  this project. Anything else removes both drive variables. */
-  drive?: { helper: string } | null
+  /** SOLUSDEV-319 (sol-drive.md §5): true only while "SOL can use your mouse
+   *  and keyboard" is on AND driving is available for this project. The
+   *  companion then reaches the helper through the agent, with the session
+   *  main sends on stdin (slice 3b) — there is no helper path variable. */
+  drive?: boolean
 }
 
 export function companionEnv(
@@ -161,16 +162,16 @@ export function companionEnv(
 }
 
 /** The drive switch is NOT like its siblings: the setting is the consent, so
- *  an inherited value never wins — both are deleted unless the option says
- *  on. It also stays off when the workspace the child gets is not the folder
- *  the nested-folder rule checked (an inherited override). */
+ *  an inherited value never wins — it is deleted unless the option says on.
+ *  It also stays off when the workspace the child gets is not the folder the
+ *  nested-folder rule checked (an inherited override). The slice 3 helper path
+ *  variable is retired (3b) and always removed. */
 function applyDrive(env: Record<string, string | undefined>, options: CompanionEnvOptions): void {
   delete env.SOLUS_COMPANION_DRIVE
   delete env.SOLUS_DRIVE_HELPER
-  const helper = options.drive?.helper
-  if (!helper || !options.workspace || env.SOLUS_COMPANION_WORKSPACE !== options.workspace) return
+  if (options.drive !== true || !options.workspace) return
+  if (env.SOLUS_COMPANION_WORKSPACE !== options.workspace) return
   env.SOLUS_COMPANION_DRIVE = '1'
-  env.SOLUS_DRIVE_HELPER = helper
 }
 
 /** Loopback always, plus the configured URL's host when it parses. */

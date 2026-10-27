@@ -24,6 +24,8 @@ export const SOL_WINDOW_CHANNELS = {
   getDriveStatus: 'sol:get-drive-status',
   setDrive: 'sol:set-drive',
   requestDrivePermissions: 'sol:request-drive-permissions',
+  /** Slice 3b: open System Settings › Login Items (the agent needs approval). */
+  openDriveApproval: 'sol:open-drive-approval',
   /** The renderer says a drive.step is running (true) or ended (false). */
   setDriving: 'sol:set-driving',
   /** main → the app's renderers: the DriveStatus on every change. */
