@@ -26,20 +26,11 @@ final class FakePort: SystemPort {
     var cwd: [Int: String] = [42: "/work/board"]
     /// `realpath` of a path the caller passes; nil = it does not resolve.
     var resolve: (String) -> String? = { $0 }
-    /// Caller chain (ADR-041 amendment 2026-10-27): self → companion (500) → Solus.app (400).
-    var ownParent = 500
-    var parents: [Int: Int] = [500: 400]
-    var argc: [Int: Int] = [500: 1]
-    /// pid → signing identifier; a pid absent here satisfies no requirement.
-    var signedAs: [Int: String] = [500: Signing.companionIdentifier, 400: Signing.appIdentifier]
-    var signedTeam = FakePort.team
-    var selfValid = true
-    var selfSignedAs = Signing.helperIdentifier
+    /// What the helper's own code satisfies (the agent's start check).
+    var ownRequirements: Set<String> = []
+    var trustPrompts = 0
     /// The home directory from the user database (never $HOME); nil = unreadable.
     var home: String? = "/Users/me"
-    var trustPrompts = 0
-    /// Lets a test change the world after a requirement is checked (a parent dying).
-    var afterSatisfies: (FakePort) -> Void = { _ in }
     static let team = "ABCDE12345"
 
     static let kicadWindow = WindowInfo(
@@ -67,17 +58,7 @@ final class FakePort: SystemPort {
     func topWindow(at point: Point) -> UInt32? { windowAt(point) ?? front?.window?.id }
     func workingDirectory(pid: Int) -> String? { cwd[pid] }
     func resolvedPath(_ path: String) -> String? { resolve(path) }
-    func ownParentPid() -> Int { ownParent }
-    func parentPid(of pid: Int) -> Int? { parents[pid] }
-    func argumentCount(pid: Int) -> Int? { argc[pid] }
-    func satisfies(pid: Int, requirement: String) -> Bool {
-        defer { afterSatisfies(self) }
-        guard let identifier = signedAs[pid] else { return false }
-        return requirement == Signing.requirement(teamId: signedTeam, identifier: identifier)
-    }
-    func ownCodeSatisfies(requirement: String) -> Bool {
-        selfValid && requirement == Signing.requirement(teamId: signedTeam, identifier: selfSignedAs)
-    }
+    func ownCodeSatisfies(requirement: String) -> Bool { ownRequirements.contains(requirement) }
     func homeDirectory() -> String? { home }
     func requestTrust() { trustPrompts += 1 }
     func post(_ event: SyntheticEvent, toPid pid: Int?) {
@@ -88,12 +69,9 @@ final class FakePort: SystemPort {
 }
 
 /// Every command runs bound to the linked workspace `/work` unless a test says otherwise.
-/// The caller check runs for real against the fake's signed chain (team `FakePort.team`).
-let trustedCaller = CallerPolicy(teamId: FakePort.team)
-
 func invoke(_ port: FakePort, _ argv: [String], within: String? = "/work",
-            caller: CallerPolicy = trustedCaller) -> [String: Any] {
-    let line = Runner(port: port, caller: caller).run(argv + (within.map { ["--within", $0] } ?? []))
+            unsignedDev: Bool = false) -> [String: Any] {
+    let line = Runner(port: port, unsignedDev: unsignedDev).run(argv + (within.map { ["--within", $0] } ?? []))
     XCTAssertFalse(line.contains("\n"), "exactly one JSON line")
     let object = try? JSONSerialization.jsonObject(with: Data(line.utf8))
     return object as? [String: Any] ?? [:]

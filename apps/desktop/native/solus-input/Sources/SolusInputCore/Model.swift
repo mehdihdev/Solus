@@ -113,14 +113,6 @@ public protocol SystemPort {
     func workingDirectory(pid: Int) -> String?
     /// `realpath`; nil when the path does not resolve.
     func resolvedPath(_ path: String) -> String?
-    /// `getppid()`.
-    func ownParentPid() -> Int
-    /// The kernel's parent pid of `pid`; nil when unreadable.
-    func parentPid(of pid: Int) -> Int?
-    /// `argc` of `pid` (`KERN_PROCARGS2`); nil when unreadable.
-    func argumentCount(pid: Int) -> Int?
-    /// The code-signing service says `pid` satisfies `requirement`.
-    func satisfies(pid: Int, requirement: String) -> Bool
     /// The helper's own code is valid and satisfies `requirement`.
     func ownCodeSatisfies(requirement: String) -> Bool
     /// The user's home directory from the user database (`getpwuid`), never `$HOME`.

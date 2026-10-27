@@ -26,13 +26,38 @@ let defaultTitleBarHeight = 28.0
 /// Room below the traffic-light buttons that still belongs to the title bar.
 let titleBarMargin = 4.0
 
-/// Set by the SIGTERM handler (main.swift); read between posted events.
+/// Why a run stops between events: SIGTERM (launchd stopping the agent), or
+/// the agent's peer closing its end of the connection (the companion stopping
+/// the step — what SIGTERM was before slice 3b).
 final class StopFlag: @unchecked Sendable {
     static let shared = StopFlag()
     private let lock = NSLock()
     private var raised = false
+    private var peer: Int32?
+
     func raise() { lock.lock(); raised = true; lock.unlock() }
-    var isRaised: Bool { lock.lock(); defer { lock.unlock() }; return raised }
+
+    /// SIGTERM while serving: true when no request is running, so the agent can exit now.
+    func raiseIsIdle() -> Bool { lock.lock(); defer { lock.unlock() }; raised = true; return peer == nil }
+
+    /// A request starts: its connection is watched for EOF / hang-up. False once
+    /// SIGTERM arrived — the agent exits instead of starting it.
+    func begin(_ fd: Int32) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !raised else { return false }
+        peer = fd
+        return true
+    }
+
+    func end() { lock.lock(); peer = nil; lock.unlock() }
+    var signalled: Bool { lock.lock(); defer { lock.unlock() }; return raised }
+
+    var isRaised: Bool {
+        lock.lock()
+        let (signalled, fd) = (raised, peer)
+        lock.unlock()
+        return signalled || fd.map(PeerWatch.hasClosed) == true
+    }
 }
 
 struct MacSystem: SystemPort {
@@ -76,39 +101,7 @@ struct MacSystem: SystemPort {
         return path.hasPrefix("/") ? resolvedPath(path) : nil
     }
 
-    // MARK: caller check (ADR-041 amendment 2026-10-27)
-
-    func ownParentPid() -> Int { Int(getppid()) }
-
-    func parentPid(of pid: Int) -> Int? {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid_t(pid), PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
-        return Int(info.pbi_ppid)
-    }
-
-    /// `KERN_PROCARGS2` starts with the process's argc (an Int32).
-    func argumentCount(pid: Int) -> Int? {
-        var argmaxMib: [Int32] = [CTL_KERN, KERN_ARGMAX]
-        var argmax: Int32 = 0
-        var argmaxSize = MemoryLayout<Int32>.size
-        guard sysctl(&argmaxMib, 2, &argmax, &argmaxSize, nil, 0) == 0, argmax > 0 else { return nil }
-        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, Int32(pid)]
-        var buffer = [UInt8](repeating: 0, count: Int(argmax))
-        var size = buffer.count
-        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size >= MemoryLayout<Int32>.size else { return nil }
-        return Int(buffer.withUnsafeBytes { $0.loadUnaligned(as: Int32.self) })
-    }
-
-    func satisfies(pid: Int, requirement: String) -> Bool {
-        var parsed: SecRequirement?
-        guard SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess,
-              let parsed else { return false }
-        var code: SecCode?
-        let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
-        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return false }
-        return SecCodeCheckValidity(code, [], parsed) == errSecSuccess
-    }
+    // MARK: agent (sol-drive.md §2.1)
 
     func ownCodeSatisfies(requirement: String) -> Bool {
         var parsed: SecRequirement?

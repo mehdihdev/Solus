@@ -34,21 +34,21 @@ public struct Runner {
     /// A capture's aspect may differ from the window's by rounding only.
     static let aspectTolerance = 0.02
 
-    /// Fixed: no pid or path of the caller ever appears in the output.
-    public static let callerUntrustedMessage = "solus-input was not started by Solus"
-    static let callerChecked: Set<String> = ["identify", "capture", "act"]
+    /// A release build answers any invocation but `serve` with this (sol-drive.md §2
+    /// "Caller"); the build script checks it to prove the binary is not a debug one.
+    public static let agentOnlyUsage =
+        #"{"code":"usage","message":"solus-input runs only as the Solus agent (serve)","ok":false,"unsignedDev":false}"#
 
     let port: SystemPort
-    let caller: CallerPolicy
+    /// Debug builds only (`SOLUS_INPUT_UNSIGNED_DEV`): reported, never a skip here.
+    let unsignedDev: Bool
 
-    public init(port: SystemPort, caller: CallerPolicy) { self.port = port; self.caller = caller }
+    /// Callers are authenticated before this (the agent, §2.1); debug argv runs are tests.
+    public init(port: SystemPort, unsignedDev: Bool) { self.port = port; self.unsignedDev = unsignedDev }
 
     public func run(_ argv: [String]) -> String {
         let result: Result<[String: Any], Refusal>
-        // Before anything else, argument checks included (ADR-041 amendment 2026-10-27).
-        if let command = argv.first, Self.callerChecked.contains(command), !caller.admits(port) {
-            result = .failure(refuse("caller_untrusted", Self.callerUntrustedMessage))
-        } else if argv.first == "trust" {
+        if argv.first == "trust" {
             result = trust(Array(argv.dropFirst()))
         } else if let args = Arguments(argv) {
             switch args.command {
@@ -71,11 +71,11 @@ public struct Runner {
 
     // MARK: trust
 
-    /// Posts nothing and captures nothing, so it skips the caller check.
+    /// Posts nothing and captures nothing. Through the agent only Solus.app may ask (§2.1).
     private func trust(_ options: [String]) -> Result<[String: Any], Refusal> {
         guard options.isEmpty || options == ["--prompt"] else { return .failure(refuse("usage", "trust [--prompt]")) }
         if !options.isEmpty { port.requestTrust() }
-        return .success(["trust": trustJSON(), "unsignedDev": caller.unsignedDev])
+        return .success(["trust": trustJSON(), "unsignedDev": unsignedDev])
     }
 
     private func trustJSON() -> [String: Any] {
@@ -89,7 +89,7 @@ public struct Runner {
             return .failure(refuse("usage", "identify --within WORKSPACE"))
         }
         let body = identifyBody(root)
-        return .success(body.merging(["unsignedDev": caller.unsignedDev]) { $1 })
+        return .success(body.merging(["unsignedDev": unsignedDev]) { $1 })
     }
 
     private func identifyBody(_ root: String) -> [String: Any] {
