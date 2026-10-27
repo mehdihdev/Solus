@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
     from solus_api.agent.tools.tool import Tool
+    from solus_api.bridge.allowlist import BridgeToolSpec
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
@@ -413,6 +414,23 @@ def _register_hosted_tools(
         logger.exception("hosted MCP tools unavailable for project %s", project_id)
 
 
+def _internal_only(spec: "BridgeToolSpec") -> bool:
+    """Bridge tools Solus code dispatches but the model is never offered."""
+    # `exposure: internal` (sol-drive.md §3): accepted from the companion for
+    # Solus code to dispatch — the ADR-041 drive executor calls `drive.act`.
+    if spec.internal:
+        return True
+    # Internal simulator inputs carry resolved graph data. Only the owned
+    # graph adapter may expose Isaac operations to SOL.
+    if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
+        return True
+    # Automatic code reads must resolve graph identity and the turn's selected
+    # revision through read_code_file. Keep this native primitive available to
+    # that wrapper's internal dispatch, never as a model-visible fallback.
+    # The separate general machine.read_file remains confirmation-gated.
+    return spec.descriptor.name == "machine.read_code_file"
+
+
 def _register_bridge_tools(
     registry: ToolRegistry,
     session_factory: async_sessionmaker[AsyncSession],
@@ -452,15 +470,7 @@ def _register_bridge_tools(
     environments: EnvironmentFetch | None = None
     tools: list[BridgeTool] = []
     for spec in session.inventory:
-        # Internal simulator inputs carry resolved graph data. Only the owned
-        # graph adapter may expose Isaac operations to SOL.
-        if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
-            continue
-        # Automatic code reads must resolve graph identity and the turn's selected
-        # revision through read_code_file. Keep this native primitive available to
-        # that wrapper's internal dispatch, never as a model-visible fallback.
-        # The separate general machine.read_file remains confirmation-gated.
-        if spec.descriptor.name == "machine.read_code_file":
+        if _internal_only(spec):
             continue
         # MCP-05: byo_paid servers get the invoke-time license gate;
         # free-tier and uncataloged servers get zero new checks.
