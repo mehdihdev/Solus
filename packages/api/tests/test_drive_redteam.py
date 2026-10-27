@@ -202,6 +202,7 @@ async def test_an_intent_cannot_break_out_of_its_fence(intent: str) -> None:
         "Place R1 e\u0301",  # a combining mark (NFD)
         "Place R1\u2003above",  # em space
         "Place R1\ue000",  # private use
+        "Place R1\u2800above",  # Braille blank: renders as nothing
     ],
 )
 async def test_an_intent_with_hidden_text_is_refused_before_any_card(intent: str) -> None:

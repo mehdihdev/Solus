@@ -144,8 +144,13 @@ Model call: `orchestration/gateway.computer_use` → `providers.AnthropicAdapter
 
 - **The tool.** `drive.step {app: "kicad", intent}` — Solus-authored, `requires_confirmation`, registered
   only when the requesting user's companion advertises all three internal drive tools. `intent` is one
-  line, ≤ 300 characters, no `<`/`>` (it is fenced as `<goal>` in the loop prompt), and refused if
-  redaction would alter it (displayed = executed). Never auto-run (`command_auto.auto_judge` is false).
+  line, ≤ 300 characters, no `<`/`>` (it is fenced as `<goal>` in the loop prompt), visible text only
+  (NFC; no format, private-use, unassigned, combining or invisible characters; U+0020 the only space),
+  single-spaced, and refused if redaction would alter it —
+  anything the card would change is refused, so displayed = executed. Never auto-run
+  (`command_auto.auto_judge` is false). One step at a time per user (`wiring.drive_lease`, keyed on the user — the instance id is
+  client-supplied;
+  process-local today, a Redis lease when the API is multi-instance).
 - **The card** is built from the arguments alone: App (`KiCad`), What SOL will do (the intent,
   verbatim), Budget (`up to 15 actions · 2 min`), Heads up ("SOL will move your mouse and type in this
   window. Move the mouse or press Esc to stop it."). While the card waits, the pill — not KiCad — is
@@ -162,11 +167,16 @@ Model call: `orchestration/gateway.computer_use` → `providers.AnthropicAdapter
   points. Model pixels map to points by `points/image`. The assistant content is replayed verbatim
   (`Usage.provider_items` — Opus 5.5 thinking blocks must come back unchanged); screenshots are never
   pruned.
-- **Budget**: N = 15 actions, T = 120 s wall-clock from bind, model time included (`Settings.drive_max_*`).
-  A screenshot does not spend an action; model rounds are capped at 2N + 2. Running out ends the step
-  (`budget`) — it never extends itself.
-- **Endings**: the model replies without a call (`done`, its text as the summary, ≤ 500 chars, returned
-  as data); `refusal` stop reason (`declined`); a point outside the capture (`out_of_bounds`, before
+- **Budget**: N = 15 actions, T = 120 s wall-clock from bind, model time included, and a 400k
+  input-token ceiling (`Settings.drive_max_*`). Every identify, capture and model round is cut at the time
+  left (a round answering after the deadline never runs); one helper action has its own 15 s bound, since
+  an action already sent must report how it ended; each bridge call has a 30 s deadline. An act's result
+  carries a fresh capture, so one action is one model round; an explicit screenshot does not spend an
+  action; rounds are capped at 2N + 2. The history is prompt-cached (it is never pruned); cache reads and writes (writes at 1.25×) count in
+  `tokens_in`, so the debit and the token ceiling see the whole input. Running out
+  ends the step (`budget`, code `time`/`actions`/`tokens`/`rounds`) — it never extends itself.
+- **Endings**: the model replies without a call with `end_turn` (`done`, its text as the summary, ≤ 500
+  chars, redacted, returned as data) — any other stop reason without a call is `error/model_incomplete`; `refusal` stop reason (`declined`); a point outside the capture (`out_of_bounds`, before
   anything posts); any helper refusal ends the step with its code, and `user_active` is `paused` — Esc,
   double-Ctrl or a click on the pill are physical input, so stopping needs no route. An unsupported
   proposal (a modifier click, `repeat`, an unknown key) is answered as an error and costs one action.

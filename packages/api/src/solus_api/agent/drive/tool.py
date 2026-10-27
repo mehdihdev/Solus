@@ -104,7 +104,7 @@ def _budget_label(budget: Budget) -> str:
 
 
 #: Letters that render as nothing (Hangul fillers, Khmer vowel inherents…).
-_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e")
+_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e\u2800")
 #: Format, private-use, unassigned, surrogate, separators and combining marks:
 #: none can be shown verbatim on a card a person reads.
 _HIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me"})
@@ -227,9 +227,11 @@ class DriveStepTool:
                 # The registry backstop (or a dropped request) cancelled the
                 # step: the audit trail still ends, then cancellation proceeds.
                 for progress in trail:
+                    # The last one may have been in flight when the step stopped.
+                    result = "cancelled" if progress is trail[-1] else "ok"
                     await self._safe_record(
                         "drive.action",
-                        {"index": progress.action, "verb": progress.verb, "result": "ok"},
+                        {"index": progress.action, "verb": progress.verb, "result": result},
                     )
                 await self._safe_record("drive.aborted", {"outcome": "cancelled", "code": None})
                 await self._safe_record(
