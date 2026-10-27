@@ -257,6 +257,7 @@ class DriveExecutor:
                 raise _Stop("declined", "model_refusal")
             if not reply.tool_calls:
                 if reply.stop_reason in _FINISHED:
+                    await self._last_look(run)
                     raise _Stop("done", summary=reply.text.strip())
                 raise _Stop("error", "model_incomplete")
             first, *extra = reply.tool_calls
@@ -306,7 +307,15 @@ class DriveExecutor:
         since = await self._act(run, proposal, frame, since)
         # A fresh look with every result: one round per action, not two.
         shot = await self._capture(run)
+        if shot.design_saved:
+            raise _Stop("saved", "design_saved")
         return action_result(use.id, shot.png), shot.frame, since
+
+    async def _last_look(self, run: _Run) -> None:
+        """Before reporting done: KiCad writes a moment after a Save click, so a
+        save by the last action may show only now (ADR-041 amendment M3)."""
+        if run.actions and (await self._capture(run)).design_saved:
+            raise _Stop("saved", "design_saved")
 
     def _progress(self, run: _Run, verb: str) -> None:
         if self._on_progress is not None:

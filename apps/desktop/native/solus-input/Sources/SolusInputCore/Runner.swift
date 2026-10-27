@@ -204,8 +204,10 @@ public struct Runner {
 
     /// The process works in `root` or below it; unreadable counts as outside.
     private func worksInside(pid: Int, _ root: String) -> Bool {
-        guard let dir = port.workingDirectory(pid: pid) else { return false }
-        return dir == root || dir.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+        // Bytes, not Swift string equality (which treats NFC and NFD as equal).
+        guard let dir = port.workingDirectory(pid: pid).map({ Array($0.utf8) }) else { return false }
+        let base = Array(root.utf8)
+        return dir == base || dir.starts(with: base + Array("/".utf8))
     }
 
     /// No path in the message: another project's location never leaves the machine.

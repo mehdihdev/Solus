@@ -88,6 +88,9 @@ class Identity:
 class Shot:
     png: bytes
     frame: Frame
+    #: A design file changed since the step's bind (ADR-041 M3): KiCad writes a
+    #: moment after a Save click, so the look after an act is where it shows.
+    design_saved: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,8 +150,9 @@ def parse_identity(value: Any) -> Identity:
     )
 
 
-def parse_capture(value: Any, *, max_edge: int) -> tuple[str, Frame]:
-    """The staged image's artifact id and the capture sizes."""
+def parse_capture(value: Any, *, max_edge: int) -> tuple[str, Frame, bool]:
+    """The staged image's artifact id, the capture sizes, and whether a design
+    was saved since the step's bind."""
     blocks = value.get("content") if isinstance(value, dict) else None
     if not isinstance(blocks, list):
         raise _malformed("capture")
@@ -166,7 +170,7 @@ def parse_capture(value: Any, *, max_edge: int) -> tuple[str, Frame]:
     if max(sizes["imageWidth"], sizes["imageHeight"]) > min(max_edge, MAX_IMAGE_EDGE):
         raise _malformed("capture")
     frame = Frame(*(sizes[k] for k in keys))
-    return image["artifact_id"], frame
+    return image["artifact_id"], frame, sizes.get("designSaved") is True
 
 
 def _refusal(exc: ToolException) -> DriveRefusal:
@@ -209,14 +213,14 @@ class BridgeDrivePort:
         value = await self._call(
             self._capture, {"bundle": bundle, "window": window, "max_edge": max_edge}
         )
-        artifact_id, frame = parse_capture(value, max_edge=max_edge)
+        artifact_id, frame, design_saved = parse_capture(value, max_edge=max_edge)
         try:
             png = await self._fetch(artifact_id)
         except ToolException as exc:
             raise _refusal(exc) from None
         if not png.startswith(PNG_MAGIC):
             raise _malformed("capture")
-        return Shot(png=png, frame=frame)
+        return Shot(png=png, frame=frame, design_saved=design_saved)
 
     async def act(
         self,

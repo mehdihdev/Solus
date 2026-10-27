@@ -93,7 +93,13 @@ def test_identity_tolerates_a_non_drivable_front_app() -> None:
 
 
 def test_capture_sizes_and_artifact() -> None:
-    assert parse_capture(capture_value(), max_edge=1280) == ("a1", Frame(1280, 800, 640, 400))
+    assert parse_capture(capture_value(), max_edge=1280) == (
+        "a1",
+        Frame(1280, 800, 640, 400),
+        False,
+    )
+    saved = capture_value({**SIZES, "designSaved": True})
+    assert parse_capture(saved, max_edge=1280)[2] is True
 
 
 @pytest.mark.parametrize(
@@ -226,3 +232,9 @@ async def test_the_binding_codes_are_known(code: str) -> None:
             "b", 1, ActRequest(verb="wait", ms=1), since=1, expect_width=1, expect_height=1
         )
     assert caught.value.code == code
+
+
+async def test_a_capture_carries_whether_the_design_was_saved() -> None:
+    capture = FakeTool(capture_value({**SIZES, "designSaved": True}))
+    shot = await port(capture=capture).capture("org.kicad.kicad", 7, max_edge=1280)
+    assert shot.design_saved is True

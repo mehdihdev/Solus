@@ -96,7 +96,7 @@ _BY_CODE: Final = {
     "no_credits": "stopped — you are out of credits",
     "tokens": "stopped — this step used its model budget; ask SOL to continue",
     "outside_workspace": (
-        "nothing done — the KiCad in front has a project outside this Solus project open"
+        "stopped — the KiCad in front has a project outside this Solus project open"
     ),
 }
 

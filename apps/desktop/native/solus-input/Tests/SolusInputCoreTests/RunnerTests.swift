@@ -481,4 +481,11 @@ final class WorkspaceBindingTests: XCTestCase {
         XCTAssertEqual(r["postedEvents"] as? Int, 1)
         XCTAssertEqual(port.posted.count, 1)
     }
+
+    func testPathsCompareByteForByte() {
+        let port = FakePort()
+        port.cwd[42] = "/work/Re\u{0301}sistance"  // NFD
+        XCTAssertEqual(invoke(port, ["identify"], within: "/work/R\u{00E9}sistance")["allowed"] as? Bool, false)
+        XCTAssertEqual(invoke(port, ["identify"], within: "/work/Re\u{0301}sistance")["allowed"] as? Bool, true)
+    }
 }

@@ -46,6 +46,8 @@ class FakePort:
     refuse_act: DriveRefusal | None = None
     #: The companion reports that the act saved a design file (ADR-041 M3).
     saves: bool = False
+    #: Captures from this index on report a save (KiCad wrote after the act).
+    saved_from_capture: int | None = None
     acts: list[dict[str, Any]] = field(default_factory=list)
     captures: int = 0
     finished: float = 200.0
@@ -55,7 +57,8 @@ class FakePort:
 
     async def capture(self, bundle: str, window: int, *, max_edge: int) -> Shot:
         self.captures += 1
-        return Shot(png=PNG, frame=FRAME)
+        late = self.saved_from_capture is not None and self.captures >= self.saved_from_capture
+        return Shot(png=PNG, frame=FRAME, design_saved=late)
 
     async def act(self, bundle: str, window: int, request: ActRequest, **kw: Any) -> ActDone:
         self.acts.append({"bundle": bundle, "window": window, **request.args(), **kw})
@@ -162,7 +165,7 @@ async def test_binds_captures_and_runs_one_mapped_action_then_finishes() -> None
     assert result["toolset_name"] == "computer"
     # The act's result carries a fresh capture: one round per action.
     assert [b["type"] for b in result["content"]] == ["text", "image"]
-    assert port.captures == 2
+    assert port.captures == 3  # + the last look for a late save before "done"
     assert [p.verb for p in progress] == ["click"]
     assert outcome.code is None
 
@@ -424,3 +427,25 @@ async def test_the_project_left_mid_step_is_refused() -> None:
     port = FakePort(refuse_act=DriveRefusal("outside_workspace", "another project"))
     result = await executor(port, FakeModel([click((10, 40))]))[0].run("Place R1", KICAD)
     assert (result.outcome, result.code) == ("refused", "outside_workspace")
+
+
+async def test_a_save_that_lands_after_the_act_is_caught_by_the_next_capture() -> None:
+    port = FakePort(saved_from_capture=2)  # 1: the first look; 2: after the act
+    model = FakeModel([click((10, 40)), click((20, 40), "t2")])
+    result = await executor(port, model)[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code, result.actions) == ("saved", "design_saved", 1)
+    assert len(model.calls) == 1
+
+
+async def test_a_save_noticed_only_at_the_end_is_not_reported_as_done() -> None:
+    port = FakePort(saved_from_capture=3)  # after the act's look, before "done"
+    model = FakeModel([click((10, 40))])
+    result = await executor(port, model)[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code) == ("saved", "design_saved")
+    assert port.captures == 3
+
+
+async def test_a_step_with_no_actions_finishes_without_a_last_look() -> None:
+    port, model = FakePort(), FakeModel([])
+    result = await executor(port, model)[0].run("Place R1", KICAD)
+    assert result.outcome == "done" and port.captures == 1

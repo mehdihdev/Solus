@@ -32,6 +32,7 @@ OFF = "SOL can't use your mouse and keyboard (off)"
 NO_HELPER = "the input helper is missing"
 NOT_MACOS = "driving apps needs macOS"
 NO_WORKSPACE = "no project workspace is linked"
+_SAVED = "a design file in this project changed; SOL stopped"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SUMMARY_CAP = 2000
 _COORD = 100_000
@@ -215,26 +216,35 @@ class DriveServer:
             stop = await self._saved_since_bind(workspace)
             if stop is not None:
                 return _error(stop)
+        if tool == "identify":
+            self._designs_at_bind = None  # each step binds afresh: no stale baseline
         reply = await self._helper(helper, workspace, tool, args)
+        # A save is reported however the act ended (it may have saved, then been
+        # refused), and by every capture: KiCad writes a moment after the click.
+        saved = tool != "identify" and await self._saved(workspace)
         if not reply["ok"]:
+            if tool == "act" and saved:
+                return _error(f"design_saved: {_SAVED}")
             return _error(f"{reply.get('code', 'refused')}: {reply.get('message', '')}")
-        if tool == "capture":
-            return _capture_result(reply)
         if tool == "identify":
             self._designs_at_bind = await asyncio.to_thread(saved_design_fingerprint, workspace)
-        if tool == "act":
-            now = await asyncio.to_thread(saved_design_fingerprint, workspace)
-            reply = {**reply, "designSaved": not now or now != self._designs_at_bind}
-        return _ok(reply)
+            return _ok(reply)
+        if tool == "capture":
+            return _capture_result(reply, design_saved=saved)
+        return _ok({**reply, "designSaved": saved})
+
+    async def _saved(self, workspace: Path) -> bool:
+        """A design file changed since the step's bind (or it cannot be seen)."""
+        if self._designs_at_bind is None:
+            return False
+        now = await asyncio.to_thread(saved_design_fingerprint, workspace)
+        return not now or now != self._designs_at_bind
 
     async def _saved_since_bind(self, workspace: Path) -> str | None:
         """Why an act must not run: not bound yet, or a design was saved since."""
         if self._designs_at_bind is None:
             return "not_bound: identify the window first"
-        now = await asyncio.to_thread(saved_design_fingerprint, workspace)
-        if not now or now != self._designs_at_bind:
-            return "design_saved: a design file in this project changed; SOL stopped"
-        return None
+        return f"design_saved: {_SAVED}" if await self._saved(workspace) else None
 
     async def _helper(
         self, helper: DriveHelper, workspace: Path, tool: str, args: _Args
@@ -260,7 +270,7 @@ class DriveServer:
         )
 
 
-def _capture_result(reply: dict[str, Any]) -> CallToolResult:
+def _capture_result(reply: dict[str, Any], *, design_saved: bool) -> CallToolResult:
     """The image as MCP content (dispatch stages it as an artifact); the sizes as
     text. No structuredContent: dispatch would forward that and drop the image."""
     png = reply.get("png")
@@ -278,7 +288,7 @@ def _capture_result(reply: dict[str, Any]) -> CallToolResult:
     return CallToolResult(
         content=[
             ImageContent(type="image", data=png, mimeType="image/png"),
-            TextContent(type="text", text=json.dumps(sizes)),
+            TextContent(type="text", text=json.dumps({**sizes, "designSaved": design_saved})),
         ],
         isError=False,
     )

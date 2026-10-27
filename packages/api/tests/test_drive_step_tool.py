@@ -146,7 +146,7 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("budget", "tokens", "model budget"),
         ("error", "helper_timeout", "helper_timeout"),
         ("saved", "design_saved", "saved the design"),
-        ("refused", "outside_workspace", "outside this Solus project"),
+        ("refused", "outside_workspace", "stopped — the KiCad in front has a project outside"),
         ("refused", "not_bound", "not_bound"),
     ],
 )

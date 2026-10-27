@@ -217,6 +217,9 @@ def fingerprint(root: Path | None) -> str:
 #: copies. They happen with nobody touching anything, so they are not a save.
 HISTORY_DIR_NAME = ".history"
 AUTOSAVE_PREFIX = "_autosave-"
+#: Narrower than SKIP_DIRS: a KiCad project saved under `build/` must still be
+#: seen. Only bulk folders no schematic is saved into, plus Solus's own exports.
+_SAVED_DESIGN_SKIP_DIRS = frozenset({".git", "node_modules", HISTORY_DIR_NAME, ARTIFACT_DIR_NAME})
 
 
 def _saved_designs(root: Path) -> list[Path] | None:
@@ -232,7 +235,7 @@ def _saved_designs(root: Path) -> list[Path] | None:
                 if remaining < 0:
                     return None
                 if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in SKIP_DIRS and entry.name != HISTORY_DIR_NAME:
+                    if entry.name not in _SAVED_DESIGN_SKIP_DIRS:
                         pending.append(Path(entry.path))
                 elif Path(
                     entry.name

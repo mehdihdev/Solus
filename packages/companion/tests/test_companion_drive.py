@@ -311,6 +311,7 @@ async def test_capture_returns_the_image_as_content_and_metadata_without_the_pix
         "imageHeight": 1176,
         "pointsWidth": 800,
         "pointsHeight": 600,
+        "designSaved": False,
     }
     assert calls(tmp_path) == [
         [
@@ -822,3 +823,39 @@ def test_saved_design_fingerprint_counts_symlinked_and_dot_folder_designs(tmp_pa
     before = saved_design_fingerprint(ws)
     (ws / ".hidden" / "power.kicad_sch").write_text("(kicad_sch)")
     assert saved_design_fingerprint(ws) != before  # only `.history` is KiCad's own
+
+
+async def test_a_failed_act_that_saved_first_reports_the_save(tmp_path: Path) -> None:
+    helper = make_helper(
+        tmp_path,
+        "pathlib.Path(argv[2], 'board.kicad_sch').write_text('saved, then the user moved')\n"
+        "print(json.dumps({'ok': False, 'code': 'user_active', 'message': 'you moved'}))\n",
+    )
+    _schematic(workspace_of(helper))
+    result = await server_with(helper).call_tool("act", ACT)
+    assert result.isError and text_of(result).startswith("design_saved: ")
+
+
+async def test_the_capture_after_an_act_reports_a_save_that_landed_late(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, capture_reply(base64.b64encode(PNG).decode()))
+    schematic = _schematic(workspace_of(helper))
+    server = server_with(helper)
+    capture = {"bundle": "org.kicad.kicad", "window": 7}
+    assert json.loads(text_of(await server.call_tool("capture", capture)))["designSaved"] is False
+    schematic.write_text("(kicad_sch written a moment after the act)")
+    assert json.loads(text_of(await server.call_tool("capture", capture)))["designSaved"] is True
+
+
+async def test_every_identify_starts_from_no_baseline(tmp_path: Path) -> None:
+    helper = echo_helper(tmp_path, {"ok": False, "code": "usage", "message": "x"})
+    server = server_with(helper)  # bound by an earlier step
+    await server.call_tool("identify", {})
+    result = await server.call_tool("act", ACT)
+    assert text_of(result).startswith("not_bound: ")
+
+
+def test_saved_design_fingerprint_sees_a_project_under_build(tmp_path: Path) -> None:
+    (tmp_path / "build").mkdir()
+    before = saved_design_fingerprint(tmp_path)
+    (tmp_path / "build" / "board.kicad_sch").write_text("(kicad_sch)")
+    assert saved_design_fingerprint(tmp_path) != before
