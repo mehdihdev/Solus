@@ -797,3 +797,28 @@ def test_saved_design_fingerprint_sees_saves_in_subfolders_only_of_design_files(
     (tmp_path / "main.py").write_text("print()")  # source is not a design save
     assert saved_design_fingerprint(tmp_path) == after
     assert saved_design_fingerprint(None) == ""
+
+
+def test_saved_design_fingerprint_fails_closed_past_its_entry_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from solus_companion import watch
+
+    monkeypatch.setattr(watch, "MAX_ENTRIES", 3)
+    for n in range(4):
+        (tmp_path / f"f{n}.txt").write_text("x")
+    assert saved_design_fingerprint(tmp_path) == ""
+
+
+def test_saved_design_fingerprint_counts_symlinked_and_dot_folder_designs(tmp_path: Path) -> None:
+    outside = tmp_path / "elsewhere.kicad_sch"
+    outside.write_text("(kicad_sch)")
+    ws = tmp_path / "ws"
+    (ws / ".hidden").mkdir(parents=True)
+    (ws / "board.kicad_sch").symlink_to(outside)
+    before = saved_design_fingerprint(ws)
+    outside.write_text("(kicad_sch saved through the link)")
+    assert saved_design_fingerprint(ws) != before
+    before = saved_design_fingerprint(ws)
+    (ws / ".hidden" / "power.kicad_sch").write_text("(kicad_sch)")
+    assert saved_design_fingerprint(ws) != before  # only `.history` is KiCad's own

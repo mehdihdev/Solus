@@ -215,35 +215,56 @@ def fingerprint(root: Path | None) -> str:
 
 #: KiCad's own timed writes: local-history snapshots (`.history/`) and autosave
 #: copies. They happen with nobody touching anything, so they are not a save.
+HISTORY_DIR_NAME = ".history"
 AUTOSAVE_PREFIX = "_autosave-"
 
 
-def _saved_design(path: Path, root: Path) -> bool:
-    rel = path.relative_to(root)
-    return (
-        path.suffix.lower() in DESIGN_SUFFIXES
-        and not path.name.startswith(AUTOSAVE_PREFIX)
-        and not any(part.startswith(".") for part in rel.parts[:-1])
-    )
+def _saved_designs(root: Path) -> list[Path] | None:
+    """Every design file a save could have written, symlinks included; None when
+    the workspace is too big to see whole (the caller fails closed)."""
+    found: list[Path] = []
+    pending = [root]
+    remaining = MAX_ENTRIES
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                remaining -= 1
+                if remaining < 0:
+                    return None
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in SKIP_DIRS and entry.name != HISTORY_DIR_NAME:
+                        pending.append(Path(entry.path))
+                elif Path(
+                    entry.name
+                ).suffix.lower() in DESIGN_SUFFIXES and not entry.name.startswith(AUTOSAVE_PREFIX):
+                    found.append(Path(entry.path))
+    return found
 
 
 def saved_design_fingerprint(root: Path | None) -> str:
-    """Like `fingerprint`, over SAVED design files only (ADR-041 drive M3): a
-    drive step ends when this changes. Source files, Git metadata and KiCad's
-    timed writes are left out so only a real save moves it. "" = cannot observe.
+    """One digest over every saved design file (ADR-041 drive M3): a drive step
+    ends when it changes. Source files, Git metadata and KiCad's timed writes are
+    left out so only a real save moves it; a symlinked design counts by its
+    target. "" = cannot observe (also when the workspace is too big to see whole)
+    — a drive step treats that as a save and stops.
     """
     if root is None or not root.is_dir():
         return ""
     digest = hashlib.blake2b(digest_size=16)
     try:
         root = root.resolve()
-        for path in sorted(p for p in _bounded_files(root) if _saved_design(p, root)):
+        designs = _saved_designs(root)
+        if designs is None:
+            logger.warning("workspace %s is too big for the saved-design check", root)
+            return ""
+        for path in sorted(designs):
             try:
-                stat = path.stat()
+                stat = path.stat()  # follows a symlink: a save through it moves the target
             except OSError:
-                continue
+                stat = None
             rel = path.relative_to(root).as_posix()
-            digest.update(f"{rel}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+            mark = f"{stat.st_size}:{stat.st_mtime_ns}" if stat else "unreadable"
+            digest.update(f"{rel}:{mark}\n".encode())
     except (OSError, ValueError, RuntimeError):
         logger.warning("could not read workspace %s for the saved-design check", root)
         return ""
