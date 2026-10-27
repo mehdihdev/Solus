@@ -391,7 +391,10 @@ async def test_one_deadline_covers_reading_and_exiting(tmp_path: Path) -> None:
     import time as clock
 
     # Closes stdout at once, then lingers: the whole run still ends at the timeout.
-    body = "import os\nprint(json.dumps({'ok': True}))\nsys.stdout.flush(); os.close(1)\ntime.sleep(30)\n"
+    body = (
+        "import os\nprint(json.dumps({'ok': True}))\n"
+        "sys.stdout.flush(); os.close(1)\ntime.sleep(30)\n"
+    )
     server = server_with(make_helper(tmp_path, body), timeouts={"identify": 0.6})
     started = clock.monotonic()
     result = await server.call_tool("identify", {})
@@ -476,7 +479,8 @@ async def test_termination_is_sigterm_first_so_the_helper_can_release_a_held_but
     pidfile = tmp_path / "pid"
     body = (
         "import signal, os\n"
-        f"signal.signal(signal.SIGTERM, lambda *_: (open({str(marker)!r}, 'w').write('1'), sys.exit(0)))\n"
+        f"mark = lambda *_: (open({str(marker)!r}, 'w').write('1'), sys.exit(0))\n"
+        "signal.signal(signal.SIGTERM, mark)\n"
         f"open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
         "time.sleep(30)\n"
     )
