@@ -87,6 +87,7 @@ _UNFINISHED: Final = {
     "refused": "stopped — the input helper refused ({code})",
     "not_in_front": "nothing done — {app} was not in front; bring it forward and ask again",
     "declined": "stopped — SOL declined this step",
+    "saved": "stopped — SOL saved the design to disk",
     "error": "stopped — something failed ({code})",
 }
 #: Codes with a sentence of their own (the person can act on these).
@@ -94,6 +95,9 @@ _BY_CODE: Final = {
     "rate_limited": "stopped — too many SOL requests right now; wait a minute and ask again",
     "no_credits": "stopped — you are out of credits",
     "tokens": "stopped — this step used its model budget; ask SOL to continue",
+    "outside_workspace": (
+        "nothing done — the KiCad in front has a project outside this Solus project open"
+    ),
 }
 
 

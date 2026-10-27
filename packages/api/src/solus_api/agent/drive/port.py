@@ -45,6 +45,9 @@ KNOWN_CODES: Final = frozenset(
         "focus_lost",
         "stopped",
         "capture_failed",
+        "outside_workspace",
+        "design_saved",
+        "not_bound",
         "helper_missing",
         "helper_spawn",
         "helper_timeout",
@@ -76,6 +79,9 @@ class Identity:
     now: float
     accessibility: bool
     screen_recording: bool
+    #: The drivable app in front is working on a project outside the linked
+    #: workspace (ADR-041 amendment, M2); the helper hid its identity.
+    outside_workspace: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,8 @@ class Shot:
 @dataclass(frozen=True)
 class ActDone:
     finished_at: float
+    #: The companion saw a design file in the workspace change (ADR-041 M3).
+    design_saved: bool = False
 
 
 class DrivePort(Protocol):
@@ -135,6 +143,7 @@ def parse_identity(value: Any) -> Identity:
         now=float(value["now"]),
         accessibility=trust.get("accessibility") is True,
         screen_recording=trust.get("screenRecording") is True,
+        outside_workspace=value.get("outsideWorkspace") is True,
     )
 
 
@@ -230,4 +239,6 @@ class BridgeDrivePort:
         value = await self._call(self._act, args)
         if not isinstance(value, dict) or not _number(value.get("finishedAt")):
             raise _malformed("act")
-        return ActDone(finished_at=float(value["finishedAt"]))
+        return ActDone(
+            finished_at=float(value["finishedAt"]), design_saved=value.get("designSaved") is True
+        )

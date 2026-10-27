@@ -44,6 +44,8 @@ ELSEWHERE = Identity(
 class FakePort:
     identities: list[Identity] = field(default_factory=lambda: [kicad()])
     refuse_act: DriveRefusal | None = None
+    #: The companion reports that the act saved a design file (ADR-041 M3).
+    saves: bool = False
     acts: list[dict[str, Any]] = field(default_factory=list)
     captures: int = 0
     finished: float = 200.0
@@ -60,7 +62,7 @@ class FakePort:
         if self.refuse_act is not None:
             raise self.refuse_act
         self.finished += 1
-        return ActDone(finished_at=self.finished)
+        return ActDone(finished_at=self.finished, design_saved=self.saves)
 
 
 @dataclass
@@ -380,3 +382,45 @@ async def test_unsupported_proposals_show_in_progress_too() -> None:
     ex, progress = executor(FakePort(), FakeModel([zoom, click((1, 1))]))
     await ex.run("x", KICAD)
     assert [(p.action, p.verb) for p in progress] == [(1, "unsupported"), (2, "click")]
+
+
+# --- ADR-041 amendment (M2/M3): project binding and saves ------------------------------
+
+
+async def test_a_kicad_working_on_another_project_is_refused_before_any_capture() -> None:
+    other = Identity(
+        allowed=False,
+        bundle_id=None,
+        app_name=None,
+        window_id=None,
+        now=1.0,
+        accessibility=True,
+        screen_recording=True,
+        outside_workspace=True,
+    )
+    port, model = FakePort(identities=[other]), FakeModel([click((10, 40))])
+    result = await executor(port, model)[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code, result.actions) == ("refused", "outside_workspace", 0)
+    assert port.captures == 0 and model.calls == []
+
+
+async def test_an_action_that_saved_ends_the_step_as_saved_and_counts() -> None:
+    port = FakePort(saves=True)
+    model = FakeModel([click((10, 40)), click((20, 40), "t2")])
+    result = await executor(port, model)[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code, result.actions) == ("saved", "design_saved", 1)
+    assert result.failed_action is None  # the action ran; nothing was refused
+    assert len(port.acts) == 1 and len(model.calls) == 1
+    assert port.captures == 1  # no look after the save
+
+
+async def test_a_save_seen_before_the_next_action_also_ends_as_saved() -> None:
+    port = FakePort(refuse_act=DriveRefusal("design_saved", "a design file changed"))
+    result = await executor(port, FakeModel([click((10, 40))]))[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code) == ("saved", "design_saved")
+
+
+async def test_the_project_left_mid_step_is_refused() -> None:
+    port = FakePort(refuse_act=DriveRefusal("outside_workspace", "another project"))
+    result = await executor(port, FakeModel([click((10, 40))]))[0].run("Place R1", KICAD)
+    assert (result.outcome, result.code) == ("refused", "outside_workspace")

@@ -198,3 +198,31 @@ async def test_a_silent_companion_times_out(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(DriveRefusal) as caught:
         await port(identify=Silent()).identify()
     assert caught.value.code == "helper_timeout"
+
+
+def test_identity_says_when_kicad_is_on_another_project() -> None:
+    assert parse_identity(IDENTIFY).outside_workspace is False
+    other = {"now": 1, "allowed": False, "app": None, "window": None, "outsideWorkspace": True}
+    assert parse_identity(other).outside_workspace is True
+    assert parse_identity({**other, "outsideWorkspace": "yes"}).outside_workspace is False
+
+
+@pytest.mark.parametrize(("reply", "saved"), [(True, True), (False, False), (None, False)])
+async def test_act_reports_whether_the_design_was_saved(reply: Any, saved: bool) -> None:
+    value: dict[str, Any] = {"finishedAt": 13.0}
+    if reply is not None:
+        value["designSaved"] = reply
+    done = await port(act=FakeTool(value)).act(
+        "b", 1, ActRequest(verb="wait", ms=1), since=1, expect_width=1, expect_height=1
+    )
+    assert done.design_saved is saved
+
+
+@pytest.mark.parametrize("code", ["outside_workspace", "design_saved", "not_bound"])
+async def test_the_binding_codes_are_known(code: str) -> None:
+    act = FakeTool(error=ToolException(f"{code}: nope"))
+    with pytest.raises(DriveRefusal) as caught:
+        await port(act=act).act(
+            "b", 1, ActRequest(verb="wait", ms=1), since=1, expect_width=1, expect_height=1
+        )
+    assert caught.value.code == code

@@ -145,6 +145,9 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("error", "rate_limited", "wait a minute"),
         ("budget", "tokens", "model budget"),
         ("error", "helper_timeout", "helper_timeout"),
+        ("saved", "design_saved", "saved the design"),
+        ("refused", "outside_workspace", "outside this Solus project"),
+        ("refused", "not_bound", "not_bound"),
     ],
 )
 async def test_an_unfinished_step_fails_so_the_plan_stops(kind: str, code: str, words: str) -> None:

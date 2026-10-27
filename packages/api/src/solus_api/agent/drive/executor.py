@@ -42,7 +42,9 @@ from solus_api.orchestration.providers import ToolUse
 
 logger = logging.getLogger("solus.drive")
 
-Outcome = Literal["done", "paused", "budget", "declined", "refused", "not_in_front", "error"]
+Outcome = Literal[
+    "done", "paused", "budget", "declined", "refused", "not_in_front", "saved", "error"
+]
 
 #: Helper and bridge failures that are not policy refusals.
 _ERROR_CODES: Final = frozenset(
@@ -210,6 +212,8 @@ class DriveExecutor:
             identity: Identity = await self._port_call(lambda: self._port.identify(), run)
             if not (identity.accessibility and identity.screen_recording):
                 raise _Stop("refused", "not_trusted")
+            if identity.outside_workspace:
+                raise _Stop("refused", "outside_workspace")
             if (
                 identity.allowed
                 and identity.bundle_id in drivable
@@ -334,12 +338,18 @@ class DriveExecutor:
         except DriveRefusal as refusal:
             outcome, code = _classify(refusal)
             raise _Stop(outcome, code, failed_action=run.actions) from None
+        if done.design_saved:
+            # ADR-041 amendment (M3): a save is the one in-window effect a click
+            # can reach; it ran, and it ends the step.
+            raise _Stop("saved", "design_saved")
         return done.finished_at
 
 
 def _classify(refusal: DriveRefusal) -> tuple[Outcome, str]:
     if refusal.code == "user_active":
         return "paused", refusal.code
+    if refusal.code == "design_saved":
+        return "saved", refusal.code
     if refusal.code in _ERROR_CODES:
         return "error", refusal.code
     return "refused", refusal.code
