@@ -3,7 +3,14 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { IpcRenderer } from 'electron'
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
-import { createSolBridge, isSolState, type SolBridge, type SolBridgeIpc } from './solBridge'
+import {
+  createSolBridge,
+  isDriveStatus,
+  isSolState,
+  type SolBridge,
+  type SolBridgeIpc
+} from './solBridge'
+import type { DriveStatus } from '../main/drive/driveStatus'
 import type { SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 
 const STATE: SolState = {
@@ -152,4 +159,93 @@ it('validates native target geometry and uses an argument-free trusted discovery
     invoke.mockResolvedValue(raw)
     expect(await bridge.getGuideTarget?.()).toBeNull()
   }
+})
+
+// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): the drive members, validated
+// like the rest — a malformed DriveStatus never reaches the renderer.
+describe('drive', () => {
+  const DRIVE: DriveStatus = {
+    enabled: true,
+    available: false,
+    reason: 'nested_folder',
+    trust: null,
+    unsignedDev: false
+  }
+
+  function driveIpc(answer: unknown): {
+    ipc: SolBridgeIpc
+    invoked: Array<{ channel: string; args: unknown[] }>
+    emit: (raw: unknown) => void
+    count: () => number
+  } {
+    const f = fakeIpc()
+    const invoked: Array<{ channel: string; args: unknown[] }> = []
+    return {
+      ipc: {
+        ...f.ipc,
+        invoke: async (channel, ...args) => {
+          invoked.push({ channel, args })
+          return answer
+        }
+      },
+      invoked,
+      emit: (raw) => f.emit(SOL_WINDOW_CHANNELS.driveStatus, raw),
+      count: () => f.count(SOL_WINDOW_CHANNELS.driveStatus)
+    }
+  }
+
+  it('maps the invokes onto their channels and passes a valid status through', async () => {
+    const f = driveIpc(DRIVE)
+    const b = createSolBridge(f.ipc)
+    await expect(b.getDriveStatus()).resolves.toEqual(DRIVE)
+    await expect(b.setDrive(true)).resolves.toEqual(DRIVE)
+    await expect(b.requestDrivePermissions()).resolves.toEqual(DRIVE)
+    await expect(b.setDriving(false)).resolves.toBeUndefined()
+    const c = SOL_WINDOW_CHANNELS
+    expect(f.invoked).toEqual([
+      { channel: c.getDriveStatus, args: [] },
+      { channel: c.setDrive, args: [true] },
+      { channel: c.requestDrivePermissions, args: [] },
+      { channel: c.setDriving, args: [false] }
+    ])
+  })
+
+  it.each([
+    ['null', null],
+    ['a bad reason', { ...DRIVE, reason: 'because' }],
+    ['available with a reason', { ...DRIVE, available: true }],
+    ['unavailable without a reason', { ...DRIVE, reason: null }],
+    ['a bad trust', { ...DRIVE, trust: { accessibility: 'yes', screenRecording: true } }],
+    ['a missing flag', { ...DRIVE, unsignedDev: undefined }]
+  ])('answers null for %s', async (_label, raw) => {
+    await expect(createSolBridge(driveIpc(raw).ipc).getDriveStatus()).resolves.toBeNull()
+  })
+
+  it('accepts an available status with trust', () => {
+    expect(
+      isDriveStatus({
+        ...DRIVE,
+        available: true,
+        reason: null,
+        trust: { accessibility: true, screenRecording: false }
+      })
+    ).toBe(true)
+  })
+
+  it('onDriveStatus delivers valid pushes, drops malformed ones, and unsubscribes', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const f = driveIpc(null)
+      const seen: DriveStatus[] = []
+      const off = createSolBridge(f.ipc).onDriveStatus((s) => seen.push(s))
+      f.emit(DRIVE)
+      f.emit({ ...DRIVE, enabled: 'yes' })
+      expect(seen).toEqual([DRIVE])
+      expect(spy).toHaveBeenCalledTimes(1)
+      off()
+      expect(f.count()).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })

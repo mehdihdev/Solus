@@ -19,6 +19,15 @@ export const SOL_WINDOW_CHANNELS = {
   setBusy: 'sol:set-busy',
   /** SOLUSDEV-319: Esc hides the pill; the window and its thread live on. */
   hide: 'sol:hide',
+  /** SOLUSDEV-319 drive slice 3 (sol-drive.md §5): Settings › SOL "SOL can use
+   *  your mouse and keyboard" — status, the setting, `trust --prompt`. */
+  getDriveStatus: 'sol:get-drive-status',
+  setDrive: 'sol:set-drive',
+  requestDrivePermissions: 'sol:request-drive-permissions',
+  /** The renderer says a drive.step is running (true) or ended (false). */
+  setDriving: 'sol:set-driving',
+  /** main → the app's renderers: the DriveStatus on every change. */
+  driveStatus: 'sol:drive-status',
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */

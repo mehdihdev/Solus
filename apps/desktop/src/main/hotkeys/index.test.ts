@@ -108,7 +108,75 @@ describe('startHotkeys (docs/architecture/sol-window.md §2-§5, wireflow §A-§
   registerNativeGestureTests()
   registerFallbackCircleTests()
   registerHotkeyStatusAndTeardownTests()
+  registerDriveQuietTests()
 })
+
+// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): while SOL drives (and briefly
+// after) the double-tap and circle detectors ignore input; the chords stay.
+function registerDriveQuietTests(): void {
+  const quietHarness = (hook: boolean): { h: Harness; quiet: { on: boolean } } => {
+    const h = harness({ hook })
+    const quiet = { on: true }
+    h.deps = { ...h.deps, isQuiet: () => quiet.on }
+    return { h, quiet }
+  }
+  const doubleTap = (h: Harness): void => {
+    h.hook!.down()
+    h.advance(60)
+    h.hook!.up()
+    h.advance(100)
+    h.hook!.down()
+    h.advance(60)
+    h.hook!.up()
+  }
+
+  it('quiet: a double-tap does not summon, and summons again once quiet ends', () => {
+    const { h, quiet } = quietHarness(true)
+    startHotkeys(h.deps)
+    doubleTap(h)
+    expect(h.onSummon).not.toHaveBeenCalled()
+    quiet.on = false
+    h.advance(1_000)
+    doubleTap(h)
+    expect(h.onSummon).toHaveBeenCalledTimes(1)
+  })
+
+  it('quiet: a Ctrl-hold circle is not detected', () => {
+    const { h } = quietHarness(true)
+    startHotkeys(h.deps)
+    h.hook!.down()
+    drawCircle(h, 500, 400, 100)
+    h.hook!.up()
+    expect(h.onRegion).not.toHaveBeenCalled()
+  })
+
+  it('quiet beginning mid-gesture drops the stroke', () => {
+    const { h, quiet } = quietHarness(true)
+    quiet.on = false
+    startHotkeys(h.deps)
+    h.hook!.down()
+    drawCircle(h, 500, 400, 100)
+    quiet.on = true
+    h.advance(16)
+    quiet.on = false
+    h.hook!.up()
+    expect(h.onRegion).not.toHaveBeenCalled()
+  })
+
+  it('quiet: circle-mode samples are ignored but the chords still work', () => {
+    const { h } = quietHarness(false)
+    const handle = startHotkeys(h.deps)
+    h.fire(ACCELERATORS.circleMode)
+    drawCircle(h, 500, 400, 100)
+    h.advance(320)
+    expect(h.onRegion).not.toHaveBeenCalled()
+    expect(handle.status().circleModeActive).toBe(false) // ended, not polling through the step
+    h.fire(ACCELERATORS.summonFallback)
+    expect(h.onSummon).toHaveBeenCalledTimes(1)
+    h.fire(ACCELERATORS.toggleMode)
+    expect(h.onToggleMode).toHaveBeenCalledTimes(1)
+  })
+}
 
 function registerNativeGestureTests(): void {
   it('hook mode: a double-tap summons', () => {

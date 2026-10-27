@@ -403,6 +403,16 @@ function registerWindowStateBroadcastsTests(): void {
     expect(h.others[0].sent).toHaveLength(1)
   })
 
+  it('broadcast sends any app push (the DriveStatus) to the same targets as the state', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.broadcast(SOL_WINDOW_CHANNELS.driveStatus, { enabled: false })
+    const sent = { channel: SOL_WINDOW_CHANNELS.driveStatus, payload: { enabled: false } }
+    expect(h.others[0].sent).toEqual([sent])
+    expect(h.windows[0].sent).toEqual([sent])
+  })
+
   it('pushState reaches the SOL window even when allWindows() is empty', () => {
     const h = harness()
     const m = createSolWindowManager({ ...h.deps, allWindows: () => [] })

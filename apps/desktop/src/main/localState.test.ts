@@ -10,6 +10,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import {
   folderLinkInput,
   linkProjectFolder,
+  linkedWorkspaces,
   projectWorkspace,
   readRegistry,
   realLocalStateDeps,
@@ -189,6 +190,27 @@ describe('projectWorkspace', () => {
     // Plant the hostile value directly on disk, bypassing the write guard.
     deps.files.set(FILE, JSON.stringify({ schema_version: 1, projects: { p1: { path } } }))
     expect(projectWorkspace('p1', deps)).toBeNull()
+  })
+})
+
+describe('linkedWorkspaces (SOLUSDEV-319 nested-folder rule)', () => {
+  test('every project with a valid linked folder, re-validated at the read', () => {
+    const deps = fakeDeps()
+    linkProjectFolder('p1', { path: '/ws/rover' }, deps)
+    linkProjectFolder('p2', { path: '/ws/rover/arm' }, deps)
+    expect(linkedWorkspaces(deps)).toEqual({ p1: '/ws/rover', p2: '/ws/rover/arm' })
+  })
+
+  test('drops a stored value that fails validation, and an unsafe project id', () => {
+    const deps = fakeDeps()
+    deps.files.set(
+      FILE,
+      JSON.stringify({
+        schema_version: 1,
+        projects: { ok: { path: '/ws/a' }, root: { path: '/' }, home: { path: '/home/tester' } }
+      })
+    )
+    expect(linkedWorkspaces(deps)).toEqual({ ok: '/ws/a' })
   })
 })
 

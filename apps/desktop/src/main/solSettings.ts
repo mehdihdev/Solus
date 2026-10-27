@@ -22,12 +22,16 @@ export interface SolSettingsState {
    *  Off stops both; the global chords stay. The consent surface for a global
    *  keyboard hook (security review L2). */
   hotkeys: boolean
+  /** "SOL can use your mouse and keyboard" (sol-drive.md §5). Default off; the
+   *  setting is the consent for the companion's drive server. */
+  drive: boolean
 }
 
 export const DEFAULT_SOL_SETTINGS: SolSettingsState = {
   actionMode: 'guide',
   screenIntelligence: false,
-  hotkeys: true
+  hotkeys: true,
+  drive: false
 }
 
 export type SolSettingsDeps = Pick<
@@ -49,6 +53,7 @@ export interface SolSettings {
   toggleMode(): SolActionMode
   setScreenIntelligence(on: boolean): void
   setHotkeys(on: boolean): void
+  setDrive(on: boolean): void
   /** Hear every change (the new state); returns unsubscribe. */
   onChange(cb: (state: SolSettingsState) => void): () => void
 }
@@ -64,7 +69,8 @@ export function parseSolSettings(v: unknown): SolSettingsState {
   return {
     actionMode: r.actionMode === 'do' ? 'do' : 'guide',
     screenIntelligence: r.screenIntelligence === true,
-    hotkeys: r.hotkeys !== false
+    hotkeys: r.hotkeys !== false,
+    drive: r.drive === true
   }
 }
 
@@ -141,6 +147,7 @@ export function createSolSettings(deps: SolSettingsDeps): SolSettings {
     },
     setScreenIntelligence: (screenIntelligence) => update({ screenIntelligence }),
     setHotkeys: (hotkeys) => update({ hotkeys }),
+    setDrive: (drive) => update({ drive }),
     onChange: (cb) => {
       listeners.add(cb)
       return () => void listeners.delete(cb)

@@ -7,6 +7,7 @@ import type { ToolWindowRef } from '@solus/shared-types'
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 import type { SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 import type { SolActionMode } from '../main/solSettings'
+import { DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
 
 /** Structural slice of ipcRenderer — just what the bridge needs. */
 export interface SolBridgeIpc {
@@ -32,6 +33,14 @@ export interface SolBridge {
   setBusy(busy: boolean): Promise<SolState | null>
   /** SOLUSDEV-319: hide the pill (Esc); its window and thread live on. */
   hide(): Promise<SolState | null>
+  /** SOLUSDEV-319 drive slice 3 (sol-drive.md §5). */
+  getDriveStatus(): Promise<DriveStatus | null>
+  setDrive(on: boolean): Promise<DriveStatus | null>
+  /** Runs the helper's `trust --prompt`; resolves with the refreshed status. */
+  requestDrivePermissions(): Promise<DriveStatus | null>
+  /** The renderer says a drive.step is running (true) or ended (false). */
+  setDriving(active: boolean): Promise<void>
+  onDriveStatus(handler: (status: DriveStatus) => void): () => void
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
 }
@@ -53,6 +62,24 @@ export function isSolState(raw: unknown): raw is SolState {
     hasFlags(raw) &&
     isCapability(raw.capture) &&
     (raw.hotkeys === null || isRecord(raw.hotkeys))
+  )
+}
+
+const isTrust = (v: unknown): boolean =>
+  v === null ||
+  (isRecord(v) && typeof v.accessibility === 'boolean' && typeof v.screenRecording === 'boolean')
+
+/** `reason` is null exactly when `available` (driveStatus.ts). */
+export function isDriveStatus(raw: unknown): raw is DriveStatus {
+  if (!isRecord(raw) || typeof raw.available !== 'boolean') return false
+  const reasonOk = raw.available
+    ? raw.reason === null
+    : (DRIVE_UNAVAILABLE as readonly unknown[]).includes(raw.reason)
+  return (
+    reasonOk &&
+    typeof raw.enabled === 'boolean' &&
+    typeof raw.unsignedDev === 'boolean' &&
+    isTrust(raw.trust)
   )
 }
 
@@ -86,6 +113,8 @@ function isGuideTarget(raw: unknown): raw is ToolWindowRef {
 export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
   const call = (channel: string, ...args: unknown[]): Promise<SolState | null> =>
     ipc.invoke(channel, ...args).then((raw) => (isSolState(raw) ? raw : null))
+  const callDrive = (channel: string, ...args: unknown[]): Promise<DriveStatus | null> =>
+    ipc.invoke(channel, ...args).then((raw) => (isDriveStatus(raw) ? raw : null))
   const subscribe = <M>(
     channel: string,
     accept: (raw: unknown) => raw is M,
@@ -112,6 +141,11 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     resize: (height) => call(c.resize, height),
     setBusy: (busy) => call(c.setBusy, busy),
     hide: () => call(c.hide),
+    getDriveStatus: () => callDrive(c.getDriveStatus),
+    setDrive: (on) => callDrive(c.setDrive, on),
+    requestDrivePermissions: () => callDrive(c.requestDrivePermissions),
+    setDriving: (active) => ipc.invoke(c.setDriving, active).then(() => undefined),
+    onDriveStatus: (handler) => subscribe(c.driveStatus, isDriveStatus, handler),
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
   }

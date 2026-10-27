@@ -12,7 +12,12 @@
 //   2. the host must appear in SOLUS_COMPANION_ALLOWED_HOSTS
 // Rule 2 exists because that host is where the user's bearer token gets sent.
 import { describe, expect, it } from 'vitest'
-import { companionEnv, companionWsUrl, findIntegrationsRoot } from './companionEnv'
+import {
+  companionEnv,
+  companionWsUrl,
+  findAncestorPath,
+  findIntegrationsRoot
+} from './companionEnv'
 
 describe('companionWsUrl', () => {
   const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
@@ -233,5 +238,72 @@ describe('companionEnv — integrations root', () => {
     const env = companionEnv({}, 'http://127.0.0.1:8000/api/v1')
 
     expect(env.SOLUS_COMPANION_INTEGRATIONS_ROOT).toBeUndefined()
+  })
+})
+
+// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): the setting is the consent, an
+// environment variable is not — so both drive variables are set ONLY from the
+// option and removed otherwise, inherited values included.
+describe('companionEnv — drive', () => {
+  const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
+  const API = 'https://api.solusforge.com/api/v1'
+  const HELPER =
+    '/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input-launch'
+  const INHERITED = { SOLUS_COMPANION_DRIVE: '1', SOLUS_DRIVE_HELPER: '/tmp/evil' }
+
+  it('sets the switch and the pinned helper path when drive is on', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: '/w', drive: { helper: HELPER } })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
+    expect(env.SOLUS_DRIVE_HELPER).toBe(HELPER)
+  })
+
+  it('the option replaces an inherited helper path rather than deferring to it', () => {
+    const env = companionEnv(INHERITED, API, {
+      projectId: P,
+      workspace: '/w',
+      drive: { helper: HELPER }
+    })
+
+    expect(env.SOLUS_DRIVE_HELPER).toBe(HELPER)
+  })
+
+  it.each([
+    ['omitted', {}],
+    ['null', { drive: null }]
+  ])('deletes both variables, inherited ones included, when drive is %s', (_label, extra) => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', ...extra })
+
+    expect('SOLUS_COMPANION_DRIVE' in env).toBe(false)
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
+  })
+
+  it('stays off when an inherited workspace override differs from the checked folder', () => {
+    // The nested-folder rule was evaluated for the registry folder; a drive
+    // server bound to some other folder would skip that check.
+    const env = companionEnv({ SOLUS_COMPANION_WORKSPACE: '/elsewhere' }, API, {
+      projectId: P,
+      workspace: '/w',
+      drive: { helper: HELPER }
+    })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
+    expect(env.SOLUS_DRIVE_HELPER).toBeUndefined()
+  })
+
+  it('stays off without a workspace even if asked', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: null, drive: { helper: HELPER } })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
+  })
+})
+
+describe('findAncestorPath', () => {
+  it('walks up to the first ancestor holding the relative path', () => {
+    const exists = (p: string): boolean => p === '/repo/apps/desktop/native/x'
+    expect(
+      findAncestorPath('/repo/apps/desktop/out', ['apps', 'desktop', 'native', 'x'], exists)
+    ).toBe('/repo/apps/desktop/native/x')
+    expect(findAncestorPath('/', ['nope'], () => false)).toBeNull()
   })
 })

@@ -13,7 +13,12 @@ asarUnpack:
   - resources/**
 # Local-bridge companion (SOLUSDEV-154 / BRG-04): PyInstaller binary + vendored
 # MCP servers, built per-platform by scripts/build-companion.sh into repo-root
-# dist/companion/. Ships at <resources>/companion/solus-companion(.exe).
+# dist/companion/. Ships at:
+#   macOS:         <resources>/companion/solus-companion/solus-companion — a
+#                  PyInstaller --onedir build (docs/architecture/sol-drive.md §5:
+#                  a onefile bootloader would put an extra process between the
+#                  drive helper and Solus.app), with mcp/ beside the binary.
+#   Windows/Linux: <resources>/companion/solus-companion(.exe) — onefile.
 extraResources:
   - from: ../../dist/companion
     to: companion
@@ -38,6 +43,15 @@ mac:
   # Signing + notarization are a release requirement scheduled with SOLUSDEV-148/149
   # (needs Apple Developer certs). Flip once certs are provisioned.
   notarize: false
+  # SOLUSDEV-319 drive slice 3 (docs/architecture/sol-drive.md §5, ADR-041 H1):
+  # the solus-input helper bundle, built by scripts/build-solus-input.sh, ships at
+  # <resources>/SolusInput.app. The OS grants (Accessibility, Screen Recording)
+  # belong to this nested bundle, never to Solus.app. Merged with the top-level
+  # extraResources. Signing and notarising the nested app (its own identifiers,
+  # hardened runtime) is human work with SOLUSDEV-148/149 — unsigned until then.
+  extraResources:
+    - from: ../../dist/solus-input/SolusInput.app
+      to: SolusInput.app
 dmg:
   artifactName: solus-${version}.${ext}
 linux:

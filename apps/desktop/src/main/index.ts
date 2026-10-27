@@ -62,6 +62,7 @@ import {
   type SolWindowManager
 } from './sol-window/solWindow'
 import { createSolSettings } from './solSettings'
+import { startDrive, type DriveHandle } from './drive/driveWiring'
 import { createScreenCapture, realScreenCaptureDeps, type Rect } from './capture/screenCapture'
 import { createTray, paintDot, type SolTray } from './tray'
 import {
@@ -144,6 +145,8 @@ let hardwareSources: HardwareSources | null = null
 let solWindows: SolWindowManager | null = null
 let solTray: SolTray | null = null
 let hotkeys: HotkeysHandle | null = null
+// SOLUSDEV-319 drive slice 3: setting, availability, outline, quiet period.
+let drive: DriveHandle | null = null
 
 /**
  * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
@@ -161,13 +164,19 @@ function registerFolderRegistryHandlers(): void {
     const input = folderLinkInput(link)
     if (input === null) return { ok: false }
     const ok = linkProjectFolder(projectId, input, realLocalStateDeps)
-    if (ok) notifyProjectFolderChanged(projectId)
+    if (ok) {
+      notifyProjectFolderChanged(projectId)
+      drive?.refresh() // any project's link can change drive availability
+    }
     return { ok }
   })
   ipcMain.handle('folder:unlink', (event, projectId: unknown) => {
     if (!isMainRendererSender(event) || typeof projectId !== 'string') return { ok: false }
     const ok = unlinkProjectFolder(projectId, realLocalStateDeps)
-    if (ok) notifyProjectFolderChanged(projectId)
+    if (ok) {
+      notifyProjectFolderChanged(projectId)
+      drive?.refresh()
+    }
     return { ok }
   })
   ipcMain.handle('folder:links', (event) =>
@@ -411,6 +420,8 @@ function startSol(): void {
     isSolSender
   )
 
+  drive = startDrive({ ipc: ipcMain, settings, windows, isAllowedSender: isSolSender })
+
   startSolTray(basics, settings, windows)
 
   // A closed loop: capture (setting on) → open + region; setting off → the
@@ -589,6 +600,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     hotkeys?.stop()
     hotkeys = null
+    drive?.dispose()
     solTray?.destroy()
     solTray = null
     if (companionStopped) return
@@ -663,6 +675,7 @@ function restartSolHotkeys(
               systemPreferences.isTrustedAccessibilityClient(false)
           }
         : {}),
+      isQuiet: () => drive?.isQuiet() ?? false,
       onSummon: () => windows.toggle(),
       onToggleMode: () => void settings.toggleMode(),
       onRegion: (region) => void onRegion(region),
@@ -807,6 +820,7 @@ function registerCompanionHandlers(): void {
       guideScopeGeneration += 1
       guideProject = projectId
       setCompanionProject(projectId)
+      drive?.setProject(projectId)
       hardwareSources?.setProject(projectId)
     }
   })

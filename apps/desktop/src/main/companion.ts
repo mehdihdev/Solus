@@ -12,6 +12,8 @@ import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_pro
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { companionEnv, findIntegrationsRoot } from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
+import { createDriveWindowReader } from './drive/driveWindow'
+import type { Rect } from './capture/screenCapture'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
 
@@ -42,6 +44,14 @@ export function resolveCompanionCommand(
   rt: CompanionRuntime
 ): { command: string; args: string[] } | null {
   if (rt.isPackaged) {
+    // macOS ships PyInstaller --onedir (sol-drive.md §5): a onefile bootloader
+    // would sit between the drive helper and Solus.app in the caller check.
+    if (rt.platform === 'darwin') {
+      return {
+        command: join(rt.resourcesPath, 'companion', 'solus-companion', 'solus-companion'),
+        args: []
+      }
+    }
     const bin = rt.platform === 'win32' ? 'solus-companion.exe' : 'solus-companion'
     return { command: join(rt.resourcesPath, 'companion', bin), args: [] }
   }
@@ -161,6 +171,25 @@ let activeProjectId: string | null = null
  *  write. `undefined` ⇒ no child has been spawned yet. */
 let activeWorkspace: string | null | undefined
 
+/** SOLUSDEV-319 drive slice 3 (sol-drive.md §5): what this project's
+ *  companion may get for drive — on AND available, else null. Read at every
+ *  spawn, like the workspace; no resolver ⇒ never. */
+type DriveResolver = (projectId: string | null) => { helper: string } | null
+let driveResolver: DriveResolver | null = null
+/** The helper baked into the CURRENT child (null: drive off). `undefined` ⇒
+ *  no child spawned yet. */
+let activeDriveHelper: string | null | undefined
+/** Main's outline hears the latest drive_window bounds (null: none / gone). */
+let driveWindowListener: ((bounds: Rect | null) => void) | null = null
+
+function resolveDrive(): { helper: string } | null {
+  try {
+    return driveResolver?.(activeProjectId) ?? null
+  } catch {
+    return null // availability unknowable ⇒ off; the setting is the consent, not a default
+  }
+}
+
 function pidfilePath(): string {
   return join(app.getPath('userData'), 'companion.pid')
 }
@@ -262,6 +291,8 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   // so a folder-link change respawns only when the value actually changed.
   const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
   activeWorkspace = workspace
+  const drive = resolveDrive()
+  activeDriveHelper = drive?.helper ?? null
   let c: ChildProcess
   try {
     c = spawn(cmd.command, cmd.args, {
@@ -269,7 +300,9 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
       // stderr is PIPED, not ignored. The companion validates its own config and
       // exits; with stderr discarded that surfaced as a silent restart loop and
       // was why the bridge never came up (CAD-02).
-      stdio: ['pipe', 'ignore', 'pipe'],
+      // stdout carries only the drive server's outline geometry (sol-drive.md
+      // §3); it is read through a bounded, strictly-validating reader.
+      stdio: ['pipe', 'pipe', 'pipe'],
       // Inherited PLUS the variables the companion cannot start without.
       //
       // The integrations root is resolved only for a dev run: a packaged build
@@ -282,7 +315,8 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
           ? null
           : findIntegrationsRoot(app.getAppPath(), existsSync),
         projectId: activeProjectId,
-        workspace
+        workspace,
+        drive
       })
     })
   } catch (error) {
@@ -299,6 +333,11 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     // Bounded: a crash-looping child must not fill the log.
     console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
   })
+  // Geometry from a child spawned without drive is ignored outright.
+  const reader = createDriveWindowReader((bounds) => {
+    if (child === c && drive !== null) driveWindowListener?.(bounds)
+  })
+  c.stdout?.on('data', (chunk: Buffer) => reader.push(chunk))
   child = c
   spawnedAt = Date.now()
   if (c.pid) {
@@ -314,7 +353,10 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   const onDown = (): void => {
     if (down) return
     down = true
-    if (child === c) child = null
+    if (child === c) {
+      child = null
+      driveWindowListener?.(null)
+    }
     if (stopped) return
     attempt = nextRestartAttempt(attempt, Date.now() - spawnedAt)
     restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
@@ -366,16 +408,42 @@ export function setCompanionProject(projectId: string | null): void {
  * A project's folder link changed in the ~/.solus registry (SOLUSDEV-166).
  * The workspace is baked into the child's environment at spawn — exactly like
  * the project id — so when it is the ACTIVE project's link that changed, the
- * companion respawns to pick it up. Other projects' links are irrelevant.
+ * companion respawns to pick it up.
  *
- * Respawn only when the resolved workspace ACTUALLY changed (review M5): a
- * re-link to the same path, or any link event that leaves the value untouched,
- * must not churn the process and its whole MCP fork tree.
+ * ANY project's link can change drive availability (SOLUSDEV-319 nested-folder
+ * rule: another project linked inside or around the active folder turns drive
+ * off), so the drive decision is re-checked for every link event too.
+ *
+ * Respawn only when the resolved workspace or drive helper ACTUALLY changed
+ * (review M5): a re-link to the same path, or any link event that leaves both
+ * untouched, must not churn the process and its whole MCP fork tree.
  */
 export function notifyProjectFolderChanged(projectId: string): void {
-  if (activeProjectId === null || projectId !== activeProjectId) return
-  if (projectWorkspace(activeProjectId, realLocalStateDeps) === activeWorkspace) return
-  replaceChild()
+  if (activeProjectId === null) return
+  const workspaceChanged =
+    projectId === activeProjectId &&
+    projectWorkspace(activeProjectId, realLocalStateDeps) !== activeWorkspace
+  if (workspaceChanged) replaceChild()
+  else notifyCompanionDriveChanged()
+}
+
+/** SOLUSDEV-319: install the drive decision (main's DriveController). */
+export function setCompanionDriveResolver(resolver: DriveResolver | null): void {
+  driveResolver = resolver
+}
+
+/** The drive setting or availability may have changed: respawn the RUNNING
+ *  child only when its baked helper differs. A child not yet (re)spawned reads
+ *  the fresh decision at spawn anyway. */
+export function notifyCompanionDriveChanged(): void {
+  if (child === null || activeDriveHelper === undefined) return
+  if ((resolveDrive()?.helper ?? null) !== activeDriveHelper) replaceChild()
+}
+
+/** Main's outline hears the latest drive_window bounds; null when the child
+ *  that reported them is gone. */
+export function onCompanionDriveWindow(listener: ((bounds: Rect | null) => void) | null): void {
+  driveWindowListener = listener
 }
 
 /** Kill the current child (if any) and spawn a fresh one against the current
@@ -391,7 +459,10 @@ function replaceChild(): void {
   }
   const previous = child
   child = null // detach first: onDown must not schedule a restart for the old config
-  if (previous) retire(previous)
+  if (previous) {
+    retire(previous)
+    driveWindowListener?.(null)
+  }
   attempt = -1
   if (!started) return
   // Coalesce (M2): the previous child is already being retired; the respawn
@@ -475,6 +546,7 @@ export async function stopCompanion(): Promise<void> {
   }
   const c = child
   child = null
+  driveWindowListener?.(null)
   if (c?.pid && c.exitCode === null && c.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       c.once('exit', () => resolve())

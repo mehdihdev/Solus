@@ -48,9 +48,20 @@ export function findIntegrationsRoot(
   startDir: string,
   exists: (path: string) => boolean
 ): string | null {
+  return findAncestorPath(startDir, INTEGRATIONS_TREE, exists)
+}
+
+/** The first `<ancestor>/<segments…>` that exists, walking up from `startDir`
+ *  to the filesystem root; null when none does. Shared by the MCP tree and the
+ *  dev drive helper (SOLUSDEV-319). */
+export function findAncestorPath(
+  startDir: string,
+  segments: readonly string[],
+  exists: (path: string) => boolean
+): string | null {
   let dir = startDir
   for (;;) {
-    const candidate = join(dir, ...INTEGRATIONS_TREE)
+    const candidate = join(dir, ...segments)
     if (exists(candidate)) return candidate
     const parent = dirname(dir)
     if (parent === dir) return null // filesystem root — stop, never loop
@@ -113,6 +124,10 @@ export interface CompanionEnvOptions {
    *  the variable is then left ABSENT so workspace-gated forks (Altium) fail
    *  closed rather than confining to an arbitrary directory. */
   workspace?: string | null
+  /** SOLUSDEV-319 (sol-drive.md §5): the pinned helper path, set only while
+   *  "SOL can use your mouse and keyboard" is on AND driving is available for
+   *  this project. Anything else removes both drive variables. */
+  drive?: { helper: string } | null
 }
 
 export function companionEnv(
@@ -138,10 +153,24 @@ export function companionEnv(
   if (!env.SOLUS_COMPANION_WORKSPACE && options.workspace) {
     env.SOLUS_COMPANION_WORKSPACE = options.workspace
   }
+  applyDrive(env, options)
   if (!env.SOLUS_COMPANION_ALLOWED_HOSTS) {
     env.SOLUS_COMPANION_ALLOWED_HOSTS = allowedHosts(env.SOLUS_COMPANION_URL)
   }
   return env
+}
+
+/** The drive switch is NOT like its siblings: the setting is the consent, so
+ *  an inherited value never wins — both are deleted unless the option says
+ *  on. It also stays off when the workspace the child gets is not the folder
+ *  the nested-folder rule checked (an inherited override). */
+function applyDrive(env: Record<string, string | undefined>, options: CompanionEnvOptions): void {
+  delete env.SOLUS_COMPANION_DRIVE
+  delete env.SOLUS_DRIVE_HELPER
+  const helper = options.drive?.helper
+  if (!helper || !options.workspace || env.SOLUS_COMPANION_WORKSPACE !== options.workspace) return
+  env.SOLUS_COMPANION_DRIVE = '1'
+  env.SOLUS_DRIVE_HELPER = helper
 }
 
 /** Loopback always, plus the configured URL's host when it parses. */

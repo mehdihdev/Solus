@@ -331,6 +331,19 @@ export function projectWorkspace(projectId: string | null, deps: LocalStateDeps)
   return safe
 }
 
+/** Every project's linked folder, each re-validated like `projectWorkspace`
+ *  (the registry is fork-writable). SOLUSDEV-319: the drive nested-folder rule
+ *  compares the active project's folder against all of these. */
+export function linkedWorkspaces(deps: LocalStateDeps): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [projectId, link] of Object.entries(readRegistry(deps).registry.projects)) {
+    if (!isSafeProjectId(projectId)) continue
+    const safe = safeWorkspacePath(link.path, deps)
+    if (safe !== null) out[projectId] = safe
+  }
+  return out
+}
+
 /** Production deps: node fs/os/crypto. `replaceFile` falls back to
  *  remove-then-rename for Windows, where rename won't replace. */
 export const realLocalStateDeps: LocalStateDeps = {

@@ -63,8 +63,19 @@ describe('read', () => {
     expect(createSolSettings(f.deps).get()).toEqual({
       actionMode: 'do',
       screenIntelligence: true,
-      hotkeys: true
+      hotkeys: true,
+      drive: false
     })
+  })
+
+  it('drive defaults to false and only an explicit true turns it on (sol-drive.md §5 consent)', () => {
+    expect(DEFAULT_SOL_SETTINGS.drive).toBe(false)
+    const on = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: { drive: true } }) })
+    expect(createSolSettings(on.deps).get().drive).toBe(true)
+    for (const junk of ['true', 1, {}, null]) {
+      const f = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: { drive: junk } }) })
+      expect(createSolSettings(f.deps).get().drive).toBe(false)
+    }
   })
 
   it('hotkeys defaults to true and only an explicit false turns it off (§7 consent surface)', () => {
@@ -101,13 +112,15 @@ describe('write', () => {
     const s = createSolSettings(f.deps)
     s.setScreenIntelligence(true)
     s.setHotkeys(false)
+    s.setDrive(true)
     const doc = JSON.parse(f.files.get(CONFIG) ?? '')
     expect(doc.other).toEqual({ keep: true })
     expect(doc.schema_version).toBe(SOL_CONFIG_SCHEMA_VERSION)
     expect(doc.sol).toEqual({
       actionMode: 'guide',
       screenIntelligence: true,
-      hotkeys: false
+      hotkeys: false,
+      drive: true
     })
     expect([...f.files.keys()]).toEqual([CONFIG]) // no temp litter
     expect(createSolSettings(f.deps).get()).toEqual(doc.sol)
