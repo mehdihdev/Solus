@@ -25,7 +25,9 @@ mouse and keyboard while a step runs unless a flow tells you otherwise.
    `SOLUS_COMPANION_DRIVE=1` and `SOLUS_DRIVE_HELPER=H` (absolute). The API needs a working
    `anthropic_api_key` in its secret store and a user with credits.
 5. Start `pnpm dev:all`, sign in, open a project whose companion is connected (Sources → the machine is
-   online).
+   online) **and linked to a workspace folder that contains the scratch KiCad project**
+   (`SOLUS_COMPANION_WORKSPACE`). Without a linked workspace, drive is off. Keep a second, unrelated
+   KiCad project outside that folder for flows 17–18.
 6. Optional for progress: keep a terminal ready to call
    `GET /projects/<project>/sol/confirmations/<confirmation_id>/output` with your session token.
 
@@ -49,6 +51,18 @@ mouse and keyboard while a step runs unless a flow tells you otherwise.
 | 14  | Revoke the terminal's **Accessibility** grant; approve a step with KiCad in front.                                                              | "stopped — the input helper refused (not_trusted)" after 0 actions; no capture taken.                                                                                                                                                                                                    | [ ]       |
 | 15  | With data-collection consent ON, run flow 3; then query `data_events` for your user.                                                            | `drive.session_started`, one `drive.action` per action (`{index, verb, result}`), `drive.session_ended` (`{app, actions, seconds, outcome, code}`), plus `drive.aborted` when it did not finish. No intent text, typed text or images in any payload. With consent OFF, none are stored. | [ ]       |
 | 16  | Check billing after flow 3.                                                                                                                     | One `credit_ledger` debit per model round, attributed to role `computer_use` / `claude-opus-5-5`.                                                                                                                                                                                        | [ ]       |
+
+### Project binding and saves (ADR-041 amendment M2/M3)
+
+| #   | Steps                                                                                                                                                                                                                           | Expected                                                                                                                                           | Pass/Fail |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| 17  | Quit KiCad. Open the **unrelated** project (outside the workspace) in KiCad, bring it to the front, approve a step.                                                                                                             | "nothing done — the KiCad in front has a project outside this Solus project open" after 0 actions; no capture, no model call, no pointer movement. | [ ]       |
+| 18  | Run a second KiCad instance on the unrelated project (`open -n -a KiCad <other>.kicad_pro`) alongside the workspace one; put the unrelated one in front; approve a step. Then put the workspace one in front and approve again. | First: refused as in 17. Second: runs normally.                                                                                                    | [ ]       |
+| 19  | In the workspace project, ask: "Click the Save button in the toolbar." Hands off.                                                                                                                                               | The schematic is saved once; the step ends "stopped — SOL saved the design to disk after N actions"; no further action.                            | [ ]       |
+| 20  | Ask for a step whose path is Plot or Export (e.g. "plot the schematic to PDF").                                                                                                                                                 | The Plot/Export dialog may open, but the step ends (`window_mismatch` / `focus_lost` / `occluded`) and nothing is plotted or written.              | [ ]       |
+| 21  | Leave a step running ~2 min on an unsaved schematic (do not touch anything) with KiCad's autosave / local history on.                                                                                                           | KiCad's timed history snapshot does **not** end the step as saved.                                                                                 | [ ]       |
+| 22  | Unset `SOLUS_COMPANION_WORKSPACE` (restart the companion) with `SOLUS_COMPANION_DRIVE=1`.                                                                                                                                       | `drive.step` is not offered; the companion status for `drive` says "no project workspace is linked".                                               | [ ]       |
+| 23  | In the workspace KiCad, File → Open Project the unrelated project while no step runs; approve a step.                                                                                                                           | Refused as in 17 (KiCad's working directory follows the open project). If it is NOT refused, record it: that is the documented residual.           | [ ]       |
 
 ## Edge cases
 

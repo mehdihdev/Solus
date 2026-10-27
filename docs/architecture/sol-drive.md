@@ -44,18 +44,26 @@ Location `apps/desktop/native/solus-input/` (Swift package: `SolusInputCore` pur
 executable, XCTest suite). macOS 14+ (ScreenCaptureKit). One process per call; **argv in, one JSON line
 out**, exit 0 for every outcome including refusals and usage errors (the JSON `code` says which); a
 non-zero exit means the helper crashed. All times are the helper's **monotonic** clock (system uptime).
+Every command also takes **`--within WS`**: the linked workspace (absolute, resolved, never `/`), without
+which it is a `usage` refusal (ADR-041 amendment M2, 2026-10-26).
 
-| Command    | Arguments                                                                       | Result                                                                                                                                                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identify` | —                                                                               | `{ok, now, trust:{accessibility,screenRecording}, allowed, app:{bundleId,pid,name}\|null, window:{id,title,bounds}\|null}`. When the frontmost app is NOT drivable, `app` and `window` are null — another app's identity and window title never leave the machine.     |
-| `capture`  | `--bundle B --window W [--max-edge N]` (256–2048, default 1568)                 | `{ok, png (base64), imageWidth, imageHeight, pointsWidth, pointsHeight}`; refuses unless W is on screen, owned by B, and B is drivable; shadow-free, and refused (`capture_failed`) if the image's shape does not match the window's (padding would skew coordinates). |
-| `act`      | `--bundle B --window W --since T [--expect-width w --expect-height h] <verb> …` | `{ok, verb, idleSeconds, finishedAt}` or a refusal (mid-verb refusals add `postedEvents`).                                                                                                                                                                             |
+| Command    | Arguments                                                                       | Result                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identify` | —                                                                               | `{ok, now, trust:{accessibility,screenRecording}, allowed, app:{bundleId,pid,name}\|null, window:{id,title,bounds}\|null}`. When the frontmost app is NOT drivable, or is drivable but working outside `WS` (`outsideWorkspace: true`), `app` and `window` are null — another app's (or another project's) identity and window title never leave the machine. |
+| `capture`  | `--bundle B --window W [--max-edge N]` (256–2048, default 1568)                 | `{ok, png (base64), imageWidth, imageHeight, pointsWidth, pointsHeight}`; refuses unless W is on screen, owned by B, and B is drivable; shadow-free, and refused (`capture_failed`) if the image's shape does not match the window's (padding would skew coordinates).                                                                                        |
+| `act`      | `--bundle B --window W --since T [--expect-width w --expect-height h] <verb> …` | `{ok, verb, idleSeconds, finishedAt}` or a refusal (mid-verb refusals add `postedEvents`).                                                                                                                                                                                                                                                                    |
 
 `act` verbs (window-relative **points**, integers): `click --x --y [--button left\|right] [--count 1\|2]`
 (no right double-click — a right click opens a menu), `move --x --y`, `drag --x --y --to-x --to-y`,
 `scroll --x --y --dy [--dx]`, `key --chord cmd+shift+z`, `type --text "…"`, `wait --ms` (≤ 2000).
 
 Checks before ANY event is posted (each failure is a refusal with a code; nothing is posted):
+
+0. **Project binding** (capture and act): the process that owns `W` has its working directory at or below
+   `WS` — read from the kernel (`proc_pidinfo` `PROC_PIDVNODEPATHINFO`, no grant needed), resolved; an
+   unreadable one counts as outside (`outside_workspace`, no path in the message). KiCad works in its open
+   project's folder; probed on KiCad 10, which exposes no `AXDocument` and puts no path in its title, so
+   the working directory is the only signal there is. `act` repeats this before every posted event.
 
 1. `B` is on the compiled-in drivable list — slice 1: `org.kicad.kicad`, `org.kicad.eeschema` (the
    schematic editor runs inside either). Amendments to ADR-041 widen it.
@@ -100,11 +108,15 @@ desktop's input listener filters on in slice 3 so SOL's own events never read as
 Refusal codes: `usage`, `app_not_allowed`, `not_trusted`, `screen_recording_denied`, `not_frontmost`,
 `window_mismatch`, `window_not_found`, `window_resized`, `window_chrome`, `out_of_bounds`, `occluded`,
 `bad_chord`, `chord_denied`, `bad_text`, `secure_field`, `user_active`, `focus_lost`, `stopped`,
-`capture_failed`.
+`capture_failed`, `outside_workspace`.
 
 Known limits (documented, not hidden): letter keys map to ANSI virtual keycodes (non-US layouts may
-differ); a save/export reached through menus by clicking is not detectable by the chord allowlist — the
-step budget, the plan approval and the API loop's verification are the controls there; a microsecond gap
+differ); effects outside the app are blocked structurally — plot, export, print and close-confirm all
+go through dialogs, sheets or menus, which are other windows (checks 3 and 5, and the menu bar lies
+outside the window) — except a toolbar **Save** click, which the companion detects (§3) and which ends the
+step (ADR-041 amendment M3); a schematic opened from outside the project inside the same KiCad process
+would pass check 0, and its window title would then reach identify (verified in the QA pass; accepted
+residual — the working directory is the only signal KiCad gives); a microsecond gap
 remains between the last hit-test and a global pointer post (inherent); the kill switch's reading of the
 HID idle counter and the stuck-button release are verified on real hardware in the QA pass, not in unit
 tests; the bundle id is not yet tied to KiCad's code signature (to add when the list widens).
@@ -136,6 +148,18 @@ and marks their specs `internal`, and `agent/runtime.py` leaves every internal s
 set. Only `drive.step` (§4) reaches them. A capture is staged `fetch_once`: the first pull serves it and
 drops it from the companion's memory (ADR-041 §6); an unpulled one is evicted with the store's LRU.
 
+**Bound to the project (ADR-041 amendment M2/M3).** `drive` is built with the companion's linked
+workspace (`SOLUS_COMPANION_WORKSPACE`, resolved) and advertises nothing without one ("no project
+workspace is linked"); every helper command carries `--within` it. A successful `identify` (the step's
+bind) takes a **saved-design baseline** (`watch.saved_design_fingerprint`: size + mtime of every
+`DESIGN_SUFFIXES` file, symlinks by their target, skipping KiCad's `.history/` snapshots and
+`_autosave-` copies, which KiCad writes on a timer, plus `.git`, `node_modules` and `solus-artifacts`;
+`""` — cannot observe, or more than 10,000 entries — counts as changed). Every `identify` clears the
+baseline first, so a step never inherits the previous one's. `act` refuses `not_bound` before any bind and
+`design_saved` when the baseline moved since; it also answers `design_saved` when the act failed after
+saving. Every act reply and every capture's metadata carry `designSaved` — KiCad writes a moment after a
+Save click, so the look after an act is where a save usually shows.
+
 ## 4. API `drive.step` and the loop (slice 2)
 
 Code: `packages/api/src/solus_api/agent/drive/` — `actions.py` (toolset ↔ vocabulary), `port.py`
@@ -157,7 +181,8 @@ Model call: `orchestration/gateway.computer_use` → `providers.AnthropicAdapter
   frontmost, so a live identify there would always be stale; the window check happens at bind instead.
 - **Bind** (before any model sees a pixel): poll `drive.identify` up to 5 s for an allowlisted bundle
   (`DRIVABLE_APPS`, mirroring the helper) with a window; missing OS grants end the step (`not_trusted`),
-  no app in front ends it with nothing done (`not_in_front`). `{bundle, window}` is fixed for the step.
+  no app in front ends it with nothing done (`not_in_front`), and a KiCad working on a project outside the
+  linked workspace ends it at once (`refused/outside_workspace`). `{bundle, window}` is fixed for the step.
 - **Loop** — ADR-041 §6 and the 2026-10-26 amendment: capture (long edge 1280) → a user turn with the
   fenced goal, then the image → `gateway.computer_use` (role `computer_use`, `claude-opus-5-5`, effort
   high; frequency cap → spend gate → retry/breaker → debit, one DB session per round) with the fixed
@@ -178,7 +203,11 @@ Model call: `orchestration/gateway.computer_use` → `providers.AnthropicAdapter
 - **Endings**: the model replies without a call with `end_turn` (`done`, its text as the summary, ≤ 500
   chars, redacted, returned as data) — any other stop reason without a call is `error/model_incomplete`; `refusal` stop reason (`declined`); a point outside the capture (`out_of_bounds`, before
   anything posts); any helper refusal ends the step with its code, and `user_active` is `paused` — Esc,
-  double-Ctrl or a click on the pill are physical input, so stopping needs no route. An unsupported
+  double-Ctrl or a click on the pill are physical input, so stopping needs no route. An act whose reply
+  or capture says `designSaved`, or a `design_saved` refusal, ends the step as `saved` ("SOL saved the
+  design to disk"); the action that saved counts and is not marked refused. Before reporting `done` the
+  loop takes one last look (a capture, no model call) when any action ran, so a save landing late is
+  never reported as `done`. An unsupported
   proposal (a modifier click, `repeat`, an unknown key) is answered as an error and costs one action.
   Anything but `done` raises a `ToolException` with a Solus sentence, so a running plan stops.
 - **Containment rests on "a new window ends the step"** (`window_mismatch`): KiCad's own code-execution
@@ -211,6 +240,10 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
 - Settings → SOL: **SOL can use your mouse and keyboard** (default off; shows the helper's Accessibility
   and Screen Recording state with the existing "Needs attention" fix card pattern). It sets
   `SOLUS_COMPANION_DRIVE` and `SOLUS_DRIVE_HELPER` and restarts the companion when changed.
+  **It sets `SOLUS_COMPANION_DRIVE` only when the project's linked folder neither contains nor lies inside
+  another linked project's folder** (M2 security review M1): the helper's check is "at or below the
+  workspace", so with nested links a step for the outer project would pass for a KiCad working on the
+  inner one. The setting shows why driving is unavailable in that case.
 - The pill shows the A3 status line (`DRIVING KICAD · STEP k OF N`, progress, Stop) from
   `drive_progress`; Stop and Esc cancel the step (the companion SIGTERMs the helper); any physical input
   is caught by the helper's kill switch even if the cancel never arrives. The amber outline is edge

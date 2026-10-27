@@ -75,14 +75,89 @@ Commits:
 ## Open — needs a human
 
 1. **Ratify `integrations/mcp/drive/allowlist.yaml`** (integrations/mcp/CLAUDE.md rule 2). Until it is merged, nothing loads it.
-2. **Project binding (security M2).** Any frontmost KiCad window binds. A user in two teams could approve a step in team A's project while team B's schematic is in front, so team B's pixels would enter team A's turn. Proposed fix: `identify` reports a "document is inside the linked workspace" boolean, checked in the companion so paths never leave the machine.
-3. **In-window Save, Plot and Export clicks (security M3).** ADR-041 §4 says effects outside the app need their own approval. The chord policy blocks shortcuts, and the system prompt now forbids these actions. A planted instruction could still get the model to click a toolbar Save button. Options: amend ADR-041 to accept the risk explicitly, or add an AX-role/identifier denylist to the helper.
-4. **Frequency cap (code review M3).** The drive loop shares the per-user cap (20 calls/min) with SOL chat. A fresh capture per action brings a full step to about 16 rounds, but a fast step plus chat can still hit `rate_limited`. Options: a separate cap for the `computer_use` role, or accept it.
-5. **Data-event contract (security L6).** The `drive.*` event types should be added to the event schema in `packages/contracts/` (tier-2).
-6. **Multi-instance lease.** `drive_lease` is process-local, like the in-memory bridge registry. It needs a Redis `SET NX` lease before the API scales out.
-7. **Long request (security L7).** A step runs inside the decide HTTP request for up to about 3 minutes, holding a DB session. This is the same model as 317's `code.exec`. Moving it to a job is a design change.
-8. **Per-team disable flag (ADR-041 consequence).** It doesn't exist yet. Slice 3 adds the setting.
-9. **Hooks.**
+2. ~~Project binding (security M2)~~ and 3. ~~In-window Save, Plot and Export clicks (security M3)~~ are
+   **settled**; see "Follow-up: M2/M3" below. Still open from that work: the nested-folder rule (slice 3)
+   and the hardware checks (QA flows 17–23).
+3. **Frequency cap (code review M3).** The drive loop shares the per-user cap (20 calls/min) with SOL chat. A fresh capture per action brings a full step to about 16 rounds, but a fast step plus chat can still hit `rate_limited`. Options: a separate cap for the `computer_use` role, or accept it.
+4. **Data-event contract (security L6).** The `drive.*` event types should be added to the event schema in `packages/contracts/` (tier-2).
+5. **Multi-instance lease.** `drive_lease` is process-local, like the in-memory bridge registry. It needs a Redis `SET NX` lease before the API scales out.
+6. **Long request (security L7).** A step runs inside the decide HTTP request for up to about 3 minutes, holding a DB session. This is the same model as 317's `code.exec`. Moving it to a job is a design change.
+7. **Per-team disable flag (ADR-041 consequence).** It doesn't exist yet. Slice 3 adds the setting.
+8. **Hooks.**
    - The H9 hook ran an unrelated vendored test, `integrations/mcp/altium/upstream/tests/design/test_executor.py`, for `executor.py` edits because the file names match.
    - The H8 hook's shared `dmypy` daemon crashed with INTERNAL ERRORs inside the anthropic and cryptography packages. Plain mypy was clean. I restarted the daemon once.
    - Both are flagged; I did not edit any hook.
+
+## Follow-up: M2/M3 settled (2026-10-26)
+
+Decisions, in-chat: bind each step to the linked workspace through the helper's cwd check, and accept an
+in-window Save as an in-step effect that ends the step. ADR-041 amendment fd97630f, approved against its
+concrete text.
+
+Probe on this Mac (KiCad 10.0): neither window exposes an `AXDocument` value; the title has no path
+("solus_sample — Schematic Editor"); the process cwd (`proc_pidinfo`, no grant needed) is the project
+folder; the Schematic Editor's toolbars are not exposed to Accessibility at all. That last point rules out
+an AX denylist for the Save button.
+
+Commits:
+
+- fd97630f: ADR-041 amendment
+- f74c849f, 3725db3d: `solus-input --within`, plus a re-check before every posted event
+- cec5541f, 9c33a1d2: companion workspace binding and the saved-design check
+- 6192a3d8: API `outside_workspace`, the `saved` outcome, sentences
+- bc2edde1: review fixes
+
+Built:
+
+- **Helper.** Every command takes `--within WS`, which is required, must be absolute and resolved, and
+  cannot be `/`.
+  - identify hides a KiCad working elsewhere (`outsideWorkspace: true`, app and window null).
+  - capture and act refuse `outside_workspace`.
+  - Paths are compared as bytes.
+- **Companion.**
+  - **Workspace.** No linked workspace means drive is not advertised. The workspace goes first in
+    every helper call.
+  - **Saved-design baseline.** It is taken at identify and cleared at the start of every identify.
+    It covers design suffixes only, symlinks are followed, and `.history/` and `_autosave-` are skipped.
+    It fails closed past 10,000 entries.
+  - **Act.** An act refuses `not_bound` or `design_saved`, and a failed act that saved first reports
+    `design_saved`.
+  - **Acts and captures.** Both carry `designSaved`.
+- **API.**
+  - The new codes are known.
+  - A step binding a KiCad from another project ends as `refused/outside_workspace` before any capture.
+  - Any `designSaved` ends the step as `saved`.
+  - Before reporting `done`, the step takes one last capture when any action ran.
+
+Verification:
+
+- Swift: 44 XCTest.
+- Companion: 440 passed.
+- API drive and exposure suites: 194 passed.
+- ruff, ruff format and mypy are clean.
+- Not run live: the drive flows themselves. Hardware QA flows 17–23 are in
+  `COWORK_QA_SOLUSDEV-319-drive-slice2.md`.
+
+Phase 4:
+
+- **Code review: APPROVE.**
+  - Fixed:
+    - a save made by a failed act was lost;
+    - a late write wasn't caught by the capture or the final check;
+    - the mid-step "nothing done" sentence;
+    - a stale baseline;
+    - a dead branch.
+  - Left as is:
+    - a refused act still counts toward "N actions", the same as every other refusal;
+    - `saved` surfaces as a `ToolException`, like every other unfinished outcome.
+- **Security review: PASS.**
+  - Fixed: M2 (the late save) and L2 (NFC/NFD).
+  - L3: the save check now skips only `.git`, `node_modules`, `.history` and `solus-artifacts`.
+  - L1: the same-process residual is documented, including the window-title leak.
+  - M1 (nested linked folders) is deferred to slice 3, where the desktop first sets
+    `SOLUS_COMPANION_DRIVE`. The rule is written in sol-drive.md §5. Today driving is only enabled by
+    hand through the environment.
+- **Automated hook review.**
+  - Its proposal to bind to `AXDocument` doesn't work: KiCad exposes no `AXDocument` value.
+  - A cwd re-check before every event was added.
+  - The fail-open scan and the over-broad dot-dir skip are fixed.
