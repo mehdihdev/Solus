@@ -228,10 +228,10 @@ class DriveStepTool:
                 # step: the audit trail still ends, then cancellation proceeds.
                 for progress in trail:
                     # The last one may have been in flight when the step stopped.
-                    result = "cancelled" if progress is trail[-1] else "ok"
+                    landed = "cancelled" if progress is trail[-1] else "ok"
                     await self._safe_record(
                         "drive.action",
-                        {"index": progress.action, "verb": progress.verb, "result": result},
+                        {"index": progress.action, "verb": progress.verb, "result": landed},
                     )
                 await self._safe_record("drive.aborted", {"outcome": "cancelled", "code": None})
                 await self._safe_record(
