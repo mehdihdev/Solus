@@ -54,6 +54,7 @@ from solus_api.models import (
 from solus_api.services.supabase_admin import SupabaseAdmin
 
 if TYPE_CHECKING:
+    from solus_api.agent.drive.executor import Budget
     from solus_api.agent.tools.mcp_tool import MCPTool
 
 logger = logging.getLogger("solus.deps")
@@ -443,6 +444,12 @@ async def get_project_read_context(
 ProjectCtx = Annotated[ProjectContext, Depends(get_project_read_context)]
 
 
+def _drive_budget(settings: Settings) -> "Budget":
+    from solus_api.agent.drive.executor import Budget
+
+    return Budget(max_actions=settings.drive_max_actions, max_seconds=settings.drive_max_seconds)
+
+
 async def discover_research_tools(
     secret_store: SecretStore, allowlist_root: str
 ) -> list["MCPTool"]:
@@ -530,6 +537,8 @@ async def get_sol_registry(
         artifact_store=getattr(request.app.state, "artifact_store", None),
         enqueue=getattr(request.app.state, "enqueue", None),
         artifact_ttl_seconds=settings.artifact_ttl_seconds,
+        # ADR-041 (2026-10-26 amendment): N actions / T wall-clock seconds per step.
+        drive_budget=_drive_budget(settings),
         # SOLUSDEV-252 P6: the web `research` tool, bound to whatever the
         # Brave fork advertised for THIS request (none = not registered).
         brave_tools=await discover_research_tools(secret_store, settings.bridge_allowlist_root),

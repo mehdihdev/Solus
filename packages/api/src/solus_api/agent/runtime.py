@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from solus_contracts.extension_manifest import ExtensionManifest
 
     from solus_api.agent.confirmations import ParkedCall
+    from solus_api.agent.drive.executor import Budget
     from solus_api.agent.execution_policy import BuildExecutionPolicy
     from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
@@ -114,6 +115,7 @@ def build_sol_registry(
     presence_service: Any | None = None,
     companion_deployment_service: Any | None = None,
     scene_enqueue: Any | None = None,
+    drive_budget: "Budget | None" = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -144,6 +146,19 @@ def build_sol_registry(
             bridge_call_cap_bytes=bridge_call_cap_bytes,
             secret_store=secret_store,
         )
+    _register_drive_step(
+        registry,
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=bridge_call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=drive_budget,
+    )
     if user_id is not None:
         _register_user_tools(
             registry,
@@ -412,6 +427,44 @@ def _register_hosted_tools(
             registry.register(tool)
     except Exception:
         logger.exception("hosted MCP tools unavailable for project %s", project_id)
+
+
+def _register_drive_step(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+) -> None:
+    """ADR-041: `drive.step` — the only model-facing way to the internal drive
+    tools, offered when this user's companion advertises all of them and the
+    metered model call has a secret store."""
+    if bridge is None or user_id is None or team_id is None or secret_store is None:
+        return
+    from solus_api.agent.drive.executor import Budget
+    from solus_api.agent.drive.wiring import build_drive_step
+
+    tool = build_drive_step(
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        project_id=project_id,
+        call_cap_bytes=call_cap_bytes,
+        session_factory=session_factory,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget or Budget(),
+    )
+    if tool is not None:
+        registry.register(tool)
 
 
 def _internal_only(spec: "BridgeToolSpec") -> bool:

@@ -1,0 +1,193 @@
+"""The drive executor's view of the helper: `identify`, `capture`, `act`.
+
+`BridgeDrivePort` reaches the companion's INTERNAL `drive.*` tools (allowlist
+`exposure: internal`) and parses what comes back. Everything here is untrusted
+input from the machine (CLAUDE.md §7): shapes are checked, sizes bounded, and a
+malformed reply is a refusal, never a crash. A helper refusal arrives as the
+companion's `code: message` error text and becomes `DriveRefusal(code, …)`.
+"""
+
+import json
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any, Final, Protocol
+
+from solus_api.agent.drive.actions import ActRequest, Frame
+from solus_api.agent.tools.tool import Tool, ToolException
+
+PNG_MAGIC: Final = b"\x89PNG\r\n\x1a\n"
+#: The vision limit on every toolset model (Anthropic: 2,576 px long edge).
+MAX_IMAGE_EDGE: Final = 2576
+_CODE_PREFIX: Final = re.compile(r"^([a-z][a-z_]{0,39}): (.*)$", re.DOTALL)
+
+
+class DriveRefusal(Exception):  # noqa: N818 — a refusal, not a bug
+    """The helper (or the path to it) refused; `code` is its stable reason."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
+@dataclass(frozen=True)
+class Identity:
+    allowed: bool
+    bundle_id: str | None
+    app_name: str | None
+    window_id: int | None
+    now: float
+    accessibility: bool
+    screen_recording: bool
+
+
+@dataclass(frozen=True)
+class Shot:
+    png: bytes
+    frame: Frame
+
+
+@dataclass(frozen=True)
+class ActDone:
+    finished_at: float
+
+
+class DrivePort(Protocol):
+    async def identify(self) -> Identity: ...
+
+    async def capture(self, bundle: str, window: int, *, max_edge: int) -> Shot: ...
+
+    async def act(
+        self,
+        bundle: str,
+        window: int,
+        request: ActRequest,
+        *,
+        since: float,
+        expect_width: int,
+        expect_height: int,
+    ) -> ActDone: ...
+
+
+def _malformed(what: str) -> DriveRefusal:
+    return DriveRefusal("bridge", f"the companion sent a malformed {what} reply")
+
+
+def _positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def parse_identity(value: Any) -> Identity:
+    if not isinstance(value, dict) or not _number(value.get("now")):
+        raise _malformed("identify")
+    trust, app, window = (_mapping(value.get(key)) for key in ("trust", "app", "window"))
+    bundle, name, window_id = app.get("bundleId"), app.get("name"), window.get("id")
+    return Identity(
+        allowed=value.get("allowed") is True,
+        bundle_id=bundle if isinstance(bundle, str) else None,
+        app_name=name[:64] if isinstance(name, str) else None,
+        window_id=window_id if _positive_int(window_id) else None,
+        now=float(value["now"]),
+        accessibility=trust.get("accessibility") is True,
+        screen_recording=trust.get("screenRecording") is True,
+    )
+
+
+def parse_capture(value: Any, *, max_edge: int) -> tuple[str, Frame]:
+    """The staged image's artifact id and the capture sizes."""
+    blocks = value.get("content") if isinstance(value, dict) else None
+    if not isinstance(blocks, list):
+        raise _malformed("capture")
+    image = next((b for b in blocks if isinstance(b, dict) and b.get("type") == "image"), None)
+    text = next((b for b in blocks if isinstance(b, dict) and b.get("type") == "text"), None)
+    if image is None or not isinstance(image.get("artifact_id"), str) or text is None:
+        raise _malformed("capture")
+    try:
+        sizes = json.loads(text.get("text") or "")
+    except (TypeError, ValueError):
+        raise _malformed("capture") from None
+    keys = ("imageWidth", "imageHeight", "pointsWidth", "pointsHeight")
+    if not isinstance(sizes, dict) or not all(_positive_int(sizes.get(k)) for k in keys):
+        raise _malformed("capture")
+    if max(sizes["imageWidth"], sizes["imageHeight"]) > min(max_edge, MAX_IMAGE_EDGE):
+        raise _malformed("capture")
+    frame = Frame(*(sizes[k] for k in keys))
+    return image["artifact_id"], frame
+
+
+def _refusal(exc: ToolException) -> DriveRefusal:
+    match = _CODE_PREFIX.match(exc.message)
+    if match is None:
+        return DriveRefusal("bridge", exc.message[:200])
+    return DriveRefusal(match.group(1), match.group(2)[:200])
+
+
+class BridgeDrivePort:
+    """`DrivePort` over the requesting user's companion (internal tools only)."""
+
+    def __init__(
+        self,
+        *,
+        identify: Tool,
+        capture: Tool,
+        act: Tool,
+        fetch: Callable[[str], Awaitable[bytes]],
+    ) -> None:
+        self._identify = identify
+        self._capture = capture
+        self._act = act
+        self._fetch = fetch
+
+    async def _call(self, tool: Tool, args: dict[str, Any]) -> Any:
+        try:
+            return await tool.invoke(args)
+        except ToolException as exc:
+            raise _refusal(exc) from None
+
+    async def identify(self) -> Identity:
+        return parse_identity(await self._call(self._identify, {}))
+
+    async def capture(self, bundle: str, window: int, *, max_edge: int) -> Shot:
+        value = await self._call(
+            self._capture, {"bundle": bundle, "window": window, "max_edge": max_edge}
+        )
+        artifact_id, frame = parse_capture(value, max_edge=max_edge)
+        try:
+            png = await self._fetch(artifact_id)
+        except ToolException as exc:
+            raise _refusal(exc) from None
+        if not png.startswith(PNG_MAGIC):
+            raise _malformed("capture")
+        return Shot(png=png, frame=frame)
+
+    async def act(
+        self,
+        bundle: str,
+        window: int,
+        request: ActRequest,
+        *,
+        since: float,
+        expect_width: int,
+        expect_height: int,
+    ) -> ActDone:
+        args = {
+            "bundle": bundle,
+            "window": window,
+            "since": since,
+            "expect_width": expect_width,
+            "expect_height": expect_height,
+            **request.args(),
+        }
+        value = await self._call(self._act, args)
+        if not isinstance(value, dict) or not _number(value.get("finishedAt")):
+            raise _malformed("act")
+        return ActDone(finished_at=float(value["finishedAt"]))
