@@ -57,3 +57,36 @@ describe('useDriveStatus', () => {
     expect(bridge.onDriveStatus).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('useDriveStatus — rereads on return', () => {
+  it('rereads the status when the window regains focus or becomes visible', async () => {
+    const bridge = fakeDriveBridge()
+    renderHook(() => useDriveStatus(bridge))
+    await waitFor(() => expect(bridge.getDriveStatus).toHaveBeenCalledTimes(1))
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(bridge.getDriveStatus).toHaveBeenCalledTimes(2)
+    const visibility = vi.spyOn(document, 'visibilityState', 'get')
+    visibility.mockReturnValue('hidden')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(bridge.getDriveStatus).toHaveBeenCalledTimes(2)
+    visibility.mockReturnValue('visible')
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    expect(bridge.getDriveStatus).toHaveBeenCalledTimes(3)
+    visibility.mockRestore()
+  })
+
+  it('stops rereading after unmount', async () => {
+    const bridge = fakeDriveBridge()
+    const { unmount } = renderHook(() => useDriveStatus(bridge))
+    await waitFor(() => expect(bridge.getDriveStatus).toHaveBeenCalledTimes(1))
+    unmount()
+    window.dispatchEvent(new Event('focus'))
+    expect(bridge.getDriveStatus).toHaveBeenCalledTimes(1)
+  })
+})

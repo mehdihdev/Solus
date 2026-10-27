@@ -63,11 +63,31 @@ describe('DriveStrip (sol-drive.md §5 While a step runs)', () => {
     unmount()
     expect(bridge.setDriving).toHaveBeenLastCalledWith(false)
   })
+})
 
-  it('Stop hides the strip and tells main, with no API call', async () => {
+describe('DriveStrip — Stop', () => {
+  it('Stop shows STOPPING, freezes the bar and keeps the outline until the run ends', async () => {
     const bridge = fakeDriveBridge()
-    render(<DriveStrip run={running('action 2/15 · click · 3.0 s\n')} bridge={bridge} />)
+    const run = running('action 2/15 · click · 3.0 s\n')
+    const { rerender } = render(<DriveStrip run={run} bridge={bridge} />)
     await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(screen.getByText('DRIVING KICAD · STOPPING…')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeDisabled()
+    expect(bridge.setDriving).not.toHaveBeenCalledWith(false)
+    // A later progress line does not move the frozen bar.
+    rerender(
+      <DriveStrip
+        run={{ ...run, text: run.text + 'action 3/15 · click · 4.0 s\n' }}
+        bridge={bridge}
+      />
+    )
+    expect(screen.getByRole('progressbar', { name: 'Drive progress' })).toHaveAttribute(
+      'aria-valuenow',
+      '2'
+    )
+    expect(screen.getByText('DRIVING KICAD · STOPPING…')).toBeInTheDocument()
+    expect(bridge.setDriving).toHaveBeenCalledTimes(1)
+    rerender(<DriveStrip run={{ ...run, status: 'finished' }} bridge={bridge} />)
     expect(bridge.setDriving).toHaveBeenLastCalledWith(false)
     expect(screen.queryByText(/DRIVING KICAD/)).toBeNull()
   })

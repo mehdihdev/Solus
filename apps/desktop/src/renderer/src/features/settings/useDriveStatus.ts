@@ -1,6 +1,7 @@
 // SOLUSDEV-319 drive slice 3: "SOL can use your mouse and keyboard" as Settings
 // reads it — main-owned (`sol.drive` in ~/.solus/config.json) over the drive
-// members of window.solus.sol. getDriveStatus on mount, then every push; main
+// members of window.solus.sol. getDriveStatus on mount, on focus and on
+// becoming visible, then every push; main
 // is the source of truth, so every call adopts the status it returns.
 import { useCallback, useEffect, useState } from 'react'
 import type { DriveBridge, DriveStatus } from '../../lib/driveBridge'
@@ -31,11 +32,23 @@ export function useDriveStatus(bridge: DriveBridge | null): DriveSettings {
   }, [])
   useEffect(() => {
     if (!bridge) return
-    run(bridge.getDriveStatus(), DRIVE_LOAD_ERROR)
-    return bridge.onDriveStatus((next) => {
+    const read = (): void => run(bridge.getDriveStatus(), DRIVE_LOAD_ERROR)
+    // The user grants in System Settings and comes back: reread trust then.
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') read()
+    }
+    read()
+    window.addEventListener('focus', read)
+    document.addEventListener('visibilitychange', onVisible)
+    const unsubscribe = bridge.onDriveStatus((next) => {
       setStatus(next)
       setError(null)
     })
+    return () => {
+      window.removeEventListener('focus', read)
+      document.removeEventListener('visibilitychange', onVisible)
+      unsubscribe()
+    }
   }, [bridge, run])
   return {
     status,

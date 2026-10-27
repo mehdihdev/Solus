@@ -4,11 +4,13 @@
 // is Solus-authored; the step's output only supplies k and N (driveProgress).
 // It tells main a step runs (amber outline, quiet gestures) and that it ended.
 // Stop needs no route: the helper's kill switch takes the click as physical
-// input and pauses the step — the strip and outline just clear at once.
+// input and pauses the step at its next act. Until the run's status arrives the
+// strip says STOPPING (bar frozen) and main keeps the outline and the quiet
+// gesture period — the step is not over until then.
 import { useEffect, useState } from 'react'
 import { getDriveBridge, type DriveBridge } from '../../lib/driveBridge'
 import type { CommandRun } from './commandRuns'
-import { latestDriveProgress } from './driveProgress'
+import { latestDriveProgress, type DriveProgress } from './driveProgress'
 import './DriveStrip.css'
 
 export interface DriveStripProps {
@@ -21,28 +23,39 @@ function tellMain(bridge: DriveBridge | null, active: boolean): void {
   void bridge?.setDriving(active).catch(() => undefined)
 }
 
+function labelOf(progress: DriveProgress | null, stopping: boolean): string {
+  if (stopping) return 'DRIVING KICAD · STOPPING…'
+  return progress
+    ? `DRIVING KICAD · STEP ${progress.step} OF ${progress.total}`
+    : 'DRIVING KICAD · STARTING'
+}
+
 export function DriveStrip({
   run,
   bridge = getDriveBridge()
 }: DriveStripProps): React.JSX.Element | null {
-  const [stopped, setStopped] = useState(false)
-  const active = run.status === null && !stopped
+  // Stop freezes the progress shown at the click (undefined: not stopped).
+  const [frozen, setFrozen] = useState<DriveProgress | null | undefined>(undefined)
+  const active = run.status === null
   useEffect(() => {
     if (!active) return
     tellMain(bridge, true)
     return () => tellMain(bridge, false)
   }, [active, bridge])
   if (!active) return null
-  const progress = latestDriveProgress(run.text)
-  const label = progress
-    ? `DRIVING KICAD · STEP ${progress.step} OF ${progress.total}`
-    : 'DRIVING KICAD · STARTING'
+  const stopping = frozen !== undefined
+  const progress = stopping ? frozen : latestDriveProgress(run.text)
   const percent = progress ? (progress.step / progress.total) * 100 : 0
   return (
     <div className="drive-strip" role="status" aria-label="SOL is driving KiCad">
       <div className="drive-strip__line">
-        <span className="drive-strip__label">{label}</span>
-        <button type="button" className="drive-strip__stop" onClick={() => setStopped(true)}>
+        <span className="drive-strip__label">{labelOf(progress, stopping)}</span>
+        <button
+          type="button"
+          className="drive-strip__stop"
+          disabled={stopping}
+          onClick={() => setFrozen(latestDriveProgress(run.text))}
+        >
           Stop
         </button>
       </div>
