@@ -729,6 +729,9 @@ class AnthropicAdapter(_BaseAdapter):
             "messages": list(messages),
             "tools": list(tools),
             "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+            # Every round re-sends the whole history (screenshots are never
+            # pruned — that would invalidate the replayed thinking): cache it.
+            "cache_control": {"type": "ephemeral"},
         }
         if effort is not None:
             request["output_config"] = {"effort": effort}

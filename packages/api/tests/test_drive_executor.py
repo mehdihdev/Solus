@@ -69,6 +69,7 @@ class Round:
     provider_items: tuple[dict[str, Any], ...] = ()
     stop_reason: str | None = "tool_use"
     text: str = ""
+    tokens_in: int = 1000
 
 
 class FakeModel:
@@ -155,8 +156,13 @@ async def test_binds_captures_and_runs_one_mapped_action_then_finishes() -> None
     # The assistant's content replays verbatim, then the OK result.
     second = model.calls[1]["messages"]
     assert second[1] == {"role": "assistant", "content": [{"type": "tool_use", "id": "t1"}]}
-    assert second[2]["content"][0]["toolset_name"] == "computer"
+    result = second[2]["content"][0]
+    assert result["toolset_name"] == "computer"
+    # The act's result carries a fresh capture: one round per action.
+    assert [b["type"] for b in result["content"]] == ["text", "image"]
+    assert port.captures == 2
     assert [p.verb for p in progress] == ["click"]
+    assert outcome.code is None
 
 
 async def test_the_next_act_is_chained_to_the_previous_finished_at() -> None:
@@ -240,7 +246,7 @@ async def test_a_screenshot_proposal_recaptures_without_spending_an_action() -> 
     port, model = FakePort(), FakeModel([shot])
     ex, _ = executor(port, model)
     outcome = await ex.run("x", KICAD)
-    assert outcome.actions == 0 and port.captures == 2
+    assert outcome.actions == 0 and port.captures == 2  # the intro + the explicit one
     assert model.calls[1]["messages"][-1]["content"][0]["content"][0]["type"] == "image"
 
 
@@ -318,3 +324,59 @@ async def test_helper_failures_end_the_step_as_errors(code: str) -> None:
     ex, _ = executor(port, FakeModel([click((1, 1))]))
     outcome = await ex.run("x", KICAD)
     assert (outcome.outcome, outcome.code) == ("error", code)
+
+
+@pytest.mark.parametrize(
+    "reason", ["max_tokens", "pause_turn", None, "model_context_window_exceeded"]
+)
+async def test_an_incomplete_reply_is_never_reported_as_done(reason: str | None) -> None:
+    port, model = FakePort(), FakeModel([Round(stop_reason=reason, text="Placed R")])
+    ex, _ = executor(port, model)
+    outcome = await ex.run("x", KICAD)
+    assert (outcome.outcome, outcome.code) == ("error", "model_incomplete")
+
+
+async def test_a_model_round_is_cut_at_the_time_left() -> None:
+    import asyncio
+
+    port = FakePort()
+
+    class StalledModel(FakeModel):
+        async def __call__(self, **kw: Any) -> Round:
+            await asyncio.sleep(30)
+            return Round()
+
+    ex = DriveExecutor(port, StalledModel([]), budget=Budget(max_seconds=0.2))
+    outcome = await asyncio.wait_for(ex.run("x", KICAD), timeout=5)
+    assert (outcome.outcome, outcome.code) == ("budget", "time")
+
+
+async def test_a_stalled_helper_action_ends_as_a_timeout_naming_the_action() -> None:
+    import asyncio
+
+    class StalledPort(FakePort):
+        async def act(self, *a: Any, **kw: Any) -> ActDone:
+            await asyncio.sleep(30)
+            raise AssertionError
+
+    ex = DriveExecutor(
+        StalledPort(), FakeModel([click((1, 1))]), budget=Budget(act_timeout_seconds=0.1)
+    )
+    outcome = await asyncio.wait_for(ex.run("x", KICAD), timeout=5)
+    assert (outcome.outcome, outcome.code, outcome.failed_action) == ("error", "helper_timeout", 1)
+
+
+async def test_the_input_token_cap_ends_the_step() -> None:
+    port = FakePort()
+    model = FakeModel([click((i, i), f"t{i}") for i in range(10)])
+    ex, _ = executor(port, model, budget=Budget(max_input_tokens=2500))
+    outcome = await ex.run("x", KICAD)
+    assert (outcome.outcome, outcome.code) == ("budget", "tokens")
+    assert len(model.calls) == 3  # 1000 tokens a round: the 4th never starts
+
+
+async def test_unsupported_proposals_show_in_progress_too() -> None:
+    zoom = Round(tool_calls=(ToolUse(id="z", name="zoom", args={}),))
+    ex, progress = executor(FakePort(), FakeModel([zoom, click((1, 1))]))
+    await ex.run("x", KICAD)
+    assert [(p.action, p.verb) for p in progress] == [(1, "unsupported"), (2, "click")]

@@ -141,7 +141,10 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("refused", "chord_denied", "chord_denied"),
         ("not_in_front", None, "in front"),
         ("declined", "model_refusal", "declined"),
-        ("error", "no_credits", "no_credits"),
+        ("error", "no_credits", "out of credits"),
+        ("error", "rate_limited", "wait a minute"),
+        ("budget", "tokens", "model budget"),
+        ("error", "helper_timeout", "helper_timeout"),
     ],
 )
 async def test_an_unfinished_step_fails_so_the_plan_stops(kind: str, code: str, words: str) -> None:
@@ -274,3 +277,75 @@ def test_drive_step_is_never_auto_approved() -> None:
     from solus_api.agent.command_auto import auto_judge
 
     assert auto_judge("drive.step", ARGS) is False
+
+
+async def test_a_second_step_on_the_same_machine_is_refused_while_one_runs() -> None:
+    import asyncio
+
+    from solus_api.agent.drive.wiring import drive_lease
+
+    key = (uuid.uuid4(), "machine-1")
+    gate = asyncio.Event()
+
+    class Slow(Runner):
+        async def __call__(self, *a: Any) -> StepOutcome:
+            await gate.wait()
+            return self.result
+
+    first = DriveStepTool(
+        run_step=Slow(outcome()), record=Events(), budget=Budget(), lease=lambda: drive_lease(key)
+    )
+    second_runner = Runner(outcome())
+    second = DriveStepTool(
+        run_step=second_runner, record=Events(), budget=Budget(), lease=lambda: drive_lease(key)
+    )
+    running = asyncio.create_task(first.invoke(ARGS))
+    await asyncio.sleep(0)
+    with pytest.raises(ToolException, match="already running"):
+        await second.invoke(ARGS)
+    assert second_runner.calls == []
+    gate.set()
+    assert (await running)["outcome"] == "done"
+    # Released: the next step may run.
+    assert (await second.invoke(ARGS))["outcome"] == "done"
+
+
+async def test_a_cancelled_step_still_ends_its_audit_trail() -> None:
+    import asyncio
+
+    class Hang(Runner):
+        async def __call__(self, *a: Any) -> StepOutcome:
+            await asyncio.sleep(30)
+            raise AssertionError
+
+    events = Events()
+    task = asyncio.create_task(tool(Hang(outcome()), events).invoke(ARGS))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert [kind for kind, _ in events.seen] == [
+        "drive.session_started",
+        "drive.aborted",
+        "drive.session_ended",
+    ]
+    assert events.seen[-1][1]["outcome"] == "cancelled"
+
+
+async def test_the_summary_is_redacted() -> None:
+    leaky = StepOutcome(
+        outcome="done",
+        code=None,
+        actions=1,
+        seconds=1.0,
+        summary="Typed token=abcdef0123456789abcdef",
+    )
+    value = await tool(Runner(leaky)).invoke(ARGS)
+    assert "abcdef0123456789abcdef" not in value["summary"]
+
+
+def test_the_description_states_the_configured_budget() -> None:
+    d = DriveStepTool(
+        run_step=Runner(outcome()), record=Events(), budget=Budget(max_actions=8, max_seconds=90)
+    ).descriptor
+    assert "up to 8 actions · 1.5 min" in d.description

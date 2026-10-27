@@ -627,3 +627,14 @@ def test_builtins_switch_drive_on_from_the_environment(tmp_path: Path) -> None:
     inventory = drive.inventory()
     assert inventory is not None
     assert {tool["name"] for tool in inventory["tools"]} == set(TOOL_NAMES)
+
+
+def test_a_fetch_once_artifact_nobody_pulls_expires() -> None:
+    now = [0.0]
+    store = ArtifactStore(clock=lambda: now[0])
+    staged = store.stage(PNG, media_type="image/png", fetch_once=True)
+    kept = store.stage(PNG, media_type="image/png")
+    now[0] = 61.0
+    assert store.get(staged.artifact_id) is None
+    assert store.get(kept.artifact_id) == PNG  # ordinary artifacts do not expire
+    assert len(store) == 1

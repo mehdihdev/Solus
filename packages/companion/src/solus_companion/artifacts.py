@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import mimetypes
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -57,6 +58,9 @@ MAX_TOTAL_BYTES: Final = 128 * 1024 * 1024
 #: Most artifacts held at once, regardless of size.
 MAX_ARTIFACTS: Final = 16
 
+#: A fetch-once artifact nobody pulls (a cancelled drive step) is dropped after this.
+FETCH_ONCE_TTL_SECONDS: Final = 60.0
+
 
 @dataclass(frozen=True)
 class StagedArtifact:
@@ -74,14 +78,17 @@ class ArtifactStore:
         max_artifact_bytes: int = MAX_ARTIFACT_BYTES,
         max_total_bytes: int = MAX_TOTAL_BYTES,
         max_artifacts: int = MAX_ARTIFACTS,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._max_artifact_bytes = max_artifact_bytes
         self._max_total_bytes = max_total_bytes
         self._max_artifacts = max_artifacts
         self._items: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
         #: Ids served at most once, then dropped (ADR-041 §6: a drive capture
-        #: lives only as long as the step that pulls it).
-        self._fetch_once: set[str] = set()
+        #: lives only as long as the step that pulls it), each with its staging
+        #: time: one nobody pulls expires after FETCH_ONCE_TTL_SECONDS.
+        self._fetch_once: dict[str, float] = {}
+        self._clock = clock
         self._total = 0
 
     def __len__(self) -> int:
@@ -99,10 +106,11 @@ class ArtifactStore:
                 f"artifact of {len(payload)} bytes exceeds the "
                 f"{self._max_artifact_bytes} byte staging limit"
             )
+        self._expire()
         artifact_id = uuid.uuid4().hex
         self._items[artifact_id] = (payload, media_type)
         if fetch_once:
-            self._fetch_once.add(artifact_id)
+            self._fetch_once[artifact_id] = self._clock()
         self._total += len(payload)
         self._evict()
         return StagedArtifact(
@@ -114,10 +122,16 @@ class ArtifactStore:
             self._total > self._max_total_bytes or len(self._items) > self._max_artifacts
         ):
             oldest, (payload, _media) = self._items.popitem(last=False)
-            self._fetch_once.discard(oldest)
+            self._fetch_once.pop(oldest, None)
             self._total -= len(payload)
 
+    def _expire(self) -> None:
+        cutoff = self._clock() - FETCH_ONCE_TTL_SECONDS
+        for artifact_id in [k for k, staged in self._fetch_once.items() if staged < cutoff]:
+            self._drop(artifact_id)
+
     def get(self, artifact_id: str) -> bytes | None:
+        self._expire()
         item = self._items.get(artifact_id)
         return None if item is None else item[0]
 
@@ -142,7 +156,7 @@ class ArtifactStore:
 
     def _drop(self, artifact_id: str) -> None:
         payload, _media = self._items.pop(artifact_id)
-        self._fetch_once.discard(artifact_id)
+        self._fetch_once.pop(artifact_id, None)
         self._total -= len(payload)
 
     def clear(self) -> None:

@@ -8,6 +8,8 @@ gateway round (that user's identity: gates + debit), and the event recorder.
 """
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final
 
 from solus_api.agent.drive.executor import Budget, DriveExecutor, Progress, StepOutcome
@@ -21,11 +23,32 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from solus_api.agent.tools.shapes import ToolDescriptor
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.secrets import SecretStore
     from solus_api.orchestration.gateway import Completion
 
 DRIVE_TOOLS: Final = ("drive.identify", "drive.capture", "drive.act")
+
+#: One drive step at a time per (user, machine): two loops on one window would
+#: double the budget and act on each other's stale captures.
+# ponytail: process-local, like the in-memory bridge registry it sits beside; a
+# Redis lease (SET NX + TTL) replaces it when the API goes multi-instance.
+_ACTIVE: set[tuple[uuid.UUID, str]] = set()
+
+
+@asynccontextmanager
+async def drive_lease(key: tuple[uuid.UUID, str]) -> AsyncIterator[None]:
+    if key in _ACTIVE:
+        raise ToolException(
+            "Another drive step is already running on this machine; wait for it to finish.",
+            code=ToolErrorCode.TOOL_ERROR,
+        )
+    _ACTIVE.add(key)
+    try:
+        yield
+    finally:
+        _ACTIVE.discard(key)
 
 
 def build_drive_step(
@@ -41,9 +64,6 @@ def build_drive_step(
     enqueue: Any,
     budget: Budget,
 ) -> DriveStepTool | None:
-    from solus_api.bridge.service import fetch_artifact
-    from solus_api.bridge.tool import BridgeTool
-
     session = bridge.get(user_id, team_id, project_id)
     if session is None:
         return None
@@ -54,29 +74,13 @@ def build_drive_step(
     }
     if not set(DRIVE_TOOLS) <= specs.keys():
         return None
-    tools = {
-        name: BridgeTool(
-            descriptor=specs[name].descriptor,
-            sessions=bridge,
-            user_id=user_id,
-            team_id=team_id,
-            project_id=project_id,
-            call_cap_bytes=call_cap_bytes,
-        )
-        for name in DRIVE_TOOLS
-    }
-
-    async def fetch(artifact_id: str) -> bytes:
-        live = bridge.get(user_id, team_id, project_id)
-        if live is None:
-            raise ToolException("bridge offline", code=ToolErrorCode.UNAVAILABLE, retryable=True)
-        return await fetch_artifact(live, artifact_id)
-
-    port = BridgeDrivePort(
-        identify=tools["drive.identify"],
-        capture=tools["drive.capture"],
-        act=tools["drive.act"],
-        fetch=fetch,
+    port = bridge_drive_port(
+        bridge,
+        {name: specs[name].descriptor for name in DRIVE_TOOLS},
+        user_id=user_id,
+        team_id=team_id,
+        project_id=project_id,
+        call_cap_bytes=call_cap_bytes,
     )
 
     async def model(
@@ -121,4 +125,48 @@ def build_drive_step(
             )
             await db.commit()
 
-    return DriveStepTool(run_step=run_step, record=record, budget=budget)
+    key = (user_id, session.companion_instance_id)
+    return DriveStepTool(
+        run_step=run_step, record=record, budget=budget, lease=lambda: drive_lease(key)
+    )
+
+
+def bridge_drive_port(
+    bridge: "BridgeSessionRegistry",
+    descriptors: "dict[str, ToolDescriptor]",
+    *,
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    project_id: uuid.UUID,
+    call_cap_bytes: int,
+) -> BridgeDrivePort:
+    """The helper port for ONE scope: every call and every artifact pull goes
+    to the requesting user's own session for this team and project, looked up
+    by that exact scope each time (contract §3) — never another session."""
+    from solus_api.bridge.service import fetch_artifact
+    from solus_api.bridge.tool import BridgeTool
+
+    tools = {
+        name: BridgeTool(
+            descriptor=descriptors[name],
+            sessions=bridge,
+            user_id=user_id,
+            team_id=team_id,
+            project_id=project_id,
+            call_cap_bytes=call_cap_bytes,
+        )
+        for name in DRIVE_TOOLS
+    }
+
+    async def fetch(artifact_id: str) -> bytes:
+        live = bridge.get(user_id, team_id, project_id)
+        if live is None:
+            raise ToolException("bridge offline", code=ToolErrorCode.UNAVAILABLE, retryable=True)
+        return await fetch_artifact(live, artifact_id)
+
+    return BridgeDrivePort(
+        identify=tools["drive.identify"],
+        capture=tools["drive.capture"],
+        act=tools["drive.act"],
+        fetch=fetch,
+    )

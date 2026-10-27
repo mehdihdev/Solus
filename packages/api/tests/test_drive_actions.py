@@ -4,7 +4,7 @@ request; a proposal that cannot be expressed is answered as an error (the model
 may try again within the budget); a proposal outside the screenshot ends the
 step (a §5 bounds check, not a retry)."""
 
-from typing import Literal
+from typing import Any, Literal
 
 import pytest
 from solus_api.agent.drive.actions import (
@@ -16,11 +16,12 @@ from solus_api.agent.drive.actions import (
     Frame,
     OutOfBounds,
     Unsupported,
+    action_result,
     error_result,
     image_result,
     map_action,
     ok_result,
-    skipped_result,
+    one_per_turn_result,
 )
 
 # A 1280x800 capture of a 640x400-point window (a 2x Retina window, downscaled 1:1
@@ -165,6 +166,24 @@ def test_results_echo_the_toolset_name() -> None:
     }
     err = error_result("t3", "no")
     assert err["is_error"] is True and err["toolset_name"] == "computer"
-    skipped = skipped_result("t4")
-    assert skipped["content"] == "Not executed: an earlier computer action in this turn failed."
+    skipped = one_per_turn_result("t4")
+    assert skipped["content"] == "Not executed: one action per turn."
     assert skipped["is_error"] is True
+    acted = action_result("t5", b"\x89PNG")
+    assert [b["type"] for b in acted["content"]] == ["text", "image"]
+    assert acted["toolset_name"] == "computer"
+
+
+@pytest.mark.parametrize(
+    ("member", "args"),
+    [
+        ("scroll", {"coordinate": [1, 1], "scroll_direction": ["up"], "scroll_amount": 1}),
+        ("wait", {"duration": 1e308}),
+        ("wait", {"duration": float("nan")}),
+        ("left_click", None),
+        ("key", {"text": ["a"]}),
+        ("left_click_drag", {"start_coordinate": {"x": 1}, "coordinate": [1, 1]}),
+    ],
+)
+def test_malformed_arguments_are_unsupported_never_raised(member: str, args: Any) -> None:
+    assert isinstance(map_action(member, args, FRAME), Unsupported)

@@ -321,6 +321,8 @@ class Settings(BaseSettings):
     # --- ADR-041 drive steps (2026-10-26 amendment: wall-clock, model time included) ---
     drive_max_actions: int = Field(default=15, ge=1, le=50)
     drive_max_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
+    # Cost ceiling per step: screenshots are never pruned, so input grows each round.
+    drive_max_input_tokens: int = Field(default=400_000, ge=20_000, le=2_000_000)
 
     # --- Artifacts (SOLUSDEV-100 T4c / docs/api/artifacts.md) ---
     # Hard upload cap (§4.4) — over → 413, enforced against Content-Length

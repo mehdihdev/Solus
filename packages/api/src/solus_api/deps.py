@@ -447,7 +447,11 @@ ProjectCtx = Annotated[ProjectContext, Depends(get_project_read_context)]
 def _drive_budget(settings: Settings) -> "Budget":
     from solus_api.agent.drive.executor import Budget
 
-    return Budget(max_actions=settings.drive_max_actions, max_seconds=settings.drive_max_seconds)
+    return Budget(
+        max_actions=settings.drive_max_actions,
+        max_seconds=settings.drive_max_seconds,
+        max_input_tokens=settings.drive_max_input_tokens,
+    )
 
 
 async def discover_research_tools(

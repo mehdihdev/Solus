@@ -11,9 +11,11 @@ An unfinished step (the user took over, budget used, a refusal) raises a
 `ToolException` with a Solus-written sentence, so a running plan stops there.
 """
 
+import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -63,14 +65,18 @@ _PARAMS: Final[dict[str, Any]] = {
     },
 }
 
-_DESCRIPTION: Final = (
-    "Use the user's mouse and keyboard in their open KiCad window for ONE small, "
-    "concrete step that no KiCad tool can do (for example: open the Add Symbol "
-    "chooser and place a resistor). Prefer kicad.* tools whenever one fits. The "
-    "user approves each step; it runs up to 15 actions in about 2 minutes, and "
-    "stops if they touch the mouse or keyboard. `intent` is shown to them word for "
-    "word: one plain sentence saying what will change in the window."
-)
+
+def _description(budget: Budget) -> str:
+    return (
+        "Use the user's mouse and keyboard in their open KiCad window for ONE small, "
+        "concrete step that no KiCad tool can do (for example: open the Add Symbol "
+        "chooser and place a resistor). Prefer kicad.* tools whenever one fits. The "
+        f"user approves each step; it runs {_budget_label(budget)}, and stops if they "
+        "touch the mouse or keyboard. `intent` is shown to them word for word: one "
+        "plain sentence saying what will change in the window."
+    )
+
+
 _CONSENT: Final = "SOL will move your mouse and type in your KiCad window for this one step"
 
 #: What an unfinished step tells SOL and the person, by outcome.
@@ -82,12 +88,23 @@ _UNFINISHED: Final = {
     "declined": "stopped — SOL declined this step",
     "error": "stopped — something failed ({code})",
 }
+#: Codes with a sentence of their own (the person can act on these).
+_BY_CODE: Final = {
+    "rate_limited": "stopped — too many SOL requests right now; wait a minute and ask again",
+    "no_credits": "stopped — you are out of credits",
+    "tokens": "stopped — this step used its model budget; ask SOL to continue",
+}
 
 
 def _budget_label(budget: Budget) -> str:
     minutes = budget.max_seconds / 60
     span = f"{minutes:g} min" if minutes >= 1 else f"{budget.max_seconds:g} s"
     return f"up to {budget.max_actions} actions · {span}"
+
+
+@asynccontextmanager
+async def _no_lease() -> AsyncIterator[None]:
+    yield
 
 
 def _row(label: str, value: str) -> dict[str, Any]:
@@ -98,13 +115,21 @@ class DriveStepTool:
     """One approved, bounded drive step. Built per turn by the runtime only when
     the requesting user's companion advertises the internal drive tools."""
 
-    def __init__(self, *, run_step: RunStep, record: Record, budget: Budget) -> None:
+    def __init__(
+        self,
+        *,
+        run_step: RunStep,
+        record: Record,
+        budget: Budget,
+        lease: "Callable[[], AbstractAsyncContextManager[None]] | None" = None,
+    ) -> None:
         self._run_step = run_step
         self._record = record
         self._budget = budget
+        self._lease = lease or _no_lease
         self._descriptor = ToolDescriptor(
             name="drive.step",
-            description=_DESCRIPTION,
+            description=_description(budget),
             consent_summary=_CONSENT,
             params=_PARAMS,
             returns={"type": "object"},
@@ -127,9 +152,17 @@ class DriveStepTool:
                 f"{INTENT_MAX} characters, without < or >",
                 code=ToolErrorCode.INVALID_ARGS,
             ) from None
-        # The card redacts secret-shaped text; the loop would get the raw intent.
-        # Displayed must be executed, so such an intent is refused outright.
-        if redact_text(parsed.intent) != parsed.intent:
+        # Displayed must be executed: the card strips non-printable characters
+        # (zero-width, bidi overrides, tag characters), collapses runs of spaces
+        # and redacts secret-shaped text, while the loop would get the raw intent.
+        # Anything the card would alter is refused outright.
+        intent = parsed.intent
+        if not intent.isprintable() or "  " in intent or intent != intent.strip():
+            raise ToolException(
+                "drive.step's intent must be plain visible text, single-spaced",
+                code=ToolErrorCode.INVALID_ARGS,
+            )
+        if redact_text(intent) != intent:
             raise ToolException(
                 "drive.step's intent contains secret-shaped text that cannot be shown "
                 "on the approval card; describe the step without it",
@@ -164,19 +197,37 @@ class DriveStepTool:
                     f"{progress.elapsed:.1f} s\n",
                 )
 
-        await self._safe_record(
-            "drive.session_started", {"app": parsed.app, "budget": _budget_label(self._budget)}
-        )
-        result = await self._run_step(parsed.intent, DRIVABLE_APPS[parsed.app], on_progress)
+        async with self._lease():
+            await self._safe_record(
+                "drive.session_started", {"app": parsed.app, "budget": _budget_label(self._budget)}
+            )
+            try:
+                result = await self._run_step(parsed.intent, DRIVABLE_APPS[parsed.app], on_progress)
+            except asyncio.CancelledError:
+                # The registry backstop (or a dropped request) cancelled the
+                # step: the audit trail still ends, then cancellation proceeds.
+                await self._safe_record("drive.aborted", {"outcome": "cancelled", "code": None})
+                await self._safe_record(
+                    "drive.session_ended",
+                    {
+                        "app": parsed.app,
+                        "actions": len(trail),
+                        "outcome": "cancelled",
+                        "code": None,
+                    },
+                )
+                raise
         await self._record_outcome(parsed.app, result, trail)
         if result.outcome == "done":
             return {
                 "outcome": "done",
                 "actions": result.actions,
                 "seconds": result.seconds,
-                "summary": result.summary,
+                # Model output derived from the screen: redacted like every
+                # other persisted or streamed value.
+                "summary": redact_text(result.summary),
             }
-        sentence = _UNFINISHED[result.outcome].format(
+        sentence = _BY_CODE.get(result.code or "") or _UNFINISHED[result.outcome].format(
             code=result.code or "unknown", app=_APP_NAMES[parsed.app]
         )
         noun = "action" if result.actions == 1 else "actions"

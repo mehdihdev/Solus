@@ -7,6 +7,7 @@ malformed reply is a refusal, never a crash. A helper refusal arrives as the
 companion's `code: message` error text and becomes `DriveRefusal(code, …)`.
 """
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -20,6 +21,41 @@ PNG_MAGIC: Final = b"\x89PNG\r\n\x1a\n"
 #: The vision limit on every toolset model (Anthropic: 2,576 px long edge).
 MAX_IMAGE_EDGE: Final = 2576
 _CODE_PREFIX: Final = re.compile(r"^([a-z][a-z_]{0,39}): (.*)$", re.DOTALL)
+#: sol-drive.md §2 (helper) and §3 (companion) refusal codes. Anything else a
+#: companion sends is `unknown`: the code reaches SOL and data events, so it is
+#: never free text from the machine.
+KNOWN_CODES: Final = frozenset(
+    {
+        "usage",
+        "app_not_allowed",
+        "not_trusted",
+        "screen_recording_denied",
+        "not_frontmost",
+        "window_mismatch",
+        "window_not_found",
+        "window_resized",
+        "window_chrome",
+        "out_of_bounds",
+        "occluded",
+        "bad_chord",
+        "chord_denied",
+        "bad_text",
+        "secure_field",
+        "user_active",
+        "focus_lost",
+        "stopped",
+        "capture_failed",
+        "helper_missing",
+        "helper_spawn",
+        "helper_timeout",
+        "helper_crashed",
+        "helper_output",
+        "bridge",
+    }
+)
+#: One bridge round trip; BridgeTool.invoke is called directly here, outside
+#: the registry's own timeout.
+CALL_TIMEOUT_SECONDS: Final = 30.0
 
 
 class DriveRefusal(Exception):  # noqa: N818 — a refusal, not a bug
@@ -128,7 +164,8 @@ def _refusal(exc: ToolException) -> DriveRefusal:
     match = _CODE_PREFIX.match(exc.message)
     if match is None:
         return DriveRefusal("bridge", exc.message[:200])
-    return DriveRefusal(match.group(1), match.group(2)[:200])
+    code = match.group(1) if match.group(1) in KNOWN_CODES else "unknown"
+    return DriveRefusal(code, match.group(2)[:200])
 
 
 class BridgeDrivePort:
@@ -149,7 +186,10 @@ class BridgeDrivePort:
 
     async def _call(self, tool: Tool, args: dict[str, Any]) -> Any:
         try:
-            return await tool.invoke(args)
+            async with asyncio.timeout(CALL_TIMEOUT_SECONDS):
+                return await tool.invoke(args)
+        except TimeoutError:
+            raise DriveRefusal("helper_timeout", "the companion did not answer in time") from None
         except ToolException as exc:
             raise _refusal(exc) from None
 

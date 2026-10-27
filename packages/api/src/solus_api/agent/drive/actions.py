@@ -15,6 +15,7 @@ window points (sol-drive.md §4: `pointsWidth / imageWidth`).
 """
 
 import base64
+import math
 from dataclasses import asdict, dataclass
 from typing import Any, Final, Literal
 
@@ -224,7 +225,8 @@ def _drag(args: dict[str, Any], frame: Frame) -> Proposal:
 
 
 def _scroll(args: dict[str, Any], frame: Frame) -> Proposal:
-    direction = _SCROLL.get(args.get("scroll_direction"))  # type: ignore[arg-type]
+    raw_direction = args.get("scroll_direction")
+    direction = _SCROLL.get(raw_direction) if isinstance(raw_direction, str) else None
     amount = args.get("scroll_amount")
     if args.get("text") or direction is None:
         return Unsupported("scroll up, down, left or right, without modifiers")
@@ -249,7 +251,11 @@ def _key(args: dict[str, Any]) -> Proposal:
 
 def _wait(args: dict[str, Any]) -> Proposal:
     duration = args.get("duration")
-    if not isinstance(duration, int | float) or isinstance(duration, bool):
+    if (
+        not isinstance(duration, int | float)
+        or isinstance(duration, bool)
+        or not math.isfinite(duration)
+    ):
         return Unsupported("duration must be a number of seconds")
     ms = round(duration * 1000)
     if not 0 <= ms <= MAX_WAIT_MS:
@@ -257,8 +263,18 @@ def _wait(args: dict[str, Any]) -> Proposal:
     return ActRequest(verb="wait", ms=ms)
 
 
-def map_action(member: str, args: dict[str, Any], frame: Frame) -> Proposal:
-    """Translate one proposed member call. Unknown members are Unsupported."""
+def map_action(member: str, args: Any, frame: Frame) -> Proposal:
+    """Translate one proposed member call. Unknown members — and any argument
+    shape the model invents — are Unsupported; this never raises."""
+    if not isinstance(args, dict):
+        return Unsupported("arguments must be an object")
+    try:
+        return _map(member, args, frame)
+    except (TypeError, ValueError, OverflowError, AttributeError):
+        return Unsupported(f"`{member}` arguments are not in the expected shape")
+
+
+def _map(member: str, args: dict[str, Any], frame: Frame) -> Proposal:
     if member not in ENABLED_MEMBERS:
         return Unsupported(f"`{member}` is not available")
     if member == "screenshot":
@@ -309,8 +325,13 @@ def error_result(tool_use_id: str, message: str) -> dict[str, Any]:
     return _result(tool_use_id, f"Error: {message}", is_error=True)
 
 
-def skipped_result(tool_use_id: str) -> dict[str, Any]:
-    """The toolset's required answer for a call after a failed one in a batch."""
-    return _result(
-        tool_use_id, "Not executed: an earlier computer action in this turn failed.", is_error=True
-    )
+def action_result(tool_use_id: str, png: bytes) -> dict[str, Any]:
+    """An action's OK plus the fresh capture taken right after it."""
+    image = image_result(tool_use_id, png)["content"]
+    return _result(tool_use_id, [{"type": "text", "text": "OK"}, *image])
+
+
+def one_per_turn_result(tool_use_id: str) -> dict[str, Any]:
+    """The answer for a second call in one turn (parallel use is off, so this is
+    defensive): every tool_use must be answered, none beyond the first runs."""
+    return _result(tool_use_id, "Not executed: one action per turn.", is_error=True)

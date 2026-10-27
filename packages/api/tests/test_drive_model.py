@@ -101,6 +101,7 @@ async def test_the_request_is_the_toolset_with_one_action_per_call(
     assert sent["system"] == "SYS"
     assert sent["messages"] == MESSAGES
     assert "thinking" not in sent  # always on for Opus 5.5; `disabled` would 400
+    assert sent["cache_control"] == {"type": "ephemeral"}  # the growing history is cached
     assert recorder["client"]["max_retries"] == 0
     assert events[0] == ToolUse(id="toolu_1", name="left_click", args={"coordinate": [4, 5]})
     usage = events[-1]
