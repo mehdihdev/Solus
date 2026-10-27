@@ -52,7 +52,7 @@ which it is a `usage` refusal (ADR-041 amendment M2, 2026-10-26).
 | `identify` | —                                                                               | `{ok, now, trust:{accessibility,screenRecording}, allowed, app:{bundleId,pid,name}\|null, window:{id,title,bounds}\|null}`. When the frontmost app is NOT drivable, or is drivable but working outside `WS` (`outsideWorkspace: true`), `app` and `window` are null — another app's (or another project's) identity and window title never leave the machine. |
 | `capture`  | `--bundle B --window W [--max-edge N]` (256–2048, default 1568)                 | `{ok, png (base64), imageWidth, imageHeight, pointsWidth, pointsHeight, bounds}`; refuses unless W is on screen, owned by B, and B is drivable; shadow-free, and refused (`capture_failed`) if the image's shape does not match the window's (padding would skew coordinates).                                                                                |
 | `act`      | `--bundle B --window W --since T [--expect-width w --expect-height h] <verb> …` | `{ok, verb, idleSeconds, finishedAt, bounds}` or a refusal (mid-verb refusals add `postedEvents`).                                                                                                                                                                                                                                                            |
-| `trust`    | `[--prompt]` (no `--within`)                                                    | `{ok, trust:{accessibility,screenRecording}, unsignedDev}`. Slice 3: the desktop's permission rows. Posts nothing, captures nothing, so it skips the caller check; `--prompt` asks macOS to show both permission prompts for the helper.                                                                                                                      |
+| `trust`    | `[--prompt]` (no `--within`)                                                    | `{ok, trust:{accessibility,screenRecording}, unsignedDev}`. The desktop's permission rows; `--prompt` asks macOS to show both permission prompts for the helper. Slice 3b: reached only as the agent's `trust` op (§2.1).                                                                                                                                     |
 
 `act` verbs (window-relative **points**, integers): `click --x --y [--button left\|right] [--count 1\|2]`
 (no right double-click — a right click opens a menu), `move --x --y`, `drag --x --y --to-x --to-y`,
@@ -63,23 +63,12 @@ the companion forwards it to the desktop for the amber outline (§3, §5).
 
 Checks before ANY event is posted (each failure is a refusal with a code; nothing is posted):
 
-- **Caller** (identify, capture and act, before anything else — ADR-041 amendment 2026-10-27): the
-  helper's parent satisfies the companion's code requirement (Solus team ID + identifier
-  `com.solusforge.solus.companion`), that parent was started with no arguments (the top-level companion
-  takes none; read with `sysctl KERN_PROCARGS2`), and the parent's parent satisfies Solus.app's
-  (`com.solusforge.solus`); the helper's own signature must also be valid. Pids come from the kernel
-  (`getppid`, `proc_pidinfo`), requirements are checked with `SecCode` — nothing is read from argv or the
-  environment. Failure is `caller_untrusted`. A release build whose team ID is still the placeholder
-  refuses every call. Debug builds compile in `SOLUS_INPUT_UNSIGNED_DEV` (Package.swift, debug
-  configuration only), which skips this check and reports `unsignedDev: true`; release builds have no
-  such path. Requirements carry the Developer ID clauses (`certificate 1[field.1.2.840.113635.100.6.2.6]`,
-  `certificate leaf[field.1.2.840.113635.100.6.1.13]`); the helper's own requirement is pinned too
-  (`com.solusforge.solus.input`). **Known bypass (security review C1, ADR-041 amendment C1):** pids are
-  inspected after the fact, so a same-user process can start the helper with arguments it chose and then
-  exec the signed companion and Solus.app binaries into its parent and grandparent pids. Slice 3b replaces
-  this with a socket agent that checks the peer's audit token (§6); until then the team ID stays a
-  placeholder and release builds refuse every call. `trust` (and `trust --prompt`) skip the check: they
-  return two booleans and can show macOS's prompts, nothing more (accepted).
+- **Caller** (slice 3b, ADR-041 amendments C1 and 3b): commands reach the helper only through the
+  agent (§2.1), which authenticates every request before the runner sees it. The slice 3 parent-chain
+  check and the disclaim launcher are removed — under launchd the parent is always launchd. A release
+  build runs only as the agent (`serve`); any other invocation is a `usage` refusal. Debug builds
+  (`SOLUS_INPUT_UNSIGNED_DEV`, Package.swift debug configuration only) also accept the commands on argv
+  for tests and skip the code-requirement checks, never the session token, and report `unsignedDev: true`.
 - **Workspace** (every command with `--within`): absolute, resolved, not `/`, and neither the user's home
   directory nor any ancestor of it (home from `getpwuid`, never `$HOME`; byte compare by whole segment) —
   `usage` otherwise.
@@ -147,19 +136,61 @@ remains between the last hit-test and a global pointer post (inherent); the kill
 HID idle counter and the stuck-button release are verified on real hardware in the QA pass, not in unit
 tests; the bundle id is not yet tied to KiCad's code signature (to add when the list widens).
 
+### 2.1 Agent mode (slice 3b)
+
+The helper runs as a **launchd agent** (`solus-input serve`), registered by Solus.app with SMAppService
+(`app.setLoginItemSettings({type: 'agentService', serviceName: 'com.solusforge.solus.input.agent.plist'})`)
+only while the drive setting is on, unregistered when it turns off. launchd starts it, so it is its own
+responsible process and the grants attach to SolusInput.app. Launch agent plist (shipped at
+`Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist`): `Label`
+`com.solusforge.solus.input.agent`, `BundleProgram`
+`Contents/Resources/SolusInput.app/Contents/MacOS/solus-input`, `ProgramArguments` `[solus-input, serve]`,
+`RunAtLoad` and `KeepAlive` true, `ProcessType` `Interactive`, `AssociatedBundleIdentifiers`
+`[com.solusforge.solus]`.
+
+**Socket.** `~/Library/Application Support/Solus/drive/agent.sock` (home from `getpwuid`). The agent
+creates the directory `0700` and refuses to serve if it exists with another owner, a symlink, or any
+group/other permission bit; the socket is `0600`. A stale socket file (nothing accepting) is unlinked
+before binding. Debug builds accept `serve --socket-dir DIR` (dev uses `…/Solus/drive-dev/`, so a dev
+run never collides with an installed agent); release builds do not.
+
+**Wire protocol v1.** One request per connection: one `\n`-terminated JSON line (≤ 64 KiB), one JSON
+line back, then the agent closes. Requests are served one at a time.
+
+| `op`      | Request                                     | Peer must satisfy                            | Reply                                                                   |
+| --------- | ------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
+| `session` | `{"v":1,"op":"session"}`                    | Solus.app (`com.solusforge.solus`)           | `{ok, token}` — 32 random bytes, base64url; replaces any previous token |
+| `trust`   | `{"v":1,"op":"trust","prompt":bool}`        | Solus.app                                    | the `trust` reply (§2)                                                  |
+| `run`     | `{"v":1,"op":"run","token":T,"argv":[...]}` | companion (`com.solusforge.solus.companion`) | the runner's reply for `argv` (`identify`, `capture`, `act` only)       |
+
+- **Peer identity** comes from `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` — the audit token captured at
+  connect — checked with `SecCodeCopyGuestWithAttributes(kSecGuestAttributeAudit)` +
+  `SecCodeCheckValidity` against the requirement (team ID + identifier + Developer ID clauses). A process
+  that connects and then execs the signed binary keeps its connect-time token, so it fails. The agent's
+  own signature is checked against its pinned requirement at start; failure exits.
+- **The token** lives only in the agent's memory (a restart invalidates it) and is compared in constant
+  time. It reaches the companion only from Solus.app main, over the companion's stdin (§3).
+- **Refusals:** `caller_untrusted` (peer requirement), `bad_token` (missing, wrong or superseded token),
+  `usage` (malformed request, unknown op, `argv` not identify/capture/act, oversize line). The placeholder
+  team ID makes every peer check fail (release fails closed until a human sets it).
+- **Cancellation:** the peer closing its end during a `run` is the old SIGTERM — the runner stops before
+  its next event (`stopped`) and releases a held button. The kill switch and every §2 check are unchanged.
+- **Residual (accepted, ADR-041 amendment 3b):** a same-user process that binds the socket path first sees
+  the requests sent to it and can answer with false captures; it cannot post input, and a token it
+  receives is useless without the companion's identity.
+
 ## 3. Companion `drive` server (slices 1–2)
 
 `packages/companion/src/solus_companion/drive/` — a `BuiltinServer` like `machine`:
 
-- `helper.py`: runs the helper at a **pinned absolute path** (`SOLUS_DRIVE_HELPER`, set by the desktop
-  app), re-checked before EVERY run: absolute, a regular executable, no symlink anywhere on the path,
-  the file not group/other-writable, and no directory above it other-writable (sticky directories
-  excepted) or group-writable unless root owns it (`/Applications` is `root:admin 0775`). The desktop
-  applies the same rule before it reports driving as available (§5).
-  `asyncio.create_subprocess_exec` with an argument list (never a shell), an empty environment but
-  `PATH`, ONE deadline covering read + exit, a 24 MiB stdout cap (an incompressible 2048-px capture
-  fits), exactly one JSON object split on `\n` only. Any early exit — timeout, cap, cancellation (Stop,
-  a dropped bridge) — sends SIGTERM (the helper releases a held button), then SIGKILL after 1 s.
+- `helper.py` (slice 3b): the **agent client**. The socket path and the session token arrive from the
+  desktop on stdin, `{"type":"drive_session","socket":…,"token":…}` (validated: absolute path, the
+  directory owned by this user and `0700`, no symlink on the path, the socket owned by this user; token
+  43 base64url characters); until one arrives every call refuses `agent_unavailable`. Each call opens a
+  connection (`asyncio.open_unix_connection`), writes one `run` request, reads one line with ONE deadline
+  and a 24 MiB cap (an incompressible 2048-px capture fits), and closes. Any early exit — timeout, cap,
+  cancellation (Stop, a dropped bridge) — closes the connection, which stops the helper. A `bad_token`
+  reply also writes `{"type":"drive_session_needed"}` to stdout so the desktop issues a fresh session.
 - `server.py`: tools `identify`, `capture`, `act` with strict pydantic argument models
   (`extra="forbid"`, no NUL bytes); one call at a time (an `asyncio.Lock` — two acts must never
   interleave); `capture` returns an MCP `ImageContent` (staged as an artifact by the existing dispatch
@@ -191,7 +222,8 @@ Save click, so the look after an act is where a save usually shows.
 **Outline geometry (slice 3).** After an ok `identify` (its `window.bounds`) and every ok `capture` or
 `act` (their `bounds`), the companion writes one line to its stdout for the desktop app:
 `{"type":"drive_window","bounds":{"x":…,"y":…,"width":…,"height":…}}` — numbers only, never a title, a
-bundle id or a path. Nothing else is written to stdout. The desktop ignores any other line.
+bundle id or a path. The only other line is `{"type":"drive_session_needed"}` (above). The desktop
+ignores any other line.
 
 ## 4. API `drive.step` and the loop (slice 2)
 
@@ -278,40 +310,42 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   `Signing.swift` is replaced (§2, caller check). Identities and notarisation are human.
 - electron-builder ships it at `<resources>/SolusInput.app`. Solus.app never requests Accessibility or
   Screen Recording; the grants belong to the helper bundle.
-- **The launcher** (`solus-input-launch`) exists because responsibility can only be disclaimed at spawn,
-  which Python cannot do: it `posix_spawn`s its sibling `solus-input` with
-  `responsibility_spawnattrs_setdisclaim` and `POSIX_SPAWN_SETEXEC`, so the helper replaces the
-  launcher in place — same pid, so its parent is still the companion (the caller check needs that). It
-  runs only that sibling (resolved from its own executable path), passing its arguments through with an
-  environment of exactly `PATH=/usr/bin:/bin` (no `DYLD_*` reaches the helper). If the
-  disclaim call is unavailable it exits non-zero rather than run the helper undisclaimed (the companion
-  reports `helper_crashed`).
+- **The agent** (§2.1, slice 3b) replaces the slice 3 launcher, which is removed. electron-builder copies
+  `bundle/com.solusforge.solus.input.agent.plist` to `Contents/Library/LaunchAgents/` (`mac.extraFiles`).
+  **Electron fuses** are locked (`electronFuses`: `runAsNode`, `enableNodeOptionsEnvironmentVariable`,
+  `enableNodeCliInspectArguments` off; `enableEmbeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar`
+  on), so a process satisfying Solus.app's requirement runs Solus code.
 - **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`): a PyInstaller onefile
   binary runs as a bootloader parent plus a child, which would put an extra process between the helper
   and Solus.app. The packaged companion is `<resources>/companion/solus-companion/solus-companion`, with
   `mcp/` beside it.
 - **Signing** (human: identities, SOLUSDEV-148/149): `scripts/build-solus-input.sh` and
   `scripts/build-companion.sh` sign with their own identifiers (`com.solusforge.solus.input`,
-  `com.solusforge.solus.input.launch`, `com.solusforge.solus.companion`), hardened runtime, no extra
+  `com.solusforge.solus.companion`), hardened runtime, no extra
   entitlements, when `SOLUS_SIGN_IDENTITY` and `SOLUS_TEAM_ID` are set, then verify the requirements and
   that the helper has no entitlements; the helper build fails if the release helper reports
   `unsignedDev: true`. electron-builder's `mac.signIgnore` leaves both untouched, so Solus.app's inherited
   entitlements (`allow-dyld-environment-variables`, JIT) are never applied to them. `make desktop-mac`
   builds both, then the app.
-- `SOLUS_DRIVE_HELPER` is the launcher in a packaged build and, in dev, the debug helper at
-  `apps/desktop/native/solus-input/.build/debug/solus-input` resolved (SwiftPM's `.build/debug` is a
-  symlink, which the companion refuses) (unsigned mode; the grants then belong to
-  whatever launched the app, as in slices 1–2). The desktop runs `trust` with the same path.
+- **Main and the agent** (slice 3b): packaged, main registers the agent while the setting is on and talks
+  to it over the socket with Node's `net` (Electron main is the peer, `com.solusforge.solus`): `session`
+  at every companion spawn and on `drive_session_needed`, then the `drive_session` stdin line to the
+  companion; `trust` for the permission rows. Dev: main runs the resolved debug helper
+  (`apps/desktop/native/solus-input/.build/debug/solus-input`, realpath — `.build/debug` is a symlink) as
+  `serve --socket-dir <…/Solus/drive-dev>` child while the setting is on, and uses that socket the same
+  way (the grants then belong to whatever launched the app, as in slices 1–2).
 
 **Settings → SOL: "SOL can use your mouse and keyboard"** (`sol.drive` in `~/.solus/config.json`,
 default off).
 
-- The companion gets `SOLUS_COMPANION_DRIVE=1` and `SOLUS_DRIVE_HELPER` only when the setting is on AND
-  driving is available for the active project; otherwise both are removed, inherited values included —
+- The companion gets `SOLUS_COMPANION_DRIVE=1` (and, from 3b, the `drive_session` line) only when the
+  setting is on AND driving is available for the active project; otherwise the variable is removed
+  (inherited values included, `SOLUS_DRIVE_HELPER` too) and no session is sent —
   the setting is the consent, an environment variable is not. Changing either restarts the companion.
   Only the main window may turn the setting on or ask for permissions; the SOL pill (which renders model
   output) may only turn it off and report a running step.
-- **Available** means: macOS; the helper path resolves; the project has a linked folder; and that folder
+- **Available** means: macOS; the helper is installed (packaged: the agent plist and SolusInput.app are in
+  the bundle; dev: the debug helper resolves and passes the helper path rule); the project has a linked folder; and that folder
   **neither contains, lies inside nor equals another linked project's folder** (security review M1 of
   M2/M3), compared after `realpath` by whole path segment, over every project in this machine's
   `~/.solus` registry (paths under the `/System/Volumes/Data` firmlink are refused as links). The helper's check is "at or below the workspace", so with nested links a step
@@ -319,7 +353,9 @@ default off).
   tree but not linked to another project is fine — its files already belong to that project. Any folder
   link change re-evaluates it.
 - The row shows why driving is unavailable (`not_macos`, `no_helper`, `no_folder`, `nested_folder`), and,
-  when on, the helper's Accessibility and Screen Recording state from `trust`. A missing grant is a
+  when on, the agent's state (`agent`: `enabled`, `requires_approval` — macOS wants approval under
+  Login Items, shown as a Needs-attention card that opens that pane — `not_registered`, `not_found`, or
+  null when unknown) and the helper's Accessibility and Screen Recording state from `trust`. A missing grant is a
   "Needs attention" card whose fix runs `trust --prompt`; the status is re-read when the window regains
   focus, and a missing grant is never served from the 10 s trust cache for more than 1 s.
 
@@ -348,4 +384,6 @@ default off).
 4. **3b — helper as a socket agent (ADR-041 amendment C1):** an SMAppService agent registered by
    Solus.app holds the grants and serves the companion over a Unix socket in a user-private directory,
    accepting a request only when the peer's audit token (captured at connect) satisfies the companion's
-   requirement. Then the team ID can be set and release builds can drive.
+   requirement, plus a session token issued only to Solus.app (ADR-041 amendment 3b); Electron fuses
+   locked; the parent-chain check and the launcher removed. Then the team ID can be set and release
+   builds can drive.
