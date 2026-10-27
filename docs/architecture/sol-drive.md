@@ -316,9 +316,10 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   `enableNodeCliInspectArguments` off; `enableEmbeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar`
   on), so a process satisfying Solus.app's requirement runs Solus code.
 - **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`): a PyInstaller onefile
-  binary runs as a bootloader parent plus a child, which would put an extra process between the helper
-  and Solus.app. The packaged companion is `<resources>/companion/solus-companion/solus-companion`, with
-  `mcp/` beside it.
+  binary runs as a bootloader parent plus an unpacked child, and the child — the process that opens the
+  agent socket — would not carry the companion's signing identifier, so every request would fail the
+  agent's peer check. The packaged companion is `<resources>/companion/solus-companion/solus-companion`,
+  with `mcp/` beside it.
 - **Signing** (human: identities, SOLUSDEV-148/149): `scripts/build-solus-input.sh` and
   `scripts/build-companion.sh` sign with their own identifiers (`com.solusforge.solus.input`,
   `com.solusforge.solus.companion`), hardened runtime, no extra
