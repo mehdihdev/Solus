@@ -72,7 +72,17 @@ Checks before ANY event is posted (each failure is a refusal with a code; nothin
   environment. Failure is `caller_untrusted`. A release build whose team ID is still the placeholder
   refuses every call. Debug builds compile in `SOLUS_INPUT_UNSIGNED_DEV` (Package.swift, debug
   configuration only), which skips this check and reports `unsignedDev: true`; release builds have no
-  such path.
+  such path. Requirements carry the Developer ID clauses (`certificate 1[field.1.2.840.113635.100.6.2.6]`,
+  `certificate leaf[field.1.2.840.113635.100.6.1.13]`); the helper's own requirement is pinned too
+  (`com.solusforge.solus.input`). **Known bypass (security review C1, ADR-041 amendment C1):** pids are
+  inspected after the fact, so a same-user process can start the helper with arguments it chose and then
+  exec the signed companion and Solus.app binaries into its parent and grandparent pids. Slice 3b replaces
+  this with a socket agent that checks the peer's audit token (§6); until then the team ID stays a
+  placeholder and release builds refuse every call. `trust` (and `trust --prompt`) skip the check: they
+  return two booleans and can show macOS's prompts, nothing more (accepted).
+- **Workspace** (every command with `--within`): absolute, resolved, not `/`, and neither the user's home
+  directory nor any ancestor of it (home from `getpwuid`, never `$HOME`; byte compare by whole segment) —
+  `usage` otherwise.
 
 0. **Project binding** (capture and act): the process that owns `W` has its working directory at or below
    `WS` — read from the kernel (`proc_pidinfo` `PROC_PIDVNODEPATHINFO`, no grant needed), resolved; an
@@ -143,7 +153,9 @@ tests; the bundle id is not yet tied to KiCad's code signature (to add when the 
 
 - `helper.py`: runs the helper at a **pinned absolute path** (`SOLUS_DRIVE_HELPER`, set by the desktop
   app), re-checked before EVERY run: absolute, a regular executable, no symlink anywhere on the path,
-  and neither the file nor any directory above it group/other-writable (sticky directories excepted).
+  the file not group/other-writable, and no directory above it other-writable (sticky directories
+  excepted) or group-writable unless root owns it (`/Applications` is `root:admin 0775`). The desktop
+  applies the same rule before it reports driving as available (§5).
   `asyncio.create_subprocess_exec` with an argument list (never a shell), an empty environment but
   `PATH`, ONE deadline covering read + exit, a 24 MiB stdout cap (an incompressible 2048-px capture
   fits), exactly one JSON object split on `\n` only. Any early exit — timeout, cap, cancellation (Stop,
@@ -270,15 +282,25 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   which Python cannot do: it `posix_spawn`s its sibling `solus-input` with
   `responsibility_spawnattrs_setdisclaim` and `POSIX_SPAWN_SETEXEC`, so the helper replaces the
   launcher in place — same pid, so its parent is still the companion (the caller check needs that). It
-  runs only that sibling (resolved from its own executable path), passing its arguments through. If the
+  runs only that sibling (resolved from its own executable path), passing its arguments through with an
+  environment of exactly `PATH=/usr/bin:/bin` (no `DYLD_*` reaches the helper). If the
   disclaim call is unavailable it exits non-zero rather than run the helper undisclaimed (the companion
   reports `helper_crashed`).
 - **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`): a PyInstaller onefile
   binary runs as a bootloader parent plus a child, which would put an extra process between the helper
   and Solus.app. The packaged companion is `<resources>/companion/solus-companion/solus-companion`, with
   `mcp/` beside it.
+- **Signing** (human: identities, SOLUSDEV-148/149): `scripts/build-solus-input.sh` and
+  `scripts/build-companion.sh` sign with their own identifiers (`com.solusforge.solus.input`,
+  `com.solusforge.solus.input.launch`, `com.solusforge.solus.companion`), hardened runtime, no extra
+  entitlements, when `SOLUS_SIGN_IDENTITY` and `SOLUS_TEAM_ID` are set, then verify the requirements and
+  that the helper has no entitlements; the helper build fails if the release helper reports
+  `unsignedDev: true`. electron-builder's `mac.signIgnore` leaves both untouched, so Solus.app's inherited
+  entitlements (`allow-dyld-environment-variables`, JIT) are never applied to them. `make desktop-mac`
+  builds both, then the app.
 - `SOLUS_DRIVE_HELPER` is the launcher in a packaged build and, in dev, the debug helper at
-  `apps/desktop/native/solus-input/.build/debug/solus-input` (unsigned mode; the grants then belong to
+  `apps/desktop/native/solus-input/.build/debug/solus-input` resolved (SwiftPM's `.build/debug` is a
+  symlink, which the companion refuses) (unsigned mode; the grants then belong to
   whatever launched the app, as in slices 1–2). The desktop runs `trust` with the same path.
 
 **Settings → SOL: "SOL can use your mouse and keyboard"** (`sol.drive` in `~/.solus/config.json`,
@@ -287,24 +309,30 @@ default off).
 - The companion gets `SOLUS_COMPANION_DRIVE=1` and `SOLUS_DRIVE_HELPER` only when the setting is on AND
   driving is available for the active project; otherwise both are removed, inherited values included —
   the setting is the consent, an environment variable is not. Changing either restarts the companion.
+  Only the main window may turn the setting on or ask for permissions; the SOL pill (which renders model
+  output) may only turn it off and report a running step.
 - **Available** means: macOS; the helper path resolves; the project has a linked folder; and that folder
   **neither contains, lies inside nor equals another linked project's folder** (security review M1 of
   M2/M3), compared after `realpath` by whole path segment, over every project in this machine's
-  `~/.solus` registry. The helper's check is "at or below the workspace", so with nested links a step
+  `~/.solus` registry (paths under the `/System/Volumes/Data` firmlink are refused as links). The helper's check is "at or below the workspace", so with nested links a step
   for the outer project would pass for a KiCad working on the inner one. A folder nested in a project's
   tree but not linked to another project is fine — its files already belong to that project. Any folder
   link change re-evaluates it.
 - The row shows why driving is unavailable (`not_macos`, `no_helper`, `no_folder`, `nested_folder`), and,
   when on, the helper's Accessibility and Screen Recording state from `trust`. A missing grant is a
-  "Needs attention" card whose fix runs `trust --prompt`.
+  "Needs attention" card whose fix runs `trust --prompt`; the status is re-read when the window regains
+  focus, and a missing grant is never served from the 10 s trust cache for more than 1 s.
 
 **While a step runs.**
 
 - The pill shows the A3 strip `DRIVING KICAD · STEP k OF N` with a progress bar and **Stop**, parsed
   from the step's progress lines (§4) while its confirmation output is incomplete. Stopping needs no
   route: a click on Stop, Esc, or any other physical input is caught by the helper's kill switch before
-  the next event (`user_active` → `paused`). Stop also clears the strip and the outline at once.
-- The renderer tells main a step is running (`sol.setDriving`); main then draws the **amber outline** as
+  the next event (`user_active` → `paused`). Stop shows `DRIVING KICAD · STOPPING…` and keeps the
+  outline and the quiet period until the step's result arrives, since the step only ends at its next
+  action.
+- The renderer tells main a step is running (`sol.setDriving`, ref-counted per window; a closed window
+  counts as ended; bounds are dropped when a step ends); main then draws the **amber outline** as
   four click-through strips just OUTSIDE the latest `drive_window` bounds (§3) — never over the window,
   which the hit-test would refuse (§2 check 5) — and quiets the double-tap-Ctrl and circle detectors,
   plus 300 ms after. Main clears both when the renderer says the step ended, or after 150 s (the 120 s
@@ -315,5 +343,9 @@ default off).
 1. **This doc + `solus-input` + companion `DriveServer`** (tests; not wired; no allowlist).
 2. **Done (2026-10-26):** API `exposure: internal`, `drive.step` + executor + computer-use adapter,
    events, red-team; the server wired; the allowlist drafted (human ratifies); bridge-protocol note.
-3. Desktop: helper app packaging (signing human), caller check, the setting with the nested-folder rule,
-   A3 strip, outline, listener quiet period.
+3. **Done on the branch (2026-10-27):** helper app packaging (signing human), caller check, the setting
+   with the nested-folder rule, A3 strip, outline, listener quiet period.
+4. **3b — helper as a socket agent (ADR-041 amendment C1):** an SMAppService agent registered by
+   Solus.app holds the grants and serves the companion over a Unix socket in a user-private directory,
+   accepting a request only when the peer's audit token (captured at connect) satisfies the companion's
+   requirement. Then the team ID can be set and release builds can drive.
