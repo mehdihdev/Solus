@@ -10,11 +10,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from solus_companion.drive.helper import DriveHelper
 from solus_companion.drive.outline import outline_line, stdout_writer
 from solus_companion.drive.server import DriveServer
 from solus_companion.watch import saved_design_fingerprint
-from test_companion_drive import PNG, echo_helper, workspace_of
+from test_companion_drive import (  # noqa: F401 — _close_agents is an autouse fixture
+    PNG,
+    _close_agents,
+    agent_helper,
+    echo_helper,
+    workspace_of,
+)
 
 BOUNDS = {"x": 10, "y": 20.5, "width": 800, "height": 600}
 LINE = '{"type":"drive_window","bounds":{"x":10,"y":20.5,"width":800,"height":600}}'
@@ -26,7 +31,7 @@ def outlined(tmp_path: Path, reply: dict[str, Any]) -> tuple[DriveServer, list[s
     lines: list[str] = []
     helper = echo_helper(tmp_path, reply)
     server = DriveServer(
-        DriveHelper(helper),
+        agent_helper(helper),
         enabled=True,
         workspace=workspace_of(helper),
         platform="darwin",

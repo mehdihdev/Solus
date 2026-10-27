@@ -323,7 +323,7 @@ async def test_progress_never_carries_typed_text() -> None:
     assert progress[0].verb == "type" and progress[0].action == 1
 
 
-@pytest.mark.parametrize("code", ["helper_timeout", "bridge"])
+@pytest.mark.parametrize("code", ["helper_timeout", "bridge", "bad_token", "agent_unavailable"])
 async def test_helper_failures_end_the_step_as_errors(code: str) -> None:
     port = FakePort(refuse_act=DriveRefusal(code, "boom"))
     ex, _ = executor(port, FakeModel([click((1, 1))]))

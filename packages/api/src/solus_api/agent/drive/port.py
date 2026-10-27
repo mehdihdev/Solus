@@ -54,6 +54,8 @@ KNOWN_CODES: Final = frozenset(
         "helper_crashed",
         "helper_output",
         "caller_untrusted",
+        "bad_token",
+        "agent_unavailable",
         "bridge",
     }
 )

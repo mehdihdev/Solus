@@ -29,6 +29,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from solus_contracts import SOLUS_HOME_DIRNAME
@@ -125,6 +126,12 @@ class ServerLaunch:
     unavailable_reason: str | None = None
 
 
+class DriveSessionSink(Protocol):
+    """Takes `{"type":"drive_session",…}` lines (drive.helper.DriveSessions)."""
+
+    def offer(self, message: Mapping[str, Any]) -> bool: ...
+
+
 class TokenBox:
     """Mutable access-token holder (BRG-04 stdin relay). Callable, so it slots
     straight into `CompanionConfig.token_source`; the channel awaits
@@ -137,6 +144,8 @@ class TokenBox:
         # tokens. Attached by the channel once the discovered-server set is
         # known; None until then (credential lines are dropped with a log).
         self.credentials: CredentialRelay | None = None
+        # Slice 3b (sol-drive.md §3): the drive agent session rides here too.
+        self.drive_sessions: DriveSessionSink | None = None
         if token:
             self.available.set()
 
@@ -185,13 +194,20 @@ def apply_token_line(box: TokenBox, line: str | bytes) -> None:
     elif kind == "signout":
         box.clear()
         logger.info("signed out via stdin; channel idles until a new token arrives")
-    elif kind == "credential":
-        if box.credentials is None:
-            logger.warning("ignored credential line: no relay attached yet")
-        else:
-            box.credentials.offer(message)  # validates, queues, never raises
+    elif kind in ("credential", "drive_session"):
+        _relay(box, kind, message)
     else:
         logger.warning("ignored unknown stdin line type %.32r", kind)
+
+
+def _relay(box: TokenBox, kind: str, message: dict[str, Any]) -> None:
+    """Credential lines go to the MCP-05 relay, drive_session lines to the drive
+    agent sessions; each validates, never raises and never logs secret values."""
+    sink = box.credentials if kind == "credential" else box.drive_sessions
+    if sink is None:
+        logger.warning("ignored %s line: nothing attached yet", kind)
+    else:
+        sink.offer(message)
 
 
 @dataclass(frozen=True)

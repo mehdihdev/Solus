@@ -1,17 +1,26 @@
-"""The ADR-041 `drive` builtin (docs/architecture/sol-drive.md §3): runs the
-pinned `solus-input` helper with an argument list, validates what comes back,
-stages captures as artifacts, and advertises nothing unless switched on.
+"""The ADR-041 `drive` builtin (docs/architecture/sol-drive.md §3): sends each
+command to the `solus-input` agent over its Unix socket (§2.1, slice 3b),
+validates what comes back, stages captures as artifacts, and advertises nothing
+unless switched on.
 
-The helper here is a real executable script, so the subprocess path (argv, no
-shell, timeouts, output caps) is exercised for real.
+The agent here is a real socket server (`FakeAgent`) that checks the session
+token and runs a stand-in script per `run` request, killing it when the
+companion closes the connection — so the socket path (one request, one line
+back, one deadline, the cap, close-to-cancel) is exercised for real.
 """
 
 import asyncio
 import base64
 import json
 import os
-import stat
+import select
+import socket
+import subprocess
 import sys
+import tempfile
+import threading
+import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -20,13 +29,7 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 from solus_companion.__main__ import build_builtins
 from solus_companion.artifacts import ArtifactStore
 from solus_companion.dispatch import Dispatcher
-from solus_companion.drive.helper import (
-    DriveHelper,
-    DriveHelperError,
-    _ancestor_replaceable,
-    _file_replaceable,
-    resolve_helper,
-)
+from solus_companion.drive.helper import DriveHelper, DriveHelperError, DriveSessions
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
 from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
@@ -52,6 +55,112 @@ def make_helper(tmp_path: Path, body: str) -> Path:
     return script
 
 
+TOKEN = "A" * 43
+
+
+class FakeAgent:
+    """A `solus-input serve` stand-in on a real Unix socket in a private 0700
+    directory. One thread per connection; `run` checks the token, then runs the
+    stand-in `script` with the request argv and sends its stdout back. A peer
+    that closes early gets its script terminated (the agent's Stop)."""
+
+    def __init__(self, script: Path, token: str = TOKEN) -> None:
+        self.script = script
+        self.token = token
+        # AF_UNIX paths are short (104 bytes on macOS): not under tmp_path.
+        self.dir = Path(tempfile.mkdtemp(prefix="sd", dir=os.path.realpath("/tmp")))
+        self.path = self.dir / "agent.sock"
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(str(self.path))
+        self.sock.listen(8)
+        self.requests: list[dict[str, Any]] = []
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def session(self, token: str | None = None) -> dict[str, str]:
+        return {"type": "drive_session", "socket": str(self.path), "token": token or self.token}
+
+    def sessions(self) -> DriveSessions:
+        sessions = DriveSessions()
+        assert sessions.offer(self.session())
+        return sessions
+
+    def close(self) -> None:
+        self.sock.close()
+        for child in self.dir.iterdir():
+            child.unlink()
+        self.dir.rmdir()
+
+    def _accept(self) -> None:
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
+
+    def _serve(self, conn: socket.socket) -> None:
+        with conn:
+            data = b""
+            while b"\n" not in data:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                data += chunk
+            request = json.loads(data.split(b"\n", 1)[0])
+            self.requests.append(request)
+            if request.get("token") != self.token:
+                reply = {"ok": False, "code": "bad_token", "message": "session superseded"}
+                conn.sendall(json.dumps(reply).encode() + b"\n")
+                return
+            child = subprocess.Popen([str(self.script), *request["argv"]], stdout=subprocess.PIPE)
+            out: list[bytes] = []
+            reader = threading.Thread(target=lambda: out.append(child.stdout.read()))  # type: ignore[union-attr]
+            reader.start()
+            while child.poll() is None:
+                readable, _, _ = select.select([conn], [], [], 0.02)
+                if readable and not conn.recv(1):  # the companion hung up: stop
+                    child.terminate()
+                    child.wait()
+                    return
+            reader.join()
+            try:
+                conn.sendall(b"".join(out))
+            except OSError:
+                pass
+
+
+_AGENTS: list[FakeAgent] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_agents() -> Iterator[None]:
+    yield
+    while _AGENTS:
+        _AGENTS.pop().close()
+
+
+def agent_for(script: Path) -> FakeAgent:
+    agent = FakeAgent(script)
+    _AGENTS.append(agent)
+    return agent
+
+
+def agent_helper(script: Path, **kwargs: Any) -> DriveHelper:
+    """A DriveHelper with a live session to a fake agent running `script`."""
+    return DriveHelper(agent_for(script).sessions(), **kwargs)
+
+
+def gone(pid: int) -> bool:
+    """The agent stops the script a moment after the companion hangs up."""
+    for _ in range(200):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.01)
+    return False
+
+
 def calls(tmp_path: Path) -> list[list[str]]:
     log = tmp_path / "calls.jsonl"
     return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -71,7 +180,10 @@ def workspace_of(helper: Path) -> Path:
 def server_with(path: Path, *, bound: bool = True, **kwargs: Any) -> DriveServer:
     """`bound`: as after the step's identify — the saved-design baseline is taken."""
     server = DriveServer(
-        DriveHelper(path, **kwargs), enabled=True, workspace=workspace_of(path), platform="darwin"
+        agent_helper(path, **kwargs),
+        enabled=True,
+        workspace=workspace_of(path),
+        platform="darwin",
     )
     if bound:
         server._designs_at_bind = saved_design_fingerprint(server.workspace)
@@ -89,54 +201,30 @@ def text_of(result: CallToolResult) -> str:
 # --- the pinned path -----------------------------------------------------------
 
 
-def test_resolve_helper_accepts_only_an_absolute_executable_regular_file(tmp_path: Path) -> None:
-    good = echo_helper(tmp_path, OK_IDENTIFY)
-    assert resolve_helper(str(good)) == good
-    assert resolve_helper(None) is None
-    assert resolve_helper("") is None
-    assert resolve_helper("solus-input") is None  # relative: never PATH-resolved
-    assert resolve_helper(str(tmp_path / "missing")) is None
-    assert resolve_helper(str(tmp_path)) is None  # a directory
-    link = tmp_path / "link"
-    link.symlink_to(good)
-    assert resolve_helper(str(link)) is None
-    plain = tmp_path / "plain"
-    plain.write_text("x")
-    plain.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    assert resolve_helper(str(plain)) is None
-
-
-def test_from_env_needs_the_switch_the_helper_and_macos(tmp_path: Path) -> None:
-    good = str(echo_helper(tmp_path, OK_IDENTIFY))
-    on = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": good}
+def test_from_env_needs_the_switch_macos_and_a_workspace(tmp_path: Path) -> None:
+    on = {"SOLUS_COMPANION_DRIVE": "1"}
     assert drive_server_from_env(on, workspace=tmp_path, platform="darwin").inventory() is not None
     assert drive_server_from_env(on, workspace=None, platform="darwin").inventory() is None
     assert (
         drive_server_from_env(
-            {**on, "SOLUS_COMPANION_DRIVE": "true"}, workspace=tmp_path, platform="darwin"
+            {"SOLUS_COMPANION_DRIVE": "true"}, workspace=tmp_path, platform="darwin"
         ).inventory()
         is None
     )
-    assert (
-        drive_server_from_env(
-            {"SOLUS_DRIVE_HELPER": good}, workspace=tmp_path, platform="darwin"
-        ).inventory()
-        is None
-    )
-    assert (
-        drive_server_from_env(
-            {**on, "SOLUS_DRIVE_HELPER": "rel"}, workspace=tmp_path, platform="darwin"
-        ).inventory()
-        is None
-    )
+    assert drive_server_from_env({}, workspace=tmp_path, platform="darwin").inventory() is None
     assert drive_server_from_env(on, workspace=tmp_path, platform="linux").inventory() is None
+
+
+def test_from_env_ignores_the_retired_helper_path(tmp_path: Path) -> None:
+    env = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": "/nowhere/solus-input"}
+    assert drive_server_from_env(env, workspace=tmp_path, platform="darwin").inventory() is not None
 
 
 # --- advertising -----------------------------------------------------------------
 
 
 def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> None:
-    helper = DriveHelper(echo_helper(tmp_path, OK_IDENTIFY))
+    helper = DriveHelper(DriveSessions())
     for server, detail in [
         (
             DriveServer(helper, enabled=False, workspace=tmp_path, platform="darwin"),
@@ -164,7 +252,7 @@ def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> Non
 
 async def test_off_server_refuses_calls_without_running_the_helper(tmp_path: Path) -> None:
     server = DriveServer(
-        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)),
+        agent_helper(echo_helper(tmp_path, OK_IDENTIFY)),
         enabled=False,
         workspace=tmp_path,
         platform="darwin",
@@ -375,7 +463,7 @@ async def test_dispatch_stages_the_capture_as_an_artifact_never_inline(tmp_path:
         ("print('[1, 2]')\n", "helper_output: "),
         ("print(json.dumps({'no_ok': 1}))\n", "helper_output: "),
         ("print('{}'); print('{}')\n", "helper_output: "),
-        ("sys.exit(3)\n", "helper_crashed: "),
+        ("sys.exit(3)\n", "helper_output: "),
         ("sys.stdout.write('x' * (25 * 1024 * 1024))\n", "helper_output: "),
     ],
 )
@@ -394,25 +482,13 @@ async def test_a_hung_helper_is_killed_at_its_timeout(tmp_path: Path) -> None:
     result = await server.call_tool("identify", {})
     assert result.isError
     assert text_of(result).startswith("helper_timeout: ")
-    pid = int(pidfile.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-
-
-async def test_helper_runs_with_a_minimal_environment(tmp_path: Path) -> None:
-    body = "import os\nprint(json.dumps({'ok': True, 'env': sorted(os.environ)}))\n"
-    os.environ["SOLUS_SECRET_TEST_VALUE"] = "nope"
-    try:
-        result = await DriveHelper(make_helper(tmp_path, body)).run(["identify"], timeout=5)
-    finally:
-        del os.environ["SOLUS_SECRET_TEST_VALUE"]
-    assert "SOLUS_SECRET_TEST_VALUE" not in result["env"]
+    assert gone(int(pidfile.read_text()))
 
 
 async def test_helper_errors_carry_a_code(tmp_path: Path) -> None:
     with pytest.raises(DriveHelperError) as caught:
-        await DriveHelper(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
-    assert caught.value.code == "helper_crashed"
+        await agent_helper(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
+    assert caught.value.code == "helper_output"
 
 
 # --- review fixes: cancellation, one deadline, path re-check, one call at a time ------------
@@ -439,15 +515,13 @@ async def test_a_cancelled_call_kills_the_helper(tmp_path: Path) -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    pid = int(pidfile.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert gone(int(pidfile.read_text()))
 
 
-async def test_one_deadline_covers_reading_and_exiting(tmp_path: Path) -> None:
+async def test_one_deadline_covers_the_whole_request(tmp_path: Path) -> None:
     import time as clock
 
-    # Closes stdout at once, then lingers: the whole run still ends at the timeout.
+    # The agent answers only once the script exits: the call still ends at the timeout.
     body = (
         "import os\nprint(json.dumps({'ok': True}))\n"
         "sys.stdout.flush(); os.close(1)\ntime.sleep(30)\n"
@@ -459,15 +533,20 @@ async def test_one_deadline_covers_reading_and_exiting(tmp_path: Path) -> None:
     assert clock.monotonic() - started < 1.0
 
 
-async def test_a_helper_replaced_by_a_symlink_after_start_is_refused(tmp_path: Path) -> None:
-    good = echo_helper(tmp_path, OK_IDENTIFY)
-    server = server_with(good)
-    moved = tmp_path / "real-helper"
-    good.rename(moved)
-    good.symlink_to(moved)
+async def test_a_socket_replaced_by_a_symlink_after_the_session_is_refused(
+    tmp_path: Path,
+) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    server = DriveServer(
+        DriveHelper(agent.sessions()), enabled=True, workspace=tmp_path, platform="darwin"
+    )
+    moved = agent.dir / "real.sock"
+    agent.path.rename(moved)
+    agent.path.symlink_to(moved)
     result = await server.call_tool("identify", {})
     assert result.isError
-    assert text_of(result).startswith("helper_missing: ")
+    assert text_of(result).startswith("agent_unavailable: ")
+    assert agent.requests == []
 
 
 async def test_calls_run_one_at_a_time_never_interleaved(tmp_path: Path) -> None:
@@ -527,29 +606,6 @@ def test_capture_max_edge_stays_within_the_output_cap() -> None:
     assert 2048 * 2048 * 4 * 4 // 3 < STDOUT_CAP_BYTES
 
 
-async def test_termination_is_sigterm_first_so_the_helper_can_release_a_held_button(
-    tmp_path: Path,
-) -> None:
-    import asyncio
-
-    marker = tmp_path / "got-term"
-    pidfile = tmp_path / "pid"
-    body = (
-        "import signal, os\n"
-        f"mark = lambda *_: (open({str(marker)!r}, 'w').write('1'), sys.exit(0))\n"
-        "signal.signal(signal.SIGTERM, mark)\n"
-        f"open({str(pidfile)!r}, 'w').write(str(os.getpid()))\n"
-        "time.sleep(30)\n"
-    )
-    server = server_with(make_helper(tmp_path, body))
-    task = asyncio.create_task(server.call_tool("identify", {}))
-    await _wait_for(pidfile)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert marker.read_text() == "1"
-
-
 async def test_a_nul_byte_is_an_argument_error_not_an_exception(tmp_path: Path) -> None:
     server = server_with(echo_helper(tmp_path, {"ok": True}))
     for field, value in [("text", "a\x00b"), ("chord", "cmd+\x00")]:
@@ -576,20 +632,6 @@ async def test_unicode_line_separators_inside_json_strings_still_parse(tmp_path:
     assert not result.isError
     assert result.structuredContent is not None
     assert result.structuredContent["window"]["title"] == "board\u2028sheet\u0085x"
-
-
-def test_a_helper_in_a_group_or_world_writable_directory_is_refused(tmp_path: Path) -> None:
-    shared = tmp_path / "shared"
-    shared.mkdir()
-    helper = echo_helper(shared, OK_IDENTIFY)
-    assert resolve_helper(str(helper)) == helper
-    shared.chmod(0o777)
-    try:
-        assert resolve_helper(str(helper)) is None
-    finally:
-        shared.chmod(0o755)
-    helper.chmod(0o775)
-    assert resolve_helper(str(helper)) is None
 
 
 async def test_act_passes_the_expected_window_size_through(tmp_path: Path) -> None:
@@ -675,8 +717,7 @@ def test_builtins_include_drive_switched_off_by_default(tmp_path: Path) -> None:
 
 
 def test_builtins_switch_drive_on_from_the_environment(tmp_path: Path) -> None:
-    helper = echo_helper(tmp_path, OK_IDENTIFY)
-    env = {"SOLUS_COMPANION_DRIVE": "1", "SOLUS_DRIVE_HELPER": str(helper)}
+    env = {"SOLUS_COMPANION_DRIVE": "1"}
     assert build_builtins(None, env=env, platform="darwin")[1].inventory() is None  # no project
     drive = build_builtins(str(tmp_path), env=env, platform="darwin")[1]
     inventory = drive.inventory()
@@ -714,7 +755,7 @@ def _schematic(ws: Path, text: str = "(kicad_sch)") -> Path:
 
 async def test_no_linked_workspace_refuses_without_running_the_helper(tmp_path: Path) -> None:
     server = DriveServer(
-        DriveHelper(echo_helper(tmp_path, OK_IDENTIFY)),
+        agent_helper(echo_helper(tmp_path, OK_IDENTIFY)),
         enabled=True,
         workspace=None,
         platform="darwin",
@@ -729,7 +770,7 @@ async def test_the_workspace_is_sent_resolved(tmp_path: Path) -> None:
     real = workspace_of(helper)
     link = tmp_path / "link"
     link.symlink_to(real)
-    server = DriveServer(DriveHelper(helper), enabled=True, workspace=link, platform="darwin")
+    server = DriveServer(agent_helper(helper), enabled=True, workspace=link, platform="darwin")
     await server.call_tool("identify", {})
     assert calls(tmp_path) == [["identify", "--within", str(real.resolve())]]
 
@@ -867,69 +908,194 @@ def test_saved_design_fingerprint_sees_a_project_under_build(tmp_path: Path) -> 
     assert saved_design_fingerprint(tmp_path) != before
 
 
-# --- ancestor directory rule (Phase 4: the packaged helper under /Applications) ---
+# --- slice 3b: the agent client (sol-drive.md §2.1, §3 helper.py) -------------------------
 
 
-def _stat(mode: int, uid: int) -> os.stat_result:
-    """A synthetic lstat result: (mode, ino, dev, nlink, uid, gid, size, atime, mtime, ctime)."""
-    return os.stat_result((mode, 1, 1, 1, uid, 80, 0, 0, 0, 0))
+def session_line(**overrides: Any) -> dict[str, Any]:
+    return {"type": "drive_session", "socket": "/x/agent.sock", "token": TOKEN, **overrides}
+
+
+async def test_no_session_refuses_agent_unavailable() -> None:
+    with pytest.raises(DriveHelperError) as caught:
+        await DriveHelper(DriveSessions()).run(["identify"], timeout=1)
+    assert caught.value.code == "agent_unavailable"
+
+
+async def test_one_run_request_per_connection_with_the_token_and_argv(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    reply = await DriveHelper(agent.sessions()).run(["identify", "--within", "/w"], timeout=5)
+    assert reply == OK_IDENTIFY
+    assert agent.requests == [
+        {"v": 1, "op": "run", "token": TOKEN, "argv": ["identify", "--within", "/w"]}
+    ]
+
+
+async def test_an_agent_that_is_not_listening_is_agent_unavailable(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = agent.sessions()
+    agent.sock.close()  # the file stays; nothing accepts
+    with pytest.raises(DriveHelperError) as caught:
+        await DriveHelper(sessions).run(["identify"], timeout=2)
+    assert caught.value.code == "agent_unavailable"
+
+
+def test_a_valid_session_line_is_accepted(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = DriveSessions()
+    assert sessions.offer(agent.session()) is True
+    current = sessions.current()
+    assert current is not None and current.socket == agent.path and current.token == TOKEN
 
 
 @pytest.mark.parametrize(
-    ("mode", "uid", "refused"),
+    "token",
+    ["A" * 42, "A" * 44, "A" * 42 + "=", "A" * 42 + "+", "A" * 42 + "\n", "", None, 43],
+)
+def test_a_malformed_token_is_dropped_and_never_logged(
+    tmp_path: Path, token: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = DriveSessions()
+    assert sessions.offer({**agent.session(), "token": token}) is False
+    assert sessions.current() is None
+    assert caplog.records  # warned
+    if isinstance(token, str) and token:
+        assert token not in caplog.text
+
+
+def test_a_valid_token_is_never_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    secret = "Zq" * 21 + "x"
+    sessions = DriveSessions()
+    sessions.offer(agent.session(secret))
+    sessions.offer({**agent.session(secret), "socket": "relative.sock"})
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "line",
     [
-        (stat.S_IFDIR | 0o775, 0, False),  # /Applications: drwxrwxr-x root:admin
-        (stat.S_IFDIR | 0o775, 501, True),  # a user-owned group-writable folder
-        (stat.S_IFDIR | 0o777, 0, True),  # other-writable, not sticky, even root's
-        (stat.S_IFDIR | 0o777, 501, True),
-        (stat.S_IFDIR | 0o1777, 0, False),  # /tmp-like sticky: others can't replace ours
-        (stat.S_IFDIR | 0o755, 501, False),
-        (stat.S_IFDIR | 0o755, 0, False),
+        session_line(socket="relative/agent.sock"),
+        session_line(socket=None),
+        session_line(socket="/a/\x00/agent.sock"),
+        session_line(extra=1),
+        {"type": "drive_session", "token": TOKEN},
     ],
 )
-def test_ancestor_directories_allow_group_write_only_when_root_owns_them(
-    mode: int, uid: int, refused: bool
-) -> None:
-    assert _ancestor_replaceable(_stat(mode, uid)) is refused
+def test_malformed_session_lines_are_dropped(line: dict[str, Any]) -> None:
+    sessions = DriveSessions()
+    assert sessions.offer(line) is False
+    assert sessions.current() is None
 
 
-@pytest.mark.parametrize("mode", [0o775, 0o757, 0o777])
-@pytest.mark.parametrize("uid", [0, 501])
-def test_the_helper_file_itself_is_never_group_or_other_writable(mode: int, uid: int) -> None:
-    assert _file_replaceable(_stat(stat.S_IFREG | mode, uid)) is True
+def test_the_socket_directory_must_be_private_to_this_user(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    for mode in (0o750, 0o701, 0o770, 0o1700, 0o755):
+        agent.dir.chmod(mode)
+        assert DriveSessions().offer(agent.session()) is False, oct(mode)
+    agent.dir.chmod(0o700)
+    assert DriveSessions().offer(agent.session()) is True
 
 
-def test_a_root_owned_group_writable_ancestor_is_accepted_end_to_end(
+def test_a_symlink_anywhere_on_the_socket_path_is_refused(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    link = Path(tempfile.mkdtemp(prefix="sl", dir=os.path.realpath("/tmp"))) / "d"
+    link.symlink_to(agent.dir)
+    try:
+        line = {**agent.session(), "socket": str(link / "agent.sock")}
+        assert DriveSessions().offer(line) is False
+    finally:
+        link.unlink()
+        link.parent.rmdir()
+
+
+def test_the_socket_must_be_a_socket_owned_by_this_user(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    plain = agent.dir / "plain"
+    plain.write_text("")
+    assert DriveSessions().offer({**agent.session(), "socket": str(plain)}) is False
+    missing = agent.dir / "missing.sock"
+    assert DriveSessions().offer({**agent.session(), "socket": str(missing)}) is False
+
+
+def test_another_users_directory_or_socket_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`/Applications/Solus.app/...`: the real dirs are user-owned here, so the
-    one ancestor that is group-writable is presented as root's."""
-    apps = tmp_path / "Applications"
-    apps.mkdir()
-    helper = echo_helper(apps, OK_IDENTIFY)
-    apps.chmod(0o775)
-    real_stat = Path.stat
-
-    def as_root(self: Path, **kwargs: Any) -> os.stat_result:
-        info = real_stat(self, **kwargs)
-        if self == apps:
-            return _stat(info.st_mode, 0)
-        return info
-
-    try:
-        assert resolve_helper(str(helper)) is None  # user-owned 0775: refused
-        monkeypatch.setattr(Path, "stat", as_root)
-        assert resolve_helper(str(helper)) == helper  # root-owned 0775: accepted
-    finally:
-        apps.chmod(0o755)
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    monkeypatch.setattr(os, "getuid", lambda: os.stat(agent.dir).st_uid + 1)
+    assert DriveSessions().offer(agent.session()) is False
 
 
-def test_a_helper_under_a_user_owned_group_writable_folder_is_refused(tmp_path: Path) -> None:
-    shared = tmp_path / "shared"
-    shared.mkdir()
-    helper = echo_helper(shared, OK_IDENTIFY)
-    shared.chmod(0o775)
-    try:
-        assert resolve_helper(str(helper)) is None
-    finally:
-        shared.chmod(0o755)
+def test_a_bad_session_line_keeps_the_previous_session(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = agent.sessions()
+    sessions.offer(session_line(socket="relative"))
+    assert sessions.current() is not None
+
+
+async def test_bad_token_asks_the_desktop_for_a_session_at_most_every_5s(
+    tmp_path: Path,
+) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = DriveSessions()
+    sessions.offer(agent.session("B" * 43))  # not the agent's token
+    lines: list[str] = []
+    now = [100.0]
+    helper = DriveHelper(sessions, emit=lines.append, clock=lambda: now[0])
+    for at in (100.0, 102.0, 104.9, 105.0):
+        now[0] = at
+        reply = await helper.run(["identify"], timeout=5)
+        assert reply["ok"] is False and reply["code"] == "bad_token"
+    assert lines == ['{"type":"drive_session_needed"}'] * 2
+
+
+async def test_a_bad_token_reaches_the_tool_as_a_refusal(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = DriveSessions()
+    sessions.offer(agent.session("B" * 43))
+    server = DriveServer(
+        DriveHelper(sessions, emit=lambda _: None),
+        enabled=True,
+        workspace=tmp_path,
+        platform="darwin",
+    )
+    result = await server.call_tool("identify", {})
+    assert result.isError and text_of(result).startswith("bad_token: ")
+
+
+async def test_a_fresh_session_replaces_a_superseded_one(tmp_path: Path) -> None:
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    sessions = DriveSessions()
+    sessions.offer(agent.session("B" * 43))
+    helper = DriveHelper(sessions, emit=lambda _: None)
+    assert (await helper.run(["identify"], timeout=5))["code"] == "bad_token"
+    sessions.offer(agent.session())
+    assert (await helper.run(["identify"], timeout=5)) == OK_IDENTIFY
+
+
+async def test_only_the_first_reply_line_is_read(tmp_path: Path) -> None:
+    body = "sys.stdout.write(json.dumps({'ok': True}) + '\\n' + 'x' * 100)\n"
+    with pytest.raises(DriveHelperError) as caught:
+        await agent_helper(make_helper(tmp_path, body)).run(["identify"], timeout=5)
+    assert caught.value.code == "helper_output"
+
+
+def test_the_stdin_control_line_routes_to_the_drive_sessions(tmp_path: Path) -> None:
+    from solus_companion.config import TokenBox, apply_token_line
+
+    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+    box = TokenBox()
+    apply_token_line(box, json.dumps(agent.session()))  # nothing attached: dropped
+    box.drive_sessions = DriveSessions()
+    apply_token_line(box, json.dumps(agent.session()))
+    current = box.drive_sessions.current()
+    assert current is not None and current.socket == agent.path
+
+
+def test_builtins_share_the_stdin_sessions_with_drive(tmp_path: Path) -> None:
+    sessions = DriveSessions()
+    drive = build_builtins(
+        str(tmp_path), env={"SOLUS_COMPANION_DRIVE": "1"}, platform="darwin", sessions=sessions
+    )[1]
+    assert isinstance(drive, DriveServer)
+    assert drive.helper is not None and drive.helper.sessions is sessions

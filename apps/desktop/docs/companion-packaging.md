@@ -45,24 +45,38 @@ The latest token is remembered (in memory only) and replayed on respawn.
     `dist/companion/solus-companion/solus-companion` plus PyInstaller's
     `_internal/`, with the MCP tree at `dist/companion/solus-companion/mcp/`.
     Packaged, that is `<resources>/companion/solus-companion/solus-companion`.
-- **Why macOS is onedir.** A onefile binary is a bootloader that unpacks to a
-  temp dir and runs the real interpreter as a *child* process. The SOL drive
-  helper (`solus-input`) checks its caller: its parent must be the signed
-  companion started with no arguments, and that parent's parent must be
-  Solus.app. Under onefile the helper's parent is the unpacked child and
-  its grandparent is the bootloader, not Solus.app, so every drive call would
-  fail `caller_untrusted`. Onedir runs the interpreter in the one process
-  Solus.app spawned.
+- **Why macOS is onedir.** A onefile binary is a bootloader that unpacks the
+  interpreter and its libraries into a temp dir at run time and runs them as a
+  *child* process. That child — unsigned code outside the signed binary — is
+  what would connect to the drive agent, and the agent accepts only a socket
+  peer whose code satisfies the companion's signing requirement (below).
+  Onedir keeps the companion one process, launched by Solus.app, with every
+  Mach-O signed on disk.
 - The MCP tree always sits beside the binary because
   `config.default_integrations_root` looks for `mcp/` next to `sys.executable`
   (pinned for both layouts in `packages/companion/tests/test_fork_runtime.py`).
 - The script removes `dist/companion/` first, so switching modes never leaves a
   file where a folder belongs.
+- PyInstaller is deliberately **not** in any pyproject: the script uses
+  `uv run --package solus-companion --with pyinstaller`, layering it ephemerally
+  over the companion's real environment so websockets/mcp/pydantic are visible
+  to its analysis. (Verified working with PyInstaller 6.21.0 on Linux ARM;
+  the binary boots to companion config validation.)
+- Copies the vendored MCP tree beside the binary (excluding `*.template.md`
+  scaffolding).
+- Build per-platform — PyInstaller does not cross-compile.
+- If a future dependency hides imports from the analyzer, add
+  `--hidden-import` / `--copy-metadata` flags in the script.
 
-### macOS signing (what the drive helper requires)
+`apps/desktop/electron-builder.yml` ships `dist/companion/` via
+`extraResources` at `<resources>/companion/`. Run the companion build before
+`electron-builder`, e.g. `./scripts/build-companion.sh && pnpm build:linux`.
 
-The drive helper's caller check (ADR-041 amendment 2026-10-27) accepts only a
-parent whose signature satisfies:
+### macOS signing (what the drive agent requires)
+
+The drive agent (`solus-input serve`, sol-drive.md §2.1, ADR-041 amendment 3b)
+checks every `run` request's socket peer — by the audit token captured at
+connect — against:
 
 ```
 anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6]
@@ -78,7 +92,7 @@ set on macOS, `build-companion.sh` signs every Mach-O under
 `--options runtime --timestamp --identifier com.solusforge.solus.companion`,
 and verifies the binary against the requirement above (`SOLUS_TEAM_ID`, ten
 upper-case letters/digits, is required). Unset ⇒ a warning and an unsigned
-build, whose drive calls a release helper refuses (`caller_untrusted`).
+build, whose drive requests a release agent refuses (`caller_untrusted`).
 
 Entitlements: none beyond the hardened runtime. A onedir build loads its
 extension modules and Python library from signed files on disk under one team
@@ -92,29 +106,35 @@ that evidence and record why here.
 (`solus-input-app`, `scripts/build-solus-input.sh`) before
 `pnpm --filter @solus/desktop build:mac`.
 
-### Where the helper may live (`SOLUS_DRIVE_HELPER`)
+### How the companion reaches the drive agent (slice 3b)
 
-The companion refuses a helper path (`resolve_helper`, treated as no helper)
-unless it is an absolute, symlink-free, executable regular file that is not
-group- or other-writable. Every **ancestor directory** must also be safe:
-other-writable is refused unless the directory is sticky; group-writable is
-allowed only when the directory is owned by root (uid 0). That admits
-`/Applications` (`drwxrwxr-x root:admin` — an admin can replace anything there
-anyway) and refuses a user-owned group-writable folder.
-- PyInstaller is deliberately **not** in any pyproject: the script uses
-  `uv run --package solus-companion --with pyinstaller`, layering it ephemerally
-  over the companion's real environment so websockets/mcp/pydantic are visible
-  to its analysis. (Verified working with PyInstaller 6.21.0 on Linux ARM;
-  the binary boots to companion config validation.)
-- Copies the vendored MCP tree beside the binary (excluding `*.template.md`
-  scaffolding).
-- Build per-platform — PyInstaller does not cross-compile.
-- If a future dependency hides imports from the analyzer, add
-  `--hidden-import` / `--copy-metadata` flags in the script.
+The companion no longer starts the helper and no longer reads
+`SOLUS_DRIVE_HELPER`; `SOLUS_COMPANION_DRIVE=1` (plus macOS and a linked
+workspace) is the only switch. Solus.app registers the agent with SMAppService
+while "SOL can use your mouse and keyboard" is on; launchd runs it, and it
+serves `~/Library/Application Support/Solus/drive/agent.sock` (a `0700`
+directory, a `0600` socket).
 
-`apps/desktop/electron-builder.yml` ships `dist/companion/` via
-`extraResources` at `<resources>/companion/`. Run the companion build before
-`electron-builder`, e.g. `./scripts/build-companion.sh && pnpm build:linux`.
+- **Session.** Solus.app asks the agent for a session token (`op: session`,
+  only Solus.app may) and passes it, with the socket path, to the companion it
+  launched over stdin, beside the token lines:
+  `{"type":"drive_session","socket":"…","token":"…"}`. The companion accepts
+  the line only when it has exactly those fields, the socket path is absolute
+  with no symlink anywhere on it, its directory is owned by this user with mode
+  exactly `0700`, the socket is a socket owned by this user, and the token is
+  43 base64url characters. Anything else is dropped with a warning that never
+  contains the token, and the previous session stays. The path is re-checked
+  before every call.
+- **Calls.** Each drive call opens one connection, writes one
+  `{"v":1,"op":"run","token":…,"argv":[…]}` line, reads ONE reply line under
+  one deadline with a 24 MiB cap, and closes. Timeout, cap or cancellation
+  close the connection, which stops the agent's runner. No session, an unsafe
+  path or a refused connection is `agent_unavailable`.
+- **Superseded token.** A `bad_token` reply (the agent restarted, or Solus.app
+  issued a newer session) is returned as the refusal, and the companion writes
+  `{"type":"drive_session_needed"}` to its stdout (at most once every 5 s) so
+  the desktop issues a fresh session. The companion's stdout carries only these
+  lines and the `drive_window` outline lines; logging goes to stderr.
 
 ## Supervision, pidfile, orphan reap
 

@@ -2,9 +2,11 @@
 
 Same inventory and `CallToolResult` shapes as `machine`, so the cloud gate and
 `dispatch.map_result` treat it like any server. It advertises nothing unless
-the platform is macOS, the pinned helper validates, and the desktop app has
-switched driving on. Arguments are checked strictly here; the helper re-checks
-everything that matters for safety itself.
+the platform is macOS, a project workspace is linked, and the desktop app has
+switched driving on; the helper agent is reached per call over its socket
+(slice 3b, `helper.py`), so a missing agent is a call-time `agent_unavailable`.
+Arguments are checked strictly here; the agent re-checks everything that
+matters for safety itself.
 """
 
 import asyncio
@@ -21,14 +23,13 @@ from typing import Any, Literal
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from solus_companion.drive.helper import DriveHelper, DriveHelperError, resolve_helper
+from solus_companion.drive.helper import DriveHelper, DriveHelperError, DriveSessions
 from solus_companion.drive.outline import Emit, outline_line, stdout_writer
 from solus_companion.watch import saved_design_fingerprint
 
 logger = logging.getLogger("solus.companion.drive")
 
 ENV_SWITCH = "SOLUS_COMPANION_DRIVE"
-ENV_HELPER = "SOLUS_DRIVE_HELPER"
 OFF = "SOL can't use your mouse and keyboard (off)"
 NO_HELPER = "the input helper is missing"
 NOT_MACOS = "driving apps needs macOS"
@@ -310,13 +311,16 @@ def _capture_result(reply: dict[str, Any], *, design_saved: bool) -> CallToolRes
 
 
 def drive_server_from_env(
-    env: Mapping[str, str], *, workspace: Path | None, platform: str = sys.platform
+    env: Mapping[str, str],
+    *,
+    workspace: Path | None,
+    platform: str = sys.platform,
+    sessions: DriveSessions | None = None,
 ) -> DriveServer:
-    """What the companion builds at start (slice 2): the desktop app sets the
-    switch to exactly "1" and the helper to its packaged absolute path."""
-    path = resolve_helper(env.get(ENV_HELPER))
+    """What the companion builds at start: the desktop app sets the switch to
+    exactly "1". The agent session arrives later over stdin (slice 3b)."""
     return DriveServer(
-        DriveHelper(path) if path is not None else None,
+        DriveHelper(sessions if sessions is not None else DriveSessions(), emit=stdout_writer()),
         enabled=env.get(ENV_SWITCH) == "1",
         workspace=workspace,
         platform=platform,

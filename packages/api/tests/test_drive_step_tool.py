@@ -150,6 +150,16 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("refused", "outside_workspace", "stopped — the KiCad in front has a project outside"),
         ("refused", "not_bound", "not_bound"),
         ("refused", "caller_untrusted", "did not recognise the Solus companion; reinstall Solus"),
+        (
+            "error",
+            "bad_token",
+            "stopped — Solus lost its connection to the input helper; try again",
+        ),
+        (
+            "error",
+            "agent_unavailable",
+            "stopped — the input helper is not running; check Settings › SOL",
+        ),
     ],
 )
 async def test_an_unfinished_step_fails_so_the_plan_stops(kind: str, code: str, words: str) -> None:

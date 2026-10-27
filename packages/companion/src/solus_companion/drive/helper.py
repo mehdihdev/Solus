@@ -1,35 +1,47 @@
-"""Run the pinned `solus-input` helper (docs/architecture/sol-drive.md §2–3).
+"""The `solus-input` agent client (docs/architecture/sol-drive.md §2.1, §3; slice 3b).
 
-The helper enforces the drive policy; this module makes sure we run the RIGHT
-binary the RIGHT way: an absolute, regular, executable path with no symlink
-and no group/other-writable file or directory on the way to it, re-checked
-before every run; an argument list (never a shell); a minimal environment; one
-deadline for the whole run; SIGTERM first (the helper releases a held mouse
-button on it), then SIGKILL; a stdout cap; exactly one JSON object back.
+The helper runs as a launchd agent serving a Unix socket; it enforces the drive
+policy and checks that the peer is the signed companion. This module talks to
+it: the socket path and session token arrive from the desktop over stdin
+(`DriveSessions.offer`, strictly validated), and each call is one connection —
+one `run` request line, ONE line back under one deadline and a 24 MiB cap,
+then close. Any early exit (timeout, cap, cancellation) closes the connection,
+which stops the helper. Exactly one JSON object comes back or it is an error.
 """
 
 import asyncio
 import contextlib
 import json
+import logging
 import os
+import re
 import stat
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from solus_companion.drive.outline import Emit
+
+logger = logging.getLogger("solus.companion.drive")
+
 #: A capture is a base64 PNG of at most 2048 px on its long edge (1568 by
 #: default). Even an incompressible 2048² RGBA image (~22 MB as base64) fits;
-#: the cap bounds a hostile or broken helper.
+#: the cap bounds a hostile or broken agent.
 STDOUT_CAP_BYTES = 24 * 1024 * 1024
-#: How long a terminated helper gets to release a held button and exit.
-TERMINATE_GRACE_SECONDS = 1.0
 _READ_CHUNK = 64 * 1024
-#: The child sees nothing of the companion's environment (tokens, secrets).
-_CHILD_ENV = {"PATH": "/usr/bin:/bin"}
+#: 32 random bytes, base64url without padding.
+_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
+_SESSION_KEYS = frozenset({"type", "socket", "token"})
+_MAX_SOCKET_PATH = 1024
+#: How often a bad token may ask the desktop for a fresh session.
+SESSION_NEEDED_INTERVAL = 5.0
+SESSION_NEEDED_LINE = '{"type":"drive_session_needed"}'
 
 
 class DriveHelperError(Exception):
-    """A helper run that produced no trustworthy answer. `code` is stable."""
+    """A helper call that produced no trustworthy answer. `code` is stable."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(f"{code}: {message}")
@@ -37,56 +49,85 @@ class DriveHelperError(Exception):
         self.message = message
 
 
-def resolve_helper(path_text: str | None) -> Path | None:
-    """The helper path, or None when it is not an absolute executable regular file.
-
-    Never PATH-resolved and never a symlink: the desktop app passes the packaged
-    binary's absolute path, and anything else is treated as "no helper"."""
-    if not path_text:
-        return None
-    path = Path(path_text)
-    if not path.is_absolute():
-        return None
-    try:
-        info = path.lstat()
-        if path.resolve(strict=True) != path:  # a symlink anywhere on the path
-            return None
-    except OSError:
-        return None
-    if not stat.S_ISREG(info.st_mode) or not os.access(path, os.X_OK):
-        return None
-    if _file_replaceable(info) or any(_ancestor_replaceable(d.stat()) for d in path.parents):
-        return None
-    return path
+@dataclass(frozen=True)
+class DriveSession:
+    socket: Path
+    token: str = field(repr=False)  # never in a log or a repr
 
 
-def _file_replaceable(info: os.stat_result) -> bool:
-    """The helper itself: never group- or other-writable."""
-    return bool(info.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
-
-
-def _ancestor_replaceable(info: os.stat_result) -> bool:
-    """A directory above the helper lets someone else swap our entry.
-
-    Sticky: no (others can't replace an entry they don't own). Other-writable:
-    yes. Group-writable: only safe when root owns it — /Applications is
-    drwxrwxr-x root:admin, and an admin can already replace anything there."""
-    if bool(info.st_mode & stat.S_ISVTX):
+def socket_is_safe(path: Path) -> bool:
+    """Absolute, no symlink anywhere, the directory this user's and exactly 0700,
+    the socket a socket owned by this user."""
+    if not path.is_absolute() or os.path.realpath(path) != str(path):
         return False
-    if info.st_mode & stat.S_IWOTH:
+    uid = os.getuid()
+    try:
+        folder = os.lstat(path.parent)
+        sock = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(folder.st_mode) or folder.st_uid != uid:
+        return False
+    if stat.S_IMODE(folder.st_mode) != 0o700:
+        return False
+    return stat.S_ISSOCK(sock.st_mode) and sock.st_uid == uid
+
+
+def _session_from(message: Mapping[str, Any]) -> tuple[DriveSession | None, str]:
+    """The session a control line carries, or None and why (never the token)."""
+    if set(message) != _SESSION_KEYS:
+        return None, "unexpected or missing fields"
+    socket_text, token = message.get("socket"), message.get("token")
+    if not isinstance(token, str) or _TOKEN.fullmatch(token) is None:
+        return None, "malformed token"
+    if (
+        not isinstance(socket_text, str)
+        or not socket_text
+        or len(socket_text) > _MAX_SOCKET_PATH
+        or "\x00" in socket_text
+    ):
+        return None, "malformed socket path"
+    path = Path(socket_text)
+    if not socket_is_safe(path):
+        return None, "socket path is not private to this user"
+    return DriveSession(path, token), ""
+
+
+class DriveSessions:
+    """The current agent session, fed by `{"type":"drive_session",…}` stdin lines.
+    A bad line is dropped with a warning and keeps the previous session."""
+
+    def __init__(self) -> None:
+        self._current: DriveSession | None = None
+
+    def current(self) -> DriveSession | None:
+        return self._current
+
+    def offer(self, message: Mapping[str, Any]) -> bool:
+        session, why = _session_from(message)
+        if session is None:
+            logger.warning("ignored drive_session line: %s", why)
+            return False
+        self._current = session
+        logger.info("drive session updated via stdin")
         return True
-    return bool(info.st_mode & stat.S_IWGRP) and info.st_uid != 0
 
 
-async def _read_capped(stream: asyncio.StreamReader, cap: int) -> bytes:
+async def _read_line(reader: asyncio.StreamReader, cap: int) -> bytes:
+    """Bytes up to the first newline (or EOF); anything after it is an error."""
     chunks: list[bytes] = []
     size = 0
-    while chunk := await stream.read(_READ_CHUNK):
+    while chunk := await reader.read(_READ_CHUNK):
+        chunks.append(chunk)
         size += len(chunk)
         if size > cap:
             raise DriveHelperError("helper_output", f"more than {cap} bytes of output")
-        chunks.append(chunk)
-    return b"".join(chunks)
+        if b"\n" in chunk:
+            break
+    line, _, rest = b"".join(chunks).partition(b"\n")
+    if rest.strip():
+        raise DriveHelperError("helper_output", "expected exactly one JSON line")
+    return line
 
 
 def _parse(raw: bytes) -> dict[str, Any]:
@@ -107,69 +148,63 @@ def _parse(raw: bytes) -> dict[str, Any]:
 class DriveHelper:
     def __init__(
         self,
-        path: Path,
+        sessions: DriveSessions,
         *,
         timeouts: dict[str, float] | None = None,
         stdout_cap: int = STDOUT_CAP_BYTES,
+        emit: Emit | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self.path = path
+        self.sessions = sessions
         self.timeouts = timeouts or {}
         self.stdout_cap = stdout_cap
+        self._emit = emit
+        self._clock = clock
+        self._last_needed: float | None = None
 
     def timeout_for(self, command: str, default: float) -> float:
         return self.timeouts.get(command, default)
 
     async def run(self, args: Sequence[str], *, timeout: float) -> dict[str, Any]:
-        """One helper call: `args` WITHOUT the program. Raises DriveHelperError."""
-        if resolve_helper(str(self.path)) != self.path:
-            raise DriveHelperError("helper_missing", "the input helper changed or is gone")
+        """One `run` request for `args`. Raises DriveHelperError."""
+        session = self.sessions.current()
+        if session is None:
+            raise DriveHelperError("agent_unavailable", "no session with the input helper yet")
+        if not socket_is_safe(session.socket):
+            raise DriveHelperError("agent_unavailable", "the input helper's socket is not safe")
+        request = {"v": 1, "op": "run", "token": session.token, "argv": list(args)}
+        writer: asyncio.StreamWriter | None = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                str(self.path),
-                *args,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=dict(_CHILD_ENV),
-            )
-        except (OSError, ValueError) as exc:
-            raise DriveHelperError("helper_spawn", type(exc).__name__) from exc
-        assert proc.stdout is not None  # stdout=PIPE above
-        finished = False
-        try:
-            async with asyncio.timeout(timeout):  # ONE deadline: reading and exiting
-                raw = await _read_capped(proc.stdout, self.stdout_cap)
-                code = await proc.wait()
-            finished = True
+            async with asyncio.timeout(timeout):  # ONE deadline: connect, write, read
+                try:
+                    reader, writer = await asyncio.open_unix_connection(str(session.socket))
+                except OSError as exc:
+                    raise DriveHelperError(
+                        "agent_unavailable", f"cannot reach the input helper ({type(exc).__name__})"
+                    ) from exc
+                writer.write(json.dumps(request).encode() + b"\n")
+                await writer.drain()
+                raw = await _read_line(reader, self.stdout_cap)
         except TimeoutError as exc:
             raise DriveHelperError("helper_timeout", f"no answer within {timeout:g}s") from exc
+        except (ConnectionError, BrokenPipeError) as exc:
+            raise DriveHelperError("agent_unavailable", "the input helper hung up") from exc
         finally:
             # Any early exit — timeout, cap, cancellation (Stop, a dropped
-            # bridge) — ends the helper; it must never keep posting events.
-            if not finished:
-                await _stop(proc)
-        if code != 0:
-            raise DriveHelperError("helper_crashed", f"exited with status {code}")
-        return _parse(raw)
+            # bridge) — closes the connection: that stops the helper.
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(writer.wait_closed())
+        reply = _parse(raw)
+        if reply.get("ok") is False and reply.get("code") == "bad_token":
+            self._ask_for_session()
+        return reply
 
-
-async def _stop(proc: asyncio.subprocess.Process) -> None:
-    """SIGTERM, a short grace to release a held button, then SIGKILL. Shielded:
-    it must finish even while the calling task is being cancelled."""
-
-    async def stop() -> None:
-        with contextlib.suppress(ProcessLookupError):
-            proc.terminate()
-        try:
-            await asyncio.wait_for(proc.wait(), TERMINATE_GRACE_SECONDS)
-        except TimeoutError:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-            with contextlib.suppress(Exception):
-                await proc.wait()
-
-        # Drain to EOF so the pipe transport closes (bounded: the process is gone).
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(proc.communicate(), TERMINATE_GRACE_SECONDS)
-
-    await asyncio.shield(stop())
+    def _ask_for_session(self) -> None:
+        now = self._clock()
+        if self._last_needed is not None and now - self._last_needed < SESSION_NEEDED_INTERVAL:
+            return
+        self._last_needed = now
+        if self._emit is not None:
+            self._emit(SESSION_NEEDED_LINE)

@@ -23,6 +23,7 @@ from solus_companion.config import (
     config_from_env,
     discover_servers,
 )
+from solus_companion.drive.helper import DriveSessions
 from solus_companion.drive.server import drive_server_from_env
 from solus_companion.machine.server import MachineServer
 from solus_companion.supervisor import BuiltinServer, Supervisor
@@ -78,7 +79,11 @@ async def _stdin_token_loop(box: TokenBox) -> None:
 
 
 def build_builtins(
-    workspace: str | None, *, env: Mapping[str, str], platform: str = sys.platform
+    workspace: str | None,
+    *,
+    env: Mapping[str, str],
+    platform: str = sys.platform,
+    sessions: DriveSessions | None = None,
 ) -> tuple[BuiltinServer, ...]:
     """The servers the companion implements natively. `drive` (ADR-041,
     sol-drive.md §3) advertises nothing unless the desktop switched it on and
@@ -86,7 +91,7 @@ def build_builtins(
     linked = workspace_path(workspace)
     return (
         MachineServer(linked),
-        drive_server_from_env(env, workspace=linked, platform=platform),
+        drive_server_from_env(env, workspace=linked, platform=platform, sessions=sessions),
     )
 
 
@@ -97,13 +102,19 @@ async def _amain(config: CompanionConfig) -> int:
     # unset OR non-existent SOLUS_COMPANION_WORKSPACE means NO workspace, so the
     # server advertises nothing rather than confining to a directory that is not
     # there.
+    # Slice 3b: the drive agent session arrives on the same stdin control
+    # channel as tokens (`{"type":"drive_session",…}`), routed by apply_token_line.
+    sessions = DriveSessions()
     supervisor = Supervisor(
-        config.servers, builtins=build_builtins(config.workspace, env=os.environ)
+        config.servers,
+        builtins=build_builtins(config.workspace, env=os.environ, sessions=sessions),
     )
     await supervisor.start_all()
     channel = asyncio.create_task(run_channel(config, supervisor))
     side_tasks = [asyncio.create_task(_health_loop(supervisor))]
     box = config.token_source if isinstance(config.token_source, TokenBox) else None
+    if box is not None:
+        box.drive_sessions = sessions
     if box is not None and not sys.stdin.isatty():
         side_tasks.append(asyncio.create_task(_stdin_token_loop(box)))
     loop = asyncio.get_running_loop()

@@ -225,7 +225,15 @@ async def test_act_reports_whether_the_design_was_saved(reply: Any, saved: bool)
 
 
 @pytest.mark.parametrize(
-    "code", ["outside_workspace", "design_saved", "not_bound", "caller_untrusted"]
+    "code",
+    [
+        "outside_workspace",
+        "design_saved",
+        "not_bound",
+        "caller_untrusted",
+        "bad_token",
+        "agent_unavailable",
+    ],
 )
 async def test_the_binding_codes_are_known(code: str) -> None:
     act = FakeTool(error=ToolException(f"{code}: nope"))
