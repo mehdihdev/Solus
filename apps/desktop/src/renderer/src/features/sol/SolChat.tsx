@@ -18,6 +18,8 @@ import { commandHeader } from './commandCard'
 import { PlanCard } from './PlanCard'
 import { AutoRunsView } from './AutoRunRow'
 import { CommandOutput } from './CommandOutput'
+import { DriveStrip } from './DriveStrip'
+import { isDriveTool } from './driveProgress'
 import { ProcessStrip } from './ProcessStrip'
 import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { Composer, type ComposerSend } from './Composer'
@@ -257,9 +259,14 @@ const MessageRow = memo(function MessageRow({
       <Confirmations confirmations={confirmations} onDecide={onDecide} onShowMe={onShowMe} />
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
           kept with its exit status after the card is gone. */}
-      {(item.commandRuns ?? []).map((run) => (
-        <CommandOutput key={run.confirmationId} run={run} />
-      ))}
+      {/* SOLUSDEV-319: a drive.step shows the A3 strip instead, while it runs. */}
+      {(item.commandRuns ?? []).map((run) =>
+        isDriveTool(run.tool) ? (
+          <DriveStrip key={run.confirmationId} run={run} />
+        ) : (
+          <CommandOutput key={run.confirmationId} run={run} />
+        )
+      )}
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
       <div style={{ minHeight: item.pending ? CITATIONS_RESERVE_PX : undefined }}>

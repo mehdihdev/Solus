@@ -30,6 +30,8 @@ import {
 } from './settingsSections.constants'
 import { attentionItems, type AttentionItem } from './attention'
 import { useDesktopSol, type DesktopSol } from './useDesktopSol'
+import { useDriveStatus, type DriveSettings } from './useDriveStatus'
+import { getDriveBridge } from '../../lib/driveBridge'
 import { useCredits, type CreditsView } from './useCredits'
 import { AttentionSection, type AttentionActions } from './sections/AttentionSection'
 import { ProfileSection } from './sections/ProfileSection'
@@ -64,6 +66,7 @@ interface PageContext {
   team: TeamData
   accounts: ReturnType<typeof useAccountConnections>
   sol: DesktopSol
+  drive: DriveSettings
   credits: CreditsView
   navigate: (screen: MainScreen) => void
   openHome: (view: HomePaneView) => void
@@ -73,7 +76,13 @@ interface PageContext {
 const SECTION_RENDERERS: Readonly<Record<SectionId, (ctx: PageContext) => React.JSX.Element>> = {
   profile: (ctx) => <ProfileSection data={ctx.settings} />,
   sol: (ctx) => (
-    <SolSection data={ctx.settings} sol={ctx.sol} onFixCapture={() => scrollTo(ATTENTION_ANCHOR)} />
+    <SolSection
+      data={ctx.settings}
+      sol={ctx.sol}
+      drive={ctx.drive}
+      onFixCapture={() => scrollTo(ATTENTION_ANCHOR)}
+      onFixDrive={() => scrollTo(ATTENTION_ANCHOR)}
+    />
   ),
   // HOME H3 (SOLUSDEV-244) lives here since SOLUSDEV-253: the one part of
   // ~/.solus the user owns, machine-local, read by SOL on every turn.
@@ -122,7 +131,9 @@ function attentionActions(ctx: PageContext): AttentionActions {
     recheckCapture: ctx.sol.recheck,
     turnOffCapture: () => ctx.sol.apply((b) => b.setScreenIntelligence(false)),
     openBilling: () => ctx.navigate('billing'),
-    openAccounts: () => ctx.openHome('accounts')
+    openAccounts: () => ctx.openHome('accounts'),
+    requestDrivePermissions: ctx.drive.requestPermissions,
+    turnOffDrive: () => ctx.drive.setDrive(false)
   }
 }
 
@@ -136,6 +147,8 @@ function useSettingsPage(onNavigate?: (screen: MainScreen) => void): {
   const accounts = useAccountConnections()
   const [solBridge] = useState(getDesktopSolBridge)
   const sol = useDesktopSol(solBridge)
+  const [driveBridge] = useState(getDriveBridge)
+  const drive = useDriveStatus(driveBridge)
   const online = settings.status === 'ready'
   const credits = useCredits(online)
   const navigate = (screen: MainScreen): void => onNavigate?.(screen)
@@ -147,12 +160,13 @@ function useSettingsPage(onNavigate?: (screen: MainScreen) => void): {
     () =>
       attentionItems({
         sol: sol.state,
+        drive: drive.status,
         subscription: online ? settings.subscription : null,
         connections: online ? accounts.connections : []
       }),
-    [sol.state, online, settings.subscription, accounts.connections]
+    [sol.state, drive.status, online, settings.subscription, accounts.connections]
   )
-  return { ctx: { settings, team, accounts, sol, credits, navigate, openHome }, items }
+  return { ctx: { settings, team, accounts, sol, drive, credits, navigate, openHome }, items }
 }
 
 export interface SettingsScreenProps {

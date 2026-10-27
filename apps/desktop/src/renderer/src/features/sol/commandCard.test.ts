@@ -37,6 +37,7 @@ describe('isCommandTool', () => {
     expect(hasCommandOutput('code.exec')).toBe(true)
     expect(hasCommandOutput('code.run')).toBe(true)
     expect(hasCommandOutput('code.test')).toBe(true)
+    expect(hasCommandOutput('drive.step')).toBe(true)
     expect(hasCommandOutput('code.process_start')).toBe(false)
     expect(hasCommandOutput('code.process_input')).toBe(false)
   })

@@ -2,12 +2,15 @@
 // ADR-016 answer mode (backend-persisted) and the desktop SOL window rows —
 // action mode, sees-your-screen, hold-Ctrl gestures — over window.solus.sol.
 // A blocked capture is tagged here; the fix itself is the Needs-attention card.
+// SOLUSDEV-319 adds "SOL can use your mouse and keyboard" (DriveRow).
 import { Segmented } from '../../../components/ui/Segmented'
 import { Switch } from '../../../components/ui/Switch'
 import { useSettingsStore, type SolMode } from '../../../store/settingsStore'
 import { Section, Row, InlineError, StatusTag } from '../settingsUi'
 import type { SettingsData } from '../useSettingsData'
 import type { DesktopSol } from '../useDesktopSol'
+import type { DriveSettings } from '../useDriveStatus'
+import { DriveRow } from './DriveRow'
 
 const SOL_MODES = ['Guide', 'Expert'] as const
 const ACTION_MODES = ['Guide', 'Build'] as const
@@ -130,9 +133,19 @@ export interface SolSectionProps {
   sol: DesktopSol
   /** Scroll to the capture fix in Needs attention. */
   onFixCapture: () => void
+  /** SOLUSDEV-319: the mouse-and-keyboard row; absent, the row is not shown. */
+  drive?: DriveSettings
+  /** Scroll to the drive-permission fix in Needs attention. */
+  onFixDrive?: () => void
 }
 
-export function SolSection({ data, sol, onFixCapture }: SolSectionProps): React.JSX.Element {
+export function SolSection({
+  data,
+  sol,
+  onFixCapture,
+  drive,
+  onFixDrive = onFixCapture
+}: SolSectionProps): React.JSX.Element {
   return (
     <Section
       id="sol"
@@ -143,6 +156,7 @@ export function SolSection({ data, sol, onFixCapture }: SolSectionProps): React.
       {sol.available ? (
         <>
           <DesktopRows sol={sol} onFix={onFixCapture} />
+          {drive && <DriveRow drive={drive} onFix={onFixDrive} />}
           <InlineError message={sol.error} />
         </>
       ) : (

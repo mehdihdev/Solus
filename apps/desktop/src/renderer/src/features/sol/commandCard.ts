@@ -18,8 +18,14 @@ export const COMMAND_TOOLS: ReadonlySet<string> = new Set([
   'code.process_input'
 ])
 
-/** Tools whose approved call streams incremental output (§5.4). */
-const OUTPUT_TOOLS: ReadonlySet<string> = new Set(['code.exec', 'code.run', 'code.test'])
+/** Tools whose approved call streams incremental output (§5.4). drive.step's
+ *  output is its progress lines (sol-drive.md §4), read by the A3 strip. */
+const OUTPUT_TOOLS: ReadonlySet<string> = new Set([
+  'code.exec',
+  'code.run',
+  'code.test',
+  'drive.step'
+])
 
 const RISK_TOKEN = /^[a-z_]{1,32}$/
 const SANDBOX_KINDS = ['sandbox-exec', 'landlock']

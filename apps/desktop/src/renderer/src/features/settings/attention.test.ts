@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { attentionItems, TRIAL_WARN_DAYS } from './attention'
 import { SOL_STATE } from '../sol/solWindow.fixtures'
 import type { Connection, Subscription } from '../../lib/api/resources'
+import { driveStatus } from './drive.fixtures'
 
 const NOW = Date.parse('2026-10-22T12:00:00Z')
 const DAY = 86_400_000
@@ -112,5 +113,27 @@ describe('attentionItems', () => {
       now: NOW
     }).map((i) => i.kind)
     expect(kinds).toEqual(['capture', 'trial', 'reconnect'])
+  })
+})
+
+describe('attentionItems — drive (SOLUSDEV-319)', () => {
+  it('flags a missing drive grant only while driving is on and available', () => {
+    const trust = { accessibility: false, screenRecording: false }
+    expect(attentionItems({ ...base, drive: driveStatus({ trust }) })).toEqual([])
+    expect(attentionItems({ ...base, drive: driveStatus({ enabled: true }) })).toEqual([])
+    expect(attentionItems({ ...base, drive: driveStatus({ enabled: true, trust }) })).toEqual([
+      { kind: 'drive', missing: ['Accessibility', 'Screen Recording'] }
+    ])
+  })
+
+  it('puts the drive card right after capture', () => {
+    const drive = driveStatus({
+      enabled: true,
+      trust: { accessibility: true, screenRecording: false }
+    })
+    const kinds = attentionItems({ ...base, sol: BLOCKED, subscription: sub(), drive }).map(
+      (i) => i.kind
+    )
+    expect(kinds).toEqual(['capture', 'drive', 'trial'])
   })
 })

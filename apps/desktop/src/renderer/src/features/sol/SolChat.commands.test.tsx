@@ -337,3 +337,30 @@ describe('Build auto-run (§10.1/§10.3)', () => {
     expect(screen.queryByLabelText('Action needs your approval')).toBeNull()
   })
 })
+
+describe('an approved drive.step (sol-drive.md §5)', () => {
+  it('shows the A3 strip while the step runs, then clears it without raw output', async () => {
+    let settle: (value: Awaited<ReturnType<typeof decide>>) => void = () => undefined
+    decide.mockReturnValue(new Promise((resolve) => (settle = resolve)))
+    output.mockResolvedValue({
+      chunks: [{ sequence: 1, stream: 'stdout', text: 'action 2/15 · click · 3.1 s\n' }],
+      cursor: 1,
+      complete: false,
+      truncated: false
+    })
+    const user = userEvent.setup()
+    await park(user, {
+      confirmationId: 'drv',
+      tool: 'drive.step',
+      summary: 'Move R1',
+      preview: []
+    })
+    const card = screen.getByLabelText('Action needs your approval')
+    await user.click(within(card).getByRole('button', { name: 'Approve' }))
+    expect(await screen.findByText('DRIVING KICAD · STEP 2 OF 15')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Command output')).toBeNull()
+    await act(async () => settle({ ok: true, value: { ok: true, outcome: 'done' } }))
+    await waitFor(() => expect(screen.queryByText(/DRIVING KICAD/)).toBeNull())
+    expect(screen.queryByText(/action 2\/15/)).toBeNull()
+  })
+})

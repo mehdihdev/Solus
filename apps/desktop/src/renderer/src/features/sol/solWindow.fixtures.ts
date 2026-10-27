@@ -46,6 +46,11 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
     resize: vi.fn(async () => state),
     setBusy: vi.fn(async () => state),
     hide: vi.fn(async () => state),
+    getDriveStatus: vi.fn(async () => null),
+    setDrive: vi.fn(async () => null),
+    requestDrivePermissions: vi.fn(async () => null),
+    setDriving: vi.fn(async () => undefined),
+    onDriveStatus: vi.fn(() => () => undefined),
     onState: vi.fn((handler: (s: SolState) => void) => {
       stateHandler = handler
       return () => {

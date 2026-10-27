@@ -9,7 +9,9 @@ function actions(): AttentionActions {
     recheckCapture: vi.fn(),
     turnOffCapture: vi.fn(),
     openBilling: vi.fn(),
-    openAccounts: vi.fn()
+    openAccounts: vi.fn(),
+    requestDrivePermissions: vi.fn(),
+    turnOffDrive: vi.fn()
   }
 }
 
@@ -71,5 +73,28 @@ describe('AttentionSection', () => {
     expect(screen.getByText('Reconnect Onshape (@mk)')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
     expect(a.openAccounts).toHaveBeenCalled()
+  })
+})
+
+describe('AttentionSection — drive (SOLUSDEV-319)', () => {
+  it('names the helper and the missing permissions, and asks macOS from the fix', async () => {
+    const a = actions()
+    render(
+      <AttentionSection
+        items={[{ kind: 'drive', missing: ['Accessibility', 'Screen Recording'] }]}
+        actions={a}
+      />
+    )
+    const card = screen.getByRole('group', { name: 'SolusInput needs permission' })
+    expect(card).toHaveTextContent(/SolusInput/)
+    expect(card).toHaveTextContent(/Accessibility and Screen Recording/)
+    expect(screen.getByText(/Privacy & Security › Accessibility › SolusInput/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Privacy & Security › Screen Recording › SolusInput/)
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Ask macOS for permission' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off mouse and keyboard' }))
+    expect(a.requestDrivePermissions).toHaveBeenCalled()
+    expect(a.turnOffDrive).toHaveBeenCalled()
   })
 })
