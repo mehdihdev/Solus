@@ -26,40 +26,6 @@ let defaultTitleBarHeight = 28.0
 /// Room below the traffic-light buttons that still belongs to the title bar.
 let titleBarMargin = 4.0
 
-/// Why a run stops between events: SIGTERM (launchd stopping the agent), or
-/// the agent's peer closing its end of the connection (the companion stopping
-/// the step — what SIGTERM was before slice 3b).
-final class StopFlag: @unchecked Sendable {
-    static let shared = StopFlag()
-    private let lock = NSLock()
-    private var raised = false
-    private var peer: Int32?
-
-    func raise() { lock.lock(); raised = true; lock.unlock() }
-
-    /// SIGTERM while serving: true when no request is running, so the agent can exit now.
-    func raiseIsIdle() -> Bool { lock.lock(); defer { lock.unlock() }; raised = true; return peer == nil }
-
-    /// A request starts: its connection is watched for EOF / hang-up. False once
-    /// SIGTERM arrived — the agent exits instead of starting it.
-    func begin(_ fd: Int32) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard !raised else { return false }
-        peer = fd
-        return true
-    }
-
-    func end() { lock.lock(); peer = nil; lock.unlock() }
-    var signalled: Bool { lock.lock(); defer { lock.unlock() }; return raised }
-
-    var isRaised: Bool {
-        lock.lock()
-        let (signalled, fd) = (raised, peer)
-        lock.unlock()
-        return signalled || fd.map(PeerWatch.hasClosed) == true
-    }
-}
-
 struct MacSystem: SystemPort {
     private let source = CGEventSource(stateID: .privateState)
 
@@ -67,7 +33,7 @@ struct MacSystem: SystemPort {
     func screenRecordingAllowed() -> Bool { CGPreflightScreenCaptureAccess() }
     /// Monotonic (system uptime), like the HID idle counter it is compared with.
     func now() -> Double { ProcessInfo.processInfo.systemUptime }
-    func stopRequested() -> Bool { StopFlag.shared.isRaised }
+    func stopRequested() -> Bool { StopSignal.shared.isRaised }
 
     func secondsSinceLastPhysicalInput() -> Double {
         physicalInputTypes

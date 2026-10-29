@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The SOL drive agent (docs/architecture/sol-drive.md §2.1; ADR-041 amendment 3b).
+<!-- The SOL drive agent (docs/architecture/sol-drive.md §2.1; ADR-041 amendment 2026-10-28).
      Shipped at Solus.app/Contents/Library/LaunchAgents/; registered by Solus.app with
-     SMAppService only while "SOL can use your mouse and keyboard" is on. launchd starts
-     it, so it is its own responsible process and the grants attach to SolusInput.app. -->
+     SMAppService only while "SOL can use your mouse and keyboard" is on. launchd starts it
+     on demand for its XPC Mach service (no RunAtLoad, no KeepAlive; it exits after 60 s
+     idle), so it is its own responsible process and the grants attach to SolusInput.app. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
 	<string>com.solusforge.solus.input.agent</string>
+	<key>MachServices</key>
+	<dict>
+		<key>com.solusforge.solus.input.agent</key>
+		<true/>
+	</dict>
 	<key>BundleProgram</key>
 	<string>Contents/Resources/SolusInput.app/Contents/MacOS/solus-input</string>
 	<key>ProgramArguments</key>
@@ -15,10 +21,6 @@
 		<string>solus-input</string>
 		<string>serve</string>
 	</array>
-	<key>RunAtLoad</key>
-	<true/>
-	<key>KeepAlive</key>
-	<true/>
 	<key>ProcessType</key>
 	<string>Interactive</string>
 	<key>AssociatedBundleIdentifiers</key>

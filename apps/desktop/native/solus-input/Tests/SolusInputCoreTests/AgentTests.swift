@@ -1,243 +1,126 @@
-// Drive slice 3b (sol-drive.md §2.1; ADR-041 amendments C1 and 3b): the agent
-// authenticates every request — the socket peer's code identity AND, for `run`,
-// the session token Solus.app was issued — before the runner sees it.
+// Drive slice 3b over XPC (sol-drive.md §2.1; ADR-041 amendment 2026-10-28).
+// Who may send is XPC's job (code requirements on both ends); the agent core
+// only parses the request strictly and hands it to the runner.
 import Foundation
 import XCTest
 @testable import SolusInputCore
 
-private let team = "ABCDE12345"
-private let appRequirement = Signing.requirement(teamId: team, identifier: Signing.appIdentifier)
-private let companionRequirement = Signing.requirement(teamId: team, identifier: Signing.companionIdentifier)
-
-/// A peer that satisfies exactly one requirement (or none).
-private func peer(_ requirement: String?) -> (String) -> Bool { { $0 == requirement } }
-private let app = peer(appRequirement)
-private let companion = peer(companionRequirement)
-
 private final class Harness {
     let port = FakePort()
-    var draws: [[UInt8]?] = [Array(0..<32), Array(repeating: 0xFF, count: 32)]
-    lazy var agent = Agent(runner: Runner(port: port, unsignedDev: unsignedDev), teamId: teamId,
-                           unsignedDev: unsignedDev, random: { [unowned self] count in
-                               XCTAssertEqual(count, 32)
-                               return self.draws.isEmpty ? nil : self.draws.removeFirst()
-                           })
-    let teamId: String
-    let unsignedDev: Bool
-    init(teamId: String = team, unsignedDev: Bool = false) { self.teamId = teamId; self.unsignedDev = unsignedDev }
+    lazy var agent = Agent(runner: Runner(port: port, unsignedDev: false))
 
-    func send(_ line: String, _ from: (String) -> Bool) -> [String: Any] {
-        send(Data((line + "\n").utf8), from)
+    func send(_ line: String) -> [String: Any] { send(Data(line.utf8)) }
+
+    func send(_ raw: Data) -> [String: Any] {
+        let reply = agent.handle(raw)
+        XCTAssertFalse(String(decoding: reply, as: UTF8.self).contains("\n"), "one JSON object")
+        return (try? JSONSerialization.jsonObject(with: reply)) as? [String: Any] ?? [:]
     }
 
-    func send(_ raw: Data, _ from: (String) -> Bool) -> [String: Any] {
-        let reply = agent.handle(raw, peerSatisfies: from)
-        XCTAssertFalse(reply.contains("\n"), "one JSON line")
-        return (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any] ?? [:]
-    }
-
-    func session(_ from: (String) -> Bool = app) -> String? {
-        send(#"{"v":1,"op":"session"}"#, from)["token"] as? String
-    }
-
-    func run(_ token: String?, _ argv: [String] = ["identify", "--within", "/work"],
-             _ from: (String) -> Bool = companion) -> [String: Any] {
-        var body: [String: Any] = ["v": 1, "op": "run", "argv": argv]
-        if let token { body["token"] = token }
-        let data = try! JSONSerialization.data(withJSONObject: body)
-        return send(String(decoding: data, as: UTF8.self), from)
+    func run(_ argv: [Any]) -> [String: Any] {
+        send(Data(try! JSONSerialization.data(withJSONObject: ["v": 1, "op": "run", "argv": argv])))
     }
 }
 
-private func base64url(_ bytes: [UInt8]) -> String {
-    Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
-        .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-}
-
-final class AgentSessionTests: XCTestCase {
-    func testSolusAppGetsA32ByteBase64urlToken() {
-        let h = Harness()
-        let token = h.session()
-        XCTAssertEqual(token, base64url(Array(0..<32)))
-        XCTAssertEqual(token?.count, 43)
-        XCTAssertTrue(token?.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" } ?? false)
-    }
-
-    func testACompanionCannotOpenASession() {
-        let h = Harness()
-        let r = h.send(#"{"v":1,"op":"session"}"#, companion)
-        XCTAssertEqual(code(r), "caller_untrusted")
-        XCTAssertNil(r["token"])
-        XCTAssertEqual(h.draws.count, 2, "no token drawn")
-    }
-
-    func testAnUnsignedPeerCannotOpenASession() {
-        XCTAssertEqual(code(Harness().send(#"{"v":1,"op":"session"}"#, peer(nil))), "caller_untrusted")
-    }
-
-    func testANewSessionSupersedesTheOldToken() {
-        let h = Harness()
-        let old = h.session()
-        let new = h.session()
-        XCTAssertNotEqual(old, new)
-        XCTAssertEqual(code(h.run(old)), "bad_token")
-        XCTAssertEqual(h.run(new)["ok"] as? Bool, true)
-    }
-
-    func testARandomFailureIssuesNothingAndRevokesTheOldToken() {
-        let h = Harness()
-        h.draws = [Array(0..<32), nil]
-        let old = h.session()
-        let r = h.send(#"{"v":1,"op":"session"}"#, app)
-        XCTAssertEqual(r["ok"] as? Bool, false)
-        XCTAssertNil(r["token"])
-        XCTAssertEqual(code(h.run(old)), "bad_token")
-    }
-
-    func testAShortRandomDrawIsAFailure() {
-        let h = Harness()
-        h.draws = [Array(0..<31)]
-        XCTAssertNil(h.session())
-    }
-}
+private let identify = ["identify", "--within", "/work"]
 
 final class AgentRunTests: XCTestCase {
-    func testTheCompanionWithTheTokenReachesTheRunner() {
-        let h = Harness()
-        let r = h.run(h.session())
+    func testRunHandsArgvToTheRunner() {
+        let r = Harness().run(identify)
         XCTAssertEqual(r["ok"] as? Bool, true)
         XCTAssertEqual(r["allowed"] as? Bool, true)
         XCTAssertEqual(r["unsignedDev"] as? Bool, false)
     }
 
-    func testTheRunnersOwnRefusalsPassThrough() {
+    func testTheRunnersOwnChecksStillApply() {
         let h = Harness()
-        XCTAssertEqual(code(h.run(h.session(), ["identify"])), "usage", "no --within")
+        XCTAssertEqual(code(h.run(["identify"])), "usage", "no --within")
+        XCTAssertEqual(code(h.run(["identify", "--within", "/Users"])), "usage", "home ancestor")
         let act = ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990",
                    "click", "--x", "10", "--y", "40", "--within", "/work"]
-        XCTAssertEqual(h.run(h.session(), act)["ok"] as? Bool, true)
+        XCTAssertEqual(h.run(act)["ok"] as? Bool, true)
         XCTAssertEqual(h.port.posted.count, 3)
-    }
-
-    func testSolusAppCannotRun() {
-        let h = Harness()
-        let token = h.session()
-        XCTAssertEqual(code(h.run(token, ["identify", "--within", "/work"], app)), "caller_untrusted")
-        XCTAssertEqual(code(h.run(token, ["identify", "--within", "/work"], peer(nil))), "caller_untrusted")
-    }
-
-    func testTheCallerCheckComesBeforeTheToken() {
-        let h = Harness()
-        XCTAssertEqual(code(h.run("x", ["identify", "--within", "/work"], app)), "caller_untrusted")
-    }
-
-    func testMissingWrongOrNoSessionTokensAreRefused() {
-        let h = Harness()
-        XCTAssertEqual(code(h.run(base64url(Array(0..<32)))), "bad_token", "before any session")
-        let token = h.session()!
-        XCTAssertEqual(code(h.run(nil)), "bad_token", "missing")
-        XCTAssertEqual(code(h.run("")), "bad_token")
-        XCTAssertEqual(code(h.run(String(token.dropLast()))), "bad_token", "short")
-        XCTAssertEqual(code(h.run(token + "A")), "bad_token", "long")
-        XCTAssertEqual(code(h.run(String(token.dropLast()) + (token.last == "A" ? "B" : "A"))), "bad_token")
-        XCTAssertEqual(h.run(token)["ok"] as? Bool, true)
     }
 
     func testOnlyIdentifyCaptureAndActRun() {
         let h = Harness()
-        let token = h.session()
-        for argv in [["trust"], ["trust", "--prompt"], ["serve"], [], ["launch"]] {
-            XCTAssertEqual(code(h.run(token, argv)), "usage", argv.joined(separator: " "))
+        for argv in [["trust"], ["trust", "--prompt"], ["serve"], [], ["launch"], ["Identify"]] {
+            XCTAssertEqual(code(h.run(argv)), "usage", argv.joined(separator: " "))
         }
         XCTAssertEqual(h.port.trustPrompts, 0)
     }
 
-    func testArgvMustBeStrings() {
+    func testArgvMustBeABoundedListOfStrings() {
         let h = Harness()
-        let token = h.session()!
-        for line in [#"{"v":1,"op":"run","token":"\#(token)","argv":["identify",1]}"#,
-                     #"{"v":1,"op":"run","token":"\#(token)","argv":"identify"}"#,
-                     #"{"v":1,"op":"run","token":"\#(token)"}"#,
-                     #"{"v":1,"op":"run","token":7,"argv":["identify"]}"#] {
-            XCTAssertEqual(code(h.send(line, companion)), "usage", line)
+        XCTAssertEqual(code(h.run(["identify", 1])), "usage")
+        XCTAssertEqual(code(h.run(["identify"] + Array(repeating: "x", count: 64))), "usage")
+        for line in [#"{"v":1,"op":"run","argv":"identify"}"#, #"{"v":1,"op":"run"}"#,
+                     #"{"v":1,"op":"run","argv":null}"#] {
+            XCTAssertEqual(code(h.send(line)), "usage", line)
         }
     }
 }
 
 final class AgentTrustTests: XCTestCase {
-    func testSolusAppReadsTrustAndMayPrompt() {
+    func testTrustReportsAndMayPrompt() {
         let h = Harness()
-        let r = h.send(#"{"v":1,"op":"trust","prompt":false}"#, app)
+        let r = h.send(#"{"v":1,"op":"trust","prompt":false}"#)
         XCTAssertEqual(r["trust"] as? [String: Bool], ["accessibility": true, "screenRecording": true])
         XCTAssertEqual(r["unsignedDev"] as? Bool, false)
         XCTAssertEqual(h.port.trustPrompts, 0)
-        XCTAssertEqual(h.send(#"{"v":1,"op":"trust","prompt":true}"#, app)["ok"] as? Bool, true)
+        XCTAssertEqual(h.send(#"{"v":1,"op":"trust","prompt":true}"#)["ok"] as? Bool, true)
         XCTAssertEqual(h.port.trustPrompts, 1)
-    }
-
-    func testTheCompanionCannotAskForTrust() {
-        let h = Harness()
-        XCTAssertEqual(code(h.send(#"{"v":1,"op":"trust","prompt":true}"#, companion)), "caller_untrusted")
-        XCTAssertEqual(h.port.trustPrompts, 0)
     }
 
     func testPromptMustBeABoolean() {
         let h = Harness()
-        for line in [#"{"v":1,"op":"trust"}"#, #"{"v":1,"op":"trust","prompt":1}"#, #"{"v":1,"op":"trust","prompt":"yes"}"#] {
-            XCTAssertEqual(code(h.send(line, app)), "usage", line)
+        for line in [#"{"v":1,"op":"trust"}"#, #"{"v":1,"op":"trust","prompt":1}"#,
+                     #"{"v":1,"op":"trust","prompt":"yes"}"#, #"{"v":1,"op":"trust","prompt":null}"#] {
+            XCTAssertEqual(code(h.send(line)), "usage", line)
         }
+        XCTAssertEqual(h.port.trustPrompts, 0)
     }
 }
 
 final class AgentRequestTests: XCTestCase {
     func testMalformedRequestsAreUsage() {
         let h = Harness()
-        for line in ["", "garbage", "[]", "null", #""session""#, "{}",
-                     #"{"v":2,"op":"session"}"#, #"{"v":"1","op":"session"}"#, #"{"v":true,"op":"session"}"#,
-                     #"{"v":1.5,"op":"session"}"#, #"{"op":"session"}"#, #"{"v":1}"#, #"{"v":1,"op":"identify"}"#,
-                     #"{"v":1,"op":"session","extra":0}"#, #"{"v":1,"op":"SESSION"}"#, #"{"v":1,"op":1}"#] {
-            XCTAssertEqual(code(h.send(line, app)), "usage", line)
+        for line in ["", "garbage", "[]", "null", #""run""#, "{}",
+                     #"{"v":2,"op":"trust","prompt":false}"#, #"{"v":"1","op":"trust","prompt":false}"#,
+                     #"{"v":true,"op":"trust","prompt":false}"#, #"{"v":1.5,"op":"trust","prompt":false}"#,
+                     #"{"op":"trust","prompt":false}"#, #"{"v":1}"#, #"{"v":1,"op":"session"}"#,
+                     #"{"v":1,"op":"identify"}"#, #"{"v":1,"op":"trust","prompt":false,"extra":0}"#,
+                     #"{"v":1,"op":"run","argv":["identify"],"token":"x"}"#, #"{"v":1,"op":"TRUST","prompt":false}"#,
+                     #"{"v":1,"op":1}"#] {
+            XCTAssertEqual(code(h.send(line)), "usage", line)
         }
-        XCTAssertEqual(h.draws.count, 2, "nothing issued")
+        XCTAssertEqual(h.port.trustPrompts, 0)
+        XCTAssertTrue(h.port.posted.isEmpty)
     }
 
-    func testTheLineMustBeOneNewlineTerminatedLine() {
-        let h = Harness()
-        XCTAssertEqual(code(h.send(Data(#"{"v":1,"op":"session"}"#.utf8), app)), "usage", "no newline")
-        XCTAssertEqual(code(h.send(Data("{\"v\":1,\"op\":\"session\"}\n{}\n".utf8), app)), "usage", "two lines")
-        XCTAssertEqual(code(h.send(Data([0xFF, 0xFE, 0x0A]), app)), "usage", "not UTF-8")
+    func testNotUTF8IsUsage() {
+        XCTAssertEqual(code(Harness().send(Data([0xFF, 0xFE]))), "usage")
     }
 
-    func testLinesUpTo64KiBAreReadAndLongerOnesRefused() {
+    func testRequestsUpTo64KiBAreReadAndLongerOnesRefused() {
         let h = Harness()
-        let body = #"{"v":1,"op":"session"}"#
-        let fits = body + String(repeating: " ", count: Agent.maxLineBytes - body.utf8.count)
-        XCTAssertEqual(h.send(fits, app)["ok"] as? Bool, true)
-        XCTAssertEqual(code(h.send(fits + " ", app)), "usage")
+        let body = #"{"v":1,"op":"trust","prompt":false}"#
+        let fits = body + String(repeating: " ", count: Agent.maxRequestBytes - body.utf8.count)
+        XCTAssertEqual(Agent.maxRequestBytes, 65_536)
+        XCTAssertEqual(h.send(fits)["ok"] as? Bool, true)
+        XCTAssertEqual(code(h.send(fits + " ")), "usage")
+    }
+
+    func testATrailingNewlineIsAllowedButNotASecondObject() {
+        let h = Harness()
+        XCTAssertEqual(h.send("{\"v\":1,\"op\":\"trust\",\"prompt\":false}\n")["ok"] as? Bool, true)
+        XCTAssertEqual(code(h.send("{\"v\":1,\"op\":\"trust\",\"prompt\":false}\n{}")), "usage")
     }
 }
 
-final class AgentPolicyTests: XCTestCase {
-    func testThePlaceholderTeamRefusesEveryPeer() {
-        let h = Harness(teamId: Signing.teamIdPlaceholder)
-        let anyone: (String) -> Bool = { _ in true }
-        XCTAssertEqual(code(h.send(#"{"v":1,"op":"session"}"#, anyone)), "caller_untrusted")
-        XCTAssertEqual(code(h.send(#"{"v":1,"op":"trust","prompt":false}"#, anyone)), "caller_untrusted")
-        XCTAssertEqual(code(h.run("x", ["identify", "--within", "/work"], anyone)), "caller_untrusted")
-    }
-
-    func testUnsignedDevSkipsPeerChecksButNeverTheToken() {
-        let h = Harness(teamId: Signing.teamIdPlaceholder, unsignedDev: true)
-        let nobody = peer(nil)
-        XCTAssertEqual(code(h.run(nil, ["identify", "--within", "/work"], nobody)), "bad_token")
-        let token = h.session(nobody)
-        XCTAssertEqual(code(h.run("wrong", ["identify", "--within", "/work"], nobody)), "bad_token")
-        let r = h.run(token, ["identify", "--within", "/work"], nobody)
-        XCTAssertEqual(r["ok"] as? Bool, true)
-        XCTAssertEqual(r["unsignedDev"] as? Bool, true)
-    }
-
+final class AgentStartTests: XCTestCase {
     func testTheAgentStartsOnlyWhenItsOwnCodeIsTheSignedHelper() {
+        let team = "ABCDE12345"
         let port = FakePort()
         XCTAssertFalse(Agent.startAllowed(teamId: team, unsignedDev: false, port: port))
         port.ownRequirements = [Signing.requirement(teamId: team, identifier: Signing.helperIdentifier)]
@@ -246,48 +129,57 @@ final class AgentPolicyTests: XCTestCase {
         XCTAssertFalse(Agent.startAllowed(teamId: Signing.teamIdPlaceholder, unsignedDev: false, port: port))
         XCTAssertTrue(Agent.startAllowed(teamId: Signing.teamIdPlaceholder, unsignedDev: true, port: FakePort()))
     }
-}
 
-final class ServeOptionsTests: XCTestCase {
-    func testReleaseAcceptsOnlyBareServe() {
-        XCTAssertEqual(ServeOptions.parse(["serve"], unsignedDev: false), ServeOptions(socketDir: nil))
-        XCTAssertNil(ServeOptions.parse(["serve", "--socket-dir", "/tmp/x"], unsignedDev: false))
-        XCTAssertNil(ServeOptions.parse(["serve", "now"], unsignedDev: false))
-        XCTAssertNil(ServeOptions.parse(["identify"], unsignedDev: false))
-    }
-
-    func testDebugMayNameAnAbsoluteSocketDirectory() {
-        XCTAssertEqual(ServeOptions.parse(["serve", "--socket-dir", "/tmp/x"], unsignedDev: true),
-                       ServeOptions(socketDir: "/tmp/x"))
-        XCTAssertEqual(ServeOptions.parse(["serve"], unsignedDev: true), ServeOptions(socketDir: nil))
-        for argv in [["serve", "--socket-dir"], ["serve", "--socket-dir", "rel"], ["serve", "--socket-dir", "/"],
-                     ["serve", "--other", "/x"], ["serve", "--socket-dir", "/a", "--socket-dir", "/b"]] {
-            XCTAssertNil(ServeOptions.parse(argv, unsignedDev: true), argv.joined(separator: " "))
-        }
-    }
-
-    func testTheDefaultSocketLivesUnderApplicationSupport() {
-        XCTAssertEqual(ServeOptions.defaultDirectory(home: "/Users/me"),
-                       "/Users/me/Library/Application Support/Solus/drive")
-        XCTAssertEqual(ServeOptions.socketName, "agent.sock")
+    func testTheListenerAdmitsOnlySolusApp() {
+        XCTAssertEqual(Signing.listenerRequirement(teamId: "ABCDE12345"),
+                       Signing.requirement(teamId: "ABCDE12345", identifier: "com.solusforge.solus"))
+        XCTAssertNil(Signing.listenerRequirement(teamId: Signing.teamIdPlaceholder), "placeholder admits nobody")
+        XCTAssertEqual(Signing.agentServiceName, "com.solusforge.solus.input.agent")
     }
 }
 
-/// Cancellation (§2.1): the peer closing its end during a `run` stops the runner.
-final class PeerClosedTests: XCTestCase {
-    func testOpenQuietAndChattyPeersAreNotClosedButAHangUpIs() {
-        var fds: [Int32] = [0, 0]
-        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds), 0)
-        defer { close(fds[0]) }
-        XCTAssertFalse(PeerWatch.hasClosed(fds[0]), "connected, nothing sent")
-        var byte: UInt8 = 0x41
-        XCTAssertEqual(send(fds[1], &byte, 1, 0), 1)
-        XCTAssertFalse(PeerWatch.hasClosed(fds[0]), "extra bytes are not a hang-up")
-        close(fds[1])
-        XCTAssertTrue(PeerWatch.hasClosed(fds[0]), "the peer closed")
+/// The idle exit (60 s, §2.1): only when nothing is running or queued.
+final class IdlePolicyTests: XCTestCase {
+    func testExitsAfterSixtyQuietSecondsOnly() {
+        XCTAssertEqual(IdlePolicy.timeoutSeconds, 60)
+        XCTAssertFalse(IdlePolicy.shouldExit(now: 159, lastActivity: 100, pending: 0))
+        XCTAssertTrue(IdlePolicy.shouldExit(now: 160, lastActivity: 100, pending: 0))
+        XCTAssertFalse(IdlePolicy.shouldExit(now: 1_000, lastActivity: 100, pending: 1), "a run in progress")
+    }
+}
+
+/// cancel(), invalidation and SIGTERM all reach the runner through one stop signal.
+final class StopSignalTests: XCTestCase {
+    func testCancelStopsOnlyTheRunningRequestOfThatConnection() {
+        let stop = StopSignal()
+        let a = NSObject(), b = NSObject()
+        XCTAssertFalse(stop.isRaised)
+        stop.cancel(a)
+        XCTAssertTrue(stop.begin(a))
+        XCTAssertFalse(stop.isRaised, "a cancel with nothing running does not poison the next request")
+        stop.cancel(b)
+        XCTAssertFalse(stop.isRaised, "another connection cannot stop it")
+        stop.cancel(a)
+        XCTAssertTrue(stop.isRaised)
+        stop.end()
+        XCTAssertTrue(stop.begin(a))
+        XCTAssertFalse(stop.isRaised, "each request starts clear")
     }
 
-    func testAnInvalidDescriptorCountsAsClosed() {
-        XCTAssertTrue(PeerWatch.hasClosed(-1))
+    func testTerminationStopsTheRunAndRefusesNewOnes() {
+        let stop = StopSignal()
+        let a = NSObject()
+        XCTAssertTrue(stop.begin(a))
+        XCTAssertFalse(stop.terminate(), "busy: exit after the run")
+        XCTAssertTrue(stop.isRaised)
+        stop.end()
+        XCTAssertFalse(stop.begin(a))
+        XCTAssertTrue(StopSignal().terminate(), "idle: exit now")
+    }
+
+    func testARaiseWithoutAConnectionIsTheArgvModeSigterm() {
+        let stop = StopSignal()
+        stop.raise()
+        XCTAssertTrue(stop.isRaised)
     }
 }

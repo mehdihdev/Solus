@@ -9,9 +9,9 @@ final class SigningTests: XCTestCase {
         XCTAssertEqual(
             Signing.requirement(teamId: "ABCDE12345", identifier: "com.solusforge.solus.companion"),
             #"anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "ABCDE12345" and identifier "com.solusforge.solus.companion""#)
-        XCTAssertEqual(Signing.companionIdentifier, "com.solusforge.solus.companion")
         XCTAssertEqual(Signing.appIdentifier, "com.solusforge.solus")
         XCTAssertEqual(Signing.helperIdentifier, "com.solusforge.solus.input")
+        XCTAssertEqual(Signing.teamId, Signing.teamIdPlaceholder, "one constant, shared with the native module")
     }
 
     func testOnlyARealTeamIdIsAccepted() {
