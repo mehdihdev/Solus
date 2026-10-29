@@ -344,7 +344,7 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   Solus.app's requirement also refuses builds carrying `allow-dyld-environment-variables`,
   `disable-library-validation` or `get-task-allow`, and below a `CFBundleVersion` floor (a human raises
   it to the first signed 3b build), so an older or debug team-signed build never counts as Solus.app.
-  A packaged main accepts only its executable, `-psn_*` and one `solus://` URL on its command line. (macOS; Linux and Windows builds, which have no drive agent, keep the switch denylist so AppImage's `--no-sandbox` still works). The floor is compared by the code-signing service; until it is confirmed to compare versions numerically, keep `CFBundleVersion` values that also sort correctly as text.
+  A packaged main accepts only its executable, `-psn_*` and one `solus://` URL on its command line. (macOS; Linux and Windows builds, which have no drive agent, keep the switch denylist so AppImage's `--no-sandbox` still works). The floor compares versions numerically (verified with `codesign -R`: 1.10.0 ≥ 1.9.0), but `1.0.0-beta.1 ≥ 1.0.0` also passes, so raise the floor past every prerelease of the first hardened build (or ship a plain integer `CFBundleVersion`).
 - **Main and the agent** (slice 3b): main is the agent's only client. It answers the companion's
   `drive_request` lines only for the child it spawned with drive on, and only for `identify`, `capture`
   and `act` argv whose `--within` is exactly the workspace main checked for that child (the nested-folder
