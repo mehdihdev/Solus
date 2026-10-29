@@ -63,12 +63,12 @@ the companion forwards it to the desktop for the amber outline (§3, §5).
 
 Checks before ANY event is posted (each failure is a refusal with a code; nothing is posted):
 
-- **Caller** (slice 3b, ADR-041 amendments C1 and 3b): commands reach the helper only through the
-  agent (§2.1), which authenticates every request before the runner sees it. The slice 3 parent-chain
-  check and the disclaim launcher are removed — under launchd the parent is always launchd. A release
-  build runs only as the agent (`serve`); any other invocation is a `usage` refusal. Debug builds
-  (`SOLUS_INPUT_UNSIGNED_DEV`, Package.swift debug configuration only) also accept the commands on argv
-  for tests and skip the code-requirement checks, never the session token, and report `unsignedDev: true`.
+- **Caller** (slice 3b, ADR-041 amendment 2026-10-28): in a release build commands reach the helper only
+  as XPC messages to the agent (§2.1) from Solus.app's main process; launchd starts it, so there is no
+  parent to check (the slice 3 parent-chain check, the disclaim launcher and the 3b socket are removed).
+  A release build run any other way is a `usage` refusal. Debug builds (`SOLUS_INPUT_UNSIGNED_DEV`,
+  Package.swift debug configuration only) accept the commands on argv instead — dev main runs one process
+  per call — skip every code-requirement check and report `unsignedDev: true`; they have no XPC listener.
 - **Workspace** (every command with `--within`): absolute, resolved, not `/`, and neither the user's home
   directory nor any ancestor of it (home from `getpwuid`, never `$HOME`; byte compare by whole segment) —
   `usage` otherwise.
@@ -136,61 +136,59 @@ remains between the last hit-test and a global pointer post (inherent); the kill
 HID idle counter and the stuck-button release are verified on real hardware in the QA pass, not in unit
 tests; the bundle id is not yet tied to KiCad's code signature (to add when the list widens).
 
-### 2.1 Agent mode (slice 3b)
+### 2.1 Agent mode (slice 3b, XPC — ADR-041 amendment 2026-10-28)
 
-The helper runs as a **launchd agent** (`solus-input serve`), registered by Solus.app with SMAppService
+The release helper runs as a **launchd agent** offering the XPC Mach service
+`com.solusforge.solus.input.agent`, registered by Solus.app with SMAppService
 (`app.setLoginItemSettings({type: 'agentService', serviceName: 'com.solusforge.solus.input.agent.plist'})`)
-only while the drive setting is on, unregistered when it turns off. launchd starts it, so it is its own
-responsible process and the grants attach to SolusInput.app. Launch agent plist (shipped at
-`Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist`): `Label`
-`com.solusforge.solus.input.agent`, `BundleProgram`
+only while the drive setting is on and the helper is installed, unregistered otherwise. launchd starts it
+on demand, so it is its own responsible process and the grants attach to SolusInput.app. Launch agent plist
+(`Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist`): `Label` and
+`MachServices` `{com.solusforge.solus.input.agent: true}`, `BundleProgram`
 `Contents/Resources/SolusInput.app/Contents/MacOS/solus-input`, `ProgramArguments` `[solus-input, serve]`,
-`RunAtLoad` and `KeepAlive` true, `ProcessType` `Interactive`, `AssociatedBundleIdentifiers`
-`[com.solusforge.solus]`.
+no `RunAtLoad`, no `KeepAlive` (on demand; the agent exits after 60 s idle), `ProcessType`
+`Interactive`, `AssociatedBundleIdentifiers` `[com.solusforge.solus]`.
 
-**Socket.** `~/Library/Application Support/Solus/drive/agent.sock` (home from `getpwuid`). The agent
-creates the directory `0700` and refuses to serve if it exists with another owner, a symlink, or any
-group/other permission bit; the socket is `0600`. A stale socket file (nothing accepting) is unlinked
-before binding. Debug builds accept `serve --socket-dir DIR` (dev uses `…/Solus/drive-dev/`, so a dev
-run never collides with an installed agent); release builds do not.
+**Who may talk to it.** The listener calls `setConnectionCodeSigningRequirement` with Solus.app's
+requirement (`identifier "com.solusforge.solus"`, team ID, Developer ID clauses), so XPC checks every
+message's send-time audit token; a process that sends and then execs fails (exec changes its pidversion —
+reproduced on this machine), and a renderer or other Electron helper (`com.solusforge.solus.helper.*`)
+never matches. The client (main's native module, below) sets the agent's requirement
+(`com.solusforge.solus.input`) on its connection, so nothing else can pose as the agent (launchd owns the
+service name too). The agent checks its own signature at start and exits on failure. The placeholder team
+ID makes every requirement fail (release fails closed until a human sets it).
 
-**Wire protocol v1.** One request per connection: one `\n`-terminated JSON line (≤ 64 KiB), one JSON
-line back, then the agent closes. Requests are served one at a time.
+**Interface** (`@objc protocol SolusInputAgent`): `handle(_ request: Data, reply: (Data) -> Void)` and
+`cancel()`. `request` is one JSON object (≤ 64 KiB):
 
-| `op`      | Request                                     | Peer must satisfy                            | Reply                                                                   |
-| --------- | ------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| `session` | `{"v":1,"op":"session"}`                    | Solus.app (`com.solusforge.solus`)           | `{ok, token}` — 32 random bytes, base64url; replaces any previous token |
-| `trust`   | `{"v":1,"op":"trust","prompt":bool}`        | Solus.app                                    | the `trust` reply (§2)                                                  |
-| `run`     | `{"v":1,"op":"run","token":T,"argv":[...]}` | companion (`com.solusforge.solus.companion`) | the runner's reply for `argv` (`identify`, `capture`, `act` only)       |
+| `op`    | Request                              | Reply                                                             |
+| ------- | ------------------------------------ | ----------------------------------------------------------------- |
+| `trust` | `{"v":1,"op":"trust","prompt":bool}` | the `trust` reply (§2)                                            |
+| `run`   | `{"v":1,"op":"run","argv":[...]}`    | the runner's reply for `argv` (`identify`, `capture`, `act` only) |
 
-- **Peer identity** comes from `getsockopt(SOL_LOCAL, LOCAL_PEERTOKEN)` — the audit token captured at
-  connect — checked with `SecCodeCopyGuestWithAttributes(kSecGuestAttributeAudit)` +
-  `SecCodeCheckValidity` against the requirement (team ID + identifier + Developer ID clauses). A process
-  that connects and then execs the signed binary keeps its connect-time token, so it fails. The agent's
-  own signature is checked against its pinned requirement at start; failure exits.
-- **The token** lives only in the agent's memory (a restart invalidates it) and is compared in constant
-  time. It reaches the companion only from Solus.app main, over the companion's stdin (§3).
-- **Refusals:** `caller_untrusted` (peer requirement), `bad_token` (missing, wrong or superseded token),
-  `usage` (malformed request, unknown op, `argv` not identify/capture/act, oversize line). The placeholder
-  team ID makes every peer check fail (release fails closed until a human sets it).
-- **Cancellation:** the peer closing its end during a `run` is the old SIGTERM — the runner stops before
-  its next event (`stopped`) and releases a held button. The kill switch and every §2 check are unchanged.
-- **Residual (accepted, ADR-041 amendment 3b):** a same-user process that binds the socket path first sees
-  the requests sent to it and can answer with false captures; it cannot post input, and a token it
-  receives is useless without the companion's identity.
+Requests run one at a time on a serial queue. `cancel()` — or the connection being invalidated (main
+quit, the companion relay dropped the call) — is the old SIGTERM: the runner stops before its next event
+(`stopped`) and releases a held button. The kill switch and every §2 check are unchanged. Refusals:
+`usage` (malformed request, unknown op, `argv` not identify/capture/act); a connection that fails the
+requirement never reaches `handle`.
+
+**The native module** (`apps/desktop/native/solus-input-xpc/`, Node-API, Objective-C++): exports
+`request(json: string, timeoutMs: number): Promise<string>` and `cancel(): void`; one
+`NSXPCConnection(machServiceName:)` with `setCodeSigningRequirement(agent)`, re-created after
+invalidation; a deadline per request (on expiry it calls `cancel()` and rejects). Loaded only in packaged
+builds, from inside the app bundle.
 
 ## 3. Companion `drive` server (slices 1–2)
 
 `packages/companion/src/solus_companion/drive/` — a `BuiltinServer` like `machine`:
 
-- `helper.py` (slice 3b): the **agent client**. The socket path and the session token arrive from the
-  desktop on stdin, `{"type":"drive_session","socket":…,"token":…}` (validated: absolute path, the
-  directory owned by this user and `0700`, no symlink on the path, the socket owned by this user; token
-  43 base64url characters); until one arrives every call refuses `agent_unavailable`. Each call opens a
-  connection (`asyncio.open_unix_connection`), writes one `run` request, reads one line with ONE deadline
-  and a 24 MiB cap (an incompressible 2048-px capture fits), and closes. Any early exit — timeout, cap,
-  cancellation (Stop, a dropped bridge) — closes the connection, which stops the helper. A `bad_token`
-  reply also writes `{"type":"drive_session_needed"}` to stdout so the desktop issues a fresh session.
+- `helper.py` (slice 3b, XPC): the **relay to the desktop**. The companion never reaches the helper
+  itself. Each call writes one stdout line `{"type":"drive_request","id":N,"argv":[…]}` (N increasing,
+  argv identify/capture/act) and waits for `{"type":"drive_reply","id":N,"reply":{…}}` on stdin, under
+  ONE deadline; a reply over 24 MiB as JSON is refused (an incompressible 2048-px capture fits).
+  Timeout or cancellation (Stop, a dropped bridge) writes `{"type":"drive_cancel","id":N}`. Desktop-side
+  failures arrive as a reply with a refusal code (`agent_unavailable` when the agent cannot be reached).
+  Replies are validated as before (exactly one JSON object with `ok`).
 - `server.py`: tools `identify`, `capture`, `act` with strict pydantic argument models
   (`extra="forbid"`, no NUL bytes); one call at a time (an `asyncio.Lock` — two acts must never
   interleave); `capture` returns an MCP `ImageContent` (staged as an artifact by the existing dispatch
@@ -222,8 +220,8 @@ Save click, so the look after an act is where a save usually shows.
 **Outline geometry (slice 3).** After an ok `identify` (its `window.bounds`) and every ok `capture` or
 `act` (their `bounds`), the companion writes one line to its stdout for the desktop app:
 `{"type":"drive_window","bounds":{"x":…,"y":…,"width":…,"height":…}}` — numbers only, never a title, a
-bundle id or a path. The only other line is `{"type":"drive_session_needed"}` (above). The desktop
-ignores any other line.
+bundle id or a path. The only other lines are `drive_request` and `drive_cancel` (above). The
+desktop ignores any other line.
 
 ## 4. API `drive.step` and the loop (slice 2)
 
@@ -303,23 +301,25 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
 **Helper packaging (security-critical, see §1; ADR-041 amendments H1 and 2026-10-27).**
 
 - `scripts/build-solus-input.sh` builds `dist/solus-input/SolusInput.app`: `Contents/MacOS/solus-input`
-  (the helper, the bundle's executable) and `Contents/MacOS/solus-input-launch`, with
+  (the helper, the bundle's executable), with
   `CFBundleIdentifier` `com.solusforge.solus.input` and `LSUIElement`. Signing runs only when
   `SOLUS_SIGN_IDENTITY` is set (hardened runtime, per-binary identifiers); otherwise the bundle is left
   unsigned with a warning. Release builds refuse every call until the team ID placeholder in
   `Signing.swift` is replaced (§2, caller check). Identities and notarisation are human.
 - electron-builder ships it at `<resources>/SolusInput.app`. Solus.app never requests Accessibility or
   Screen Recording; the grants belong to the helper bundle.
-- **The agent** (§2.1, slice 3b) replaces the slice 3 launcher, which is removed. electron-builder copies
-  `bundle/com.solusforge.solus.input.agent.plist` to `Contents/Library/LaunchAgents/` (`mac.extraFiles`).
-  **Electron fuses** are locked (`electronFuses`: `runAsNode`, `enableNodeOptionsEnvironmentVariable`,
-  `enableNodeCliInspectArguments` off; `enableEmbeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar`
-  on), so a process satisfying Solus.app's requirement runs Solus code.
-- **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`): a PyInstaller onefile
-  binary runs as a bootloader parent plus an unpacked child, and the child — the process that opens the
-  agent socket — would not carry the companion's signing identifier, so every request would fail the
-  agent's peer check. The packaged companion is `<resources>/companion/solus-companion/solus-companion`,
-  with `mcp/` beside it.
+- **The agent** (§2.1) replaces the slice 3 launcher and the 3b socket, which are removed.
+  electron-builder copies `bundle/com.solusforge.solus.input.agent.plist` to
+  `Contents/Library/LaunchAgents/` (`mac.extraFiles`). **Electron fuses** are locked (`electronFuses`:
+  `runAsNode`, `enableNodeOptionsEnvironmentVariable`, `enableNodeCliInspectArguments` off;
+  `enableEmbeddedAsarIntegrityValidation`, `onlyLoadAppFromAsar` on) and verified by reading them back
+  from the packed app before signing; Solus.app's entitlements no longer include
+  `allow-dyld-environment-variables`; a packaged build refuses to start with `--remote-debugging-port`,
+  `--remote-debugging-pipe`, `--inspect*` or `--js-flags`. Together: a process satisfying Solus.app's
+  requirement runs Solus code with Solus configuration.
+- **The companion is built `--onedir` on macOS** (`scripts/build-companion.sh`), so every Mach-O in it is
+  signed in place (a onefile build unpacks unsigned code at run time). The packaged companion is
+  `<resources>/companion/solus-companion/solus-companion`, with `mcp/` beside it. PyInstaller is pinned.
 - **Signing** (human: identities, SOLUSDEV-148/149): `scripts/build-solus-input.sh` and
   `scripts/build-companion.sh` sign with their own identifiers (`com.solusforge.solus.input`,
   `com.solusforge.solus.companion`), hardened runtime, no extra
@@ -328,20 +328,26 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   `unsignedDev: true`. electron-builder's `mac.signIgnore` leaves both untouched, so Solus.app's inherited
   entitlements (`allow-dyld-environment-variables`, JIT) are never applied to them. `make desktop-mac`
   builds both, then the app.
-- **Main and the agent** (slice 3b): packaged, main registers the agent while the setting is on and talks
-  to it over the socket with Node's `net` (Electron main is the peer, `com.solusforge.solus`): `session`
-  at every companion spawn and on `drive_session_needed`, then the `drive_session` stdin line to the
-  companion; `trust` for the permission rows. Dev: main runs the resolved debug helper
-  (`apps/desktop/native/solus-input/.build/debug/solus-input`, realpath — `.build/debug` is a symlink) as
-  `serve --socket-dir <…/Solus/drive-dev>` child while the setting is on, and uses that socket the same
-  way (the grants then belong to whatever launched the app, as in slices 1–2).
+- **Main and the agent** (slice 3b): main is the agent's only client. It answers the companion's
+  `drive_request` lines only for the child it spawned with drive on, and only for `identify`, `capture`
+  and `act` argv whose `--within` is exactly the workspace main checked for that child (the nested-folder
+  rule) — anything else gets a `usage` reply and nothing is sent. Packaged: through the native module
+  (§2.1); dev: by running the resolved debug helper (`…/.build/debug/solus-input`, realpath — `.build/debug`
+  is a symlink) once per call with the argv (argument list, `PATH`-only env, the same deadline; its stderr
+  is logged, bounded). `drive_cancel`, or the child exiting, cancels the call in flight. `trust` for the
+  permission rows goes the same way. The grants in dev belong to whatever launched the app, as in slices
+  1–2.
+- **The companion's environment** in a packaged build is built from an allowlist (`PATH`, `HOME`, `USER`,
+  `LOGNAME`, `TMPDIR`, `LANG`, `LC_*`) plus the variables main computes; inherited `SOLUS_COMPANION_*` and
+  `PYTHON*` are ignored, so the companion always dials the baked API and serves the registry workspace.
+  Dev builds keep inheriting (developer overrides).
 
 **Settings → SOL: "SOL can use your mouse and keyboard"** (`sol.drive` in `~/.solus/config.json`,
 default off).
 
-- The companion gets `SOLUS_COMPANION_DRIVE=1` (and, from 3b, the `drive_session` line) only when the
-  setting is on AND driving is available for the active project; otherwise the variable is removed
-  (inherited values included, `SOLUS_DRIVE_HELPER` too) and no session is sent —
+- The companion gets `SOLUS_COMPANION_DRIVE=1` only when the setting is on AND driving is available for
+  the active project, and main answers its `drive_request` lines only then; otherwise the variable is
+  removed (inherited values included, `SOLUS_DRIVE_HELPER` too) —
   the setting is the consent, an environment variable is not. Changing either restarts the companion.
   Only the main window may turn the setting on or ask for permissions; the SOL pill (which renders model
   output) may only turn it off and report a running step.
@@ -382,9 +388,8 @@ default off).
    events, red-team; the server wired; the allowlist drafted (human ratifies); bridge-protocol note.
 3. **Done on the branch (2026-10-27):** helper app packaging (signing human), caller check, the setting
    with the nested-folder rule, A3 strip, outline, listener quiet period.
-4. **3b — helper as a socket agent (ADR-041 amendment C1):** an SMAppService agent registered by
-   Solus.app holds the grants and serves the companion over a Unix socket in a user-private directory,
-   accepting a request only when the peer's audit token (captured at connect) satisfies the companion's
-   requirement, plus a session token issued only to Solus.app (ADR-041 amendment 3b); Electron fuses
-   locked; the parent-chain check and the launcher removed. Then the team ID can be set and release
-   builds can drive.
+4. **3b — helper as an XPC agent (ADR-041 amendments C1, 3b, 2026-10-28):** an SMAppService agent
+   registered by Solus.app holds the grants and serves only Solus.app's main process over XPC
+   (send-time audit tokens, both sides verify requirements); the companion relays through main; the
+   packaged companion environment is allowlisted; fuses locked and verified; no dyld entitlement; no
+   remote debugging. Then the team ID can be set and release builds can drive.
