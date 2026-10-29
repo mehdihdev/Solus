@@ -39,12 +39,16 @@ describe('relayRefusal', () => {
   })
 })
 
-function harness(transport: DriveTransport | null): {
+function harness(
+  transport: DriveTransport | null,
+  packaged = false
+): {
   relay: ReturnType<typeof createDriveRelay>
   writes: Array<[object, unknown]>
 } {
   const writes: Array<[object, unknown]> = []
   const relay = createDriveRelay({
+    packaged,
     transport: () => transport,
     write: (child, line) => {
       expect(line.endsWith('\n')).toBe(true)
@@ -216,6 +220,29 @@ describe('createDriveRelay — limits and the bundle gate', () => {
     expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'agent_unavailable' } })
   })
 
+  it('LOW-A: packaged with no bundle check given fails closed — nothing reaches the agent', async () => {
+    const request = vi.fn<DriveTransport['request']>(async () => REPLY)
+    const h = harness({ request }, true)
+    const child = {}
+    h.relay.attach(child, WS)
+    h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
+    await flush()
+    expect(request).not.toHaveBeenCalled()
+    expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'agent_unavailable' } })
+  })
+
+  it('an interrupted act (the transport rejects) is agent_unavailable', async () => {
+    const h = harness({ request: () => Promise.reject(new Error('interrupted')) })
+    const child = {}
+    h.relay.attach(child, WS)
+    h.relay.request(child, {
+      id: 1,
+      argv: ['act', '--within', WS, 'click', '--x', '1', '--y', '1']
+    })
+    await flush()
+    expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'agent_unavailable' } })
+  })
+
   it('a passed bundle check lets the call through', async () => {
     const request = vi.fn<DriveTransport['request']>(async () => REPLY)
     const h = harness({ request })
@@ -238,6 +265,7 @@ it('every reply line starts with {"type":"drive_reply", — the companion admits
   expect(driveReplyLine(1, capture).startsWith('{"type":"drive_reply",')).toBe(true)
   const lines: string[] = []
   const relay = createDriveRelay({
+    packaged: false,
     transport: () => ({ request: async () => capture }),
     write: (_child, line) => void lines.push(line)
   })

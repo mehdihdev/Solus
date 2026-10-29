@@ -47,8 +47,10 @@ export function parseReplyObject(raw: string): Record<string, unknown> | null {
 
 /** `@solus/solus-input-xpc` (apps/desktop/native/solus-input-xpc). */
 export interface XpcModule {
-  request(json: string, timeoutMs: number): Promise<string>
-  cancel(): void
+  /** Starts one request; throws synchronously only for bad arguments. */
+  request(json: string, timeoutMs: number): { id: number; promise: Promise<string> }
+  /** Cancels THAT request only; an unknown or finished id is a no-op. */
+  cancel(id: number): void
   /** Review HIGH-1: SecStaticCodeCheckValidity over main's own bundle. */
   checkOwnBundle?(): Promise<boolean>
 }
@@ -77,13 +79,27 @@ export function createXpcTransport(module: XpcModule): DriveTransport {
   return {
     async request(op, signal) {
       if (signal.aborted) return null
-      const onAbort = (): void => module.cancel()
-      signal.addEventListener('abort', onAbort, { once: true })
+      let started: { id: number; promise: Promise<string> }
       try {
-        const raw = await module.request(JSON.stringify({ v: 1, ...op }), timeoutFor(op))
-        return signal.aborted ? null : parseReplyObject(raw)
+        started = module.request(JSON.stringify({ v: 1, ...op }), timeoutFor(op))
       } catch {
         return null
+      }
+      // Per-request cancel (LOW-B): aborting a relayed run never touches a
+      // concurrent trust request.
+      const onAbort = (): void => {
+        try {
+          module.cancel(started.id)
+        } catch {
+          /* a cancel that throws must not escape the abort */
+        }
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      try {
+        const raw = await started.promise
+        return signal.aborted ? null : parseReplyObject(raw)
+      } catch {
+        return null // a rejection (cancelled, timed out, an interrupted act) is agent_unavailable upstream
       } finally {
         signal.removeEventListener('abort', onAbort)
       }

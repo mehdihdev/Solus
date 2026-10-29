@@ -46,6 +46,9 @@ function boundedReplyLine(id: number, reply: Record<string, unknown>): string {
 }
 
 export interface DriveRelayDeps {
+  /** Packaged builds fail closed (LOW-A): a drive child attached without a
+   *  bundle check never reaches the agent. */
+  packaged: boolean
   /** The transport now (null: the native module did not load). */
   transport(): DriveTransport | null
   /** Write one line to that child's stdin. */
@@ -97,7 +100,7 @@ export function createDriveRelay(deps: DriveRelayDeps): DriveRelay {
   }
 
   return {
-    attach(child, workspace, bundleOk = Promise.resolve(true)) {
+    attach(child, workspace, bundleOk = Promise.resolve(!deps.packaged)) {
       abortAll()
       current = workspace === null ? null : { child, workspace, bundleOk }
     },

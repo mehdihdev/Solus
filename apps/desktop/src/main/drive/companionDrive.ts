@@ -59,3 +59,15 @@ export function createDriveGeometryRelay(): DriveGeometryRelay {
     }
   }
 }
+
+/** What the relay gets at spawn (LOW-D): no gate for a child without drive;
+ *  otherwise the registered own-bundle check — called once — or, with none
+ *  registered, closed in a packaged build (LOW-A) and open in dev. */
+export function driveRelayGate(input: {
+  driveOn: boolean
+  packaged: boolean
+  spawnCheck: (() => Promise<boolean>) | null
+}): Promise<boolean> | undefined {
+  if (!input.driveOn) return undefined
+  return input.spawnCheck?.() ?? Promise.resolve(!input.packaged)
+}

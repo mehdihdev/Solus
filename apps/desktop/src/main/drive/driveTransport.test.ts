@@ -27,11 +27,16 @@ describe('parseReplyObject', () => {
 })
 
 describe('createXpcTransport', () => {
+  /** The addon's final API: request → {id, promise}; cancel(id) cancels that one only. */
   function xpc(answer: () => Promise<string>): XpcModule & {
     request: ReturnType<typeof vi.fn>
     cancel: ReturnType<typeof vi.fn>
   } {
-    return { request: vi.fn(answer), cancel: vi.fn() }
+    let next = 0
+    return {
+      request: vi.fn(() => ({ id: ++next, promise: answer() })),
+      cancel: vi.fn()
+    }
   }
 
   it('sends a v1 request with the op and parses the reply', async () => {
@@ -82,7 +87,60 @@ describe('createXpcTransport', () => {
     ac.abort()
     resolve(JSON.stringify(REPLY))
     expect(await pending).toBeNull()
-    expect(m.cancel).toHaveBeenCalledTimes(1)
+    expect(m.cancel.mock.calls).toEqual([[1]])
+  })
+
+  it('LOW-B: aborting a relayed run cancels that request only; a concurrent trust settles ok', async () => {
+    const pending = new Map<number, { resolve: (v: string) => void; reject: (e: Error) => void }>()
+    let next = 0
+    const m: XpcModule & { cancel: ReturnType<typeof vi.fn> } = {
+      request: () => {
+        const id = ++next
+        const promise = new Promise<string>((resolve, reject) =>
+          pending.set(id, { resolve, reject })
+        )
+        return { id, promise }
+      },
+      // Like the addon: cancel(id) rejects that request only.
+      cancel: vi.fn((id: number) => pending.get(id)?.reject(new Error('cancelled')))
+    }
+    const t = createXpcTransport(m)
+    const run = new AbortController()
+    const act = t.request({ op: 'run', argv: ['act'] }, run.signal)
+    const trust = t.request({ op: 'trust', prompt: false }, new AbortController().signal)
+    run.abort()
+    pending
+      .get(2)
+      ?.resolve(JSON.stringify({ ok: true, trust: { accessibility: true, screenRecording: true } }))
+    expect(await act).toBeNull()
+    expect(await trust).toMatchObject({ ok: true })
+    expect(m.cancel.mock.calls).toEqual([[1]])
+  })
+
+  it('a synchronous throw from request (bad args) is null', async () => {
+    const m: XpcModule = {
+      request: () => {
+        throw new RangeError('timeoutMs')
+      },
+      cancel: () => undefined
+    }
+    expect(
+      await createXpcTransport(m).request(
+        { op: 'trust', prompt: false },
+        new AbortController().signal
+      )
+    ).toBeNull()
+  })
+
+  it('a cancel that throws never escapes the abort', async () => {
+    const m = xpc(() => new Promise<string>(() => undefined))
+    m.cancel.mockImplementation(() => {
+      throw new TypeError('not an id')
+    })
+    const ac = new AbortController()
+    const pending = createXpcTransport(m).request({ op: 'run', argv: ['act'] }, ac.signal)
+    expect(() => ac.abort()).not.toThrow()
+    void pending
   })
 
   it('an already-aborted signal sends nothing', async () => {

@@ -15,6 +15,7 @@ import { projectWorkspace, realLocalStateDeps } from './localState'
 import { createCompanionStdoutReader } from './drive/driveWindow'
 import {
   createDriveGeometryRelay,
+  driveRelayGate,
   driveRespawnNeeded,
   folderChangeAction
 } from './drive/companionDrive'
@@ -193,6 +194,7 @@ let driveSpawnCheck: (() => Promise<boolean>) | null = null
 let driveTransport: (() => DriveTransport | null) | null = null
 /** The companion relays drive calls to main (3b, XPC); replies go to its stdin. */
 const driveRelay = createDriveRelay({
+  packaged: app.isPackaged,
   transport: () => driveTransport?.() ?? null,
   write: (target, line) => writeStdin(target as ChildProcess, line)
 })
@@ -373,7 +375,11 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   driveRelay.attach(
     c,
     driveWorkspace,
-    driveWorkspace === null ? undefined : (driveSpawnCheck?.() ?? Promise.resolve(true))
+    driveRelayGate({
+      driveOn: driveWorkspace !== null,
+      packaged: app.isPackaged,
+      spawnCheck: driveSpawnCheck
+    })
   )
   const reader = createCompanionStdoutReader({
     onBounds: driveGeometry.attach(c, driveWorkspace !== null),

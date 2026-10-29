@@ -1,7 +1,12 @@
 // SOLUSDEV-319 drive slice 3, review M3: the companion's drive lifecycle
 // decisions, extracted from companion.ts so they are tested without a process.
 import { describe, expect, it, vi } from 'vitest'
-import { createDriveGeometryRelay, driveRespawnNeeded, folderChangeAction } from './companionDrive'
+import {
+  createDriveGeometryRelay,
+  driveRelayGate,
+  driveRespawnNeeded,
+  folderChangeAction
+} from './companionDrive'
 
 const B = { x: 1, y: 2, width: 3, height: 4 }
 
@@ -81,5 +86,26 @@ describe('createDriveGeometryRelay', () => {
     const child = {}
     relay.attach(child, true)(B)
     expect(() => relay.detach(child)).not.toThrow()
+  })
+})
+
+// LOW-D: what companion.ts hands the relay at spawn.
+describe('driveRelayGate', () => {
+  it('drive on: the registered spawn check, called once, its promise passed on', () => {
+    const answer = Promise.resolve(true)
+    const check = vi.fn(() => answer)
+    expect(driveRelayGate({ driveOn: true, packaged: true, spawnCheck: check })).toBe(answer)
+    expect(check).toHaveBeenCalledTimes(1)
+  })
+
+  it('drive off: no gate and no check', () => {
+    const check = vi.fn(() => Promise.resolve(true))
+    expect(driveRelayGate({ driveOn: false, packaged: true, spawnCheck: check })).toBeUndefined()
+    expect(check).not.toHaveBeenCalled()
+  })
+
+  it('LOW-A: no check registered fails closed when packaged, open in dev', async () => {
+    expect(await driveRelayGate({ driveOn: true, packaged: true, spawnCheck: null })).toBe(false)
+    expect(await driveRelayGate({ driveOn: true, packaged: false, spawnCheck: null })).toBe(true)
   })
 })
