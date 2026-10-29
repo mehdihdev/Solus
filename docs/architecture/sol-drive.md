@@ -178,6 +178,13 @@ requirement never reaches `handle`.
 invalidation; a deadline per request (on expiry it calls `cancel()` and rejects). Loaded only in packaged
 builds, from inside the app bundle.
 
+**Residuals (accepted; recorded here and in the completion report):** files swapped after the bundle
+check, between spawn and use, are not re-checked; consent (`sol.drive`) and the folder registry live in
+user-writable `~/.solus`, so a same-user process can forge them — it then needs the real Solus.app and the
+user's session to get a drive step from the cloud; a user LaunchAgent that claims the Mach service name
+first sees main's requests (the workspace path, typed text) but cannot answer them (the client requires
+the agent's signature), so drive fails rather than misbehaves.
+
 ## 3. Companion `drive` server (slices 1–2)
 
 `packages/companion/src/solus_companion/drive/` — a `BuiltinServer` like `machine`:
@@ -325,9 +332,19 @@ existing staged artifact (`artifact_chunk`). The change is cloud-side registrati
   `com.solusforge.solus.companion`), hardened runtime, no extra
   entitlements, when `SOLUS_SIGN_IDENTITY` and `SOLUS_TEAM_ID` are set, then verify the requirements and
   that the helper has no entitlements; the helper build fails if the release helper reports
-  `unsignedDev: true`. electron-builder's `mac.signIgnore` leaves both untouched, so Solus.app's inherited
-  entitlements (`allow-dyld-environment-variables`, JIT) are never applied to them. `make desktop-mac`
+  `unsignedDev: true`. electron-builder's `mac.signIgnore` leaves both untouched, so Solus.app's
+  entitlements (JIT) are never applied to them. `make desktop-mac`
   builds both, then the app.
+- **Bundle seal (security review HIGH-1).** A same-user process could copy Solus.app somewhere writable
+  and replace the companion's files (Python reads them as data, so the kernel never re-checks them); the
+  copy's untouched main would pass the agent's requirement and relay the fake companion's requests. So a
+  packaged main checks its own bundle's static signature — nested code and the resource seal over the
+  companion, `_internal/` and `mcp/` (`SecStaticCodeCheckValidity`, strict) — once per launch and at
+  every drive-child spawn; a failure is `bundle_modified` (drive unavailable, relay not attached).
+  Solus.app's requirement also refuses builds carrying `allow-dyld-environment-variables`,
+  `disable-library-validation` or `get-task-allow`, and below a `CFBundleVersion` floor (a human raises
+  it to the first signed 3b build), so an older or debug team-signed build never counts as Solus.app.
+  A packaged main accepts only its executable, `-psn_*` and one `solus://` URL on its command line.
 - **Main and the agent** (slice 3b): main is the agent's only client. It answers the companion's
   `drive_request` lines only for the child it spawned with drive on, and only for `identify`, `capture`
   and `act` argv whose `--within` is exactly the workspace main checked for that child (the nested-folder

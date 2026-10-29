@@ -1,7 +1,9 @@
 # Cowork QA — SOLUSDEV-319 drive slice 3 (desktop setting, strip, outline, packaged helper)
 
 Spec: `docs/architecture/sol-drive.md` §5 (and §2 caller check, §3 outline geometry). Decisions:
-DECISIONS.md ADR-041 and its amendments (H1, M2/M3, 2026-10-27 caller check). Earlier flows:
+DECISIONS.md ADR-041 and its amendments (H1, M2/M3, and 2026-10-28 XPC, which superseded the
+2026-10-27 caller check). Slice 3b has its own file: `COWORK_QA_SOLUSDEV-319-drive-slice3b.md`. Earlier
+flows:
 `COWORK_QA_SOLUSDEV-319-drive-slice2.md` (1–23) still apply; run them with the setting below instead of
 environment variables.
 
@@ -11,9 +13,8 @@ environment variables.
       allowlisted (`integrations/mcp/drive/allowlist.yaml` ratified by a human).
 - [ ] **Dev build:** `cd apps/desktop/native/solus-input && swift build` (debug — unsigned mode), then
       `pnpm dev:all`. The grants then belong to whatever launched the app (Terminal / the IDE).
-- [ ] **Packaged build (flows 13–14):** `make desktop-mac` (unsigned). Until slice 3b (ADR-041
-      amendment C1) the team ID stays a placeholder, so a packaged build MUST refuse every drive call with
-      `caller_untrusted` — that is the expected result now. Flows 1–12 and 15–16 run on the dev build.
+- [ ] **Packaged build (flows 13–14):** see the slice 3b QA file. Flows 1–12 and 15–16 run on the dev
+      build.
 - [ ] Two Solus projects, A and B, each linked to a folder on this Mac (Project → Link folder). A copy of
       `solus_sample` inside A's folder for KiCad.
 
@@ -49,13 +50,8 @@ environment variables.
     both vanish. Repeat with Esc and with moving the mouse: same ending.
 12. **Hotkeys quiet.** During a step, SOL's own typing never opens a second SOL pill or circle mode. After the
     step (≥ 0.5 s), double-tap Ctrl opens SOL as usual.
-13. **Packaged fails closed.** Install the unsigned packaged build in /Applications. Settings shows the row
-    available (the /Applications path passes the helper path rule). A drive step ends "stopped — the input
-    helper did not recognise the Solus companion; reinstall Solus". From Terminal,
-    `/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input-launch identify --within /tmp`
-    answers `{"code":"caller_untrusted",…}`; `… trust` answers two booleans and `"unsignedDev":false`.
-14. **Grants land on the helper** (after slice 3b, signed): System Settings › Privacy & Security ›
-    Accessibility and Screen Recording list **SolusInput**, not Solus. Mark N/A until then.
+13. **Packaged fails closed.** Superseded — see the slice 3b QA file (flows 1–4).
+14. **Grants land on the helper.** Superseded — see the slice 3b QA file (flow 6).
 15. **Safety timeout.** Force-quit the renderer mid-step (or kill the API). Expected: the outline clears by
     itself within 150 s.
 16. **Turn off.** Flip the switch off. Expected: the companion restarts; SOL offers no drive step.
