@@ -6,6 +6,7 @@
 // and does nothing for any other id. The connection's invalidation or
 // interruption does the same for every request it sent.
 import Foundation
+import Security
 import SolusInputCore
 import SolusInputShared
 
@@ -24,6 +25,7 @@ private final class Item {
 
 public final class AgentService: NSObject, NSXPCListenerDelegate {
     private let stop: StopSignal
+    private let admitClient: (pid_t) -> Bool
     private let handler: (Data) -> Data
     private let onDrained: () -> Void
     private let work = DispatchQueue(label: "com.solusforge.solus.input.agent.work")
@@ -31,11 +33,16 @@ public final class AgentService: NSObject, NSXPCListenerDelegate {
     private var queue: [Item] = []
     private var running: Item?
     private var last = ProcessInfo.processInfo.systemUptime
+    /// Set (under the lock) by `terminate()` or `exitIfIdle`: nothing new runs.
+    private var closed = false
 
-    /// `onDrainedWhileTerminating` runs when the last request finishes after `terminate()`.
-    public init(stop: StopSignal, handler: @escaping (Data) -> Data,
+    /// `admitClient` gets each connecting process's pid (ClientCode.isHardened in
+    /// release); `onDrainedWhileTerminating` runs once the last reply after
+    /// `terminate()` has been handed to XPC.
+    public init(stop: StopSignal, admitClient: @escaping (pid_t) -> Bool, handler: @escaping (Data) -> Data,
                 onDrainedWhileTerminating: @escaping () -> Void = { exit(0) }) {
         self.stop = stop
+        self.admitClient = admitClient
         self.handler = handler
         onDrained = onDrainedWhileTerminating
     }
@@ -50,11 +57,29 @@ public final class AgentService: NSObject, NSXPCListenerDelegate {
     public func terminate() -> Bool {
         _ = stop.terminate()
         lock.lock(); defer { lock.unlock() }
+        closed = true
         return queue.isEmpty && running == nil
     }
 
+    /// The idle exit, decided atomically: if nothing is pending and nothing has
+    /// arrived for the idle timeout, close (later requests are answered `stopped`
+    /// and never run) and return true so the caller exits.
+    public func exitIfIdle(now: Double) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if closed { return queue.isEmpty && running == nil }
+        guard IdlePolicy.shouldExit(now: now, lastActivity: last, pending: queue.count + (running == nil ? 0 : 1))
+        else { return false }
+        closed = true
+        _ = stop.terminate()
+        return true
+    }
+
+    /// Identity is the requirement XPC checks on every message; this adds that the
+    /// client runs hardened and undebugged (a team-signed build without the
+    /// hardened runtime would satisfy the requirement string alone).
     public func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        let endpoint = Endpoint(service: self)
+        guard admitClient(connection.processIdentifier) else { return false }
+        let endpoint = Endpoint(service: self, connection: connection)
         connection.exportedInterface = NSXPCInterface(with: SolusInputAgent.self)
         connection.exportedObject = endpoint
         connection.invalidationHandler = { [weak self] in self?.cancelAll(from: endpoint) }
@@ -66,6 +91,10 @@ public final class AgentService: NSObject, NSXPCListenerDelegate {
     fileprivate func enqueue(_ sender: Endpoint, _ request: Data, _ reply: @escaping (Data) -> Void) {
         let item = Item(sender: sender, id: Agent.requestId(request), request: request, reply: reply)
         lock.lock()
+        guard !closed else {
+            lock.unlock()
+            return reply(Agent.stoppedReply("the drive agent is stopping"))
+        }
         queue.append(item)
         last = ProcessInfo.processInfo.systemUptime
         lock.unlock()
@@ -90,7 +119,14 @@ public final class AgentService: NSObject, NSXPCListenerDelegate {
         running = nil
         let drained = queue.isEmpty && stop.isTerminating
         lock.unlock()
-        if drained { onDrained() }
+        guard drained else { return }
+        // Exit only once the reply has left: the barrier runs after every message
+        // queued on that connection so far has been sent.
+        if let connection = item.sender.connection {
+            connection.scheduleSendBarrierBlock(onDrained)
+        } else {
+            onDrained()
+        }
     }
 
     fileprivate func cancel(_ id: Int, from sender: Endpoint) {
@@ -113,11 +149,42 @@ public final class AgentService: NSObject, NSXPCListenerDelegate {
 
 private final class Endpoint: NSObject, SolusInputAgent {
     private weak var service: AgentService?
+    private(set) weak var connection: NSXPCConnection?
 
-    init(service: AgentService) { self.service = service }
+    init(service: AgentService, connection: NSXPCConnection) {
+        self.service = service
+        self.connection = connection
+    }
 
     func handle(_ request: Data, reply: @escaping (Data) -> Void) { service?.enqueue(self, request, reply) }
     func cancel(_ requestId: Int) { service?.cancel(requestId, from: self) }
+}
+
+/// The connecting process's code signing state, by pid. The audit token is not
+/// public API on NSXPCConnection, so this reads the pid; the identity itself is
+/// enforced on every message by the connection's code-signing requirement
+/// (send-time audit token). Residual: a pid reused between accept and this read.
+public enum ClientCode {
+    /// (kSecCodeInfoFlags, kSecCodeInfoStatus); nil when unreadable.
+    public static func signingState(pid: pid_t) -> (flags: UInt32, status: UInt32)? {
+        var code: SecCode?
+        let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return nil }
+        var info: CFDictionary?
+        // A SecCode is accepted where a SecStaticCode is declared (and is required
+        // for kSecCSDynamicInformation); Swift needs the cast spelled out.
+        let dynamic = unsafeBitCast(code, to: SecStaticCode.self)
+        guard SecCodeCopySigningInformation(dynamic, SecCSFlags(rawValue: kSecCSDynamicInformation), &info) == errSecSuccess,
+              let values = info as? [String: Any]
+        else { return nil }
+        let flags = (values[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value ?? 0
+        let status = (values[kSecCodeInfoStatus as String] as? NSNumber)?.uint32Value ?? 0
+        return (flags, status)
+    }
+
+    public static func isHardened(pid: pid_t) -> Bool {
+        signingState(pid: pid).map { SolusInputCodeIsHardened($0.flags, $0.status) } ?? false
+    }
 }
 
 /// The release Mach-service listener: every connection must satisfy Solus.app's

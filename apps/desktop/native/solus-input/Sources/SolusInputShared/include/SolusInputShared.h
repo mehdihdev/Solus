@@ -30,9 +30,10 @@
 #define SOLUS_APP_VERSION_FLOOR "1.0.0"
 
 /// Appended to Solus.app's requirement (one %s: the floor): no entitlement that lets
-/// foreign code or a debugger into the process, and no build older than the floor.
+/// foreign code, unsigned code pages or a debugger into the process (allow-jit, which
+/// Solus.app carries, is not one of them), and no build older than the floor.
 // clang-format off
-#define SOLUS_APP_REQUIREMENT_SUFFIX " and !(entitlement[\"com.apple.security.cs.allow-dyld-environment-variables\"] exists) and !(entitlement[\"com.apple.security.cs.disable-library-validation\"] exists) and !(entitlement[\"com.apple.security.get-task-allow\"] exists) and info[CFBundleVersion] >= \"%s\""
+#define SOLUS_APP_REQUIREMENT_SUFFIX " and !(entitlement[\"com.apple.security.cs.allow-dyld-environment-variables\"] exists) and !(entitlement[\"com.apple.security.cs.disable-library-validation\"] exists) and !(entitlement[\"com.apple.security.get-task-allow\"] exists) and !(entitlement[\"com.apple.security.cs.allow-unsigned-executable-memory\"] exists) and !(entitlement[\"com.apple.security.cs.disable-executable-page-protection\"] exists) and info[CFBundleVersion] >= \"%s\""
 // clang-format on
 
 /// Requests are one JSON object of at most this many bytes.
@@ -47,6 +48,28 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)handle:(NSData *)request reply:(void (^)(NSData *reply))reply;
 - (void)cancel:(NSInteger)requestId;
 @end
+
+/// <kern/cs_blobs.h> values, as SecCodeCopySigningInformation reports them:
+/// kSecCodeInfoFlags (static) and kSecCodeInfoStatus (dynamic, kSecCSDynamicInformation).
+#define SOLUS_CS_VALID 0x00000001u
+#define SOLUS_CS_RUNTIME 0x00010000u
+#define SOLUS_CS_DEBUGGED 0x10000000u
+
+/// The client (or Solus.app checking itself) runs with the hardened runtime and
+/// a valid, never-debugged signature. A team-signed build without the hardened
+/// runtime satisfies the requirement string but fails here.
+static inline BOOL SolusInputCodeIsHardened(uint32_t staticFlags, uint32_t dynamicStatus) {
+    return (staticFlags & SOLUS_CS_RUNTIME) != 0 && (dynamicStatus & SOLUS_CS_RUNTIME) != 0 &&
+           (dynamicStatus & SOLUS_CS_VALID) != 0 && (dynamicStatus & SOLUS_CS_DEBUGGED) == 0;
+}
+
+/// Safe to send again after an interruption, because it posts no input: `trust`,
+/// or `run` of identify/capture. Never `act` — a replay could repeat a click.
+static inline BOOL SolusInputRequestIsRetryable(NSString *op, NSString *_Nullable command) {
+    if ([op isEqualToString:@"trust"]) return YES;
+    return [op isEqualToString:@"run"] && ([command isEqualToString:@"identify"] || [command isEqualToString:@"capture"]);
+}
+
 NS_ASSUME_NONNULL_END
 
 #endif

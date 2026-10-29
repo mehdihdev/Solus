@@ -155,6 +155,8 @@ final class AgentStartTests: XCTestCase {
                 + #" and !(entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists)"#
                 + #" and !(entitlement["com.apple.security.cs.disable-library-validation"] exists)"#
                 + #" and !(entitlement["com.apple.security.get-task-allow"] exists)"#
+                + #" and !(entitlement["com.apple.security.cs.allow-unsigned-executable-memory"] exists)"#
+                + #" and !(entitlement["com.apple.security.cs.disable-executable-page-protection"] exists)"#
                 + #" and info[CFBundleVersion] >= "1.0.0""#)
         XCTAssertNil(Signing.listenerRequirement(teamId: Signing.teamIdPlaceholder), "placeholder admits nobody")
         XCTAssertEqual(Signing.agentServiceName, "com.solusforge.solus.input.agent")

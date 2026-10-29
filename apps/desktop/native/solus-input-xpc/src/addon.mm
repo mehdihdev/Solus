@@ -1,13 +1,14 @@
 // Solus.app main's XPC client for the SOL drive agent (docs/architecture/sol-drive.md
 // §2.1; ADR-041 amendment 2026-10-28). Exports
-//   request(json: string, timeoutMs: number): Promise<string>
-//   cancel(): void                  — cancels every request this module has in flight, each by id
-//   checkOwnBundle(): Promise<boolean> — Solus.app's own bundle is intact and Solus-signed
+//   request(json: string, timeoutMs: number): { id: number, promise: Promise<string> }
+//   cancel(id: number): void        — stops (or drops, if queued) that request only
+//   checkOwnBundle(): Promise<boolean> — Solus.app's own bundle is intact, Solus-signed and hardened
 // One NSXPCConnection to the agent's Mach service, required to satisfy the
 // agent's code requirement (so nothing else can pose as it), re-created after
 // invalidation. Each request gets an id; its deadline cancels only that id and
 // rejects. A request the agent never answered is sent once more if the
-// connection was interrupted (the agent exiting idle as it arrived). XPC
+// connection was interrupted (the agent exiting idle as it arrived) — only when
+// it posts no input (trust, identify, capture); an `act` is never replayed. XPC
 // callbacks arrive on arbitrary queues; results reach JS through a per-request
 // thread-safe function, settled exactly once.
 #import <Foundation/Foundation.h>
@@ -90,7 +91,8 @@ struct Pending {
     std::atomic<bool> settled{false};
     int64_t id = 0;
     NSData *data = nil;
-    bool retried = false;  // Queue() only
+    bool retryable = false;  // posts no input: may be sent again after an interruption
+    bool retried = false;    // Queue() only
 };
 
 struct Outcome {
@@ -150,7 +152,7 @@ void Send(const std::shared_ptr<Pending> &pending) {
       dispatch_async(Queue(), ^{
         if (pending->settled.load()) return;
         bool interrupted = [error.domain isEqualToString:NSCocoaErrorDomain] && error.code == NSXPCConnectionInterrupted;
-        if (interrupted && !pending->retried) {
+        if (interrupted && pending->retryable && !pending->retried) {
             pending->retried = true;
             return Send(pending);
         }
@@ -174,16 +176,26 @@ napi_value Throw(napi_env env, bool range, const char *message) {
     return nullptr;
 }
 
+/// `{ id, promise }` — what `request` returns.
+napi_value Handle(napi_env env, int64_t id, napi_value promise) {
+    napi_value handle, idValue;
+    napi_create_object(env, &handle);
+    napi_create_int64(env, id, &idValue);
+    napi_set_named_property(env, handle, "id", idValue);
+    napi_set_named_property(env, handle, "promise", promise);
+    return handle;
+}
+
 /// Rejects before anything was dispatched, and lets the thread-safe function go
-/// (an unreleased one would keep the event loop alive).
-napi_value Rejected(napi_env env, const std::shared_ptr<Pending> &pending, napi_value promise, const char *message) {
+/// (an unreleased one would keep the event loop alive). Returns `result` as given.
+napi_value Rejected(napi_env env, const std::shared_ptr<Pending> &pending, napi_value result, const char *message) {
     pending->settled.store(true);
     napi_value text, error;
     napi_create_string_utf8(env, message, NAPI_AUTO_LENGTH, &text);
     napi_create_error(env, nullptr, text, &error);
     napi_reject_deferred(env, pending->deferred, error);
     if (pending->tsfn) napi_release_threadsafe_function(pending->tsfn, napi_tsfn_release);
-    return promise;
+    return result;
 }
 
 /// A promise whose settlement can come from any queue.
@@ -197,11 +209,17 @@ napi_value MakePending(napi_env env, const char *name, std::shared_ptr<Pending> 
     return promise;
 }
 
-/// `json` with the module's id added; nil unless it is a JSON object that still fits.
-NSData *WithId(const std::string &json, int64_t requestId) {
+/// `json` with the module's id added; nil unless it is a JSON object that still
+/// fits. `retryable` says whether it may be sent again (SolusInputRequestIsRetryable).
+NSData *WithId(const std::string &json, int64_t requestId, bool *retryable) {
     NSData *raw = [NSData dataWithBytes:json.data() length:json.size()];
     id object = [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil];
     if (![object isKindOfClass:[NSDictionary class]]) return nil;
+    id op = object[@"op"];
+    id argv = object[@"argv"];
+    id command = [argv isKindOfClass:[NSArray class]] ? [argv firstObject] : nil;
+    *retryable = [op isKindOfClass:[NSString class]] &&
+                 SolusInputRequestIsRetryable(op, [command isKindOfClass:[NSString class]] ? command : nil);
     NSMutableDictionary *request = [object mutableCopy];
     request[@"id"] = @(requestId);
     NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:nil];
@@ -231,16 +249,17 @@ napi_value Request(napi_env env, napi_callback_info info) {
     std::shared_ptr<Pending> pending;
     bool scheduled = false;
     napi_value promise = MakePending(env, "solus-input-xpc.request", pending, &scheduled);
-    if (json.size() > SOLUS_AGENT_MAX_REQUEST_BYTES) return Rejected(env, pending, promise, "request exceeds 64 KiB");
     int64_t id = gNextId.fetch_add(1);
-    if (id > kMaxId) return Rejected(env, pending, promise, "request ids exhausted");
     pending->id = id;
-    pending->data = WithId(json, id);
-    if (!pending->data) return Rejected(env, pending, promise, "request must be a JSON object within 64 KiB");
+    napi_value handle = Handle(env, id, promise);
+    if (json.size() > SOLUS_AGENT_MAX_REQUEST_BYTES) return Rejected(env, pending, handle, "request exceeds 64 KiB");
+    if (id > kMaxId) return Rejected(env, pending, handle, "request ids exhausted");
+    pending->data = WithId(json, id, &pending->retryable);
+    if (!pending->data) return Rejected(env, pending, handle, "request must be a JSON object within 64 KiB");
     if (!AgentRequirement()) {
-        return Rejected(env, pending, promise, "drive agent unavailable: the Solus team ID is not set");
+        return Rejected(env, pending, handle, "drive agent unavailable: the Solus team ID is not set");
     }
-    if (!scheduled) return Rejected(env, pending, promise, "cannot schedule the request");
+    if (!scheduled) return Rejected(env, pending, handle, "cannot schedule the request");
 
     int64_t deadline = static_cast<int64_t>(timeoutMs * NSEC_PER_MSEC);
     dispatch_async(Queue(), ^{
@@ -252,20 +271,45 @@ napi_value Request(napi_env env, napi_callback_info info) {
         Finish(pending, false, "drive agent timed out");
       });
     });
-    return promise;
+    return handle;
 }
 
-napi_value Cancel(napi_env env, napi_callback_info) {
+napi_value Cancel(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1];
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    napi_valuetype type = napi_undefined;
+    if (argc >= 1) napi_typeof(env, argv[0], &type);
+    double value = 0;
+    if (type == napi_number) napi_get_value_double(env, argv[0], &value);
+    if (type != napi_number || !std::isfinite(value) || value < 1 || value > kMaxId || std::floor(value) != value) {
+        return Throw(env, false, "cancel(id): a request id from request()");
+    }
+    int64_t id = static_cast<int64_t>(value);
     dispatch_async(Queue(), ^{
-      for (int64_t id : gInFlight) SendCancel(id);
+      if (gInFlight.count(id)) SendCancel(id);  // only a request of ours still in flight
     });
     napi_value undefined;
     napi_get_undefined(env, &undefined);
     return undefined;
 }
 
+/// The running process itself: hardened runtime, valid, never debugged
+/// (SolusInputCodeIsHardened, the predicate the agent applies to its clients).
+bool RunningCodeIsHardened(SecCodeRef running) {
+    CFDictionaryRef info = nullptr;
+    if (SecCodeCopySigningInformation((SecStaticCodeRef)running, kSecCSDynamicInformation, &info) != errSecSuccess) {
+        return false;
+    }
+    NSDictionary *values = (__bridge_transfer NSDictionary *)info;
+    uint32_t flags = [values[(__bridge NSString *)kSecCodeInfoFlags] unsignedIntValue];
+    uint32_t status = [values[(__bridge NSString *)kSecCodeInfoStatus] unsignedIntValue];
+    return SolusInputCodeIsHardened(flags, status);
+}
+
 /// Static validity of the running app's whole bundle (nested code, strict, every
-/// architecture) against Solus.app's requirement. Off the JS thread.
+/// architecture) against Solus.app's requirement, and the running process
+/// hardened. Off the JS thread.
 bool OwnBundleIsSolus() {
     NSString *requirementText = AppRequirement();
     if (!requirementText) return false;
@@ -278,7 +322,8 @@ bool OwnBundleIsSolus() {
                                                 &requirement) == errSecSuccess &&
                  SecStaticCodeCheckValidity(bundle,
                                             kSecCSCheckNestedCode | kSecCSStrictValidate | kSecCSCheckAllArchitectures,
-                                            requirement) == errSecSuccess;
+                                            requirement) == errSecSuccess &&
+                 RunningCodeIsHardened(running);
     if (requirement) CFRelease(requirement);
     if (bundle) CFRelease(bundle);
     if (running) CFRelease(running);

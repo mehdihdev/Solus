@@ -46,7 +46,8 @@ guard Agent.startAllowed(teamId: Signing.teamId, unsignedDev: false, port: port)
 else { fatal("this agent's own signature does not satisfy its requirement") }
 
 let agent = Agent(runner: Runner(port: port, unsignedDev: false))
-let agentService = AgentService(stop: StopSignal.shared) { agent.handle($0) }
+let agentService = AgentService(stop: StopSignal.shared, admitClient: ClientCode.isHardened,
+                                handler: { agent.handle($0) })
 service = agentService
 let listener = AgentListener.machService(requirement: requirement)
 listener.delegate = agentService
@@ -55,8 +56,7 @@ listener.resume()
 let idle = DispatchSource.makeTimerSource(queue: .global())
 idle.schedule(deadline: .now() + .seconds(idleCheckSeconds), repeating: .seconds(idleCheckSeconds))
 idle.setEventHandler {
-    let now = ProcessInfo.processInfo.systemUptime
-    if IdlePolicy.shouldExit(now: now, lastActivity: agentService.lastActivity, pending: agentService.pending) { exit(0) }
+    if agentService.exitIfIdle(now: ProcessInfo.processInfo.systemUptime) { exit(0) }
 }
 idle.resume()
 dispatchMain()
