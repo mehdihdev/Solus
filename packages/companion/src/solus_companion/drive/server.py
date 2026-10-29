@@ -3,10 +3,10 @@
 Same inventory and `CallToolResult` shapes as `machine`, so the cloud gate and
 `dispatch.map_result` treat it like any server. It advertises nothing unless
 the platform is macOS, a project workspace is linked, and the desktop app has
-switched driving on; the helper agent is reached per call over its socket
-(slice 3b, `helper.py`), so a missing agent is a call-time `agent_unavailable`.
-Arguments are checked strictly here; the agent re-checks everything that
-matters for safety itself.
+switched driving on. Each call is relayed to the desktop app, which alone
+reaches the helper agent (slice 3b, XPC; `helper.py`), so a missing agent is a
+call-time `agent_unavailable`. Arguments are checked strictly here; the agent
+re-checks everything that matters for safety itself.
 """
 
 import asyncio
@@ -23,7 +23,7 @@ from typing import Any, Literal
 from mcp.types import CallToolResult, ImageContent, TextContent
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from solus_companion.drive.helper import DriveHelper, DriveHelperError, DriveSessions
+from solus_companion.drive.helper import DriveHelperError, DriveRelay
 from solus_companion.drive.outline import Emit, outline_line, stdout_writer
 from solus_companion.watch import saved_design_fingerprint
 
@@ -146,7 +146,7 @@ class DriveServer:
 
     def __init__(
         self,
-        helper: DriveHelper | None,
+        helper: DriveRelay | None,
         *,
         enabled: bool,
         workspace: Path | None,
@@ -215,7 +215,7 @@ class DriveServer:
             return _error(str(exc))
 
     async def _run(
-        self, helper: DriveHelper, workspace: Path, tool: str, args: _Args
+        self, helper: DriveRelay, workspace: Path, tool: str, args: _Args
     ) -> CallToolResult:
         if isinstance(args, ActArgs):
             stop = await self._saved_since_bind(workspace)
@@ -263,7 +263,7 @@ class DriveServer:
         return f"design_saved: {_SAVED}" if await self._saved(workspace) else None
 
     async def _helper(
-        self, helper: DriveHelper, workspace: Path, tool: str, args: _Args
+        self, helper: DriveRelay, workspace: Path, tool: str, args: _Args
     ) -> dict[str, Any]:
         if isinstance(args, CaptureArgs):
             argv = [
@@ -315,12 +315,12 @@ def drive_server_from_env(
     *,
     workspace: Path | None,
     platform: str = sys.platform,
-    sessions: DriveSessions | None = None,
+    relay: DriveRelay | None = None,
 ) -> DriveServer:
     """What the companion builds at start: the desktop app sets the switch to
-    exactly "1". The agent session arrives later over stdin (slice 3b)."""
+    exactly "1". Calls are relayed to the desktop over stdio (slice 3b, XPC)."""
     return DriveServer(
-        DriveHelper(sessions if sessions is not None else DriveSessions(), emit=stdout_writer()),
+        relay if relay is not None else DriveRelay(stdout_writer()),
         enabled=env.get(ENV_SWITCH) == "1",
         workspace=workspace,
         platform=platform,

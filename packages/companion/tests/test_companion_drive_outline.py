@@ -13,10 +13,10 @@ import pytest
 from solus_companion.drive.outline import outline_line, stdout_writer
 from solus_companion.drive.server import DriveServer
 from solus_companion.watch import saved_design_fingerprint
-from test_companion_drive import (  # noqa: F401 — _close_agents is an autouse fixture
+from test_companion_drive import (  # noqa: F401 — _stop_desktops is an autouse fixture
     PNG,
-    _close_agents,
-    agent_helper,
+    _stop_desktops,
+    desktop_relay,
     echo_helper,
     workspace_of,
 )
@@ -31,7 +31,7 @@ def outlined(tmp_path: Path, reply: dict[str, Any]) -> tuple[DriveServer, list[s
     lines: list[str] = []
     helper = echo_helper(tmp_path, reply)
     server = DriveServer(
-        agent_helper(helper),
+        desktop_relay(helper),
         enabled=True,
         workspace=workspace_of(helper),
         platform="darwin",

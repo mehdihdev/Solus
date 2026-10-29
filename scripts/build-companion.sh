@@ -5,19 +5,22 @@
 #   Linux/Windows:
 #     dist/companion/solus-companion   PyInstaller onefile binary
 #     dist/companion/mcp/              vendored MCP server tree (templates excluded)
-#   macOS (--onedir, sol-drive.md §5 / ADR-041 amendment 2026-10-27):
+#   macOS (--onedir, sol-drive.md §5 / ADR-041 amendment 2026-10-28):
 #     dist/companion/solus-companion/solus-companion   the binary, in its own folder
 #     dist/companion/solus-companion/mcp/              the MCP tree beside it
-#   A onefile binary runs as a bootloader parent plus a child; on macOS that
-#   extra process would sit between the drive helper and Solus.app and fail the
-#   helper's caller check (caller_untrusted). config.default_integrations_root
+#   Onedir so every Mach-O is signed in place: a onefile build unpacks
+#   unsigned code into a temp dir at run time. config.default_integrations_root
 #   looks for `mcp/` beside sys.executable, so the tree goes next to the binary.
 #
 # electron-builder picks dist/companion/ up via extraResources (see
 # apps/desktop/electron-builder.yml) and ships it at <resources>/companion/.
 #
 # PyInstaller is NOT a project dependency (kept out of every pyproject by
-# design): `uv run --with pyinstaller` layers it ephemerally over the
+# design), but it IS pinned: the binary it produces is what gets signed and
+# shipped, so the bootloader must not change under a rebuild. 6.22.3 is the
+# latest 6.x on PyPI as of 2026-10-28 (released 2026-09-12); bump deliberately.
+PYINSTALLER_VERSION=6.22.3
+# `uv run --with pyinstaller==…` layers it ephemerally over the
 # companion's own resolved environment, so its real deps (websockets, mcp,
 # pydantic) are importable during PyInstaller's analysis.
 set -euo pipefail
@@ -40,7 +43,7 @@ fi
 # (or the reverse); start clean.
 rm -rf dist/companion
 
-uv run --package solus-companion --with pyinstaller pyinstaller \
+uv run --package solus-companion --with "pyinstaller==$PYINSTALLER_VERSION" pyinstaller \
   "$mode" \
   --name solus-companion \
   --distpath dist/companion \
@@ -53,8 +56,8 @@ uv run --package solus-companion --with pyinstaller pyinstaller \
 # Vendored MCP servers ride along; *.template.md are repo scaffolding, not payload.
 rsync -a --delete --exclude '*.template.md' integrations/mcp/ "$out/mcp/"
 
-# macOS signing (ADR-041 amendment 2026-10-27): the drive helper requires its
-# parent to satisfy the Solus team's requirement with this exact identifier.
+# macOS signing (sol-drive.md §5): hardened runtime, the companion's own
+# identifier, verified against the Solus team's Developer ID requirement.
 # Signing is human-gated: it runs only when SOLUS_SIGN_IDENTITY is set.
 companion_id=com.solusforge.solus.companion
 if [[ "$(uname -s)" == "Darwin" && -n "${SOLUS_SIGN_IDENTITY:-}" ]]; then
@@ -82,8 +85,8 @@ if [[ "$(uname -s)" == "Darwin" && -n "${SOLUS_SIGN_IDENTITY:-}" ]]; then
   echo "companion built and signed ($companion_id): $out/solus-companion (+ $out/mcp/)"
 else
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "WARNING: SOLUS_SIGN_IDENTITY is not set; the companion is UNSIGNED. A release drive" >&2
-    echo "         helper refuses every call from it (caller_untrusted)." >&2
+    echo "WARNING: SOLUS_SIGN_IDENTITY is not set; the companion is UNSIGNED (not shippable:" >&2
+    echo "         notarisation needs every Mach-O signed with the hardened runtime)." >&2
   fi
   echo "companion built: $out/solus-companion (+ $out/mcp/)"
 fi

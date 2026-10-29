@@ -101,7 +101,6 @@ _BY_CODE: Final = {
     "caller_untrusted": (
         "stopped — the input helper did not recognise the Solus companion; reinstall Solus"
     ),
-    "bad_token": "stopped — Solus lost its connection to the input helper; try again",
     "agent_unavailable": "stopped — the input helper is not running; check Settings › SOL",
 }
 

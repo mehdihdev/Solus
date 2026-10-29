@@ -352,7 +352,10 @@ async def test_oversize_stdin_line_is_dropped_and_the_loop_survives() -> None:
 
     box = TokenBox()  # empty: the valid line below must fill it
     reader = asyncio.StreamReader(limit=STDIN_READER_LIMIT)
-    reader.feed_data(b"x" * (200 * 1024) + b"\n")  # 200 KiB — over the limit
+    # 200 KiB: over the control bound (refused before parsing). The reader limit
+    # itself is the drive-reply bound (slice 3b); test_companion_drive covers a
+    # line over THAT limit.
+    reader.feed_data(b"x" * (200 * 1024) + b"\n")
     reader.feed_data(json.dumps({"type": "token", "access_token": "tok-after"}).encode() + b"\n")
     reader.feed_eof()
 

@@ -55,7 +55,6 @@ _ERROR_CODES: Final = frozenset(
         "helper_timeout",
         "helper_crashed",
         "helper_output",
-        "bad_token",
         "agent_unavailable",
         "capture_failed",
         "unknown",

@@ -1,24 +1,19 @@
-"""The ADR-041 `drive` builtin (docs/architecture/sol-drive.md §3): sends each
-command to the `solus-input` agent over its Unix socket (§2.1, slice 3b),
-validates what comes back, stages captures as artifacts, and advertises nothing
-unless switched on.
+"""The ADR-041 `drive` builtin (docs/architecture/sol-drive.md §3): relays each
+command to the desktop over stdout/stdin (slice 3b, XPC — the desktop reaches
+the agent), validates what comes back, stages captures as artifacts, and
+advertises nothing unless switched on.
 
-The agent here is a real socket server (`FakeAgent`) that checks the session
-token and runs a stand-in script per `run` request, killing it when the
-companion closes the connection — so the socket path (one request, one line
-back, one deadline, the cap, close-to-cancel) is exercised for real.
+The desktop here (`FakeDesktop`) runs a real stand-in script per request and
+answers through the real stdin routing, so the relay path (ids, one deadline,
+drive_cancel, the reply cap) is exercised for real.
 """
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
-import select
-import socket
-import subprocess
 import sys
-import tempfile
-import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -28,8 +23,9 @@ import pytest
 from mcp.types import CallToolResult, ImageContent, TextContent
 from solus_companion.__main__ import build_builtins
 from solus_companion.artifacts import ArtifactStore
+from solus_companion.config import TokenBox, apply_token_line
 from solus_companion.dispatch import Dispatcher
-from solus_companion.drive.helper import DriveHelper, DriveHelperError, DriveSessions
+from solus_companion.drive.helper import DriveHelperError, DriveRelay
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
 from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
@@ -55,103 +51,81 @@ def make_helper(tmp_path: Path, body: str) -> Path:
     return script
 
 
-TOKEN = "A" * 43
+class FakeDesktop:
+    """Solus.app main as the companion sees it: it reads `drive_request` lines off
+    the companion's stdout, runs the stand-in `script` with the request argv (in
+    place of the XPC agent), and answers with a `drive_reply` line through the
+    real stdin routing (`apply_token_line`). `drive_cancel` terminates the script."""
 
-
-class FakeAgent:
-    """A `solus-input serve` stand-in on a real Unix socket in a private 0700
-    directory. One thread per connection; `run` checks the token, then runs the
-    stand-in `script` with the request argv and sends its stdout back. A peer
-    that closes early gets its script terminated (the agent's Stop)."""
-
-    def __init__(self, script: Path, token: str = TOKEN) -> None:
+    def __init__(self, script: Path) -> None:
         self.script = script
-        self.token = token
-        # AF_UNIX paths are short (104 bytes on macOS): not under tmp_path.
-        self.dir = Path(tempfile.mkdtemp(prefix="sd", dir=os.path.realpath("/tmp")))
-        self.path = self.dir / "agent.sock"
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.bind(str(self.path))
-        self.sock.listen(8)
+        self.lines: list[str] = []
         self.requests: list[dict[str, Any]] = []
-        threading.Thread(target=self._accept, daemon=True).start()
+        self.procs: dict[int, asyncio.subprocess.Process] = {}
+        self.box = TokenBox()
+        self.tasks: set[asyncio.Task[None]] = set()
 
-    def session(self, token: str | None = None) -> dict[str, str]:
-        return {"type": "drive_session", "socket": str(self.path), "token": token or self.token}
+    def emit(self, line: str) -> None:
+        self.lines.append(line)
+        message = json.loads(line)
+        if message["type"] == "drive_request":
+            self.requests.append(message)
+            task = asyncio.get_running_loop().create_task(self._serve(message))
+            self.tasks.add(task)
+            task.add_done_callback(self.tasks.discard)
+        elif message["type"] == "drive_cancel":
+            proc = self.procs.get(message["id"])
+            if proc is not None and proc.returncode is None:
+                proc.terminate()
 
-    def sessions(self) -> DriveSessions:
-        sessions = DriveSessions()
-        assert sessions.offer(self.session())
-        return sessions
+    async def _serve(self, message: dict[str, Any]) -> None:
+        proc = await asyncio.create_subprocess_exec(
+            str(self.script), *message["argv"], stdout=asyncio.subprocess.PIPE
+        )
+        self.procs[message["id"]] = proc
+        out, _ = await proc.communicate()
+        try:
+            reply: Any = json.loads(out)
+        except ValueError:
+            reply = out.decode(errors="replace")  # garbage still reaches the companion
+        line = json.dumps({"type": "drive_reply", "id": message["id"], "reply": reply})
+        apply_token_line(self.box, line.encode())
 
-    def close(self) -> None:
-        self.sock.close()
-        for child in self.dir.iterdir():
-            child.unlink()
-        self.dir.rmdir()
-
-    def _accept(self) -> None:
-        while True:
-            try:
-                conn, _ = self.sock.accept()
-            except OSError:
-                return
-            threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
-
-    def _serve(self, conn: socket.socket) -> None:
-        with conn:
-            data = b""
-            while b"\n" not in data:
-                chunk = conn.recv(65536)
-                if not chunk:
-                    return
-                data += chunk
-            request = json.loads(data.split(b"\n", 1)[0])
-            self.requests.append(request)
-            if request.get("token") != self.token:
-                reply = {"ok": False, "code": "bad_token", "message": "session superseded"}
-                conn.sendall(json.dumps(reply).encode() + b"\n")
-                return
-            child = subprocess.Popen([str(self.script), *request["argv"]], stdout=subprocess.PIPE)
-            out: list[bytes] = []
-            reader = threading.Thread(target=lambda: out.append(child.stdout.read()))  # type: ignore[union-attr]
-            reader.start()
-            while child.poll() is None:
-                readable, _, _ = select.select([conn], [], [], 0.02)
-                if readable and not conn.recv(1):  # the companion hung up: stop
-                    child.terminate()
-                    child.wait()
-                    return
-            reader.join()
-            try:
-                conn.sendall(b"".join(out))
-            except OSError:
-                pass
+    def stop(self) -> None:
+        for proc in self.procs.values():
+            if proc.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+        for task in self.tasks:
+            task.cancel()
 
 
-_AGENTS: list[FakeAgent] = []
+_DESKTOPS: list[FakeDesktop] = []
 
 
 @pytest.fixture(autouse=True)
-def _close_agents() -> Iterator[None]:
+def _stop_desktops() -> Iterator[None]:
     yield
-    while _AGENTS:
-        _AGENTS.pop().close()
+    while _DESKTOPS:
+        _DESKTOPS.pop().stop()
 
 
-def agent_for(script: Path) -> FakeAgent:
-    agent = FakeAgent(script)
-    _AGENTS.append(agent)
-    return agent
+def desktop_for(script: Path) -> FakeDesktop:
+    desktop = FakeDesktop(script)
+    _DESKTOPS.append(desktop)
+    return desktop
 
 
-def agent_helper(script: Path, **kwargs: Any) -> DriveHelper:
-    """A DriveHelper with a live session to a fake agent running `script`."""
-    return DriveHelper(agent_for(script).sessions(), **kwargs)
+def desktop_relay(script: Path, **kwargs: Any) -> DriveRelay:
+    """A DriveRelay whose stdout goes to a fake desktop running `script`."""
+    desktop = desktop_for(script)
+    relay = DriveRelay(desktop.emit, attached=True, **kwargs)
+    desktop.box.drive_relay = relay
+    return relay
 
 
 def gone(pid: int) -> bool:
-    """The agent stops the script a moment after the companion hangs up."""
+    """The desktop stops the script a moment after the companion cancels."""
     for _ in range(200):
         try:
             os.kill(pid, 0)
@@ -180,7 +154,7 @@ def workspace_of(helper: Path) -> Path:
 def server_with(path: Path, *, bound: bool = True, **kwargs: Any) -> DriveServer:
     """`bound`: as after the step's identify — the saved-design baseline is taken."""
     server = DriveServer(
-        agent_helper(path, **kwargs),
+        desktop_relay(path, **kwargs),
         enabled=True,
         workspace=workspace_of(path),
         platform="darwin",
@@ -224,7 +198,7 @@ def test_from_env_ignores_the_retired_helper_path(tmp_path: Path) -> None:
 
 
 def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> None:
-    helper = DriveHelper(DriveSessions())
+    helper = DriveRelay(lambda _: None)
     for server, detail in [
         (
             DriveServer(helper, enabled=False, workspace=tmp_path, platform="darwin"),
@@ -252,7 +226,7 @@ def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> Non
 
 async def test_off_server_refuses_calls_without_running_the_helper(tmp_path: Path) -> None:
     server = DriveServer(
-        agent_helper(echo_helper(tmp_path, OK_IDENTIFY)),
+        desktop_relay(echo_helper(tmp_path, OK_IDENTIFY)),
         enabled=False,
         workspace=tmp_path,
         platform="darwin",
@@ -464,7 +438,7 @@ async def test_dispatch_stages_the_capture_as_an_artifact_never_inline(tmp_path:
         ("print(json.dumps({'no_ok': 1}))\n", "helper_output: "),
         ("print('{}'); print('{}')\n", "helper_output: "),
         ("sys.exit(3)\n", "helper_output: "),
-        ("sys.stdout.write('x' * (25 * 1024 * 1024))\n", "helper_output: "),
+        ("sys.stdout.write('x' * (24 * 1024 * 1024 + 4096))\n", "helper_output: "),
     ],
 )
 async def test_bad_helper_output_is_an_error_not_a_guess(
@@ -487,7 +461,7 @@ async def test_a_hung_helper_is_killed_at_its_timeout(tmp_path: Path) -> None:
 
 async def test_helper_errors_carry_a_code(tmp_path: Path) -> None:
     with pytest.raises(DriveHelperError) as caught:
-        await agent_helper(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
+        await desktop_relay(make_helper(tmp_path, "sys.exit(1)\n")).run(["identify"], timeout=5)
     assert caught.value.code == "helper_output"
 
 
@@ -531,22 +505,6 @@ async def test_one_deadline_covers_the_whole_request(tmp_path: Path) -> None:
     result = await server.call_tool("identify", {})
     assert text_of(result).startswith("helper_timeout: ")
     assert clock.monotonic() - started < 1.0
-
-
-async def test_a_socket_replaced_by_a_symlink_after_the_session_is_refused(
-    tmp_path: Path,
-) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    server = DriveServer(
-        DriveHelper(agent.sessions()), enabled=True, workspace=tmp_path, platform="darwin"
-    )
-    moved = agent.dir / "real.sock"
-    agent.path.rename(moved)
-    agent.path.symlink_to(moved)
-    result = await server.call_tool("identify", {})
-    assert result.isError
-    assert text_of(result).startswith("agent_unavailable: ")
-    assert agent.requests == []
 
 
 async def test_calls_run_one_at_a_time_never_interleaved(tmp_path: Path) -> None:
@@ -755,7 +713,7 @@ def _schematic(ws: Path, text: str = "(kicad_sch)") -> Path:
 
 async def test_no_linked_workspace_refuses_without_running_the_helper(tmp_path: Path) -> None:
     server = DriveServer(
-        agent_helper(echo_helper(tmp_path, OK_IDENTIFY)),
+        desktop_relay(echo_helper(tmp_path, OK_IDENTIFY)),
         enabled=True,
         workspace=None,
         platform="darwin",
@@ -770,7 +728,7 @@ async def test_the_workspace_is_sent_resolved(tmp_path: Path) -> None:
     real = workspace_of(helper)
     link = tmp_path / "link"
     link.symlink_to(real)
-    server = DriveServer(agent_helper(helper), enabled=True, workspace=link, platform="darwin")
+    server = DriveServer(desktop_relay(helper), enabled=True, workspace=link, platform="darwin")
     await server.call_tool("identify", {})
     assert calls(tmp_path) == [["identify", "--within", str(real.resolve())]]
 
@@ -908,194 +866,173 @@ def test_saved_design_fingerprint_sees_a_project_under_build(tmp_path: Path) -> 
     assert saved_design_fingerprint(tmp_path) != before
 
 
-# --- slice 3b: the agent client (sol-drive.md §2.1, §3 helper.py) -------------------------
+# --- slice 3b (XPC): the relay to the desktop (sol-drive.md §3 helper.py) ------------------
 
 
-def session_line(**overrides: Any) -> dict[str, Any]:
-    return {"type": "drive_session", "socket": "/x/agent.sock", "token": TOKEN, **overrides}
+def reply_line(call_id: Any, reply: Any) -> bytes:
+    return json.dumps({"type": "drive_reply", "id": call_id, "reply": reply}).encode()
 
 
-async def test_no_session_refuses_agent_unavailable() -> None:
+async def test_each_call_writes_one_request_with_increasing_ids(tmp_path: Path) -> None:
+    relay = desktop_relay(echo_helper(tmp_path, OK_IDENTIFY))
+    desktop = _DESKTOPS[-1]
+    assert await relay.run(["identify", "--within", "/w"], timeout=5) == OK_IDENTIFY
+    assert await relay.run(["identify"], timeout=5) == OK_IDENTIFY
+    first, second = (json.loads(line) for line in desktop.lines)
+    assert first == {"type": "drive_request", "id": 1, "argv": ["identify", "--within", "/w"]}
+    assert second["id"] == 2
+
+
+async def test_a_relay_with_no_desktop_attached_refuses_agent_unavailable() -> None:
+    lines: list[str] = []
     with pytest.raises(DriveHelperError) as caught:
-        await DriveHelper(DriveSessions()).run(["identify"], timeout=1)
+        await DriveRelay(lines.append).run(["identify"], timeout=1)
     assert caught.value.code == "agent_unavailable"
+    assert lines == []
 
 
-async def test_one_run_request_per_connection_with_the_token_and_argv(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    reply = await DriveHelper(agent.sessions()).run(["identify", "--within", "/w"], timeout=5)
-    assert reply == OK_IDENTIFY
-    assert agent.requests == [
-        {"v": 1, "op": "run", "token": TOKEN, "argv": ["identify", "--within", "/w"]}
+async def test_a_desktop_refusal_is_a_reply_like_any_other() -> None:
+    lines: list[str] = []
+    relay = DriveRelay(lines.append, attached=True)
+    box = TokenBox()
+    box.drive_relay = relay
+    task = asyncio.create_task(relay.run(["identify"], timeout=5))
+    await asyncio.sleep(0)
+    refusal = {"ok": False, "code": "agent_unavailable", "message": "not running"}
+    apply_token_line(box, reply_line(1, refusal))
+    assert await task == refusal
+
+
+async def test_timeout_writes_a_cancel_and_a_late_reply_is_dropped() -> None:
+    lines: list[str] = []
+    relay = DriveRelay(lines.append, attached=True)
+    with pytest.raises(DriveHelperError) as caught:
+        await relay.run(["identify"], timeout=0.05)
+    assert caught.value.code == "helper_timeout"
+    assert [json.loads(line) for line in lines] == [
+        {"type": "drive_request", "id": 1, "argv": ["identify"]},
+        {"type": "drive_cancel", "id": 1},
     ]
+    relay.deliver({"type": "drive_reply", "id": 1, "reply": {"ok": True}}, size=30)  # no raise
+    assert relay.pending == 0
 
 
-async def test_an_agent_that_is_not_listening_is_agent_unavailable(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = agent.sessions()
-    agent.sock.close()  # the file stays; nothing accepts
-    with pytest.raises(DriveHelperError) as caught:
-        await DriveHelper(sessions).run(["identify"], timeout=2)
-    assert caught.value.code == "agent_unavailable"
-
-
-def test_a_valid_session_line_is_accepted(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = DriveSessions()
-    assert sessions.offer(agent.session()) is True
-    current = sessions.current()
-    assert current is not None and current.socket == agent.path and current.token == TOKEN
+async def test_cancellation_writes_a_cancel() -> None:
+    lines: list[str] = []
+    relay = DriveRelay(lines.append, attached=True)
+    task = asyncio.create_task(relay.run(["identify"], timeout=5))
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert json.loads(lines[-1]) == {"type": "drive_cancel", "id": 1}
+    assert relay.pending == 0
 
 
 @pytest.mark.parametrize(
-    "token",
-    ["A" * 42, "A" * 44, "A" * 42 + "=", "A" * 42 + "+", "A" * 42 + "\n", "", None, 43],
-)
-def test_a_malformed_token_is_dropped_and_never_logged(
-    tmp_path: Path, token: Any, caplog: pytest.LogCaptureFixture
-) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = DriveSessions()
-    assert sessions.offer({**agent.session(), "token": token}) is False
-    assert sessions.current() is None
-    assert caplog.records  # warned
-    if isinstance(token, str) and token:
-        assert token not in caplog.text
-
-
-def test_a_valid_token_is_never_logged(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    secret = "Zq" * 21 + "x"
-    sessions = DriveSessions()
-    sessions.offer(agent.session(secret))
-    sessions.offer({**agent.session(secret), "socket": "relative.sock"})
-    assert secret not in caplog.text
-
-
-@pytest.mark.parametrize(
-    "line",
+    "message",
     [
-        session_line(socket="relative/agent.sock"),
-        session_line(socket=None),
-        session_line(socket="/a/\x00/agent.sock"),
-        session_line(extra=1),
-        {"type": "drive_session", "token": TOKEN},
+        {"type": "drive_reply", "id": 99, "reply": {"ok": True}},
+        {"type": "drive_reply", "id": "1", "reply": {"ok": True}},
+        {"type": "drive_reply", "id": True, "reply": {"ok": True}},
+        {"type": "drive_reply", "reply": {"ok": True}},
+        {"type": "drive_reply", "id": 1, "reply": {"ok": True}, "extra": 1},
     ],
 )
-def test_malformed_session_lines_are_dropped(line: dict[str, Any]) -> None:
-    sessions = DriveSessions()
-    assert sessions.offer(line) is False
-    assert sessions.current() is None
-
-
-def test_the_socket_directory_must_be_private_to_this_user(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    for mode in (0o750, 0o701, 0o770, 0o1700, 0o755):
-        agent.dir.chmod(mode)
-        assert DriveSessions().offer(agent.session()) is False, oct(mode)
-    agent.dir.chmod(0o700)
-    assert DriveSessions().offer(agent.session()) is True
-
-
-def test_a_symlink_anywhere_on_the_socket_path_is_refused(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    link = Path(tempfile.mkdtemp(prefix="sl", dir=os.path.realpath("/tmp"))) / "d"
-    link.symlink_to(agent.dir)
-    try:
-        line = {**agent.session(), "socket": str(link / "agent.sock")}
-        assert DriveSessions().offer(line) is False
-    finally:
-        link.unlink()
-        link.parent.rmdir()
-
-
-def test_the_socket_must_be_a_socket_owned_by_this_user(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    plain = agent.dir / "plain"
-    plain.write_text("")
-    assert DriveSessions().offer({**agent.session(), "socket": str(plain)}) is False
-    missing = agent.dir / "missing.sock"
-    assert DriveSessions().offer({**agent.session(), "socket": str(missing)}) is False
-
-
-def test_another_users_directory_or_socket_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    monkeypatch.setattr(os, "getuid", lambda: os.stat(agent.dir).st_uid + 1)
-    assert DriveSessions().offer(agent.session()) is False
-
-
-def test_a_bad_session_line_keeps_the_previous_session(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = agent.sessions()
-    sessions.offer(session_line(socket="relative"))
-    assert sessions.current() is not None
-
-
-async def test_bad_token_asks_the_desktop_for_a_session_at_most_every_5s(
-    tmp_path: Path,
-) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = DriveSessions()
-    sessions.offer(agent.session("B" * 43))  # not the agent's token
-    lines: list[str] = []
-    now = [100.0]
-    helper = DriveHelper(sessions, emit=lines.append, clock=lambda: now[0])
-    for at in (100.0, 102.0, 104.9, 105.0):
-        now[0] = at
-        reply = await helper.run(["identify"], timeout=5)
-        assert reply["ok"] is False and reply["code"] == "bad_token"
-    assert lines == ['{"type":"drive_session_needed"}'] * 2
-
-
-async def test_a_bad_token_reaches_the_tool_as_a_refusal(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = DriveSessions()
-    sessions.offer(agent.session("B" * 43))
-    server = DriveServer(
-        DriveHelper(sessions, emit=lambda _: None),
-        enabled=True,
-        workspace=tmp_path,
-        platform="darwin",
-    )
-    result = await server.call_tool("identify", {})
-    assert result.isError and text_of(result).startswith("bad_token: ")
-
-
-async def test_a_fresh_session_replaces_a_superseded_one(tmp_path: Path) -> None:
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
-    sessions = DriveSessions()
-    sessions.offer(agent.session("B" * 43))
-    helper = DriveHelper(sessions, emit=lambda _: None)
-    assert (await helper.run(["identify"], timeout=5))["code"] == "bad_token"
-    sessions.offer(agent.session())
-    assert (await helper.run(["identify"], timeout=5)) == OK_IDENTIFY
-
-
-async def test_only_the_first_reply_line_is_read(tmp_path: Path) -> None:
-    body = "sys.stdout.write(json.dumps({'ok': True}) + '\\n' + 'x' * 100)\n"
+async def test_unknown_or_malformed_replies_are_dropped(message: dict[str, Any]) -> None:
+    relay = DriveRelay(lambda _: None, attached=True)
+    task = asyncio.create_task(relay.run(["identify"], timeout=0.2))
+    await asyncio.sleep(0)
+    relay.deliver(message, size=64)
     with pytest.raises(DriveHelperError) as caught:
-        await agent_helper(make_helper(tmp_path, body)).run(["identify"], timeout=5)
+        await task
+    assert caught.value.code == "helper_timeout"  # the call was never answered
+
+
+async def test_a_reply_over_24_mib_fails_its_call() -> None:
+    relay = DriveRelay(lambda _: None, attached=True)
+    task = asyncio.create_task(relay.run(["capture"], timeout=5))
+    await asyncio.sleep(0)
+    relay.deliver({"type": "drive_reply", "id": 1, "reply": {"ok": True}}, size=24 * 2**20 + 1)
+    with pytest.raises(DriveHelperError) as caught:
+        await task
     assert caught.value.code == "helper_output"
 
 
-def test_the_stdin_control_line_routes_to_the_drive_sessions(tmp_path: Path) -> None:
-    from solus_companion.config import TokenBox, apply_token_line
+def test_drive_reply_lines_without_a_relay_are_ignored() -> None:
+    apply_token_line(TokenBox(), reply_line(1, {"ok": True}))  # must not raise
 
-    agent = agent_for(echo_helper(tmp_path, OK_IDENTIFY))
+
+async def test_a_large_drive_reply_line_passes_the_stdin_bound(tmp_path: Path) -> None:
+    lines: list[str] = []
+    relay = DriveRelay(lines.append, attached=True)
     box = TokenBox()
-    apply_token_line(box, json.dumps(agent.session()))  # nothing attached: dropped
-    box.drive_sessions = DriveSessions()
-    apply_token_line(box, json.dumps(agent.session()))
-    current = box.drive_sessions.current()
-    assert current is not None and current.socket == agent.path
+    box.drive_relay = relay
+    task = asyncio.create_task(relay.run(["capture"], timeout=5))
+    await asyncio.sleep(0)
+    big = {"ok": True, "png": "A" * (2 * 2**20)}  # far over the 32 KiB control bound
+    apply_token_line(box, reply_line(1, big))
+    assert (await task)["png"] == big["png"]
 
 
-def test_builtins_share_the_stdin_sessions_with_drive(tmp_path: Path) -> None:
-    sessions = DriveSessions()
+def test_builtins_share_the_relay_with_drive(tmp_path: Path) -> None:
+    relay = DriveRelay(lambda _: None)
     drive = build_builtins(
-        str(tmp_path), env={"SOLUS_COMPANION_DRIVE": "1"}, platform="darwin", sessions=sessions
+        str(tmp_path), env={"SOLUS_COMPANION_DRIVE": "1"}, platform="darwin", relay=relay
     )[1]
     assert isinstance(drive, DriveServer)
-    assert drive.helper is not None and drive.helper.sessions is sessions
+    assert drive.helper is relay
+
+
+def test_an_oversize_non_drive_line_is_still_refused_before_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(raw: object) -> object:
+        raise AssertionError("an oversize control line must not be parsed")
+
+    monkeypatch.setattr("solus_companion.config.json.loads", boom)
+    box = TokenBox("tok-1")
+    box.drive_relay = DriveRelay(lambda _: None, attached=True)
+    token = json.dumps({"type": "token", "access_token": "t" * (40 * 1024)}).encode()
+    apply_token_line(box, token)
+    # Padding before the type key does not smuggle a big line past the bound.
+    sneaky = b' {"type":"drive_reply","id":1,"reply":' + b"0" * (40 * 1024) + b"}"
+    apply_token_line(box, sneaky)
+    assert box() == "tok-1"
+
+
+async def test_the_stdin_reader_carries_a_capture_sized_drive_reply() -> None:
+    from solus_companion.__main__ import STDIN_READER_LIMIT, _consume_token_lines
+
+    assert STDIN_READER_LIMIT >= 25 * 2**20
+    relay = DriveRelay(lambda _: None, attached=True)
+    box = TokenBox()
+    box.drive_relay = relay
+    task = asyncio.create_task(relay.run(["capture"], timeout=10))
+    await asyncio.sleep(0)
+    reader = asyncio.StreamReader(limit=STDIN_READER_LIMIT)
+    png = "A" * (22 * 2**20)  # an incompressible 2048-px capture as base64
+    reader.feed_data(reply_line(1, {"ok": True, "png": png}) + b"\n")
+    reader.feed_eof()
+    await _consume_token_lines(reader, box)
+    assert (await task)["png"] == png
+
+
+async def test_a_line_over_the_reader_limit_is_dropped_and_the_loop_survives() -> None:
+    from solus_companion.__main__ import STDIN_READER_LIMIT, _consume_token_lines
+
+    box = TokenBox()
+    reader = asyncio.StreamReader(limit=STDIN_READER_LIMIT)
+    reader.feed_data(b"x" * (STDIN_READER_LIMIT + 1024) + b"\n")
+    reader.feed_data(json.dumps({"type": "token", "access_token": "after"}).encode() + b"\n")
+    reader.feed_eof()
+    await _consume_token_lines(reader, box)
+    assert box() == "after"
+
+
+def test_a_duplicate_type_key_cannot_smuggle_a_big_token_line() -> None:
+    box = TokenBox("tok-1")
+    box.drive_relay = DriveRelay(lambda _: None, attached=True)
+    smuggled = b'{"type":"drive_reply","type":"token","access_token":"' + b"t" * 40960 + b'"}'
+    apply_token_line(box, smuggled)
+    assert box() == "tok-1"

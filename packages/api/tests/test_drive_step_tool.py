@@ -152,11 +152,6 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("refused", "caller_untrusted", "did not recognise the Solus companion; reinstall Solus"),
         (
             "error",
-            "bad_token",
-            "stopped — Solus lost its connection to the input helper; try again",
-        ),
-        (
-            "error",
             "agent_unavailable",
             "stopped — the input helper is not running; check Settings › SOL",
         ),

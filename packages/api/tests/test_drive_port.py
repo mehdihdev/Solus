@@ -189,6 +189,16 @@ async def test_an_unknown_refusal_code_is_normalised() -> None:
     assert caught.value.code == "unknown"
 
 
+async def test_the_retired_bad_token_code_is_not_known() -> None:
+    """The socket session (and its bad_token) never shipped: ADR-041 2026-10-28."""
+    act = FakeTool(error=ToolException("bad_token: superseded"))
+    with pytest.raises(DriveRefusal) as caught:
+        await port(act=act).act(
+            "b", 1, ActRequest(verb="wait", ms=1), since=1, expect_width=1, expect_height=1
+        )
+    assert caught.value.code == "unknown"
+
+
 async def test_a_silent_companion_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
@@ -231,7 +241,6 @@ async def test_act_reports_whether_the_design_was_saved(reply: Any, saved: bool)
         "design_saved",
         "not_bound",
         "caller_untrusted",
-        "bad_token",
         "agent_unavailable",
     ],
 )
