@@ -18,7 +18,7 @@ private final class Harness {
     }
 
     func run(_ argv: [Any]) -> [String: Any] {
-        send(Data(try! JSONSerialization.data(withJSONObject: ["v": 1, "op": "run", "argv": argv])))
+        send(Data(try! JSONSerialization.data(withJSONObject: ["v": 1, "id": 1, "op": "run", "argv": argv])))
     }
 }
 
@@ -54,8 +54,8 @@ final class AgentRunTests: XCTestCase {
         let h = Harness()
         XCTAssertEqual(code(h.run(["identify", 1])), "usage")
         XCTAssertEqual(code(h.run(["identify"] + Array(repeating: "x", count: 64))), "usage")
-        for line in [#"{"v":1,"op":"run","argv":"identify"}"#, #"{"v":1,"op":"run"}"#,
-                     #"{"v":1,"op":"run","argv":null}"#] {
+        for line in [#"{"v":1,"id":1,"op":"run","argv":"identify"}"#, #"{"v":1,"id":1,"op":"run"}"#,
+                     #"{"v":1,"id":1,"op":"run","argv":null}"#] {
             XCTAssertEqual(code(h.send(line)), "usage", line)
         }
     }
@@ -64,18 +64,18 @@ final class AgentRunTests: XCTestCase {
 final class AgentTrustTests: XCTestCase {
     func testTrustReportsAndMayPrompt() {
         let h = Harness()
-        let r = h.send(#"{"v":1,"op":"trust","prompt":false}"#)
+        let r = h.send(#"{"v":1,"id":1,"op":"trust","prompt":false}"#)
         XCTAssertEqual(r["trust"] as? [String: Bool], ["accessibility": true, "screenRecording": true])
         XCTAssertEqual(r["unsignedDev"] as? Bool, false)
         XCTAssertEqual(h.port.trustPrompts, 0)
-        XCTAssertEqual(h.send(#"{"v":1,"op":"trust","prompt":true}"#)["ok"] as? Bool, true)
+        XCTAssertEqual(h.send(#"{"v":1,"id":1,"op":"trust","prompt":true}"#)["ok"] as? Bool, true)
         XCTAssertEqual(h.port.trustPrompts, 1)
     }
 
     func testPromptMustBeABoolean() {
         let h = Harness()
-        for line in [#"{"v":1,"op":"trust"}"#, #"{"v":1,"op":"trust","prompt":1}"#,
-                     #"{"v":1,"op":"trust","prompt":"yes"}"#, #"{"v":1,"op":"trust","prompt":null}"#] {
+        for line in [#"{"v":1,"id":1,"op":"trust"}"#, #"{"v":1,"id":1,"op":"trust","prompt":1}"#,
+                     #"{"v":1,"id":1,"op":"trust","prompt":"yes"}"#, #"{"v":1,"id":1,"op":"trust","prompt":null}"#] {
             XCTAssertEqual(code(h.send(line)), "usage", line)
         }
         XCTAssertEqual(h.port.trustPrompts, 0)
@@ -88,14 +88,31 @@ final class AgentRequestTests: XCTestCase {
         for line in ["", "garbage", "[]", "null", #""run""#, "{}",
                      #"{"v":2,"op":"trust","prompt":false}"#, #"{"v":"1","op":"trust","prompt":false}"#,
                      #"{"v":true,"op":"trust","prompt":false}"#, #"{"v":1.5,"op":"trust","prompt":false}"#,
-                     #"{"op":"trust","prompt":false}"#, #"{"v":1}"#, #"{"v":1,"op":"session"}"#,
-                     #"{"v":1,"op":"identify"}"#, #"{"v":1,"op":"trust","prompt":false,"extra":0}"#,
-                     #"{"v":1,"op":"run","argv":["identify"],"token":"x"}"#, #"{"v":1,"op":"TRUST","prompt":false}"#,
-                     #"{"v":1,"op":1}"#] {
+                     #"{"op":"trust","prompt":false}"#, #"{"v":1}"#, #"{"v":1,"id":1,"op":"session"}"#,
+                     #"{"v":1,"id":1,"op":"identify"}"#, #"{"v":1,"id":1,"op":"trust","prompt":false,"extra":0}"#,
+                     #"{"v":1,"id":1,"op":"run","argv":["identify"],"token":"x"}"#, #"{"v":1,"id":1,"op":"TRUST","prompt":false}"#,
+                     #"{"v":1,"id":1,"op":1}"#] {
             XCTAssertEqual(code(h.send(line)), "usage", line)
         }
         XCTAssertEqual(h.port.trustPrompts, 0)
         XCTAssertTrue(h.port.posted.isEmpty)
+    }
+
+    func testEveryRequestCarriesAPositiveIntegerId() {
+        let h = Harness()
+        for id in ["0", "-1", "1.5", #""1""#, "true", "null", "9007199254740993"] {
+            let line = #"{"v":1,"id":\#(id),"op":"trust","prompt":false}"#
+            XCTAssertEqual(code(h.send(line)), "usage", line)
+        }
+        XCTAssertEqual(code(h.send(#"{"v":1,"op":"trust","prompt":false}"#)), "usage", "no id")
+        XCTAssertEqual(h.send(#"{"v":1,"id":9007199254740991,"op":"trust","prompt":false}"#)["ok"] as? Bool, true)
+    }
+
+    func testTheIdIsReadForTheServiceAndNothingElse() {
+        XCTAssertEqual(Agent.requestId(Data(#"{"v":1,"id":42,"op":"trust","prompt":false}"#.utf8)), 42)
+        XCTAssertEqual(Agent.requestId(Data(#"{"v":1,"id":7,"op":"run","argv":["identify"]}"#.utf8)), 7)
+        XCTAssertNil(Agent.requestId(Data(#"{"v":1,"id":7,"op":"nope"}"#.utf8)), "only a valid request has an id")
+        XCTAssertNil(Agent.requestId(Data("garbage".utf8)))
     }
 
     func testNotUTF8IsUsage() {
@@ -104,7 +121,7 @@ final class AgentRequestTests: XCTestCase {
 
     func testRequestsUpTo64KiBAreReadAndLongerOnesRefused() {
         let h = Harness()
-        let body = #"{"v":1,"op":"trust","prompt":false}"#
+        let body = #"{"v":1,"id":1,"op":"trust","prompt":false}"#
         let fits = body + String(repeating: " ", count: Agent.maxRequestBytes - body.utf8.count)
         XCTAssertEqual(Agent.maxRequestBytes, 65_536)
         XCTAssertEqual(h.send(fits)["ok"] as? Bool, true)
@@ -113,8 +130,8 @@ final class AgentRequestTests: XCTestCase {
 
     func testATrailingNewlineIsAllowedButNotASecondObject() {
         let h = Harness()
-        XCTAssertEqual(h.send("{\"v\":1,\"op\":\"trust\",\"prompt\":false}\n")["ok"] as? Bool, true)
-        XCTAssertEqual(code(h.send("{\"v\":1,\"op\":\"trust\",\"prompt\":false}\n{}")), "usage")
+        XCTAssertEqual(h.send("{\"v\":1,\"id\":1,\"op\":\"trust\",\"prompt\":false}\n")["ok"] as? Bool, true)
+        XCTAssertEqual(code(h.send("{\"v\":1,\"id\":1,\"op\":\"trust\",\"prompt\":false}\n{}")), "usage")
     }
 }
 
@@ -130,9 +147,15 @@ final class AgentStartTests: XCTestCase {
         XCTAssertTrue(Agent.startAllowed(teamId: Signing.teamIdPlaceholder, unsignedDev: true, port: FakePort()))
     }
 
-    func testTheListenerAdmitsOnlySolusApp() {
-        XCTAssertEqual(Signing.listenerRequirement(teamId: "ABCDE12345"),
-                       Signing.requirement(teamId: "ABCDE12345", identifier: "com.solusforge.solus"))
+    func testTheListenerAdmitsOnlyAHardenedCurrentSolusApp() {
+        XCTAssertEqual(Signing.appVersionFloor, "1.0.0")
+        XCTAssertEqual(
+            Signing.listenerRequirement(teamId: "ABCDE12345"),
+            Signing.requirement(teamId: "ABCDE12345", identifier: "com.solusforge.solus")
+                + #" and !(entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists)"#
+                + #" and !(entitlement["com.apple.security.cs.disable-library-validation"] exists)"#
+                + #" and !(entitlement["com.apple.security.get-task-allow"] exists)"#
+                + #" and info[CFBundleVersion] >= "1.0.0""#)
         XCTAssertNil(Signing.listenerRequirement(teamId: Signing.teamIdPlaceholder), "placeholder admits nobody")
         XCTAssertEqual(Signing.agentServiceName, "com.solusforge.solus.input.agent")
     }

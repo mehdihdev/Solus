@@ -9,9 +9,20 @@ const path = require('node:path');
 
 const addon = require(path.join(__dirname, '..', process.env.SOLUS_XPC_ADDON || 'build/Release/solus_input_xpc.node'));
 
-test('exports request and cancel', () => {
-  assert.strictEqual(typeof addon.request, 'function');
-  assert.strictEqual(typeof addon.cancel, 'function');
+test('exports request, cancel and checkOwnBundle', () => {
+  assert.deepStrictEqual(Object.keys(addon).sort(), ['cancel', 'checkOwnBundle', 'request']);
+});
+
+test('checkOwnBundle is false while the team ID is the placeholder', async () => {
+  const result = addon.checkOwnBundle();
+  assert.ok(result instanceof Promise);
+  assert.strictEqual(await result, false);
+});
+
+test('a request must be a JSON object (the module adds its id)', async () => {
+  for (const json of ['', 'garbage', '[]', '1', 'null']) {
+    await assert.rejects(addon.request(json, 1000), /JSON object/, json);
+  }
 });
 
 test('refuses to connect while the team ID is the placeholder', async () => {

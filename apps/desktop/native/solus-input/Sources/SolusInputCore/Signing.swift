@@ -13,21 +13,29 @@ public enum Signing {
     public static let appIdentifier = SOLUS_APP_IDENTIFIER
     public static let helperIdentifier = SOLUS_HELPER_IDENTIFIER
     public static let agentServiceName = SOLUS_AGENT_SERVICE
+    /// Solus.app builds below this CFBundleVersion are never admitted (a human bumps it).
+    public static let appVersionFloor = SOLUS_APP_VERSION_FLOOR
 
     /// Developer ID: Apple anchor, the Developer ID intermediate (…6.2.6) and
     /// Developer ID Application leaf (…6.1.13), pinned to the team and identifier.
     public static func requirement(teamId: String, identifier: String) -> String {
-        // The C format's two `%s` (team, then identifier), filled without printf:
-        // `%s` wants C strings, and nothing else in it is a directive.
-        let parts = SOLUS_REQUIREMENT_FORMAT.components(separatedBy: "%s")
-        precondition(parts.count == 3, "SOLUS_REQUIREMENT_FORMAT takes exactly two %s")
-        return parts[0] + teamId + parts[1] + identifier + parts[2]
+        fill(SOLUS_REQUIREMENT_FORMAT, [teamId, identifier])
     }
 
-    /// What every connection to the Mach service must satisfy; nil (admit nobody)
-    /// until the team ID is real.
+    /// What every connection to the Mach service must satisfy: Solus.app, with no
+    /// entitlement admitting foreign code or a debugger, at or above the version
+    /// floor. Nil (admit nobody) until the team ID is real.
     public static func listenerRequirement(teamId: String) -> String? {
-        isRealTeamId(teamId) ? requirement(teamId: teamId, identifier: appIdentifier) : nil
+        guard isRealTeamId(teamId) else { return nil }
+        return requirement(teamId: teamId, identifier: appIdentifier) + fill(SOLUS_APP_REQUIREMENT_SUFFIX, [appVersionFloor])
+    }
+
+    /// The C formats' `%s` placeholders, filled in order without printf (`%s`
+    /// wants C strings, and nothing else in them is a directive).
+    private static func fill(_ format: String, _ values: [String]) -> String {
+        let parts = format.components(separatedBy: "%s")
+        precondition(parts.count == values.count + 1, "format placeholder count")
+        return zip(parts, values + [""]).map { $0 + $1 }.joined()
     }
 
     /// Apple team IDs are ten upper-case letters or digits (nothing that could

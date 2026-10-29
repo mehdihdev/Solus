@@ -20,11 +20,14 @@ let serving = !unsignedDev && argv == ["serve"]
 let idleCheckSeconds = 5
 
 // SIGTERM stops a run between events (a held button is released). Serving,
-// launchd stopping the agent exits at once when idle, else after the run.
+// launchd stopping the agent exits at once when idle, else once the running
+// request ends and queued ones are refused (AgentService).
+var service: AgentService?
 signal(SIGTERM, SIG_IGN)
 let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
 terminate.setEventHandler {
-    if serving { if StopSignal.shared.terminate() { exit(0) } } else { StopSignal.shared.raise() }
+    guard serving, let service else { return StopSignal.shared.raise() }
+    if service.terminate() { exit(0) }
 }
 terminate.resume()
 
@@ -43,16 +46,17 @@ guard Agent.startAllowed(teamId: Signing.teamId, unsignedDev: false, port: port)
 else { fatal("this agent's own signature does not satisfy its requirement") }
 
 let agent = Agent(runner: Runner(port: port, unsignedDev: false))
-let service = AgentService(stop: StopSignal.shared) { agent.handle($0) }
+let agentService = AgentService(stop: StopSignal.shared) { agent.handle($0) }
+service = agentService
 let listener = AgentListener.machService(requirement: requirement)
-listener.delegate = service
+listener.delegate = agentService
 listener.resume()
 
 let idle = DispatchSource.makeTimerSource(queue: .global())
 idle.schedule(deadline: .now() + .seconds(idleCheckSeconds), repeating: .seconds(idleCheckSeconds))
 idle.setEventHandler {
     let now = ProcessInfo.processInfo.systemUptime
-    if IdlePolicy.shouldExit(now: now, lastActivity: service.lastActivity, pending: service.pending) { exit(0) }
+    if IdlePolicy.shouldExit(now: now, lastActivity: agentService.lastActivity, pending: agentService.pending) { exit(0) }
 }
 idle.resume()
 dispatchMain()

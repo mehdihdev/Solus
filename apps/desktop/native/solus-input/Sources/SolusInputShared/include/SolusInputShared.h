@@ -24,15 +24,28 @@
 #define SOLUS_REQUIREMENT_FORMAT "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"%s\" and identifier \"%s\""
 // clang-format on
 
+/// Lowest Solus.app CFBundleVersion the agent admits. Set to apps/desktop/package.json's
+/// version; a human bumps it to the first signed 3b build so older signed Solus
+/// builds (before the fuse/environment hardening) can never drive.
+#define SOLUS_APP_VERSION_FLOOR "1.0.0"
+
+/// Appended to Solus.app's requirement (one %s: the floor): no entitlement that lets
+/// foreign code or a debugger into the process, and no build older than the floor.
+// clang-format off
+#define SOLUS_APP_REQUIREMENT_SUFFIX " and !(entitlement[\"com.apple.security.cs.allow-dyld-environment-variables\"] exists) and !(entitlement[\"com.apple.security.cs.disable-library-validation\"] exists) and !(entitlement[\"com.apple.security.get-task-allow\"] exists) and info[CFBundleVersion] >= \"%s\""
+// clang-format on
+
 /// Requests are one JSON object of at most this many bytes.
 #define SOLUS_AGENT_MAX_REQUEST_BYTES 65536
 
-/// The agent's exported interface. `handle` replies with one JSON object;
-/// `cancel` stops the request running for this connection before its next event.
+/// The agent's exported interface. `handle` replies with one JSON object (the
+/// request carries a positive integer "id"); `cancel:` stops that request if it is
+/// running, drops it (replying "stopped") if it is still queued, and does nothing
+/// for any other id. There is no connection-wide cancel.
 NS_ASSUME_NONNULL_BEGIN
 @protocol SolusInputAgent
 - (void)handle:(NSData *)request reply:(void (^)(NSData *reply))reply;
-- (void)cancel;
+- (void)cancel:(NSInteger)requestId;
 @end
 NS_ASSUME_NONNULL_END
 

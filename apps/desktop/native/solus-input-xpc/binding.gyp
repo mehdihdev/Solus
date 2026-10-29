@@ -15,7 +15,7 @@
             "MACOSX_DEPLOYMENT_TARGET": "14.0",
             "GCC_TREAT_WARNINGS_AS_ERRORS": "YES",
             "WARNING_CFLAGS": ["-Wall", "-Wextra", "-Wno-unused-parameter"],
-            "OTHER_LDFLAGS": ["-framework", "Foundation"]
+            "OTHER_LDFLAGS": ["-framework", "Foundation", "-framework", "Security"]
           }
         }]
       ]

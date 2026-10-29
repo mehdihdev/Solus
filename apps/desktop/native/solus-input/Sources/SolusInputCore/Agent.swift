@@ -23,35 +23,53 @@ public final class Agent {
     /// One JSON object in, one JSON object out.
     public func handle(_ request: Data) -> Data {
         let line: String
-        switch Request.parse(request) {
+        switch Request.parse(request)?.op {
         case .trust(let prompt): line = runner.run(prompt ? ["trust", "--prompt"] : ["trust"])
         case .run(let argv): line = runner.run(argv)
         case nil: line = #"{"code":"usage","message":"malformed request","ok":false}"#
         }
         return Data(line.utf8)
     }
+
+    /// The id of a well-formed request — what `cancel(id)` names; nil otherwise.
+    public static func requestId(_ request: Data) -> Int? { Request.parse(request)?.id }
+
+    /// The reply to a request dropped before it ran (cancelled while queued, or the
+    /// agent stopping), so the caller always settles.
+    public static func stoppedReply(_ message: String) -> Data {
+        Data(#"{"code":"stopped","message":"\#(message)","ok":false}"#.utf8)
+    }
 }
 
-/// Wire protocol v1: exactly these two shapes, no other fields.
-enum Request {
-    case trust(prompt: Bool)
-    case run(argv: [String])
+/// Wire protocol v1: exactly these two shapes plus `v` and `id`, no other fields.
+struct Request {
+    enum Op {
+        case trust(prompt: Bool)
+        case run(argv: [String])
+    }
+
+    /// Largest id JSON carries exactly (2^53 - 1).
+    static let maxId: Int64 = 9_007_199_254_740_991
+
+    let id: Int
+    let op: Op
 
     static func parse(_ raw: Data) -> Request? {
         guard raw.count <= Agent.maxRequestBytes, String(data: raw, encoding: .utf8) != nil,
               let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
-              isInteger(object["v"], 1), let op = object["op"] as? String
+              isInteger(object["v"], 1), let id = positiveInteger(object["id"]), let op = object["op"] as? String
         else { return nil }
-        let keys = Set(object.keys)
+        let keys = Set(object.keys).subtracting(["id"])
         switch op {
         case "trust" where keys == ["v", "op", "prompt"]:
-            return isBoolean(object["prompt"]) ? .trust(prompt: (object["prompt"] as! NSNumber).boolValue) : nil
+            guard isBoolean(object["prompt"]) else { return nil }
+            return Request(id: id, op: .trust(prompt: (object["prompt"] as! NSNumber).boolValue))
         case "run" where keys == ["v", "op", "argv"]:
             guard let argv = object["argv"] as? [Any], argv.count <= Agent.maxArgv,
                   let strings = argv as? [String], strings.count == argv.count,
                   let command = strings.first, Agent.runnable.contains(command)
             else { return nil }
-            return .run(argv: strings)
+            return Request(id: id, op: .run(argv: strings))
         default:
             return nil
         }
@@ -62,11 +80,18 @@ enum Request {
         return CFGetTypeID(number) == CFBooleanGetTypeID()
     }
 
-    /// An integer, not a boolean, string or fraction.
-    private static func isInteger(_ value: Any?, _ expected: Int) -> Bool {
-        guard let number = value as? NSNumber, !isBoolean(number),
-              !["d", "f"].contains(String(cString: number.objCType)) else { return false }
-        return number.intValue == expected
+    /// An integer, not a boolean, string, fraction or out-of-range number.
+    private static func integer(_ value: Any?) -> Int64? {
+        guard let number = value as? NSNumber, !isBoolean(number), !(number is NSDecimalNumber),
+              !["d", "f"].contains(String(cString: number.objCType)) else { return nil }
+        return number.int64Value
+    }
+
+    private static func isInteger(_ value: Any?, _ expected: Int64) -> Bool { integer(value) == expected }
+
+    private static func positiveInteger(_ value: Any?) -> Int? {
+        guard let id = integer(value), (1...maxId).contains(id) else { return nil }
+        return Int(id)
     }
 }
 
@@ -113,6 +138,8 @@ public final class StopSignal: @unchecked Sendable {
 
     /// SIGTERM while serving: true when idle (exit now), else the run stops and the agent exits after.
     public func terminate() -> Bool { lock.lock(); defer { lock.unlock() }; terminating = true; return owner == nil }
+
+    public var isTerminating: Bool { lock.lock(); defer { lock.unlock() }; return terminating }
 
     /// SIGTERM in debug argv mode (one process, one call).
     public func raise() { lock.lock(); terminating = true; lock.unlock() }
