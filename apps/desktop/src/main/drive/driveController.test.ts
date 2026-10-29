@@ -14,7 +14,6 @@ const TRUST: DriveTrustResult = {
   trust: { accessibility: true, screenRecording: false },
   unsignedDev: true
 }
-const SOCKET = '/Users/me/Library/Application Support/Solus/drive/agent.sock'
 
 function harness(over: Partial<DriveControllerDeps> = {}): {
   deps: DriveControllerDeps
@@ -37,7 +36,6 @@ function harness(over: Partial<DriveControllerDeps> = {}): {
   const deps: DriveControllerDeps = {
     platform: 'darwin',
     installed: () => true,
-    socketPath: () => SOCKET,
     trust,
     agentState: () => 'enabled',
     onAgentWanted: agentWanted,
@@ -156,16 +154,16 @@ describe('status', () => {
 })
 
 describe('companionDrive', () => {
-  it('the socket only when the setting is on AND driving is available for that project', () => {
+  it('only when the setting is on AND driving is available for that project', () => {
     const h = harness()
     const c = createDriveController(h.deps)
-    expect(c.companionDrive('p')).toEqual({ socket: SOCKET })
-    expect(c.companionDrive(null)).toBeNull()
+    expect(c.companionDrive('p')).toBe(true)
+    expect(c.companionDrive(null)).toBe(false)
     h.folders.q = '/w/p/inner'
-    expect(c.companionDrive('p')).toBeNull() // nested_folder
+    expect(c.companionDrive('p')).toBe(false) // nested_folder
     delete h.folders.q
     h.setting.drive = false
-    expect(c.companionDrive('p')).toBeNull()
+    expect(c.companionDrive('p')).toBe(false)
   })
 })
 
@@ -183,7 +181,19 @@ describe('the agent', () => {
     expect(h.agentWanted).toHaveBeenLastCalledWith(true) // nested_folder: the project, not the agent
     c.setProject('none')
     expect(h.agentWanted).toHaveBeenLastCalledWith(true) // no_folder: likewise
-    expect(c.companionDrive('none')).toBeNull() // …but that project's companion never drives
+    expect(c.companionDrive('none')).toBe(false) // …but that project's companion never drives
+  })
+
+  it('L3: agent state and grants show while on and installed, even for an unavailable project', async () => {
+    const h = harness({ agentState: () => 'requires_approval' })
+    const c = createDriveController(h.deps)
+    c.setProject('no-folder-project')
+    expect(await c.status()).toMatchObject({
+      available: false,
+      reason: 'no_folder',
+      agent: 'requires_approval',
+      trust: TRUST.trust
+    })
   })
 
   it('not wanted when the helper is not installed or not on macOS', () => {

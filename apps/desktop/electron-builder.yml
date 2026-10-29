@@ -52,8 +52,14 @@ mac:
   extraResources:
     - from: ../../dist/solus-input/SolusInput.app
       to: SolusInput.app
+    # Slice 3b, XPC (sol-drive.md §2.1): main's client for the agent, a Node-API
+    # module built by scripts/build-solus-input-xpc.sh (make solus-input-xpc).
+    # Main loads it from <resources>/solus-input-xpc/ in packaged builds only.
+    # It is NOT in signIgnore: it is signed with Solus.app like any Mach-O inside.
+    - from: native/solus-input-xpc/build/Release/solus_input_xpc.node
+      to: solus-input-xpc/solus_input_xpc.node
   # Never let osx-sign re-sign the helper bundle or the companion: it would apply
-  # Solus.app's entitlements.mac.plist (allow-dyld-environment-variables, JIT …)
+  # Solus.app's entitlements.mac.plist (JIT …)
   # to them and replace their own identifiers, which the helper's caller check
   # and the TCC grants depend on (ADR-041). They are signed beforehand with their
   # own identifiers and hardened runtime by scripts/build-solus-input.sh and
@@ -70,7 +76,11 @@ mac:
   extraFiles:
     - from: ../../dist/solus-input/com.solusforge.solus.input.agent.plist
       to: Library/LaunchAgents/com.solusforge.solus.input.agent.plist
-# Slice 3b (sol-drive.md §5, ADR-041 amendment 3b): the agent trusts any process
+# Flip the fuses and read them back from the packed binary before signing;
+# a mismatch fails the build (scripts/verify-fuses.cjs — electron-builder 26
+# flips electronFuses only after afterPack, so the hook flips them first).
+afterPack: ../../scripts/verify-fuses.cjs
+# Slice 3b (sol-drive.md §5, ADR-041 amendments 3b and 2026-10-28): the agent trusts any process
 # satisfying Solus.app's code requirement, so that process must only ever run
 # Solus code — no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect, and only the
 # integrity-checked app.asar. The ASAR integrity fuse needs the app packed as

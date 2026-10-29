@@ -1,9 +1,8 @@
 // SOLUSDEV-319 drive slices 3/3b (sol-drive.md §2.1, §5): where the helper,
-// the agent plist and the socket live, the helper path rule, and the `trust`
+// the agent plist and the XPC module live, the helper path rule, and the `trust`
 // reply parsing (the agent's `trust` op answers the same shape).
 import { describe, expect, it } from 'vitest'
 import {
-  driveSocketPaths,
   isSafeHelperPath,
   packagedDriveFiles,
   parseTrustOutput,
@@ -46,25 +45,14 @@ describe('resolveDevHelper', () => {
 // installed — packaged: SolusInput.app's helper or the LaunchAgents plist is
 // missing from the bundle; dev: the debug helper is missing or fails the rule.
 describe('packagedDriveFiles', () => {
-  it('the helper inside Resources and the plist in Contents/Library/LaunchAgents', () => {
+  it('the helper and the XPC module inside Resources, the plist in Contents/Library/LaunchAgents', () => {
     expect(packagedDriveFiles('/Applications/Solus.app/Contents/Resources')).toEqual({
       helper:
         '/Applications/Solus.app/Contents/Resources/SolusInput.app/Contents/MacOS/solus-input',
       plist:
-        '/Applications/Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist'
+        '/Applications/Solus.app/Contents/Library/LaunchAgents/com.solusforge.solus.input.agent.plist',
+      xpcModule: '/Applications/Solus.app/Contents/Resources/solus-input-xpc/solus_input_xpc.node'
     })
-  })
-})
-
-describe('driveSocketPaths', () => {
-  it('packaged uses drive/, dev uses drive-dev/ so the two never collide', () => {
-    expect(driveSocketPaths({ isPackaged: true, home: '/Users/me' })).toEqual({
-      dir: '/Users/me/Library/Application Support/Solus/drive',
-      socket: '/Users/me/Library/Application Support/Solus/drive/agent.sock'
-    })
-    expect(driveSocketPaths({ isPackaged: false, home: '/Users/me' }).socket).toBe(
-      '/Users/me/Library/Application Support/Solus/drive-dev/agent.sock'
-    )
   })
 })
 
@@ -123,7 +111,7 @@ describe('isSafeHelperPath', () => {
     canExecute: () => executable
   })
   const root = { kind: 'dir', mode: 0o755, uid: 0 } as const
-  const HELPER = '/Applications/Solus.app/Contents/MacOS/solus-input-launch'
+  const HELPER = '/Applications/Solus.app/Contents/MacOS/solus-input'
   const tree = (over: Record<string, Partial<Node>> = {}): Record<string, Node> => {
     const base: Record<string, Node> = {
       '/': { ...root },
@@ -167,7 +155,7 @@ describe('isSafeHelperPath', () => {
     const fs = fsWith(tree())
     expect(isSafeHelperPath('Applications/x', fs)).toBe(false)
     expect(
-      isSafeHelperPath('/Applications/Solus.app/../Solus.app/Contents/MacOS/solus-input-launch', fs)
+      isSafeHelperPath('/Applications/Solus.app/../Solus.app/Contents/MacOS/solus-input', fs)
     ).toBe(false)
     expect(isSafeHelperPath('/Applications/Solus.app/Contents/MacOS/missing', fs)).toBe(false)
     expect(isSafeHelperPath('/Applications/Solus.app/Contents/MacOS', fs)).toBe(false)

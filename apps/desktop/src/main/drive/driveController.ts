@@ -2,8 +2,8 @@
 // DriveStatus main hands the renderer (Settings › SOL "SOL can use your mouse
 // and keyboard") and decides what the companion and the agent may get. The
 // setting is the consent; availability is re-evaluated on every setting,
-// project or folder link change. Each time, the agent is (un)registered — or
-// the dev helper started/stopped — and the companion re-checks (it respawns
+// project or folder link change. Each time, the agent is (un)registered and
+// the companion re-checks (it respawns
 // only when what it baked actually differs).
 import { driveUnavailable } from './driveAvailability'
 import type { DriveTrustResult } from './driveHelper'
@@ -29,14 +29,12 @@ export interface DriveControllerDeps {
    *  LaunchAgents plist are in the bundle; dev — the debug helper resolves and
    *  passes the helper path rule. False ⇒ `no_helper`. */
   installed(): boolean
-  /** The agent's socket (packaged `…/Solus/drive/`, dev `…/Solus/drive-dev/`). */
-  socketPath(): string
-  /** The agent's `trust` op. */
+  /** `trust` through the drive transport (XPC packaged, debug helper in dev). */
   trust(prompt: boolean): Promise<DriveTrustResult | null>
   /** The SMAppService registration (null in dev, where main runs the helper). */
   agentState(): DriveAgentState | null
-  /** Drive is on AND available: register the agent / run the dev helper (true),
-   *  or unregister / stop it (false). Called on every re-evaluation. */
+  /** The setting is on AND the helper is installed: register the agent (true)
+   *  or unregister it (false). Called on every re-evaluation. */
   onAgentWanted(wanted: boolean): void
   /** Every project's validated linked folder (localState.linkedWorkspaces). */
   linkedFolders(): Record<string, string>
@@ -50,8 +48,8 @@ export interface DriveControllerDeps {
 
 export interface DriveController {
   setProject(projectId: string | null): void
-  /** What the companion for `projectId` may get: on AND available, else null. */
-  companionDrive(projectId: string | null): { socket: string } | null
+  /** May the companion for `projectId` drive: on AND available. */
+  companionDrive(projectId: string | null): boolean
   status(): Promise<DriveStatus>
   setDrive(on: boolean): Promise<DriveStatus>
   requestPermissions(): Promise<DriveStatus>
@@ -111,13 +109,15 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
     reason,
     trust: trust?.trust ?? null,
     unsignedDev: trust?.unsignedDev ?? false,
-    agent: reason === null ? deps.agentState() : null
+    // L3: shown while on and installed, even for a project that cannot drive,
+    // so a requires_approval stays visible.
+    agent: agentWanted(reason) ? deps.agentState() : null
   })
 
-  /** Trust is asked only while the agent should be running (on AND available). */
+  /** Trust is asked only while the agent should be running (on AND installed). */
   const status = async (): Promise<DriveStatus> => {
     const reason = reasonFor(projectId)
-    return compose(reason, wanted(reason) ? await cachedTrust() : null)
+    return compose(reason, agentWanted(reason) ? await cachedTrust() : null)
   }
 
   const publish = (next: DriveStatus): DriveStatus => {
@@ -143,7 +143,7 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
       refresh()
     },
     companionDrive(id) {
-      return wanted(reasonFor(id)) ? { socket: deps.socketPath() } : null
+      return wanted(reasonFor(id))
     },
     status: () => status().then(publish),
     async setDrive(on) {
@@ -152,7 +152,7 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
     },
     async requestPermissions() {
       const reason = reasonFor(projectId)
-      if (!wanted(reason)) return publish(compose(reason, null))
+      if (!agentWanted(reason)) return publish(compose(reason, null))
       inflight = null // a plain request finishing later must not overwrite the prompt's answer
       const result = await deps.trust(true)
       // Not cached: the prompt answers before the user acts on it, so the next

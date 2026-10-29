@@ -129,6 +129,23 @@ export interface CompanionEnvOptions {
    *  companion then reaches the helper through the agent, with the session
    *  main sends on stdin (slice 3b) — there is no helper path variable. */
   drive?: boolean
+  /** ADR-041 amendment 2026-10-28 (H-1): a packaged build starts from
+   *  PACKAGED_ENV_ALLOWLIST instead of inheriting everything, so inherited
+   *  SOLUS_COMPANION_* and PYTHON* (and DYLD_*, NODE_OPTIONS …) never reach the
+   *  companion. Dev keeps inheriting (developer overrides). */
+  packaged?: boolean
+}
+
+/** What a packaged companion may inherit; LC_* is matched by prefix. */
+export const PACKAGED_ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG'] as const
+
+function allowlisted(
+  inherited: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const allowed = new Set<string>(PACKAGED_ENV_ALLOWLIST)
+  return Object.fromEntries(
+    Object.entries(inherited).filter(([key]) => allowed.has(key) || key.startsWith('LC_'))
+  )
 }
 
 export function companionEnv(
@@ -136,7 +153,7 @@ export function companionEnv(
   apiBaseUrl: string,
   options: CompanionEnvOptions = {}
 ): Record<string, string | undefined> {
-  const env = { ...inherited }
+  const env = options.packaged ? allowlisted(inherited) : { ...inherited }
   // Third of the same kind. Absent when nothing resolved, on purpose: the
   // companion refuses to invent a default because "that would turn a packaging
   // mistake into a silent zero-server run" (config.py), and a guessed path here

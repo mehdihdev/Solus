@@ -4,7 +4,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createCompanionStdoutReader,
-  parseDriveSessionNeeded,
+  parseDriveCancel,
+  parseDriveRequest,
   createLineSplitter,
   MAX_STDOUT_LINE_BYTES,
   parseDriveWindowLine
@@ -73,30 +74,72 @@ describe('createLineSplitter', () => {
   })
 })
 
-describe('parseDriveSessionNeeded', () => {
-  it('accepts exactly {"type":"drive_session_needed"}', () => {
-    expect(parseDriveSessionNeeded('{"type":"drive_session_needed"}')).toBe(true)
+// Slice 3b, XPC (sol-drive.md §3 helper.py relay): the companion asks main to
+// run a helper command; only these exact shapes are accepted.
+describe('parseDriveRequest', () => {
+  const ok = { type: 'drive_request', id: 7, argv: ['identify', '--within', '/w'] }
+
+  it('accepts {type, id, argv} exactly', () => {
+    expect(parseDriveRequest(JSON.stringify(ok))).toEqual({ id: 7, argv: ok.argv })
   })
 
   it.each([
-    ['an extra key', '{"type":"drive_session_needed","socket":"/tmp/evil.sock"}'],
-    ['another type', '{"type":"drive_window"}'],
-    ['not JSON', 'drive_session_needed'],
-    ['an array', '["drive_session_needed"]']
-  ])('false for %s', (_label, raw) => {
-    expect(parseDriveSessionNeeded(raw)).toBe(false)
+    ['an extra key', { ...ok, socket: '/x' }],
+    ['a zero id', { ...ok, id: 0 }],
+    ['a fractional id', { ...ok, id: 1.5 }],
+    ['a string id', { ...ok, id: '7' }],
+    ['an empty argv', { ...ok, argv: [] }],
+    ['a non-string arg', { ...ok, argv: ['act', 3] }],
+    ['a NUL in an arg', { ...ok, argv: ['act', 'a\u0000b'] }],
+    ['65 args', { ...ok, argv: Array.from({ length: 65 }, () => 'x') }],
+    ['another type', { ...ok, type: 'drive_reply' }]
+  ])('null for %s', (_label, value) => {
+    expect(parseDriveRequest(JSON.stringify(value))).toBeNull()
+  })
+
+  it('accepts 64 args', () => {
+    const argv = Array.from({ length: 64 }, () => 'x')
+    expect(parseDriveRequest(JSON.stringify({ ...ok, argv }))?.argv).toHaveLength(64)
+  })
+})
+
+describe('parseDriveCancel', () => {
+  it('accepts {type, id} exactly', () => {
+    expect(parseDriveCancel('{"type":"drive_cancel","id":3}')).toBe(3)
+  })
+  it.each([
+    ['{"type":"drive_cancel","id":3,"x":1}'],
+    ['{"type":"drive_cancel","id":-1}'],
+    ['{"type":"drive_cancel"}']
+  ])('null for %s', (raw) => {
+    expect(parseDriveCancel(raw)).toBeNull()
   })
 })
 
 describe('createCompanionStdoutReader', () => {
-  it('routes valid bounds and session requests; ignores everything else', () => {
+  it('routes bounds, requests and cancels; ignores everything else', () => {
     const onBounds = vi.fn()
-    const onSessionNeeded = vi.fn()
-    const reader = createCompanionStdoutReader({ onBounds, onSessionNeeded })
+    const onRequest = vi.fn()
+    const onCancel = vi.fn()
+    const reader = createCompanionStdoutReader({ onBounds, onRequest, onCancel })
     reader.push(Buffer.from('noise\n{"type":"drive_window","bounds":{"x":1,"y":2,'))
     reader.push(Buffer.from('"width":3,"height":4}}\n{"type":"other"}\n'))
-    reader.push(Buffer.from('{"type":"drive_session_needed"}\n'))
+    reader.push(Buffer.from('{"type":"drive_request","id":1,"argv":["capture"]}\n'))
+    reader.push(Buffer.from('{"type":"drive_cancel","id":1}\n'))
+    reader.push(Buffer.from('{"type":"drive_session_needed"}\n')) // retired: ignored
     expect(onBounds.mock.calls).toEqual([[{ x: 1, y: 2, width: 3, height: 4 }]])
-    expect(onSessionNeeded).toHaveBeenCalledTimes(1)
+    expect(onRequest.mock.calls).toEqual([[{ id: 1, argv: ['capture'] }]])
+    expect(onCancel.mock.calls).toEqual([[1]])
+  })
+
+  it('a drive_request line up to the 64 KiB cap gets through', () => {
+    expect(MAX_STDOUT_LINE_BYTES).toBe(64 * 1024)
+    const onRequest = vi.fn()
+    const reader = createCompanionStdoutReader({ onBounds: vi.fn(), onRequest, onCancel: vi.fn() })
+    const big = 'y'.repeat(30 * 1024)
+    reader.push(
+      Buffer.from(`${JSON.stringify({ type: 'drive_request', id: 2, argv: ['act', big] })}\n`)
+    )
+    expect(onRequest).toHaveBeenCalledTimes(1)
   })
 })

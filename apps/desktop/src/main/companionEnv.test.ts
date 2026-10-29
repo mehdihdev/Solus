@@ -300,3 +300,69 @@ describe('findAncestorPath', () => {
     expect(findAncestorPath('/', ['nope'], () => false)).toBeNull()
   })
 })
+
+// ADR-041 amendment 2026-10-28 (H-1): a packaged companion's environment is an
+// allowlist plus what main computes, so it always dials the baked API and
+// serves the registry workspace whatever launched Solus.app.
+describe('companionEnv — packaged allowlist', () => {
+  const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
+  const API = 'https://api.solusforge.com/api/v1'
+  const INHERITED = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/Users/me',
+    USER: 'me',
+    LOGNAME: 'me',
+    TMPDIR: '/var/folders/x/T/',
+    LANG: 'en_GB.UTF-8',
+    LC_ALL: 'en_GB.UTF-8',
+    LC_CTYPE: 'UTF-8',
+    SOLUS_COMPANION_URL: 'wss://evil.example/api/v1/projects/x/bridge',
+    SOLUS_COMPANION_ALLOWED_HOSTS: 'evil.example',
+    SOLUS_COMPANION_WORKSPACE: '/elsewhere',
+    SOLUS_COMPANION_INTEGRATIONS_ROOT: '/evil/mcp',
+    PYTHONPATH: '/evil',
+    PYTHONSTARTUP: '/evil/x.py',
+    DYLD_INSERT_LIBRARIES: '/evil.dylib',
+    NODE_OPTIONS: '--require /evil.js',
+    SOMETHING_ELSE: 'x'
+  }
+
+  it('keeps only the allowlist from the inherited env', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', packaged: true })
+
+    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE']) {
+      expect(env[key]).toBe(INHERITED[key as keyof typeof INHERITED])
+    }
+    for (const key of [
+      'PYTHONPATH',
+      'PYTHONSTARTUP',
+      'DYLD_INSERT_LIBRARIES',
+      'NODE_OPTIONS',
+      'SOMETHING_ELSE'
+    ]) {
+      expect(key in env).toBe(false)
+    }
+  })
+
+  it('ignores inherited SOLUS_COMPANION_* and computes its own', () => {
+    const env = companionEnv(INHERITED, API, {
+      projectId: P,
+      workspace: '/w',
+      drive: true,
+      packaged: true
+    })
+
+    expect(env.SOLUS_COMPANION_URL).toBe(`wss://api.solusforge.com/api/v1/projects/${P}/bridge`)
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBe('/w')
+    expect(env.SOLUS_COMPANION_ALLOWED_HOSTS).toBe('localhost,127.0.0.1,api.solusforge.com')
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1') // the override no longer blocks it
+    expect('SOLUS_COMPANION_INTEGRATIONS_ROOT' in env).toBe(false)
+  })
+
+  it('dev keeps inheriting (developer overrides)', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w' })
+
+    expect(env.SOLUS_COMPANION_URL).toBe(INHERITED.SOLUS_COMPANION_URL)
+    expect(env.PYTHONPATH).toBe('/evil')
+  })
+})

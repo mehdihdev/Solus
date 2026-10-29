@@ -1,4 +1,4 @@
-.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin solus-input-app desktop-mac seed-secrets
+.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin solus-input-app solus-input-xpc desktop-mac seed-secrets
 
 bootstrap: ## one-command setup (run after cloning)
 	corepack enable && pnpm install
@@ -43,7 +43,12 @@ companion-bin: ## build the companion binary + vendored MCP servers into dist/co
 solus-input-app: ## build the SOL drive helper bundle into dist/solus-input/SolusInput.app (macOS; ADR-041)
 	bash scripts/build-solus-input.sh
 
-desktop-mac: companion-bin solus-input-app ## package the macOS app with the companion + drive helper it ships
+solus-input-xpc: ## build main's XPC client for the drive agent (native/solus-input-xpc; sol-drive.md §2.1)
+	bash scripts/build-solus-input-xpc.sh
+
+# The Electron fuses are flipped and read back by electron-builder's afterPack
+# hook (scripts/verify-fuses.cjs) before signing; a mismatch fails the build.
+desktop-mac: companion-bin solus-input-app solus-input-xpc ## package the macOS app with the companion, drive helper and XPC client it ships
 	pnpm --filter @solus/desktop build:mac
 
 seed-secrets: ## seed every env-sourced SecretStore ref from the root .env (idempotent; prints names+lengths only)

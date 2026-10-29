@@ -1,3 +1,6 @@
+// Must stay the first import: refuses a packaged launch with debugging switches
+// before anything else in main runs (ADR-041 amendment 2026-10-28).
+import './packagedGuardBoot'
 import { findNativeGuideTarget, readNativeWindowProperty } from './sol-window/nativeGuideTarget'
 import {
   app,

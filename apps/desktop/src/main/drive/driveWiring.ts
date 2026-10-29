@@ -1,42 +1,48 @@
-// SOLUSDEV-319 drive slices 3/3b (docs/architecture/sol-drive.md §2.1, §5):
-// the Electron glue that connects the drive pieces — controller (status +
-// consent), the agent (SMAppService registration packaged, a `serve` child in
-// dev, the socket client), the companion (env at spawn, the session line,
-// stdout geometry), the outline session and the IPC. Everything with logic
-// lives in the pure modules beside this one.
+// SOLUSDEV-319 drive slices 3/3b (docs/architecture/sol-drive.md §2.1, §5;
+// ADR-041 amendment 2026-10-28): the Electron glue that connects the drive
+// pieces — controller (status + consent), the agent (SMAppService registration,
+// packaged), the transport (the XPC native module packaged, the debug helper in
+// dev), the companion (env at spawn, the relay, stdout geometry), the outline
+// session and the IPC. Everything with logic lives in the pure modules beside
+// this one.
 import { app, shell, type IpcMainInvokeEvent } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
-import { userInfo } from 'node:os'
-import { dirname } from 'node:path'
+import { existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import {
   notifyCompanionDriveChanged,
   onCompanionDriveWindow,
   setCompanionDriveResolver,
-  setCompanionDriveSessionSource
+  setCompanionDriveTransport
 } from '../companion'
 import { linkedWorkspaces, realLocalStateDeps } from '../localState'
 import type { SolSettings } from '../solSettings'
 import type { SolWindowIpc, SolWindowManager } from '../sol-window/solWindow'
 import { SOL_WINDOW_CHANNELS } from '../sol-window/solWindow.constants'
-import { requestAgentSession, requestAgentTrust } from './driveAgentClient'
 import {
   createAgentRegistration,
   DRIVE_LOGIN_ITEMS_URL,
   type LoginItemsApi
 } from './driveAgentRegistration'
 import { createDriveController } from './driveController'
-import { createDevAgentSupervisor } from './driveDevAgent'
 import {
-  driveSocketPaths,
   isSafeHelperPath,
   packagedDriveFiles,
+  parseTrustOutput,
   realHelperFs,
-  resolveDevHelper
+  resolveDevHelper,
+  type DriveTrustResult
 } from './driveHelper'
 import { registerDriveIpcHandlers } from './driveIpc'
 import { createDriveSession } from './driveOutline'
 import { createOutlineStrip } from './driveOutlineWindow'
+import {
+  createDevTransport,
+  createXpcTransport,
+  loadXpcModule,
+  type DevSpawn,
+  type DriveTransport
+} from './driveTransport'
 
 export interface DriveHandle {
   /** The renderer's active project (bridge:project). */
@@ -56,28 +62,57 @@ const isPlainFile = (path: string): boolean => {
   return info !== null && info.isFile && !info.isSymbolicLink
 }
 
-/** Where the agent runs from, and whether it is installed. */
-function agentHost(): {
-  socket: { dir: string; socket: string }
-  devHelper(): string | null
-  installed(): boolean
-} {
-  const socket = driveSocketPaths({ isPackaged: app.isPackaged, home: userInfo().homedir })
-  const devHelper = (): string | null =>
-    resolveDevHelper({
-      appPath: app.getAppPath(),
-      exists: existsSync,
-      realpath: realLocalStateDeps.realpath
+/** The dev debug helper, only while it passes the helper path rule. */
+function devHelper(): string | null {
+  const helper = resolveDevHelper({
+    appPath: app.getAppPath(),
+    exists: existsSync,
+    realpath: realLocalStateDeps.realpath
+  })
+  return helper !== null && isSafeHelperPath(helper, realHelperFs) ? helper : null
+}
+
+/** packaged — SolusInput.app's helper, the LaunchAgents plist and the XPC
+ *  module are in the bundle; dev — the debug helper resolves and passes the
+ *  helper path rule. */
+function installed(): boolean {
+  if (!app.isPackaged) return devHelper() !== null
+  const files = packagedDriveFiles(process.resourcesPath)
+  return [files.helper, files.plist, files.xpcModule].every(isPlainFile)
+}
+
+/** The transport, created on first use. Packaged: the native module from the
+ *  app bundle — a module that fails to load leaves null (⇒ agent_unavailable). */
+function createTransportSource(): () => DriveTransport | null {
+  if (!app.isPackaged) {
+    const transport = createDevTransport({
+      helper: devHelper,
+      spawn: ((command, args, options) => spawn(command, args, options)) as DevSpawn,
+      warn,
+      setTimeout: (cb, ms) => setTimeout(cb, ms),
+      clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout)
     })
-  const installed = (): boolean => {
-    if (app.isPackaged) {
-      const files = packagedDriveFiles(process.resourcesPath)
-      return isPlainFile(files.helper) && isPlainFile(files.plist)
-    }
-    const helper = devHelper()
-    return helper !== null && isSafeHelperPath(helper, realHelperFs)
+    return () => transport
   }
-  return { socket, devHelper, installed }
+  let loaded: DriveTransport | null | undefined
+  return () => {
+    if (loaded !== undefined) return loaded
+    const module = loadXpcModule(
+      () => createRequire(__filename)(packagedDriveFiles(process.resourcesPath).xpcModule),
+      warn
+    )
+    loaded = module === null ? null : createXpcTransport(module)
+    return loaded
+  }
+}
+
+async function trustVia(
+  transport: DriveTransport | null,
+  prompt: boolean
+): Promise<DriveTrustResult | null> {
+  if (transport === null) return null
+  const reply = await transport.request({ op: 'trust', prompt }, new AbortController().signal)
+  return reply === null ? null : parseTrustOutput(JSON.stringify(reply))
 }
 
 export function startDrive(opts: {
@@ -88,7 +123,7 @@ export function startDrive(opts: {
   /** The main renderer only — consent actions (drive on, `trust --prompt`, approval pane). */
   isMainSender: (event: IpcMainInvokeEvent) => boolean
 }): DriveHandle {
-  const host = agentHost()
+  const transport = createTransportSource()
   const session = createDriveSession({
     createStrip: createOutlineStrip,
     now: Date.now,
@@ -96,25 +131,14 @@ export function startDrive(opts: {
     clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout)
   })
   const registration = createAgentRegistration(app as unknown as LoginItemsApi, warn)
-  const devAgent = createDevAgentSupervisor({
-    spawn: (command, args, options) => spawn(command, args, options),
-    // The agent creates and checks `drive-dev/` itself; its parent must exist.
-    prepareDir: (dir) => void mkdirSync(dirname(dir), { recursive: true, mode: 0o700 }),
-    setTimeout: (cb, ms) => setTimeout(cb, ms),
-    clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
-    now: Date.now
-  })
+  // Packaged only: in dev main runs the helper per call, nothing to register.
   const onAgentWanted = (wanted: boolean): void => {
-    if (process.platform !== 'darwin') return
-    if (app.isPackaged) return registration.apply(wanted)
-    const helper = wanted ? host.devHelper() : null
-    devAgent.set(helper === null ? null : { helper, socketDir: host.socket.dir })
+    if (process.platform === 'darwin' && app.isPackaged) registration.apply(wanted)
   }
   const controller = createDriveController({
     platform: process.platform,
-    installed: host.installed,
-    socketPath: () => host.socket.socket,
-    trust: (prompt) => requestAgentTrust(host.socket.socket, prompt),
+    installed,
+    trust: (prompt) => trustVia(transport(), prompt),
     agentState: () => (app.isPackaged ? registration.state() : null),
     onAgentWanted,
     linkedFolders: () => linkedWorkspaces(realLocalStateDeps),
@@ -125,7 +149,7 @@ export function startDrive(opts: {
     onCompanionDriveChanged: notifyCompanionDriveChanged
   })
   setCompanionDriveResolver((projectId) => controller.companionDrive(projectId))
-  setCompanionDriveSessionSource((socket) => requestAgentSession(socket))
+  setCompanionDriveTransport(transport)
   onCompanionDriveWindow((bounds) => session.setBounds(bounds))
   registerDriveIpcHandlers(
     opts.ipc,
@@ -142,8 +166,8 @@ export function startDrive(opts: {
     },
     { isAllowedSender: opts.isAllowedSender, isMainSender: opts.isMainSender }
   )
-  // First evaluation: clears an agent registration (or dev helper) a previous
-  // run left behind while the setting is now off.
+  // First evaluation: clears an agent registration a previous run left behind
+  // while the setting is now off.
   controller.refresh()
   return {
     setProject: (projectId) => controller.setProject(projectId),
@@ -151,8 +175,7 @@ export function startDrive(opts: {
     isQuiet: () => session.isQuiet(),
     dispose: () => {
       onCompanionDriveWindow(null)
-      setCompanionDriveSessionSource(null)
-      devAgent.set(null)
+      setCompanionDriveTransport(null)
       session.dispose()
     }
   }

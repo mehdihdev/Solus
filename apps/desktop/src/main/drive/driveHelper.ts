@@ -1,7 +1,7 @@
 // SOLUSDEV-319 drive slices 3/3b (docs/architecture/sol-drive.md §2.1, §5):
-// where the helper, the launch agent plist and the agent socket live; the
-// helper path rule the dev helper must pass; and the `trust` reply parsing
-// (the agent's `trust` op answers the slice 3 shape). Pure except realHelperFs.
+// where the helper, the launch agent plist and the XPC module live; the helper
+// path rule the dev helper must pass; and the `trust` reply parsing (the
+// agent's `trust` op answers the slice 3 shape). Pure except realHelperFs.
 import { accessSync, constants, lstatSync } from 'node:fs'
 import { dirname, isAbsolute, join, normalize, sep } from 'node:path'
 import { findAncestorPath } from '../companionEnv'
@@ -35,29 +35,19 @@ export function resolveDevHelper(rt: DevHelperRuntime): string | null {
   return dev === null ? null : rt.realpath(dev)
 }
 
-/** What a packaged Solus.app must contain for the agent to be installable:
- *  launchd runs `BundleProgram` (the helper) from the plist SMAppService registers. */
-export function packagedDriveFiles(resourcesPath: string): { helper: string; plist: string } {
+/** What a packaged Solus.app carries for drive: launchd runs `BundleProgram`
+ *  (the helper) from the plist SMAppService registers; main talks to it through
+ *  the XPC native module (electron-builder mac.extraResources). */
+export function packagedDriveFiles(resourcesPath: string): {
+  helper: string
+  plist: string
+  xpcModule: string
+} {
   return {
     helper: join(resourcesPath, 'SolusInput.app', 'Contents', 'MacOS', 'solus-input'),
-    plist: join(dirname(resourcesPath), 'Library', 'LaunchAgents', DRIVE_AGENT_PLIST)
+    plist: join(dirname(resourcesPath), 'Library', 'LaunchAgents', DRIVE_AGENT_PLIST),
+    xpcModule: join(resourcesPath, 'solus-input-xpc', 'solus_input_xpc.node')
   }
-}
-
-/** The agent's socket directory and path (§2.1). Dev uses `drive-dev/`, so a
- *  dev run never collides with an installed agent. */
-export function driveSocketPaths(rt: { isPackaged: boolean; home: string }): {
-  dir: string
-  socket: string
-} {
-  const dir = join(
-    rt.home,
-    'Library',
-    'Application Support',
-    'Solus',
-    rt.isPackaged ? 'drive' : 'drive-dev'
-  )
-  return { dir, socket: join(dir, 'agent.sock') }
 }
 
 export interface DriveTrustResult {
