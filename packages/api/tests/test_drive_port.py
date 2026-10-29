@@ -189,9 +189,12 @@ async def test_an_unknown_refusal_code_is_normalised() -> None:
     assert caught.value.code == "unknown"
 
 
-async def test_the_retired_bad_token_code_is_not_known() -> None:
-    """The socket session (and its bad_token) never shipped: ADR-041 2026-10-28."""
-    act = FakeTool(error=ToolException("bad_token: superseded"))
+@pytest.mark.parametrize("code", ["bad_token", "caller_untrusted"])
+async def test_retired_codes_are_not_known(code: str) -> None:
+    """The socket session (bad_token) never shipped, and the XPC agent never
+    answers caller_untrusted — a requirement failure is agent_unavailable
+    (ADR-041 2026-10-28)."""
+    act = FakeTool(error=ToolException(f"{code}: nope"))
     with pytest.raises(DriveRefusal) as caught:
         await port(act=act).act(
             "b", 1, ActRequest(verb="wait", ms=1), since=1, expect_width=1, expect_height=1
@@ -240,7 +243,6 @@ async def test_act_reports_whether_the_design_was_saved(reply: Any, saved: bool)
         "outside_workspace",
         "design_saved",
         "not_bound",
-        "caller_untrusted",
         "agent_unavailable",
     ],
 )

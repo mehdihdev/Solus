@@ -98,9 +98,6 @@ _BY_CODE: Final = {
     "outside_workspace": (
         "stopped — the KiCad in front has a project outside this Solus project open"
     ),
-    "caller_untrusted": (
-        "stopped — the input helper did not recognise the Solus companion; reinstall Solus"
-    ),
     "agent_unavailable": "stopped — the input helper is not running; check Settings › SOL",
 }
 

@@ -138,6 +138,21 @@ call to main over the stdin/stdout pipe main created for it
 - **Stdout** carries only `drive_request`, `drive_cancel` and the
   `drive_window` outline lines; logging goes to stderr.
 
+### Known limitation: allowlisted environment (no proxy variables)
+
+A packaged companion does not inherit the app's environment wholesale
+(ADR-041 amendment 2026-10-28): `companionEnv` in
+`src/main/companionEnv.ts` passes only `PATH`, `HOME`, `USER`, `LOGNAME`,
+`TMPDIR`, `LANG` and `LC_*` (`PACKAGED_ENV_ALLOWLIST`), then sets the
+`SOLUS_COMPANION_*` values itself. Inherited `SOLUS_COMPANION_*` and `PYTHON*`
+are deliberately ignored. A side effect is that `HTTPS_PROXY` / `HTTP_PROXY` /
+`NO_PROXY`, `SSL_CERT_FILE` / `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE` and similar
+are **not** passed, so a packaged companion behind a corporate proxy or a
+TLS-intercepting CA cannot reach the cloud. Dev runs are unaffected because
+they inherit the full environment. Supporting proxies needs a follow-up
+decision on which variables to admit and how to validate them. Do not widen
+the allowlist ad hoc.
+
 ## Supervision, pidfile, orphan reap
 
 `src/main/companion.ts`:

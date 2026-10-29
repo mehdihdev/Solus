@@ -149,7 +149,6 @@ async def test_a_finished_step_reports_what_happened() -> None:
         ("saved", "design_saved", "saved the design"),
         ("refused", "outside_workspace", "stopped — the KiCad in front has a project outside"),
         ("refused", "not_bound", "not_bound"),
-        ("refused", "caller_untrusted", "did not recognise the Solus companion; reinstall Solus"),
         (
             "error",
             "agent_unavailable",
