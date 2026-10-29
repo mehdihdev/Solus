@@ -191,6 +191,17 @@ function applyDrive(env: Record<string, string | undefined>, options: CompanionE
   env.SOLUS_COMPANION_DRIVE = '1'
 }
 
+/** The workspace a child built from these inputs would drive in — exactly
+ *  the env builder's decision (null: drive off). Main bakes and compares this
+ *  (L6), so what the relay accepts as `--within` is what the child got. */
+export function companionDriveWorkspace(
+  inherited: Record<string, string | undefined>,
+  options: Pick<CompanionEnvOptions, 'workspace' | 'drive' | 'packaged'>
+): string | null {
+  const env = companionEnv(inherited, '', options)
+  return env.SOLUS_COMPANION_DRIVE === '1' ? (options.workspace ?? null) : null
+}
+
 /** Loopback always, plus the configured URL's host when it parses. */
 function allowedHosts(configuredUrl: string | undefined): string {
   const hosts = new Set<string>(LOOPBACK_HOSTS)

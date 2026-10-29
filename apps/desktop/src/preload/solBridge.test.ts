@@ -226,6 +226,10 @@ describe('drive', () => {
     await expect(createSolBridge(driveIpc(raw).ipc).getDriveStatus()).resolves.toBeNull()
   })
 
+  it('accepts the bundle_modified reason (review HIGH-1)', () => {
+    expect(isDriveStatus({ ...DRIVE, reason: 'bundle_modified' })).toBe(true)
+  })
+
   it('accepts an available status with trust', () => {
     expect(
       isDriveStatus({

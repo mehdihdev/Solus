@@ -2,12 +2,20 @@
 // main hands the renderer for Settings › SOL "SOL can use your mouse and
 // keyboard". Shared by main (producer), preload (validator) and renderer.
 
-/** Why driving cannot be turned on for the active project. */
-export type DriveUnavailable = 'not_macos' | 'no_helper' | 'no_folder' | 'nested_folder'
+/** Why driving cannot be turned on for the active project. `bundle_modified`
+ *  (review HIGH-1): a packaged Solus.app whose own signature — nested code and
+ *  resources included — does not validate (a relocated copy with swapped files). */
+export type DriveUnavailable =
+  | 'not_macos'
+  | 'no_helper'
+  | 'bundle_modified'
+  | 'no_folder'
+  | 'nested_folder'
 
 export const DRIVE_UNAVAILABLE: readonly DriveUnavailable[] = [
   'not_macos',
   'no_helper',
+  'bundle_modified',
   'no_folder',
   'nested_folder'
 ]

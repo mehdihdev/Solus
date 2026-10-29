@@ -110,6 +110,14 @@ describe('status', () => {
     expect(h.trust).not.toHaveBeenCalled()
   })
 
+  it('bundle_modified while the app bundle signature fails (HIGH-1): no companion drive, agent kept', async () => {
+    const h = harness({ bundleOk: () => false })
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    expect(await c.status()).toMatchObject({ available: false, reason: 'bundle_modified' })
+    expect(c.companionDrive('p')).toBe(false)
+  })
+
   it('no_helper when the agent is not installed', async () => {
     const c = createDriveController(harness({ installed: () => false }).deps)
     c.setProject('p')

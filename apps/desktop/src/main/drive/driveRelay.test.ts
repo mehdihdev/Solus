@@ -4,7 +4,13 @@
 // workspace main checked for that child; everything else is refused without
 // reaching the agent.
 import { describe, expect, it, vi } from 'vitest'
-import { createDriveRelay, driveReplyLine, relayRefusal } from './driveRelay'
+import {
+  createDriveRelay,
+  driveReplyLine,
+  MAX_RELAY_ARGV_BYTES,
+  MAX_RELAY_REPLY_BYTES,
+  relayRefusal
+} from './driveRelay'
 import type { DriveOp, DriveTransport } from './driveTransport'
 
 const WS = '/w/rover'
@@ -137,21 +143,87 @@ describe('createDriveRelay — cancellation', () => {
     const child = {}
     h.relay.attach(child, WS)
     h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
-    h.relay.request(child, { id: 2, argv: ['capture', '--within', WS] })
+    await flush()
     h.relay.detach(child)
-    expect(signals.map((s) => s.aborted)).toEqual([true, true])
+    expect(signals.map((s) => s.aborted)).toEqual([true])
   })
 
-  it('a duplicate id in flight is refused with usage', async () => {
+  it('one call at a time per child (LOW-4): a second concurrent request gets usage', async () => {
     const h = harness({ request: () => new Promise(() => undefined) })
     const child = {}
     h.relay.attach(child, WS)
     h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
+    h.relay.request(child, { id: 2, argv: ['capture', '--within', WS] })
     h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
     await flush()
     expect(h.writes).toEqual([
-      [child, expect.objectContaining({ id: 1, reply: expect.objectContaining({ code: 'usage' }) })]
+      [
+        child,
+        {
+          type: 'drive_reply',
+          id: 2,
+          reply: { ok: false, code: 'usage', message: 'one drive call at a time' }
+        }
+      ],
+      [
+        child,
+        {
+          type: 'drive_reply',
+          id: 1,
+          reply: { ok: false, code: 'usage', message: 'one drive call at a time' }
+        }
+      ]
     ])
+  })
+})
+
+describe('createDriveRelay — limits and the bundle gate', () => {
+  it('argv over the byte cap is refused before the transport (L3: the XPC request stays < 64 KiB)', async () => {
+    const request = vi.fn<DriveTransport['request']>(async () => REPLY)
+    const h = harness({ request })
+    const child = {}
+    h.relay.attach(child, WS)
+    const text = 'x'.repeat(MAX_RELAY_ARGV_BYTES)
+    h.relay.request(child, { id: 1, argv: ['act', '--within', WS, 'type', '--text', text] })
+    await flush()
+    expect(request).not.toHaveBeenCalled()
+    expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'usage' } })
+    expect(MAX_RELAY_ARGV_BYTES).toBeLessThanOrEqual(60 * 1024)
+  })
+
+  it('a reply over 24 MiB as JSON becomes helper_output (L4)', async () => {
+    const huge = { ok: true, png: 'A'.repeat(MAX_RELAY_REPLY_BYTES) }
+    const h = harness({ request: async () => huge })
+    const child = {}
+    h.relay.attach(child, WS)
+    h.relay.request(child, { id: 3, argv: ['capture', '--within', WS] })
+    await flush()
+    expect(h.writes[0][1]).toMatchObject({ id: 3, reply: { ok: false, code: 'helper_output' } })
+  })
+
+  it('waits for the spawn-time bundle check; a failed check never reaches the agent (HIGH-1)', async () => {
+    const request = vi.fn<DriveTransport['request']>(async () => REPLY)
+    const h = harness({ request })
+    const child = {}
+    let pass: (ok: boolean) => void = () => undefined
+    h.relay.attach(child, WS, new Promise<boolean>((r) => (pass = r)))
+    h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
+    await flush()
+    expect(request).not.toHaveBeenCalled()
+    pass(false)
+    await flush()
+    expect(request).not.toHaveBeenCalled()
+    expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'agent_unavailable' } })
+  })
+
+  it('a passed bundle check lets the call through', async () => {
+    const request = vi.fn<DriveTransport['request']>(async () => REPLY)
+    const h = harness({ request })
+    const child = {}
+    h.relay.attach(child, WS, Promise.resolve(true))
+    h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
+    await flush()
+    expect(h.writes[0][1]).toEqual({ type: 'drive_reply', id: 1, reply: REPLY })
   })
 })
 

@@ -10,7 +10,7 @@
 import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { companionEnv, findIntegrationsRoot } from './companionEnv'
+import { companionDriveWorkspace, companionEnv, findIntegrationsRoot } from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
 import { createCompanionStdoutReader } from './drive/driveWindow'
 import {
@@ -187,6 +187,8 @@ let driveResolver: DriveResolver | null = null
  *  rule checked, and the only `--within` main relays for it (null: drive off).
  *  `undefined` ⇒ no child spawned yet. */
 let activeDriveWorkspace: string | null | undefined
+/** HIGH-1: main's own-bundle check, run at each drive spawn (null: dev, none). */
+let driveSpawnCheck: (() => Promise<boolean>) | null = null
 /** Main's transport to the helper (XPC packaged, debug helper in dev). */
 let driveTransport: (() => DriveTransport | null) | null = null
 /** The companion relays drive calls to main (3b, XPC); replies go to its stdin. */
@@ -205,9 +207,14 @@ function resolveDrive(): boolean {
   }
 }
 
-/** The drive workspace a child spawned now would get. */
+/** The drive workspace a child spawned now would get — the env builder's own
+ *  decision (L6), so a dev workspace override does not look like a change. */
 function driveWorkspaceNow(): string | null {
-  return resolveDrive() ? projectWorkspace(activeProjectId, realLocalStateDeps) : null
+  return companionDriveWorkspace(process.env, {
+    workspace: projectWorkspace(activeProjectId, realLocalStateDeps),
+    drive: resolveDrive(),
+    packaged: app.isPackaged
+  })
 }
 
 function pidfilePath(): string {
@@ -360,7 +367,14 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   // workspace checked for it. A child spawned without drive gets nothing.
   const driveWorkspace = env.SOLUS_COMPANION_DRIVE === '1' ? workspace : null
   activeDriveWorkspace = driveWorkspace
-  driveRelay.attach(c, driveWorkspace)
+  // HIGH-1: Solus.app's own signature is re-checked at every drive spawn; the
+  // relay holds this child's calls until it answers, and a false answer
+  // reaches no agent (main then re-evaluates and respawns without drive).
+  driveRelay.attach(
+    c,
+    driveWorkspace,
+    driveWorkspace === null ? undefined : (driveSpawnCheck?.() ?? Promise.resolve(true))
+  )
   const reader = createCompanionStdoutReader({
     onBounds: driveGeometry.attach(c, driveWorkspace !== null),
     onRequest: (request) => driveRelay.request(c, request),
@@ -455,6 +469,11 @@ export function notifyProjectFolderChanged(projectId: string): void {
   })
   if (action === 'respawn') replaceChild()
   else if (action === 'recheck_drive') notifyCompanionDriveChanged()
+}
+
+/** SOLUSDEV-319 HIGH-1: the own-bundle check run at every drive spawn. */
+export function setCompanionDriveSpawnCheck(check: (() => Promise<boolean>) | null): void {
+  driveSpawnCheck = check
 }
 
 /** SOLUSDEV-319 slice 3b (XPC): main's transport to the helper for relayed calls. */

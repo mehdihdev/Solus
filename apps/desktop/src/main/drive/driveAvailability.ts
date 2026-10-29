@@ -48,6 +48,8 @@ export interface DriveAvailabilityInput {
   platform: NodeJS.Platform
   /** The helper path resolves to an executable file. */
   helperOk: boolean
+  /** Packaged: Solus.app's own signature validates (checkOwnBundle). Dev: omitted. */
+  bundleOk?: boolean
   projectId: string | null
   /** Every project's linked folder on this machine (validated registry read). */
   folders: Readonly<Record<string, string>>
@@ -58,6 +60,7 @@ export interface DriveAvailabilityInput {
 export function driveUnavailable(input: DriveAvailabilityInput): DriveUnavailable | null {
   if (input.platform !== 'darwin') return 'not_macos'
   if (!input.helperOk) return 'no_helper'
+  if (input.bundleOk === false) return 'bundle_modified'
   const { projectId, folders } = input
   if (projectId === null || !Object.hasOwn(folders, projectId)) return 'no_folder'
   if (nestedFolderConflict(projectId, folders, input.realpath, input.platform)) {

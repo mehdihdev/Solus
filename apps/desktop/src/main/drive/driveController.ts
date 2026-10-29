@@ -29,6 +29,9 @@ export interface DriveControllerDeps {
    *  LaunchAgents plist are in the bundle; dev — the debug helper resolves and
    *  passes the helper path rule. False ⇒ `no_helper`. */
   installed(): boolean
+  /** Packaged: the latest checkOwnBundle answer (false until one completed).
+   *  Omitted in dev. False ⇒ `bundle_modified`. */
+  bundleOk?(): boolean
   /** `trust` through the drive transport (XPC packaged, debug helper in dev). */
   trust(prompt: boolean): Promise<DriveTrustResult | null>
   /** The SMAppService registration (null in dev, where main runs the helper). */
@@ -72,6 +75,7 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
     driveUnavailable({
       platform: deps.platform,
       helperOk: deps.platform === 'darwin' && deps.installed(),
+      bundleOk: deps.bundleOk?.(),
       projectId: id,
       folders: deps.linkedFolders(),
       realpath: deps.realpath

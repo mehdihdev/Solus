@@ -79,6 +79,12 @@ describe('driveUnavailable', () => {
     expect(driveUnavailable(base)).toBeNull()
   })
 
+  it('bundle_modified after no_helper and before the folder reasons (review HIGH-1)', () => {
+    expect(driveUnavailable({ ...base, bundleOk: false, projectId: null })).toBe('bundle_modified')
+    expect(driveUnavailable({ ...base, helperOk: false, bundleOk: false })).toBe('no_helper')
+    expect(driveUnavailable({ ...base, bundleOk: true })).toBeNull()
+  })
+
   it('checks in order: not_macos → no_helper → no_folder → nested_folder', () => {
     const nested = { p: '/w/p', q: '/w/p/q' }
     expect(driveUnavailable({ ...base, platform: 'linux', helperOk: false, projectId: null })).toBe(

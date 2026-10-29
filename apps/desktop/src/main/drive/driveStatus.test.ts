@@ -11,6 +11,7 @@ describe('DRIVE_UNAVAILABLE', () => {
     const all: Record<DriveUnavailable, true> = {
       not_macos: true,
       no_helper: true,
+      bundle_modified: true,
       no_folder: true,
       nested_folder: true
     }

@@ -72,6 +72,10 @@ describe('SolSection — SOL can use your mouse and keyboard (sol-drive.md §5)'
     [
       'nested_folder',
       "This project's folder is inside, or contains, another linked project's folder. Move one of them so SOL can't act on the other project's files."
+    ],
+    [
+      'bundle_modified',
+      "This copy of Solus has been changed since it was signed, so SOL can't use your mouse and keyboard. Reinstall Solus from solusforge.com."
     ]
   ] as const)('when unavailable (%s), disables the switch and says why', async (reason, copy) => {
     renderWith(driveStatus({ available: false, reason, trust: null }))

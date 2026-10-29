@@ -16,7 +16,9 @@ describe('drive copy (sol-drive.md §5)', () => {
       no_helper: 'The input helper is missing from this install.',
       no_folder: 'Link this project to a folder on this computer first.',
       nested_folder:
-        "This project's folder is inside, or contains, another linked project's folder. Move one of them so SOL can't act on the other project's files."
+        "This project's folder is inside, or contains, another linked project's folder. Move one of them so SOL can't act on the other project's files.",
+      bundle_modified:
+        "This copy of Solus has been changed since it was signed, so SOL can't use your mouse and keyboard. Reinstall Solus from solusforge.com."
     })
   })
 

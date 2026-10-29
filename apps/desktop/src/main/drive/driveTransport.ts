@@ -49,6 +49,8 @@ export function parseReplyObject(raw: string): Record<string, unknown> | null {
 export interface XpcModule {
   request(json: string, timeoutMs: number): Promise<string>
   cancel(): void
+  /** Review HIGH-1: SecStaticCodeCheckValidity over main's own bundle. */
+  checkOwnBundle?(): Promise<boolean>
 }
 
 /** Load the module; null (⇒ every call answers agent_unavailable) when it is

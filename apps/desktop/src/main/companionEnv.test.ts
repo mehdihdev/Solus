@@ -13,6 +13,7 @@
 // Rule 2 exists because that host is where the user's bearer token gets sent.
 import { describe, expect, it } from 'vitest'
 import {
+  companionDriveWorkspace,
   companionEnv,
   companionWsUrl,
   findAncestorPath,
@@ -364,5 +365,34 @@ describe('companionEnv — packaged allowlist', () => {
 
     expect(env.SOLUS_COMPANION_URL).toBe(INHERITED.SOLUS_COMPANION_URL)
     expect(env.PYTHONPATH).toBe('/evil')
+  })
+})
+
+// L6: main bakes the drive workspace the env builder actually decided, and
+// compares against the same decision, so a dev SOLUS_COMPANION_WORKSPACE
+// override (drive refused) never looks like a change on every refresh.
+describe('companionDriveWorkspace', () => {
+  it('the workspace when the env builder turns drive on, else null', () => {
+    expect(companionDriveWorkspace({}, { workspace: '/w', drive: true })).toBe('/w')
+    expect(companionDriveWorkspace({}, { workspace: '/w', drive: false })).toBeNull()
+    expect(companionDriveWorkspace({}, { workspace: null, drive: true })).toBeNull()
+  })
+
+  it('null under a dev workspace override, the same answer the spawned env gets', () => {
+    const inherited = { SOLUS_COMPANION_WORKSPACE: '/elsewhere' }
+    const options = { workspace: '/w', drive: true }
+    expect(companionDriveWorkspace(inherited, options)).toBeNull()
+    expect(
+      companionEnv(inherited, 'http://127.0.0.1:8000', options).SOLUS_COMPANION_DRIVE
+    ).toBeUndefined()
+  })
+
+  it('packaged ignores the override and drives', () => {
+    expect(
+      companionDriveWorkspace(
+        { SOLUS_COMPANION_WORKSPACE: '/elsewhere' },
+        { workspace: '/w', drive: true, packaged: true }
+      )
+    ).toBe('/w')
   })
 })

@@ -13,6 +13,7 @@ import {
   notifyCompanionDriveChanged,
   onCompanionDriveWindow,
   setCompanionDriveResolver,
+  setCompanionDriveSpawnCheck,
   setCompanionDriveTransport
 } from '../companion'
 import { linkedWorkspaces, realLocalStateDeps } from '../localState'
@@ -41,8 +42,10 @@ import {
   createXpcTransport,
   loadXpcModule,
   type DevSpawn,
-  type DriveTransport
+  type DriveTransport,
+  type XpcModule
 } from './driveTransport'
+import { createBundleCheck } from './driveBundleCheck'
 
 export interface DriveHandle {
   /** The renderer's active project (bridge:project). */
@@ -81,9 +84,22 @@ function installed(): boolean {
   return [files.helper, files.plist, files.xpcModule].every(isPlainFile)
 }
 
-/** The transport, created on first use. Packaged: the native module from the
- *  app bundle — a module that fails to load leaves null (⇒ agent_unavailable). */
-function createTransportSource(): () => DriveTransport | null {
+/** The native module from the app bundle, loaded once on first use (packaged
+ *  only); null when it fails to load. */
+function createXpcModuleSource(): () => XpcModule | null {
+  let loaded: XpcModule | null | undefined
+  return () => {
+    loaded ??= loadXpcModule(
+      () => createRequire(__filename)(packagedDriveFiles(process.resourcesPath).xpcModule),
+      warn
+    )
+    return loaded
+  }
+}
+
+/** The transport. Packaged: the native module — one that fails to load leaves
+ *  null (⇒ agent_unavailable); dev: the debug helper per call. */
+function createTransportSource(xpc: () => XpcModule | null): () => DriveTransport | null {
   if (!app.isPackaged) {
     const transport = createDevTransport({
       helper: devHelper,
@@ -94,15 +110,13 @@ function createTransportSource(): () => DriveTransport | null {
     })
     return () => transport
   }
-  let loaded: DriveTransport | null | undefined
+  let transport: DriveTransport | null | undefined
   return () => {
-    if (loaded !== undefined) return loaded
-    const module = loadXpcModule(
-      () => createRequire(__filename)(packagedDriveFiles(process.resourcesPath).xpcModule),
-      warn
-    )
-    loaded = module === null ? null : createXpcTransport(module)
-    return loaded
+    if (transport === undefined) {
+      const module = xpc()
+      transport = module === null ? null : createXpcTransport(module)
+    }
+    return transport
   }
 }
 
@@ -123,7 +137,11 @@ export function startDrive(opts: {
   /** The main renderer only — consent actions (drive on, `trust --prompt`, approval pane). */
   isMainSender: (event: IpcMainInvokeEvent) => boolean
 }): DriveHandle {
-  const transport = createTransportSource()
+  const xpc = createXpcModuleSource()
+  const transport = createTransportSource(xpc)
+  // HIGH-1 (packaged only): Solus.app checks its own bundle at launch and at
+  // every drive spawn; a changed answer re-evaluates availability.
+  const bundle = app.isPackaged ? createBundleCheck(xpc, () => controller.refresh()) : null
   const session = createDriveSession({
     createStrip: createOutlineStrip,
     now: Date.now,
@@ -138,6 +156,7 @@ export function startDrive(opts: {
   const controller = createDriveController({
     platform: process.platform,
     installed,
+    ...(bundle === null ? {} : { bundleOk: () => bundle.ok() }),
     trust: (prompt) => trustVia(transport(), prompt),
     agentState: () => (app.isPackaged ? registration.state() : null),
     onAgentWanted,
@@ -150,6 +169,7 @@ export function startDrive(opts: {
   })
   setCompanionDriveResolver((projectId) => controller.companionDrive(projectId))
   setCompanionDriveTransport(transport)
+  setCompanionDriveSpawnCheck(bundle === null ? null : () => bundle.check())
   onCompanionDriveWindow((bounds) => session.setBounds(bounds))
   registerDriveIpcHandlers(
     opts.ipc,
@@ -169,6 +189,7 @@ export function startDrive(opts: {
   // First evaluation: clears an agent registration a previous run left behind
   // while the setting is now off.
   controller.refresh()
+  void bundle?.check()
   return {
     setProject: (projectId) => controller.setProject(projectId),
     refresh: () => controller.refresh(),
@@ -176,6 +197,7 @@ export function startDrive(opts: {
     dispose: () => {
       onCompanionDriveWindow(null)
       setCompanionDriveTransport(null)
+      setCompanionDriveSpawnCheck(null)
       session.dispose()
     }
   }

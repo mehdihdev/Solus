@@ -23,7 +23,8 @@ vi.mock('../companion', () => ({
   notifyCompanionDriveChanged: companion.notify,
   setCompanionDriveResolver: (r: (id: string | null) => unknown) => void (companion.resolver = r),
   onCompanionDriveWindow: (l: (b: unknown) => void) => void (companion.window = l),
-  setCompanionDriveTransport: vi.fn()
+  setCompanionDriveTransport: vi.fn(),
+  setCompanionDriveSpawnCheck: vi.fn()
 }))
 
 import { SOL_WINDOW_CHANNELS } from '../sol-window/solWindow.constants'
