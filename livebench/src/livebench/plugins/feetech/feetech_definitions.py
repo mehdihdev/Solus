@@ -37,9 +37,9 @@ CONTROL_TABLE_BY_PROTOCOL: Final[dict[int, dict[str, FeetechRegister]]] = {
 #: Sign-magnitude registers (name → sign bit), as lerobot's STS/SMS encoding table declares them:
 #: a servo whose burned Homing_Offset puts the reading below zero reports `bit | magnitude`.
 #: SCS carries no such encoding. Homing_Offset (bit 11) and Present_Load (bit 10) keep their own
-#: decoders below.
+#: decoders below. Goal_Position (bit 15 in lerobot) stays out until a writer encodes it too.
 SIGN_MAGNITUDE_BITS_BY_PROTOCOL: Final[dict[int, dict[str, int]]] = {
-    0: {"Goal_Position": 15, "Present_Position": 15},
+    0: {"Present_Position": 15},
     1: {},
 }
 
