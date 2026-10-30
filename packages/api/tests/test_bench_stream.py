@@ -120,7 +120,7 @@ def test_invalid_expiry_claim_is_bounded(bridge_app: FastAPI, expiry: float | No
 
     client = TestClient(bridge_app)
     _, project = _setup_project(client, bearer(**ALICE))
-    claims = {**ALICE, "aud": "authenticated"}
+    claims: dict[str, object] = {**ALICE, "aud": "authenticated"}
     if expiry is not None:
         claims["exp"] = expiry
     token = jwt.encode(claims, TEST_JWT_SECRET, algorithm="HS256")
@@ -383,6 +383,35 @@ def test_frame_downsampling_retains_channel_identity_and_latest(
     assert len(encoded.encode()) <= 1500
     assert len(result["devices"][0]["signals"]) == 6
     assert all(series["points"][-1] == 127 for series in result["devices"][0]["signals"])
+
+
+def test_window_decimation_is_stable_between_frames() -> None:
+    """A 30 Hz signal over 8 s is ~240 samples for 128 slots. Picking by index stride re-picks a
+    different subset every 100 ms frame as samples arrive, so the sparkline's peaks wander
+    (the 'oscillating' trace). Absolute-time buckets keep the overlapping picks identical."""
+    from datetime import timedelta
+
+    from solus_api.livebench import stream
+
+    start = datetime(2026, 10, 30, tzinfo=UTC)
+    samples = [
+        SimpleNamespace(timestamp=start + timedelta(seconds=i / 30), value=float(i % 7))
+        for i in range(300)
+    ]
+
+    def frame(newest: int) -> list[SimpleNamespace]:
+        cutoff = samples[newest].timestamp - timedelta(seconds=8)
+        window = [s for s in samples[: newest + 1] if s.timestamp > cutoff]
+        return stream.decimate_window(window, 128, timedelta(seconds=8))
+
+    first, second = frame(270), frame(273)  # one 100 ms frame later: three new samples
+    assert len(first) <= 128 and len(second) <= 128
+    assert first[-1] is samples[270] and second[-1] is samples[273]  # newest always survives
+    overlap = second[0].timestamp
+    stable_first = [s for s in first[:-1] if s.timestamp >= overlap]
+    stable_second = [s for s in second if s.timestamp <= first[-2].timestamp]
+    assert stable_first == stable_second
+    assert stream.decimate_window(samples[:10], 128, timedelta(seconds=8)) == samples[:10]
 
 
 def test_pre_auth_rate_limit_is_separate_from_bridge(bridge_app: FastAPI) -> None:

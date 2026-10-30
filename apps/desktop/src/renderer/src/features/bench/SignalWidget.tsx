@@ -3,7 +3,7 @@ import type { BenchSignalSeries } from '../../lib/api/resources'
 import { anomalyMarkers } from './signalAnomalies'
 import type { ObserverEventOut } from '../../widgets/livebench/telemetry'
 import { chartSegments } from '../../widgets/livebench/telemetry'
-import { convertUnit, displayGroups, displayPoints, unitOptions } from './signalUnits'
+import { convertUnit, displayGroups, displayPoints, unitOptions, valueDomain } from './signalUnits'
 
 interface Props {
   userId: string | null
@@ -112,8 +112,10 @@ function segmentsFor(
   const domain = {
     tMin: windowEndMs === undefined ? Date.parse(comparable[0].timestamp) : windowEndMs - 8000,
     tMax: windowEndMs ?? Date.parse(comparable[comparable.length - 1].timestamp),
-    vMin: Math.min(...comparable.map((point) => point.value)),
-    vMax: Math.max(...comparable.map((point) => point.value))
+    ...valueDomain(
+      comparable.map((point) => point.value),
+      unit
+    )
   }
   return displayGroups(series.points, unit).flatMap((points) =>
     chartSegments(points, 240, 48, domain)

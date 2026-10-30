@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { SignalWidget } from './SignalWidget'
-import { convertUnit, displayPoints, unitOptions } from './signalUnits'
+import { convertUnit, displayPoints, unitOptions, valueDomain } from './signalUnits'
 
 beforeEach(() => localStorage.clear())
 
@@ -125,4 +125,20 @@ it('places evidence markers on time without converting unknown event values', ()
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'deg' } })
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
+})
+
+describe('chart value domain', () => {
+  it('keeps hand tremor small instead of stretching it to full height', () => {
+    // Two degrees of wobble on a held joint must not fill the chart like a 90-degree swing.
+    expect(valueDomain([10, 12, 11], 'deg')).toEqual({ vMin: 6, vMax: 16 })
+    expect(valueDomain([2000, 2010], 'tick')).toEqual({ vMin: 1955, vMax: 2055 })
+  })
+
+  it('uses the data range once motion exceeds the floor', () => {
+    expect(valueDomain([-40, 50], 'deg')).toEqual({ vMin: -40, vMax: 50 })
+  })
+
+  it('leaves unknown units on their own range', () => {
+    expect(valueDomain([1, 1.001], null)).toEqual({ vMin: 1, vMax: 1.001 })
+  })
 })

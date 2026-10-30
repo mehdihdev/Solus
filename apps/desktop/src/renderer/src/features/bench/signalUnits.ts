@@ -60,3 +60,27 @@ export function displayGroups(
   }
   return groups.filter((group) => group.length > 0)
 }
+
+/** Smallest vertical span a sparkline shows, per unit: a held joint wobbles a few ticks, and
+ *  autoscaling that to full height reads as wild oscillation. Unknown units keep their range. */
+const MIN_CHART_SPAN: Readonly<Record<string, number>> = {
+  deg: 10,
+  rad: 10 * (Math.PI / 180),
+  '%': 10,
+  tick: 100,
+  mm: 5,
+  cm: 0.5,
+  m: 0.005
+}
+
+export function valueDomain(
+  values: readonly number[],
+  unit: string | null
+): { vMin: number; vMax: number } {
+  const vMin = Math.min(...values)
+  const vMax = Math.max(...values)
+  const floor = unit === null ? 0 : (MIN_CHART_SPAN[unit] ?? 0)
+  if (vMax - vMin >= floor) return { vMin, vMax }
+  const mid = (vMin + vMax) / 2
+  return { vMin: mid - floor / 2, vMax: mid + floor / 2 }
+}
