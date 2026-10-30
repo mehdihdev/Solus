@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 from uuid import UUID
 
-from solus_api.livebench.sessions import SessionManager
+from solus_api.livebench.sessions import BenchSessionOut, SessionManager, SessionNotFoundError
 from solus_api.models import utcnow
 
 logger = logging.getLogger(__name__)
@@ -59,6 +59,15 @@ def _not_ready(code: str, message: str) -> dict[str, Any]:
     }
 
 
+def _device_key(out: BenchSessionOut) -> str:
+    """The physical robot behind a session: two sessions (any project) on one arm share it."""
+    device = out.device or {}
+    ref = device.get("device_ref")
+    if not ref and device.get("serial_number"):
+        ref = f"usb:{device['serial_number']}"
+    return str(ref) if ref else f"session:{out.id}"
+
+
 @dataclass
 class _Preview:
     leader: UUID
@@ -73,9 +82,11 @@ class _Teleop:
     leader: dict[str, str]
     follower: dict[str, str]
     loop: Any
+    keys: tuple[str, str] = ("", "")  # physical (leader, follower)
     started_at: datetime = field(default_factory=utcnow)
     stopped_at: datetime | None = None
     stop_reason: str | None = None
+    pending_stop: str | None = None  # asked to stop while its loop was still starting
 
     @property
     def running(self) -> bool:
@@ -108,12 +119,20 @@ class TeleopManager:
         self.clock: Callable[[], float] = time.monotonic
         self._previews: dict[UUID, dict[UUID, _Preview]] = {}
         self._teleops: dict[UUID, _Teleop] = {}
+        #: Starts in flight, so stop / session end / shutdown can reach them before they run.
+        self._starting: dict[UUID, _Teleop] = {}
+        self._start_lock = asyncio.Lock()
         self._recording: set[asyncio.Task[None]] = set()  # keep stop-event tasks referenced
         sessions.add_end_listener(self._session_ended)
 
     def _running(self, project_id: UUID) -> _Teleop | None:
         teleop = self._teleops.get(project_id)
         return teleop if teleop is not None and teleop.running else None
+
+    def _busy(self) -> set[str]:
+        """Physical robots in any running or starting teleop, across every project."""
+        live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
+        return {key for teleop in live for key in teleop.keys}
 
     @staticmethod
     def _end(session_id: UUID, label: str) -> dict[str, str]:
@@ -123,7 +142,7 @@ class TeleopManager:
         """Raises SessionNotFoundError for a session that is not active in THIS project."""
         leader_out, leader_conn = self._sessions.connection(project_id, leader)
         follower_out, follower_conn = self._sessions.connection(project_id, follower)
-        if leader == follower:
+        if leader == follower or _device_key(leader_out) == _device_key(follower_out):
             wire = _not_ready("same_session", "Pick two different robots.")
         else:
             try:
@@ -132,7 +151,12 @@ class TeleopManager:
                 )
             except NotActuatedError as exc:
                 wire = _not_ready("not_actuated", str(exc))
-        if self._running(project_id) is not None:
+        busy = self._busy()
+        if (
+            self._running(project_id) is not None
+            or project_id in self._starting
+            or {_device_key(leader_out), _device_key(follower_out)} & busy
+        ):
             running = {"code": "teleop_running", "message": "A teleoperation is already running."}
             wire = {**wire, "ready": False, "blockers": [*wire["blockers"], running]}
         previews = self._previews.setdefault(project_id, {})
@@ -154,21 +178,43 @@ class TeleopManager:
     async def start(
         self, project_id: UUID, preview_id: UUID, *, record_stop: StopRecorder | None = None
     ) -> dict[str, Any]:
-        if self._running(project_id) is not None:
+        async with self._start_lock:  # one check-and-reserve at a time (no double start)
+            teleop = self._reserve(project_id, preview_id)
+        try:
+            return await self._launch(project_id, teleop, record_stop)
+        finally:
+            self._starting.pop(project_id, None)
+
+    def _reserve(self, project_id: UUID, preview_id: UUID) -> _Teleop:
+        if self._running(project_id) is not None or project_id in self._starting:
             raise TeleopRunningError("a teleoperation is already running in this project")
         preview = self._previews.get(project_id, {}).pop(preview_id, None)
         if preview is None or preview.expires < self.clock():
             raise PreviewExpiredError(str(preview_id))
         if not preview.wire["ready"]:
             raise TeleopNotReadyError(preview.wire)
-        leader_out, leader_conn = self._sessions.connection(project_id, preview.leader)
-        follower_out, follower_conn = self._sessions.connection(project_id, preview.follower)
+        leader_out, _ = self._sessions.connection(project_id, preview.leader)
+        follower_out, _ = self._sessions.connection(project_id, preview.follower)
+        keys = (_device_key(leader_out), _device_key(follower_out))
+        if set(keys) & self._busy():
+            raise TeleopRunningError("one of these robots is already in a teleoperation")
         teleop = _Teleop(
             id=uuid.uuid4(),
             leader=self._end(preview.leader, leader_out.label),
             follower=self._end(preview.follower, follower_out.label),
             loop=None,
+            keys=keys,
         )
+        self._starting[project_id] = teleop
+        return teleop
+
+    async def _launch(
+        self, project_id: UUID, teleop: _Teleop, record_stop: StopRecorder | None
+    ) -> dict[str, Any]:
+        leader_id = UUID(teleop.leader["session_id"])
+        follower_id = UUID(teleop.follower["session_id"])
+        _, leader_conn = self._sessions.connection(project_id, leader_id)
+        _, follower_conn = self._sessions.connection(project_id, follower_id)
 
         def stopped(reason: str) -> None:
             if not teleop.running:
@@ -186,6 +232,14 @@ class TeleopManager:
         except NotActuatedError as exc:
             raise TeleopNotReadyError(_not_ready("not_actuated", str(exc))) from exc
         self._teleops[project_id] = teleop
+        try:  # either robot's session may have ended while the loop was starting
+            self._sessions.connection(project_id, leader_id)
+            self._sessions.connection(project_id, follower_id)
+        except SessionNotFoundError:
+            await teleop.loop.stop("session_ended")
+            raise
+        if teleop.pending_stop is not None:
+            await teleop.loop.stop(teleop.pending_stop)
         return teleop.out()
 
     def current(self, project_id: UUID) -> dict[str, Any] | None:
@@ -194,6 +248,9 @@ class TeleopManager:
 
     async def stop(self, project_id: UUID, reason: str = "user") -> dict[str, Any] | None:
         """Stop and HOLD: the follower keeps its last goal with torque on."""
+        starting = self._starting.get(project_id)
+        if starting is not None:
+            starting.pending_stop = starting.pending_stop or reason
         teleop = self._teleops.get(project_id)
         if teleop is None:
             return None
@@ -202,19 +259,27 @@ class TeleopManager:
         return teleop.out()
 
     async def release(self, project_id: UUID, session_id: UUID) -> None:
-        _, conn = self._sessions.connection(project_id, session_id)
-        teleop = self._running(project_id)
-        if teleop is not None and teleop.follower["session_id"] == str(session_id):
+        out, conn = self._sessions.connection(project_id, session_id)
+        live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
+        if _device_key(out) in {teleop.keys[1] for teleop in live}:
             raise TeleopRunningError("stop teleoperation before releasing its follower")
         await asyncio.to_thread(self._local().robot_release, conn)
 
     async def _session_ended(self, project_id: UUID, session_id: UUID) -> None:
+        starting = self._starting.get(project_id)
+        if starting is not None and str(session_id) in (
+            starting.leader["session_id"],
+            starting.follower["session_id"],
+        ):
+            starting.pending_stop = starting.pending_stop or "session_ended"
         teleop = self._running(project_id)
         ends = (teleop.leader["session_id"], teleop.follower["session_id"]) if teleop else ()
         if teleop is not None and str(session_id) in ends:
             await teleop.loop.stop("session_ended")
 
     async def aclose(self) -> None:
+        for starting in self._starting.values():
+            starting.pending_stop = starting.pending_stop or "shutdown"
         for teleop in list(self._teleops.values()):
             if teleop.running:
                 try:

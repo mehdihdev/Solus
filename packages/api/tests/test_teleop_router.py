@@ -451,3 +451,110 @@ async def test_a_release_the_servos_did_not_acknowledge_is_reported(
         json={"confirm": True},
     )
     assert resp.status_code == 503 and resp.json()["error"]["code"] == "release_failed"
+
+
+# ── hardening (automated security review of d83eefbc..013670fa) ─────────────────
+
+
+async def test_concurrent_starts_cannot_both_drive(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal
+) -> None:
+    import asyncio
+
+    project, leader, follower = await _pair(client, alice_headers)
+    first = await _preview(client, alice_headers, project, leader, follower)
+    second = await _preview(client, alice_headers, project, leader, follower)
+    gate = asyncio.Event()
+    original = teleop_local.teleop_start
+
+    async def slow_start(*args: Any, **kwargs: Any) -> FakeLoop:
+        await gate.wait()
+        return await original(*args, **kwargs)
+
+    teleop_local.teleop_start = slow_start  # type: ignore[method-assign]
+    racing = asyncio.gather(
+        _start(client, alice_headers, project, first["preview_id"]),
+        _start(client, alice_headers, project, second["preview_id"]),
+    )
+    await asyncio.sleep(0.05)
+    gate.set()
+    statuses = sorted(r.status_code for r in await racing)
+    assert statuses == [201, 409]
+    assert len(teleop_local.loops) == 1
+
+
+async def test_a_session_ending_while_teleop_starts_stops_it(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal, app: FastAPI
+) -> None:
+    project, leader, follower = await _pair(client, alice_headers)
+    preview = await _preview(client, alice_headers, project, leader, follower)
+    original = teleop_local.teleop_start
+
+    async def start_then_lose_follower(*args: Any, **kwargs: Any) -> FakeLoop:
+        loop = await original(*args, **kwargs)
+        await app.state.bench_sessions.stop(uuid.UUID(project), uuid.UUID(follower))
+        return loop
+
+    teleop_local.teleop_start = start_then_lose_follower  # type: ignore[method-assign]
+    resp = await _start(client, alice_headers, project, preview["preview_id"])
+    assert resp.status_code == 404
+    assert teleop_local.loops[0].stop_reason == "session_ended"
+    got = await client.get(f"/api/v1/projects/{project}/bench/teleop", headers=alice_headers)
+    assert got.json()["data"]["stop_reason"] == "session_ended"
+
+
+async def test_the_driven_robot_cannot_be_released_or_paired_through_another_session(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    teleop_local: TeleopLocal,
+) -> None:
+    project, leader, follower = await _pair(client, alice_headers)  # follower serial FOLLOW0001
+    preview = await _preview(client, alice_headers, project, leader, follower)
+    assert (await _start(client, alice_headers, project, preview["preview_id"])).status_code == 201
+    bob_project, _ = await _project(client, bob_headers)
+    same_arm = await _session(client, bob_headers, bob_project, "FOLLOW0001")
+    other_arm = await _session(client, bob_headers, bob_project, "BOBARM0001")
+    released = await client.post(
+        f"/api/v1/projects/{bob_project}/bench/sessions/{same_arm}/release",
+        headers=bob_headers,
+        json={"confirm": True},
+    )
+    assert released.status_code == 409 and released.json()["error"]["code"] == "teleop_running"
+    assert teleop_local.released == []
+    pairing = await _preview(client, bob_headers, bob_project, other_arm, same_arm)
+    assert "teleop_running" in [b["code"] for b in pairing["blockers"]]
+
+
+async def test_two_sessions_on_one_physical_robot_cannot_pair(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal
+) -> None:
+    project, _ = await _project(client, alice_headers)
+    first = await _session(client, alice_headers, project, "SAMEARM001")
+    second = await _session(client, alice_headers, project, "SAMEARM001")
+    data = await _preview(client, alice_headers, project, first, second)
+    assert data["ready"] is False and data["blockers"][0]["code"] == "same_session"
+
+
+async def test_stop_pressed_while_teleop_is_starting_wins(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal
+) -> None:
+    import asyncio
+
+    project, leader, follower = await _pair(client, alice_headers)
+    preview = await _preview(client, alice_headers, project, leader, follower)
+    gate = asyncio.Event()
+    original = teleop_local.teleop_start
+
+    async def slow_start(*args: Any, **kwargs: Any) -> FakeLoop:
+        await gate.wait()
+        return await original(*args, **kwargs)
+
+    teleop_local.teleop_start = slow_start  # type: ignore[method-assign]
+    starting = asyncio.ensure_future(_start(client, alice_headers, project, preview["preview_id"]))
+    await asyncio.sleep(0.05)
+    await client.post(f"/api/v1/projects/{project}/bench/teleop/stop", headers=alice_headers)
+    gate.set()
+    resp = await starting
+    assert resp.status_code == 201 and resp.json()["data"]["state"] == "stopped"
+    assert teleop_local.loops[0].stop_reason == "user"
