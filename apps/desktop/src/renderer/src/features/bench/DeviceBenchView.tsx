@@ -184,6 +184,10 @@ interface Props {
   onStreamChange?: (live: boolean) => void
   onConfirmBoard?: () => void
   robotCount?: number
+  /** Per-robot panels hide the project-wide reasoning section (shown once below). */
+  showReasoning?: boolean
+  /** Only the reasoning section, over these devices: the once-below copy for robot panels. */
+  reasoningOnly?: boolean
 }
 export function DeviceBenchView({
   projectId,
@@ -192,7 +196,9 @@ export function DeviceBenchView({
   paused = false,
   onStreamChange,
   onConfirmBoard,
-  robotCount
+  robotCount,
+  showReasoning,
+  reasoningOnly
 }: Props): React.JSX.Element {
   const deviceKey = deviceIds.join('\n')
   const [lastDevices, setLastDevices] = useState(deviceKey)
@@ -217,6 +223,18 @@ export function DeviceBenchView({
   const events = signalEvents(current, rows)
   const placeholders = rows.some(hasPlaceholder)
   const windowEndMs = current?.fetchedAtMs
+  const reasoning = (
+    <ReasoningSection
+      hidden={showReasoning === false}
+      failed={failedScope === scope}
+      current={current}
+      events={events}
+      count={rows.filter((row) => !row.stale).length}
+      robotCount={robotCount}
+    />
+  )
+  if (reasoningOnly)
+    return <section className="bench-signals bench-reasoning-only">{reasoning}</section>
   return (
     <section className="bench-signals" aria-label="Live signals">
       <div className="bench-section-heading">
@@ -255,13 +273,7 @@ export function DeviceBenchView({
         onScope={(key) => setSelection({ scope, key })}
       />
       <PlaceholderBanner visible={placeholders} onConfirmBoard={onConfirmBoard} />
-      <Reasoning
-        failed={failedScope === scope}
-        current={current}
-        events={events}
-        count={rows.filter((row) => !row.stale).length}
-        robotCount={robotCount}
-      />
+      {reasoning}
     </section>
   )
 }
@@ -447,6 +459,12 @@ function DeviceStatus({
       )}
     </>
   )
+}
+function ReasoningSection({
+  hidden,
+  ...props
+}: { hidden: boolean } & React.ComponentProps<typeof Reasoning>): React.JSX.Element | null {
+  return hidden ? null : <Reasoning {...props} />
 }
 function Reasoning({
   failed,

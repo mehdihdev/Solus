@@ -1472,6 +1472,8 @@ export interface BenchSessionDevice {
   /** `<transport>:<binding>` identity (hardware.md §1); null on legacy serial sessions. */
   device_ref?: string | null
   driver_id?: string | null
+  /** Saved-robot sessions only (teleoperation amendment) — groups the Live Bench panel. */
+  robot_entity_id?: string | null
 }
 
 export interface BenchSession {
@@ -1533,6 +1535,101 @@ export function stopBenchSession(
 ): Promise<BenchSession> {
   return client.request<BenchSession>(`/projects/${projectId}/bench/sessions/${sessionId}/stop`, {
     method: 'POST'
+  })
+}
+
+export interface TeleopSessionRef {
+  session_id: string
+  label: string
+}
+export interface TeleopBlocker {
+  code: string
+  message: string
+}
+export interface TeleopPair {
+  address: number
+  leader_signal: string
+  follower_signal: string
+  unit: string
+  leader_value: number | null
+  follower_value: number | null
+  delta: number | null
+  within_tolerance: boolean
+}
+export interface TeleopPreview {
+  preview_id: string
+  expires_at: string
+  leader: TeleopSessionRef
+  follower: TeleopSessionRef
+  ready: boolean
+  blockers: TeleopBlocker[]
+  pairs: TeleopPair[]
+  tolerance: { deg: number; '%': number }
+}
+export type TeleopStopReason =
+  | 'user'
+  | 'leader_lost'
+  | 'follower_lost'
+  | 'session_ended'
+  | 'shutdown'
+export interface Teleop {
+  id: string
+  state: 'running' | 'stopped'
+  leader: TeleopSessionRef
+  follower: TeleopSessionRef
+  rate_hz: number
+  started_at: string
+  stopped_at: string | null
+  stop_reason: TeleopStopReason | null
+  pairs: { address: number; leader_signal: string; follower_signal: string }[]
+}
+
+/** Live pairing preview. Errors: 404 session_not_found. */
+export function previewTeleop(
+  projectId: string,
+  input: { leader_session_id: string; follower_session_id: string },
+  client: ApiClient = api
+): Promise<TeleopPreview> {
+  return client.request<TeleopPreview>(`/projects/${projectId}/bench/teleop/preview`, {
+    method: 'POST',
+    body: input
+  })
+}
+
+/** Start from a preview. Errors: 409 teleop_not_ready (details carry the fresh
+ *  preview), 410 preview_expired, 409 teleop_running. */
+export function startTeleop(
+  projectId: string,
+  previewId: string,
+  client: ApiClient = api
+): Promise<Teleop> {
+  return client.request<Teleop>(`/projects/${projectId}/bench/teleop`, {
+    method: 'POST',
+    body: { preview_id: previewId, confirm: true }
+  })
+}
+
+/** Current teleop (running or last stopped) or null. */
+export function getTeleop(projectId: string, client: ApiClient = api): Promise<Teleop | null> {
+  return client.request<Teleop | null>(`/projects/${projectId}/bench/teleop`)
+}
+
+/** Idempotent; the follower holds its last pose. */
+export function stopTeleop(projectId: string, client: ApiClient = api): Promise<Teleop | null> {
+  return client.request<Teleop | null>(`/projects/${projectId}/bench/teleop/stop`, {
+    method: 'POST'
+  })
+}
+
+/** Torque off. Errors: 409 teleop_running, 409 not_actuated. */
+export function releaseRobot(
+  projectId: string,
+  sessionId: string,
+  client: ApiClient = api
+): Promise<unknown> {
+  return client.request<unknown>(`/projects/${projectId}/bench/sessions/${sessionId}/release`, {
+    method: 'POST',
+    body: { confirm: true }
   })
 }
 

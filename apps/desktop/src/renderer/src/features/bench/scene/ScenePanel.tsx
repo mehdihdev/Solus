@@ -17,18 +17,23 @@ import type { SceneModel } from './types'
 export function ScenePanel({
   projectId,
   paused = false,
-  compact = false
+  compact = false,
+  robotId
 }: {
   projectId: string
   paused?: boolean
   compact?: boolean
+  /** Show only this saved robot's models (Live Bench per-robot panel). */
+  robotId?: string
 }): React.JSX.Element {
   const generation = useWorkspaceSessionGeneration()
   const user = useAuthStore((state) => state.user?.email ?? null)
   return (
     <ScopedScenePanel
-      key={JSON.stringify([user, projectId, generation])}
+      key={JSON.stringify([user, projectId, generation, robotId ?? null])}
       projectId={projectId}
+      onlyRobotId={robotId}
+      initialRobotId={robotId ?? ''}
       paused={paused}
       compact={compact}
       generation={generation}
@@ -41,8 +46,12 @@ function ScopedScenePanel({
   generation,
   user,
   paused,
-  compact
+  compact,
+  onlyRobotId,
+  initialRobotId
 }: {
+  onlyRobotId?: string
+  initialRobotId: string
   projectId: string
   generation: number
   user: string | null
@@ -52,7 +61,7 @@ function ScopedScenePanel({
   const [spawning, setSpawning] = useState(!compact)
   const [models, setModels] = useState<SceneModel[]>([])
   const [robots, setRobots] = useState<Entity[]>([])
-  const [robotId, setRobotId] = useState('')
+  const [robotId, setRobotId] = useState(initialRobotId)
   const [file, setFile] = useState<File | null>(null)
   const [meshes, setMeshes] = useState<{ file: File; reference: string }[]>([])
   const [format, setFormat] = useState<'urdf' | 'mjcf'>('urdf')
@@ -71,11 +80,12 @@ function ScopedScenePanel({
       if (inFlight) return
       inFlight = true
       try {
-        const [next, entities] = await Promise.all([
+        const [listed, entities] = await Promise.all([
           listSceneModels(projectId),
           listEntities(projectId, { type: 'physical_robot', limit: 100 })
         ])
         if (!live || workspaceSessionGeneration() !== generation) return
+        const next = scopeModels(listed, onlyRobotId)
         setModels((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next))
         setRobots(
           entities.filter(
@@ -102,7 +112,7 @@ function ScopedScenePanel({
       live = false
       clearInterval(timer)
     }
-  }, [projectId, generation, user, refresh, paused])
+  }, [projectId, generation, user, refresh, paused, onlyRobotId])
   async function importFile(): Promise<void> {
     if (!file || !robotId || busy) return
     const validationError = validateImport(file, meshes)
@@ -340,6 +350,11 @@ function ScopedScenePanel({
       </SceneSettings>
     </section>
   )
+}
+
+/** Per-robot panels see only that robot's models; undefined keeps every model. */
+function scopeModels(models: SceneModel[], robotId: string | undefined): SceneModel[] {
+  return robotId ? models.filter((model) => model.robot_id === robotId) : models
 }
 
 function SceneSettings({

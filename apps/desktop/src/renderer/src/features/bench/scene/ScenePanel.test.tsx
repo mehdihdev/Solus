@@ -153,3 +153,31 @@ it('refuses an import when the account changes across the empty mesh-upload awai
     generationRead.mockRestore()
   }
 })
+
+describe('per-robot scene (robotId)', () => {
+  const model = (id: string, robot: string, name: string): never =>
+    ({
+      id,
+      robot_id: robot,
+      name,
+      version: 1,
+      source_current: true,
+      bindings: [],
+      model: { links: [], joints: [], warnings: [] }
+    }) as never
+  it('shows only the models of the given robot', async () => {
+    vi.mocked(listSceneModels).mockResolvedValue([
+      model('m1', 'r1', 'Leader arm'),
+      model('m2', 'r2', 'Follower arm')
+    ])
+    render(<ScenePanel projectId="p" robotId="r2" />)
+    expect(await screen.findByRole('article', { name: 'Follower arm' })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
+  })
+  it('defaults the import robot select to that robot', async () => {
+    vi.mocked(listEntities).mockResolvedValue([robot, { ...robot, id: 'r2', name: 'Other' }])
+    render(<ScenePanel projectId="p" robotId="r2" />)
+    await screen.findByRole('option', { name: 'Other' })
+    expect((screen.getByLabelText('Robot for model') as HTMLSelectElement).value).toBe('r2')
+  })
+})

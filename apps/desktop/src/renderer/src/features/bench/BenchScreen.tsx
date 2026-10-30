@@ -12,15 +12,11 @@ import { Button } from '../../components/ui/Button'
 import { ConnectDeviceModal } from './ConnectDeviceModal'
 import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { BenchCanvasHost } from './BenchCanvasHost'
-import { DeviceBenchView } from './DeviceBenchView'
+import { BenchPanels } from './BenchPanels'
 import { activeDeviceIds, useActiveBenchSessions } from './useActiveBenchSessions'
 import { useExternalBenchDevices } from './useExternalBenchDevices'
 import './bench.css'
 import { BenchRealtimeContext, useBenchRealtime } from './BenchRealtime'
-
-const ScenePanel = lazy(() =>
-  import('./scene/ScenePanel').then((module) => ({ default: module.ScenePanel }))
-)
 
 const RunsView = lazy(() =>
   import('./runs/RunsView').then((module) => ({ default: module.RunsView }))
@@ -100,30 +96,16 @@ export function BenchScreen({
         )}
         <SessionChips sessions={sessions} />
         <ConnectionStatus sessions={sessions} paused={paused} realtime={realtime} />
-        <div className="bench-panes">
-          <aside className="bench-left">
-            <Suspense fallback={<p role="status">Loading scene…</p>}>
-              <ScenePanel projectId={project.id} paused={paused} compact />
-            </Suspense>
-            <div className="bench-sensor-empty">
-              No camera stream available. Recorded video is time-aligned in Runs below.
-            </div>
-            <div className="bench-sensor-empty">
-              No LiDAR or depth stream available. Recorded point clouds appear in Runs below.
-            </div>
-            <p className="bench-scene-caption">
-              Recorded sensor frames remain time-aligned in the Runs pane below.
-            </p>
-          </aside>
-          <DeviceBenchView
-            projectId={project.id}
-            deviceIds={deviceIds}
-            focusEntityId={focusEntityId}
-            paused={paused}
-            onStreamChange={onStreamChange}
-            onConfirmBoard={onAddHardware}
-          />
-        </div>
+        <BenchPanels
+          projectId={project.id}
+          sessions={sessions}
+          externalDevices={externalDevices}
+          allDeviceIds={deviceIds}
+          paused={paused}
+          focusEntityId={focusEntityId}
+          onStreamChange={onStreamChange}
+          onConfirmBoard={onAddHardware}
+        />
         <section className="bench-secondary" aria-label="Runs and capture">
           <Suspense fallback={<p role="status">Loading runs…</p>}>
             <RunsView projectId={project.id} sessions={sessions} />

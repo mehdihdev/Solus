@@ -270,3 +270,21 @@ it('uses shared live snapshots without telemetry or anomaly polling and masks re
   expect(screen.queryByLabelText('qvel value')).not.toBeInTheDocument()
   expect(mockedRecent).not.toHaveBeenCalled()
 })
+
+describe('DeviceBenchView showReasoning', () => {
+  it('omits the live reasoning section when hidden', async () => {
+    render(<DeviceBenchView projectId="p1" deviceIds={['d1']} showReasoning={false} />)
+    expect(await screen.findByLabelText('qvel value')).toBeInTheDocument()
+    expect(screen.queryByText(/LIVE REASONING/)).not.toBeInTheDocument()
+  })
+  it('keeps it by default', async () => {
+    render(<DeviceBenchView projectId="p1" deviceIds={['d1']} />)
+    expect(await screen.findByText(/LIVE REASONING/)).toBeInTheDocument()
+  })
+  it('renders only the reasoning section when reasoningOnly', async () => {
+    render(<DeviceBenchView projectId="p1" deviceIds={['d1']} reasoningOnly />)
+    expect(await screen.findByText(/LIVE REASONING/)).toBeInTheDocument()
+    expect(screen.queryByLabelText('qvel value')).not.toBeInTheDocument()
+    expect(screen.queryByText(/SIGNALS · CLICK TO SCOPE/)).not.toBeInTheDocument()
+  })
+})
