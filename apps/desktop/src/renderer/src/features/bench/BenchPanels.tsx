@@ -17,6 +17,7 @@ const OTHERS_KEY = 'others'
 function LegacyPanes({
   projectId,
   deviceIds,
+  panelledRobotIds,
   paused,
   focusEntityId,
   onStream,
@@ -24,6 +25,7 @@ function LegacyPanes({
 }: {
   projectId: string
   deviceIds: string[]
+  panelledRobotIds: readonly string[]
   paused: boolean
   focusEntityId?: string
   onStream: (key: string, live: boolean) => void
@@ -34,7 +36,12 @@ function LegacyPanes({
     <div className="bench-panes">
       <aside className="bench-left">
         <Suspense fallback={<p role="status">Loading scene…</p>}>
-          <ScenePanel projectId={projectId} paused={paused} compact />
+          <ScenePanel
+            projectId={projectId}
+            paused={paused}
+            compact
+            excludeRobotIds={panelledRobotIds}
+          />
         </Suspense>
         <div className="bench-sensor-empty">
           No camera stream available. Recorded video is time-aligned in Runs below.
@@ -115,6 +122,7 @@ export function BenchPanels({
         <LegacyPanes
           projectId={projectId}
           deviceIds={robots.length > 0 ? otherDeviceIds : allDeviceIds}
+          panelledRobotIds={robots.map((robot) => robot.robotId)}
           paused={paused}
           focusEntityId={focusEntityId}
           onStream={onStream}

@@ -148,11 +148,12 @@ export function TeleopBar({
   teleop: Teleop | null
   onChanged: () => void
 }): React.JSX.Element | null {
-  const defaults = defaultTeleopPair(robots)
-  if (!defaults) return null
+  // Running first: Stop must stay reachable even if a robot session briefly drops.
   if (teleop?.state === 'running') {
     return <RunningBar projectId={projectId} teleop={teleop} onChanged={onChanged} />
   }
+  const defaults = defaultTeleopPair(robots)
+  if (!defaults) return null
   return (
     <PairingBar
       projectId={projectId}

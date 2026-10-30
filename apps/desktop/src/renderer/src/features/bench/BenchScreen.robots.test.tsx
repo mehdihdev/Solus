@@ -85,13 +85,14 @@ describe('BenchScreen robot panels', () => {
     render(<BenchScreen />)
     const follower = await screen.findByRole('region', { name: 'lerobot follower' })
     const leader = screen.getByRole('region', { name: 'lerobot leader' })
-    expect(within(follower).getByText('scene r2')).toBeInTheDocument()
+    // Scenes are lazy (Suspense): wait for them rather than racing the import.
+    expect(await within(follower).findByText('scene r2')).toBeInTheDocument()
     expect(within(follower).getByText('cards usb:B/1')).toBeInTheDocument()
-    expect(within(leader).getByText('scene r1')).toBeInTheDocument()
+    expect(await within(leader).findByText('scene r1')).toBeInTheDocument()
     expect(within(leader).getByText('cards usb:A/1')).toBeInTheDocument()
     // The fallback holds only the non-robot device.
     expect(screen.getByText('cards demo/rod')).toBeInTheDocument()
-    expect(screen.getByText('scene all')).toBeInTheDocument()
+    expect(await screen.findByText('scene all')).toBeInTheDocument()
   })
 
   it('renders the project-wide live reasoning section once', async () => {
@@ -159,7 +160,7 @@ describe('BenchScreen robot panels', () => {
     routeSessions([SIM])
     render(<BenchScreen />)
     expect(await screen.findByText('cards demo/rod')).toBeInTheDocument()
-    expect(screen.getByText('scene all')).toBeInTheDocument()
+    expect(await screen.findByText('scene all')).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'Teleoperation' })).not.toBeInTheDocument()
   })
 })

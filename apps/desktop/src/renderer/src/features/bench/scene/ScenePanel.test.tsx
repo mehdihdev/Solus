@@ -174,6 +174,15 @@ describe('per-robot scene (robotId)', () => {
     expect(await screen.findByRole('article', { name: 'Follower arm' })).toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
   })
+  it('leaves out robots that have their own panel (excludeRobotIds)', async () => {
+    vi.mocked(listSceneModels).mockResolvedValue([
+      model('m1', 'r1', 'Leader arm'),
+      model('m3', 'r9', 'Unpanelled arm')
+    ])
+    render(<ScenePanel projectId="p" excludeRobotIds={['r1']} />)
+    expect(await screen.findByRole('article', { name: 'Unpanelled arm' })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
+  })
   it('defaults the import robot select to that robot', async () => {
     vi.mocked(listEntities).mockResolvedValue([robot, { ...robot, id: 'r2', name: 'Other' }])
     render(<ScenePanel projectId="p" robotId="r2" />)

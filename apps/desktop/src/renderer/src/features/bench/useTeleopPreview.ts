@@ -13,7 +13,6 @@ export function useTeleopPreview(
 ): {
   preview: TeleopPreview | null
   error: string | null
-  adopt: (preview: TeleopPreview) => void
   refresh: () => Promise<void>
 } {
   const [preview, setPreview] = useState<TeleopPreview | null>(null)
@@ -32,7 +31,10 @@ export function useTeleopPreview(
       setPreview(next)
       setError(null)
     } catch {
-      if (live.current) setError('The pairing preview could not be loaded.')
+      if (!live.current) return
+      // Never keep a (possibly ready) preview the server can no longer stand behind.
+      setPreview(null)
+      setError('The pairing preview could not be loaded.')
     } finally {
       inFlight.current = false
     }
@@ -47,5 +49,5 @@ export function useTeleopPreview(
       clearInterval(timer)
     }
   }, [refresh, paused])
-  return { preview, error, adopt: setPreview, refresh }
+  return { preview, error, refresh }
 }

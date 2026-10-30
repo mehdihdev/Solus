@@ -18,13 +18,16 @@ export function ScenePanel({
   projectId,
   paused = false,
   compact = false,
-  robotId
+  robotId,
+  excludeRobotIds
 }: {
   projectId: string
   paused?: boolean
   compact?: boolean
   /** Show only this saved robot's models (Live Bench per-robot panel). */
   robotId?: string
+  /** Leave out these robots' models (they have their own panels). */
+  excludeRobotIds?: readonly string[]
 }): React.JSX.Element {
   const generation = useWorkspaceSessionGeneration()
   const user = useAuthStore((state) => state.user?.email ?? null)
@@ -33,6 +36,7 @@ export function ScenePanel({
       key={JSON.stringify([user, projectId, generation, robotId ?? null])}
       projectId={projectId}
       onlyRobotId={robotId}
+      excluded={(excludeRobotIds ?? []).join(',')}
       initialRobotId={robotId ?? ''}
       paused={paused}
       compact={compact}
@@ -48,9 +52,12 @@ function ScopedScenePanel({
   paused,
   compact,
   onlyRobotId,
+  excluded,
   initialRobotId
 }: {
   onlyRobotId?: string
+  /** Comma-joined robot ids to leave out (a string keeps the load effect's deps stable). */
+  excluded: string
   initialRobotId: string
   projectId: string
   generation: number
@@ -85,7 +92,7 @@ function ScopedScenePanel({
           listEntities(projectId, { type: 'physical_robot', limit: 100 })
         ])
         if (!live || workspaceSessionGeneration() !== generation) return
-        const next = scopeModels(listed, onlyRobotId)
+        const next = scopeModels(listed, onlyRobotId, excluded)
         setModels((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next))
         setRobots(
           entities.filter(
@@ -112,7 +119,7 @@ function ScopedScenePanel({
       live = false
       clearInterval(timer)
     }
-  }, [projectId, generation, user, refresh, paused, onlyRobotId])
+  }, [projectId, generation, user, refresh, paused, onlyRobotId, excluded])
   async function importFile(): Promise<void> {
     if (!file || !robotId || busy) return
     const validationError = validateImport(file, meshes)
@@ -353,8 +360,14 @@ function ScopedScenePanel({
 }
 
 /** Per-robot panels see only that robot's models; undefined keeps every model. */
-function scopeModels(models: SceneModel[], robotId: string | undefined): SceneModel[] {
-  return robotId ? models.filter((model) => model.robot_id === robotId) : models
+function scopeModels(
+  models: SceneModel[],
+  robotId: string | undefined,
+  excluded: string
+): SceneModel[] {
+  const skip = new Set(excluded.split(',').filter(Boolean))
+  const kept = models.filter((model) => !skip.has(model.robot_id))
+  return robotId ? kept.filter((model) => model.robot_id === robotId) : kept
 }
 
 function SceneSettings({

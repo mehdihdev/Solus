@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 import { TeleopDialog } from './TeleopDialog'
+import { PREVIEW_REFRESH_MS } from './useTeleopPreview'
 import { FOLLOWER, LEADER, previewFixture, teleopFixture } from './teleopFixtures'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => ({
@@ -105,7 +106,7 @@ describe('TeleopDialog', () => {
     expect(onStarted).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }))
   })
 
-  it('shows the fresh table from a 409 teleop_not_ready', async () => {
+  it('re-previews (fresh id) after a 409 teleop_not_ready instead of adopting its details', async () => {
     preview.mockResolvedValue(previewFixture())
     const base = previewFixture()
     const fresh = previewFixture({
@@ -122,6 +123,24 @@ describe('TeleopDialog', () => {
     expect(screen.getByText('fresh_joint')).toBeInTheDocument()
     expect(screen.getByRole('alert')).toHaveTextContent(/not ready/i)
     expect(onStarted).not.toHaveBeenCalled()
+    // Only real previews (with an id) are ever held; Start stays disabled on the not-ready one.
+    expect(screen.getByRole('button', { name: 'Start teleoperation' })).toBeDisabled()
+  })
+
+  it('says the follower may be holding when the start fails on the bus', async () => {
+    preview.mockResolvedValue(previewFixture())
+    start.mockRejectedValue(
+      new ApiError(
+        503,
+        'teleop_failed',
+        'Teleoperation could not start (x); the follower may be holding some joints.'
+      )
+    )
+    open()
+    await flush()
+    fireEvent.click(screen.getByRole('button', { name: 'Start teleoperation' }))
+    await flush()
+    expect(screen.getByRole('alert')).toHaveTextContent(/may be holding/)
   })
 
   it('re-previews after a 410 preview_expired', async () => {
@@ -141,6 +160,18 @@ describe('TeleopDialog', () => {
     open()
     await flush()
     expect(screen.getByRole('alert')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start teleoperation' })).toBeDisabled()
+  })
+
+  it('drops a ready preview once refreshing it fails, so Start cannot use a stale one', async () => {
+    preview.mockResolvedValue(previewFixture())
+    open()
+    await flush()
+    expect(screen.getByRole('button', { name: 'Start teleoperation' })).toBeEnabled()
+    preview.mockRejectedValue(new ApiError(404, 'not_found', 'session ended'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(PREVIEW_REFRESH_MS)
+    })
     expect(screen.getByRole('button', { name: 'Start teleoperation' })).toBeDisabled()
   })
 })

@@ -52,6 +52,13 @@ describe('TeleopBar', () => {
     )
   })
 
+  it('keeps Stop visible while running even if a robot session drops from the list', () => {
+    render(
+      <TeleopBar projectId="p1" robots={[LEADER]} teleop={teleopFixture()} onChanged={vi.fn()} />
+    )
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+  })
+
   it('shows the running state with Stop', async () => {
     const onChanged = vi.fn()
     render(

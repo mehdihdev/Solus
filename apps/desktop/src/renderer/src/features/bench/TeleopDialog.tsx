@@ -20,12 +20,6 @@ function fmt(value: number | null, unit?: string): string {
   return unit ? `${value.toFixed(1)} ${unit}` : value.toFixed(1)
 }
 
-function isPreview(value: unknown): value is TeleopPreview {
-  return (
-    typeof value === 'object' && value !== null && Array.isArray((value as TeleopPreview).pairs)
-  )
-}
-
 function PairRow({ pair }: { pair: TeleopPair }): React.JSX.Element {
   return (
     <tr>
@@ -85,19 +79,18 @@ function PreviewBody({ preview }: { preview: TeleopPreview }): React.JSX.Element
   )
 }
 
-function startFailure(error: unknown): { message: string; fresh?: TeleopPreview } {
-  if (!(error instanceof ApiError)) return { message: 'Teleoperation could not be started.' }
+function startFailure(error: unknown): string {
+  if (!(error instanceof ApiError)) return 'Teleoperation could not be started.'
   if (error.code === 'teleop_not_ready') {
-    return {
-      message: 'Not ready — the pairing changed. Check the table below.',
-      fresh: error.details?.find(isPreview)
-    }
+    return 'Not ready — the pairing changed. Check the table below.'
   }
   if (error.code === 'preview_expired') {
-    return { message: 'The preview expired and was refreshed. Review it and start again.' }
+    return 'The preview expired and was refreshed. Review it and start again.'
   }
-  if (error.code === 'teleop_running') return { message: 'Teleoperation is already running.' }
-  return { message: 'Teleoperation could not be started.' }
+  if (error.code === 'teleop_running') return 'Teleoperation is already running.'
+  // teleop_failed says whether the follower may be holding: show the server's words.
+  if (error.code === 'teleop_failed') return error.message
+  return 'Teleoperation could not be started.'
 }
 
 export function TeleopDialog({
@@ -115,7 +108,7 @@ export function TeleopDialog({
 }): React.JSX.Element {
   const [starting, setStarting] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
-  const { preview, error, adopt, refresh } = useTeleopPreview(
+  const { preview, error, refresh } = useTeleopPreview(
     projectId,
     leader.sessionId,
     follower.sessionId,
@@ -128,11 +121,10 @@ export function TeleopDialog({
     try {
       onStarted(await startTeleop(projectId, preview.preview_id))
     } catch (caught) {
-      const { message, fresh } = startFailure(caught)
-      setFailure(message)
-      if (fresh) adopt(fresh)
+      // Every failure re-previews: the dialog only ever holds a real preview (with its id).
+      setFailure(startFailure(caught))
       setStarting(false)
-      if (!fresh) void refresh()
+      void refresh()
     }
   }
   const message = failure ?? error
