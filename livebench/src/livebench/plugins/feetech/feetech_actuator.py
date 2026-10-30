@@ -56,6 +56,7 @@ class FeetechActuator:
                 signal=f"{j.prefix}.position",
                 unit=j.position(j.center)[1],
                 span=j.goal_span,
+                mode=j.mode.value if j.mode is not None else None,
             )
             for j in joints.values()
         )
@@ -99,8 +100,10 @@ class FeetechActuator:
         return held
 
     def release(self) -> None:
-        """Torque off on the joints `hold` can turn on — the calibrated ones."""
-        bus, joints = self._calibrated()
-        failed = [a for a in joints if not bus.write_register(a, "Torque_Enable", 0)]
+        """Torque off on every joint that answers; only a calibrated joint (one `hold` could
+        have turned on) that stays torqued is a failure."""
+        bus, joints = self._link()
+        acked = {a: bus.write_register(a, "Torque_Enable", 0) for a in joints}
+        failed = [a for a, ok in acked.items() if not ok and joints[a].goal_span is not None]
         if failed:
             raise ActuatorWriteError(f"servos {failed} did not acknowledge torque off")

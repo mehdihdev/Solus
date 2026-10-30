@@ -118,7 +118,12 @@ class _FeetechJoint:
         )
         if self.span is None or self.mode not in actuated:
             return None
-        return round(self.span[0]), round(self.span[1])
+        low, high = round(self.span[0]), round(self.span[1])
+        # Calibration may come from a committed repo file (untrusted, §7): a range the servo
+        # cannot physically report is no range at all.
+        if not 0 <= low < high <= self.resolution - 1:
+            return None
+        return low, high
 
     def goal_ticks(self, value: float) -> int:
         """Inverse of `position`, clamped into `goal_span`."""

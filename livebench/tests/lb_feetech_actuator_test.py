@@ -10,8 +10,8 @@ import uuid
 import pytest
 from lb_feetech_codec_test import FeetechFakeChannel
 from livebench.hardware.actuation import ActuatorUnavailableError, ActuatorWriteError
-from livebench.plugins.feetech.feetech_definitions import STS_CONTROL_TABLE
 from livebench.plugins.feetech.feetech_actuator import FeetechActuator
+from livebench.plugins.feetech.feetech_definitions import STS_CONTROL_TABLE
 from livebench.plugins.feetech.feetech_driver import (
     FeetechPacketSource,
     FeetechParams,
@@ -80,6 +80,7 @@ def _opened(
 def test_joints_describe_signal_unit_and_calibrated_range() -> None:
     _, _, actuator = _opened(FeetechFakeChannel({1: 2000, 6: 2100, 3: 1000}), _arm())
     joints = {j.address: j for j in actuator.joints()}
+    assert (joints[1].mode, joints[6].mode, joints[3].mode) == ("degrees", "range_0_100", None)
     assert joints[1].signal == "arm-shoulder_pan.position"
     assert (joints[1].unit, joints[1].span) == ("deg", (700, 3300))
     assert (joints[6].unit, joints[6].span) == ("%", (2036, 3486))
@@ -149,11 +150,44 @@ def test_hold_refuses_when_a_joint_does_not_answer() -> None:
     assert all(reg != TORQUE for _, reg, _ in channel.writes)
 
 
-def test_release_turns_torque_off_on_every_joint() -> None:
-    channel = FeetechFakeChannel({1: 2000, 6: 2100})
+def test_release_turns_torque_off_on_every_joint_that_answers() -> None:
+    # Uncalibrated joints are released too (something else may have torqued them); only a
+    # calibrated joint that fails to acknowledge is an error.
+    channel = FeetechFakeChannel({1: 2000, 6: 2100, 3: 1000})
     _, _, actuator = _opened(channel, _arm())
     actuator.release()
-    assert [(i, v) for i, reg, v in channel.writes if reg == TORQUE] == [(1, 0), (6, 0)]
+    assert [(i, v) for i, reg, v in channel.writes if reg == TORQUE] == [(1, 0), (6, 0), (3, 0)]
+    silent_uncalibrated = FeetechFakeChannel({1: 2000, 6: 2100})
+    _, _, quiet = _opened(silent_uncalibrated, _arm())
+    quiet.release()  # address 3 is absent: not an error
+
+
+def test_release_reports_a_calibrated_joint_that_stays_torqued() -> None:
+    channel = FeetechFakeChannel({1: 2000, 6: 2100})
+    channel.silent_writes.add(6)
+    _, _, actuator = _opened(channel, _arm())
+    with pytest.raises(ActuatorWriteError):
+        actuator.release()
+
+
+@pytest.mark.parametrize(
+    "values", [{"range_min": 100, "range_max": 5000}, {"range_min": -50, "range_max": 3000}]
+)
+def test_a_calibrated_range_the_servo_cannot_reach_is_not_actuated(
+    values: dict[str, float | int],
+) -> None:
+    # Calibration can arrive from a committed repo file — untrusted input (CLAUDE.md §7).
+    config = _arm()
+    part = config.parts[str(SHOULDER)]
+    bad = part.model_copy(
+        update={"calibration": PartCalibration(mode=CalibrationMode.DEGREES, values=values)}
+    )
+    config = config.model_copy(update={"parts": {**config.parts, str(SHOULDER): bad}})
+    _, _, actuator = _opened(FeetechFakeChannel({1: 2000, 6: 2100}), config)
+    joint = next(j for j in actuator.joints() if j.address == 1)
+    assert joint.span is None
+    with pytest.raises(ValueError):
+        actuator.write_goals({1: 4096})
 
 
 async def test_actuator_follows_the_source_across_incarnations() -> None:

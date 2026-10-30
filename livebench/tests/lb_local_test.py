@@ -277,6 +277,30 @@ def test_teleop_preview_wire_carries_pairs_blockers_and_tolerance() -> None:
     }
 
 
+def test_teleop_preview_blockers_name_their_joint() -> None:
+    from lb_teleop_test import FakeActuator, _joint
+    from livebench.local import teleop_preview
+
+    leader = _Conn(FakeActuator([_joint(1, "l"), _joint(2, "l2")], {1: 0, 2: 0}))
+    follower = _Conn(FakeActuator([_joint(1, "f")], {1: 0}))
+    wire = teleop_preview(leader, follower)
+    assert wire["blockers"][0]["code"] == "unpaired_joint"
+    assert wire["blockers"][0]["address"] == 2
+
+
+async def test_a_bus_error_while_starting_is_a_runtime_failure_naming_the_hold() -> None:
+    from livebench.local import teleop_start
+
+    leader, follower = _arms()
+
+    def unplugged() -> dict[int, int]:
+        raise OSError("device disconnected")
+
+    follower.actuator.hold = unplugged
+    with pytest.raises(RuntimeError, match="may be holding"):
+        await teleop_start(leader, follower, on_stopped=lambda reason: None)
+
+
 def test_teleop_preview_refuses_a_connection_without_an_actuator() -> None:
     from livebench.local import teleop_preview
     from solus_api.livebench.teleop import NotActuatedError

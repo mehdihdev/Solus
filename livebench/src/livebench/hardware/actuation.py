@@ -27,6 +27,7 @@ class ActuatedJoint:
     signal: str  # the reading's signal name, e.g. "arm-shoulder_pan.position"
     unit: str  # the calibrated unit ("deg", "%"), or "tick" when uncalibrated
     span: tuple[int, int] | None  # calibrated tick range; None = never actuated
+    mode: str | None = None  # the calibration mode: joints pair only within one mode
 
 
 class Actuator(Protocol):

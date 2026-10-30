@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Any, Final, Literal, TypeVar
 
 from livebench.hardware.actuation import (
     ActuatedJoint,
@@ -32,6 +32,7 @@ MAX_RATE_HZ: Final = 1000.0
 DEFAULT_MAX_STEP_TICKS: Final = 68
 MAX_MISSED_READS: Final = 3
 
+T = TypeVar("T")
 StopReason = Literal["user", "leader_lost", "follower_lost", "session_ended", "shutdown"]
 _FAILURES = (ActuatorUnavailableError, ActuatorWriteError, OSError)
 
@@ -81,6 +82,10 @@ class TeleopPreview:
         )
 
 
+class _LeaderLostError(Exception):
+    """An unexpected failure on the leader side of a tick."""
+
+
 class TeleopNotReadyError(RuntimeError):
     def __init__(self, preview: TeleopPreview) -> None:
         super().__init__("teleoperation is not ready to start")
@@ -106,11 +111,11 @@ def pair_joints(
             blockers.append(
                 Blocker("uncalibrated_joint", f"{name} has no calibrated range", address)
             )
-        elif lead.unit != follow.unit:
+        elif lead.mode != follow.mode or lead.unit != follow.unit:
             blockers.append(
                 Blocker(
                     "mode_mismatch",
-                    f"{lead.signal} is {lead.unit}, {follow.signal} is {follow.unit}",
+                    f"{lead.signal} is {lead.mode}, {follow.signal} is {follow.mode}",
                     address,
                 )
             )
@@ -119,8 +124,11 @@ def pair_joints(
     return pairs, blockers
 
 
-def preview(leader: Actuator, follower: Actuator) -> TeleopPreview:
-    """Where each paired joint is on both robots now. Blocking (reads both buses)."""
+def preview(
+    leader: Actuator, follower: Actuator, *, max_step: int = DEFAULT_MAX_STEP_TICKS
+) -> TeleopPreview:
+    """Where each paired joint is on both robots now. Blocking (reads both buses). A follower
+    resting more than one step outside its range would jump on the first tick: blocked."""
     if leader is follower:
         return TeleopPreview((), (Blocker("same_session", "pick two different robots"),))
     pairs, blockers = pair_joints(leader.joints(), follower.joints())
@@ -135,6 +143,17 @@ def preview(leader: Actuator, follower: Actuator) -> TeleopPreview:
         )
         for pair in pairs
     )
+    for pair in pairs:
+        low, high = pair.follower_span
+        ticks = follow.get(pair.address)
+        if ticks is not None and (ticks < low - max_step or ticks > high + max_step):
+            blockers.append(
+                Blocker(
+                    "follower_out_of_range",
+                    f"{pair.follower_signal} rests outside its calibrated range; move it back",
+                    pair.address,
+                )
+            )
     return TeleopPreview(readings, tuple(blockers))
 
 
@@ -170,6 +189,9 @@ class TeleopLoop:
         self._on_stopped = on_stopped
         self.stop_reason: StopReason | None = None
         self._task: asyncio.Task[None] | None = None
+        #: The bus call running on a worker thread right now; cancelling the task does not stop
+        #: it, so `stop` waits for it — nothing reaches the bus after `stop` returns.
+        self._inflight: asyncio.Future[Any] | None = None
 
     @property
     def running(self) -> bool:
@@ -184,6 +206,12 @@ class TeleopLoop:
         if task is not None and task is not current:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        if self._inflight is not None and not self._inflight.done():
+            await asyncio.wait([self._inflight])
+
+    async def _io(self, call: Callable[..., T], *args: Any) -> T:
+        self._inflight = asyncio.ensure_future(asyncio.to_thread(call, *args))
+        return await asyncio.shield(self._inflight)
 
     def _finish(self, reason: StopReason) -> None:
         if self.stop_reason is not None:
@@ -193,23 +221,32 @@ class TeleopLoop:
         if self._on_stopped is not None:
             self._on_stopped(reason)
 
-    def _targets(self, ticks: Mapping[int, int]) -> dict[int, int]:
-        return {
-            p.address: self._follower.to_goal(
-                p.address, self._leader.to_value(p.address, ticks[p.address])
-            )
-            for p in self.pairs
-        }
+    async def _leader_values(self) -> dict[int, float] | None:
+        """The leader's calibrated value per paired joint, or None for a missed read. Raises
+        `_LeaderLostError` for anything unexpected (never misreported as a follower failure)."""
+        try:
+            ticks = await self._io(self._leader.read)
+            if any(p.address not in ticks for p in self.pairs):
+                return None
+            return {
+                p.address: self._leader.to_value(p.address, ticks[p.address]) for p in self.pairs
+            }
+        except _FAILURES:
+            return None
+        except Exception as exc:
+            logger.exception("teleop leader read failed")
+            raise _LeaderLostError from exc
 
     async def _run(self) -> None:
         period, missed = 1.0 / self.rate_hz, 0
         while self.running:
             started = time.monotonic()
             try:
-                ticks = await asyncio.to_thread(self._leader.read)
-            except _FAILURES:
-                ticks = {}
-            if any(p.address not in ticks for p in self.pairs):
+                values = await self._leader_values()
+            except _LeaderLostError:
+                self._finish("leader_lost")
+                return
+            if values is None:
                 missed += 1
                 if missed >= MAX_MISSED_READS:
                     self._finish("leader_lost")
@@ -217,25 +254,28 @@ class TeleopLoop:
             else:
                 missed = 0
                 try:
-                    await self._drive(ticks)
+                    await self._drive(values)
                 except _FAILURES:
                     self._finish("follower_lost")
                     return
                 except Exception:
                     # Never leave a "running" loop that no longer drives anything.
-                    logger.exception("teleop step failed")
+                    logger.exception("teleop follower step failed")
                     self._finish("follower_lost")
                     return
             await asyncio.sleep(max(0.0, period - (time.monotonic() - started)))
 
-    async def _drive(self, ticks: Mapping[int, int]) -> None:
-        stepped = step_goals(self._targets(ticks), self._last, max_step=self._max_step)
-        # A resting follower can sit just past its calibrated extremes; never aim outside them.
+    async def _drive(self, values: Mapping[int, float]) -> None:
+        targets = {
+            p.address: self._follower.to_goal(p.address, values[p.address]) for p in self.pairs
+        }
+        stepped = step_goals(targets, self._last, max_step=self._max_step)
+        # A follower resting within one step past its extremes is brought inside on this tick.
         goals = {
             p.address: min(p.follower_span[1], max(p.follower_span[0], stepped[p.address]))
             for p in self.pairs
         }
-        await asyncio.to_thread(self._follower.write_goals, goals)
+        await self._io(self._follower.write_goals, goals)
         self._last = goals
 
 
@@ -249,7 +289,7 @@ async def start_teleop(
 ) -> TeleopLoop:
     """Re-check the start gate on fresh readings, hold the follower's pose, then start tracking.
     Raises `TeleopNotReadyError` (nothing written) when the gate fails."""
-    fresh = await asyncio.to_thread(preview, leader, follower)
+    fresh = await asyncio.to_thread(preview, leader, follower, max_step=max_step)
     if not fresh.ready:
         raise TeleopNotReadyError(fresh)
     held = await asyncio.to_thread(follower.hold)

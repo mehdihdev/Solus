@@ -73,10 +73,23 @@ class FakeActuator:
         self.released = True
 
 
+_MODES = {"deg": "degrees", "%": "range_0_100"}
+
+
 def _joint(
-    address: int, name: str, unit: str = "deg", span: tuple[int, int] | None = (0, 4000)
+    address: int,
+    name: str,
+    unit: str = "deg",
+    span: tuple[int, int] | None = (0, 4000),
+    mode: str | None = None,
 ) -> ActuatedJoint:
-    return ActuatedJoint(address=address, signal=f"{name}.position", unit=unit, span=span)
+    return ActuatedJoint(
+        address=address,
+        signal=f"{name}.position",
+        unit=unit,
+        span=span,
+        mode=mode or _MODES.get(unit),
+    )
 
 
 def _pair(
@@ -210,21 +223,85 @@ async def test_a_follower_resting_past_its_range_is_brought_inside_not_crashed()
     # Calibration ranges are the extremes seen while calibrating; a resting arm can sit a tick
     # or two beyond them. The first goal must land inside the span, and the loop keep running.
     leader = FakeActuator([_joint(1, "l", span=(1000, 3000))], {1: 2950})
-    follower = FakeActuator([_joint(1, "f", span=(1000, 3000))], {1: 3060})  # > one step past
+    follower = FakeActuator([_joint(1, "f", span=(1000, 3000))], {1: 3030})  # within one step
     loop = await start_teleop(leader, follower, rate_hz=500, max_step=40)
     await _run_until(lambda: len(follower.writes) >= 3)
     assert loop.running
     assert all(1000 <= w[1] <= 3000 for w in follower.writes)
+    assert 3030 - follower.writes[0][1] <= 40  # the first tick still moves at most one step
     await loop.stop()
 
 
-async def test_an_unexpected_error_stops_the_loop_instead_of_leaving_it_running() -> None:
+async def test_an_unexpected_follower_error_stops_the_loop_instead_of_leaving_it_running() -> None:
     leader, follower = _pair({1: 2000, 6: 500}, {1: 2000, 6: 500})
     loop = await start_teleop(leader, follower, rate_hz=500)
 
-    def broken(address: int, ticks: int) -> float:
+    def broken(address: int, value: float) -> int:
         raise ZeroDivisionError
 
-    leader.to_value = broken  # type: ignore[method-assign]
+    follower.to_goal = broken  # type: ignore[method-assign]
     await _run_until(lambda: not loop.running)
     assert loop.stop_reason == "follower_lost"
+
+
+# ── review findings (Phase 4) ────────────────────────────────────────────────────
+
+
+def test_percent_joints_on_different_scales_do_not_pair() -> None:
+    leader = [_joint(6, "l-grip", "%", mode="range_0_100")]
+    follower = [_joint(6, "f-grip", "%", mode="range_m100_100")]
+    pairs, blockers = pair_joints(leader, follower)
+    assert pairs == [] and [(b.code, b.address) for b in blockers] == [("mode_mismatch", 6)]
+
+
+def test_a_follower_resting_more_than_a_step_outside_its_range_blocks_the_start() -> None:
+    leader = FakeActuator([_joint(1, "l", span=(1000, 3000))], {1: 2950})
+    follower = FakeActuator([_joint(1, "f", span=(1000, 3000))], {1: 3100})
+    result = preview(leader, follower, max_step=40)
+    assert result.ready is False
+    assert [(b.code, b.address) for b in result.blockers] == [("follower_out_of_range", 1)]
+
+
+async def test_a_leader_conversion_failure_is_reported_as_leader_lost() -> None:
+    leader, follower = _pair({1: 2000, 6: 500}, {1: 2000, 6: 500})
+    loop = await start_teleop(leader, follower, rate_hz=500)
+
+    def gone(address: int, ticks: int) -> float:
+        raise ActuatorUnavailableError("leader link dropped between read and convert")
+
+    leader.to_value = gone  # type: ignore[method-assign]
+    await _run_until(lambda: not loop.running)
+    assert loop.stop_reason == "leader_lost"
+
+
+async def test_an_unexpected_leader_read_error_stops_as_leader_lost() -> None:
+    leader, follower = _pair({1: 2000, 6: 500}, {1: 2000, 6: 500})
+    loop = await start_teleop(leader, follower, rate_hz=500)
+
+    def broken() -> dict[int, int]:
+        raise KeyError("joint set changed under us")
+
+    leader.read = broken  # type: ignore[method-assign]
+    await _run_until(lambda: not loop.running)
+    assert loop.stop_reason == "leader_lost"
+
+
+async def test_stop_waits_for_an_in_flight_follower_write() -> None:
+    import threading
+    import time as clock
+
+    leader, follower = _pair({1: 2000, 6: 500}, {1: 2000, 6: 500})
+    loop = await start_teleop(leader, follower, rate_hz=500)
+    writing, finished = threading.Event(), threading.Event()
+    original = follower.write_goals
+
+    def slow_write(goals: Mapping[int, int]) -> None:
+        writing.set()
+        clock.sleep(0.15)
+        original(goals)
+        finished.set()
+
+    follower.write_goals = slow_write  # type: ignore[method-assign]
+    await _run_until(writing.is_set)
+    await loop.stop()
+    assert finished.is_set()  # nothing writes to the bus after stop() returns

@@ -528,7 +528,9 @@ def _preview_wire(result: "TeleopPreview") -> dict[str, Any]:
 
     return {
         "ready": result.ready,
-        "blockers": [{"code": b.code, "message": b.message} for b in result.blockers],
+        "blockers": [
+            {"code": b.code, "message": b.message, "address": b.address} for b in result.blockers
+        ],
         "pairs": [
             {
                 "address": r.pair.address,
@@ -586,6 +588,7 @@ async def teleop_start(
     leader_conn: Any, follower_conn: Any, *, on_stopped: Callable[[str], object]
 ) -> _TeleopHandle:
     """Re-check the gate on fresh readings, hold the follower, start tracking."""
+    from livebench.hardware.actuation import ActuatorUnavailableError, ActuatorWriteError
     from livebench.teleop import TeleopNotReadyError as GateFailed
     from livebench.teleop import start_teleop
 
@@ -594,6 +597,11 @@ async def teleop_start(
         loop = await start_teleop(leader, follower, on_stopped=on_stopped)
     except GateFailed as exc:
         raise TeleopNotReadyError(_preview_wire(exc.preview)) from None
+    except (ActuatorUnavailableError, ActuatorWriteError, OSError) as exc:
+        # Hold may have torqued some joints before the bus failed: say so, never imply limp.
+        raise ActuatorWriteError(
+            f"Teleoperation could not start ({exc}); the follower may be holding some joints."
+        ) from exc
     return _TeleopHandle(loop)
 
 
