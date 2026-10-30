@@ -39,6 +39,11 @@ function buildVisual(visual: SceneVisual, model: KinematicModel): Mesh | null {
   origin(mesh, visual.xyz, visual.rpy)
   return mesh
 }
+/** The compact bench pane draws a jointed primitive model as a skeleton to stay legible, but a
+ *  model with supplied mesh geometry renders as itself — that geometry is why it was imported. */
+export function compactSkeleton(model: KinematicModel, compact: boolean): boolean {
+  return compact && model.joints.length > 0 && !Object.keys(model.meshes ?? {}).length
+}
 export function buildModel(model: KinematicModel, skeleton = false): BuiltModel {
   const root = new Group(),
     links = new Map<string, Group>(),

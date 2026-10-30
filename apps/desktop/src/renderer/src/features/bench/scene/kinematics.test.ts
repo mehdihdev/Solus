@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Vector3 } from 'three'
-import { buildModel, applyJoints, jointValue, disposeModel } from './kinematics'
+import { buildModel, applyJoints, jointValue, disposeModel, compactSkeleton } from './kinematics'
 
 const model = {
   links: [
@@ -148,4 +148,12 @@ it('draws joint markers and segments only at declared model transforms', () => {
   expect(marker?.getWorldPosition(new Vector3()).toArray()).toEqual([1, 0, 0])
   expect(scene.root.getObjectByName('joint-segment:hinge')).toBeDefined()
   disposeModel(scene)
+})
+
+it('keeps imported mesh geometry visible in the compact bench view', () => {
+  const meshed = { ...model, meshes: { mesh: { vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0] } } }
+  expect(compactSkeleton(meshed, true)).toBe(false) // the user imported geometry to see it
+  expect(compactSkeleton(model, true)).toBe(true) // primitive-only arm: skeleton stays legible
+  expect(compactSkeleton(model, false)).toBe(false)
+  expect(compactSkeleton({ ...model, joints: [] }, true)).toBe(false) // static model: geometry
 })
