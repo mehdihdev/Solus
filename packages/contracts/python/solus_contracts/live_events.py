@@ -110,6 +110,36 @@ class JobUpdated(_Frame):
     status: JobStatusName
 
 
+FindingStatusName = Literal["open", "acknowledged", "dismissed", "resolved"]
+
+
+class FindingRaised(_Frame):
+    """A finding node was created (SOLUSDEV-320). Refetch ``GET /findings?status=open``."""
+
+    type: Literal["finding.raised"] = "finding.raised"
+    project_id: uuid.UUID
+    finding_id: uuid.UUID
+    status: FindingStatusName
+
+
+class FindingUpdated(_Frame):
+    """A finding's status, severity or count moved (not resolved)."""
+
+    type: Literal["finding.updated"] = "finding.updated"
+    project_id: uuid.UUID
+    finding_id: uuid.UUID
+    status: FindingStatusName
+
+
+class FindingResolved(_Frame):
+    """A finding was resolved by a person; its ``errors`` entry exists now."""
+
+    type: Literal["finding.resolved"] = "finding.resolved"
+    project_id: uuid.UUID
+    finding_id: uuid.UUID
+    status: Literal["resolved"] = "resolved"
+
+
 class ProjectStreamReady(BaseModel):
     """Data of the project stream's ``ready`` event."""
 
@@ -217,6 +247,9 @@ ProjectFrame = (
     | SourcesChanged
     | ProjectUpdated
     | JobUpdated
+    | FindingRaised
+    | FindingUpdated
+    | FindingResolved
     | AccessRevoked
 )
 
@@ -227,6 +260,9 @@ PROJECT_EVENT_TYPES: tuple[str, ...] = (
     "sources.changed",
     "project.updated",
     "job.updated",
+    "finding.raised",
+    "finding.updated",
+    "finding.resolved",
     "access.revoked",
 )
 ACCOUNT_EVENT_TYPES: tuple[str, ...] = (

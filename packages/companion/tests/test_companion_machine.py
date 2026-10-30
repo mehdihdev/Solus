@@ -88,7 +88,7 @@ def test_inventory_matches_allowlist_and_schema_shape(tmp_path: Path) -> None:
     inv = MachineServer(tmp_path).inventory()
     assert inv is not None and inv["server"] == "machine"
     names = {t["name"] for t in inv["tools"]}
-    assert names == TOOL_NAMES == {"read_file", "write_file", "read_code_file"}
+    assert names == TOOL_NAMES == {"read_file", "write_file", "read_code_file", "tool_versions"}
     for tool in inv["tools"]:
         assert set(tool) == {"name", "description", "input_schema", "output_schema"}
         assert tool["input_schema"]["type"] == "object"
@@ -98,9 +98,11 @@ def test_inventory_matches_allowlist_and_schema_shape(tmp_path: Path) -> None:
     assert names == _allowlist_names()
 
 
-def test_no_workspace_advertises_nothing_and_fails_closed() -> None:
+def test_no_workspace_advertises_only_tool_versions_and_fails_closed() -> None:
     server = MachineServer(None)
-    assert server.inventory() is None
+    inventory = server.inventory()
+    assert inventory is not None
+    assert [t["name"] for t in inventory["tools"]] == ["tool_versions"]
     assert server.status_entry()["detail"] == "no project workspace linked"
 
 
@@ -140,9 +142,9 @@ async def test_supervisor_routes_builtin_and_dispatcher(tmp_path: Path) -> None:
     }
 
 
-def test_supervisor_no_workspace_builtin_not_in_inventory() -> None:
+def test_supervisor_no_workspace_builtin_advertises_only_tool_versions() -> None:
     sup = Supervisor((), builtins=(MachineServer(None),))
-    assert sup.inventory() == []
+    assert [t["name"] for t in sup.inventory()[0]["tools"]] == ["tool_versions"]
     assert sup.status_snapshot()[0]["name"] == "machine"
 
 
@@ -157,4 +159,5 @@ def test_machine_has_no_parallel_environment_executor(tmp_path: Path) -> None:
         "read_file",
         "write_file",
         "read_code_file",
+        "tool_versions",
     }

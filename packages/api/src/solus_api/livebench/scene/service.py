@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import retire_edge, write_edge
 from solus_api.graph.read_scope import resolve_scope
 from solus_api.hardware.config import part_ref
 from solus_api.hardware.runtime import resolve_runtime_config
@@ -147,7 +148,8 @@ class SceneService:
         entry = await add_artifact_entry(
             self.session,
             self.project_id,
-            SolusSection.DOCS,
+            SolusSection.DOCUMENTATION,
+            subsection="guides",
             artifact_id=body.artifact_id,
             name=body.name,
             created_by=self.user_id,
@@ -156,7 +158,8 @@ class SceneService:
             await add_artifact_entry(
                 self.session,
                 self.project_id,
-                SolusSection.DOCS,
+                SolusSection.DOCUMENTATION,
+                subsection="guides",
                 artifact_id=mesh.artifact_id,
                 name=f"{body.name} mesh {index + 1}",
                 created_by=self.user_id,
@@ -194,7 +197,7 @@ class SceneService:
                 )
             )
             for edge in edges:
-                await self.session.delete(edge)
+                retire_edge(edge)
         else:
             entity = GraphEntity(
                 project_id=self.project_id,
@@ -213,20 +216,20 @@ class SceneService:
         }
         if source:
             targets.add(source.id)
-        self.session.add_all(
-            [
-                GraphEdge(
-                    project_id=self.project_id,
-                    src_id=entity.id,
-                    dst_id=target,
-                    relation_type="references",
-                    domain_pair="simulation<->project",
-                    origin="manual",
-                )
-                for target in targets
-            ]
-        )
-        await self.session.flush()
+        for target in targets:
+            if target is None:  # entry nodes are attached before this point
+                continue
+            await write_edge(
+                self.session,
+                project_id=self.project_id,
+                src_id=entity.id,
+                dst_id=target,
+                relation_type="references",
+                origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=self.user_id,
+            )
         return entity
 
     async def mapping(self, identity: uuid.UUID, body: Mapping) -> GraphEntity:

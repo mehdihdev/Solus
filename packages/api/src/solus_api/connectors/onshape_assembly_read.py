@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -15,6 +16,94 @@ from solus_api.connectors.onshape_circle_geometry import _connector_frame, _pose
 from solus_api.connectors.onshape_geometry import _contained_size_bound
 
 _FEATURE_ID = re.compile(r"[A-Za-z0-9_+/-]{1,64}")
+#: Onshape's own mate-type enum; anything else in `featureData.mateType` is untrusted text.
+_MATE_TYPE = re.compile(r"[A-Z_]{1,32}")
+
+
+@dataclass(frozen=True)
+class MateRecord:
+    """One mate feature of an assembly definition between two occurrence paths.
+
+    Paths are instance NAMES joined by `/`, with Onshape's ` <n>` instance suffix spelled
+    the way the STEP export spells repeated occurrences (`Peg <2>` → `Peg[1]`, `<1>` bare);
+    `mechanical.build_mechanical_graph` resolves them against the exported node keys.
+    """
+
+    a_occurrence: str
+    b_occurrence: str
+    mate_type: str
+    feature_id: str
+
+
+def _instance_segment(name: Any) -> str | None:
+    if not isinstance(name, str) or not name.strip():
+        return None
+    # `Peg <2>` → base `Peg`, index 2. A linear rpartition, not a regex: instance names are
+    # user text of unbounded length and a backtracking match would stall the sync worker.
+    text: str = name.strip()
+    base, sep, tail = text.rpartition("<")
+    if not sep or not tail.endswith(">") or not tail[:-1].isdecimal():
+        return text
+    index = int(tail[:-1])
+    base = base.rstrip()
+    return base if index <= 1 else f"{base}[{index - 1}]"
+
+
+def _mated_paths(feature: dict[str, Any], instances: dict[str, str]) -> list[str] | None:
+    data = feature.get("featureData")
+    entities = data.get("matedEntities") if isinstance(data, dict) else None
+    if not isinstance(entities, list) or len(entities) != 2:
+        return None
+    paths: list[str] = []
+    for entity in entities:
+        occurrence = entity.get("matedOccurrence") if isinstance(entity, dict) else None
+        if not isinstance(occurrence, list) or not occurrence:
+            return None
+        segments: list[str] = []
+        for identity in occurrence:
+            segment = instances.get(str(identity))
+            if segment is None:
+                return None
+            segments.append(segment)
+        paths.append("/".join(segments))
+    return paths
+
+
+def mates_from_definition(payload: Any) -> list[MateRecord]:
+    """Pure: the `mate` features of an assembly definition (`rootAssembly.features`, with
+    or without `{message}` envelopes), suppressed ones and anything malformed skipped."""
+    root = payload.get("rootAssembly", payload) if isinstance(payload, dict) else None
+    if not isinstance(root, dict):
+        return []
+    instances: dict[str, str] = {}
+    raw_instances = root.get("instances")
+    for instance in raw_instances if isinstance(raw_instances, list) else []:
+        if isinstance(instance, dict) and isinstance(instance.get("id"), str):
+            segment = _instance_segment(instance.get("name"))
+            if segment is not None:
+                instances[instance["id"]] = segment
+    features = root.get("features")
+    records: list[MateRecord] = []
+    for raw in features if isinstance(features, list) else []:
+        feature = raw.get("message", raw) if isinstance(raw, dict) else None
+        if not isinstance(feature, dict) or feature.get("featureType") != "mate":
+            continue
+        if feature.get("suppressed") is True:
+            continue
+        data = feature.get("featureData")
+        mate_type = data.get("mateType") if isinstance(data, dict) else None
+        feature_id = feature.get("id")
+        paths = _mated_paths(feature, instances)
+        if (
+            paths is None
+            or not isinstance(mate_type, str)
+            or not _MATE_TYPE.fullmatch(mate_type)
+            or not isinstance(feature_id, str)
+            or not _FEATURE_ID.fullmatch(feature_id)
+        ):
+            continue
+        records.append(MateRecord(paths[0], paths[1], mate_type, feature_id))
+    return records
 
 
 def _invalid() -> ConnectorError:

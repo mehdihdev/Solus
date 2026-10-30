@@ -31,7 +31,14 @@ from .arduino import collect_sketches
 from .deps import collect_dependencies
 from .detect import tools_installed
 from .gitremote import GitInfo, git_info
-from .toolmap import HASH_CHUNK_BYTES, MAX_FILES, MAX_HASH_BYTES, SKIP_DIRS, tool_for
+from .toolmap import (
+    HASH_CHUNK_BYTES,
+    MAX_FILES,
+    MAX_HASH_BYTES,
+    SKIP_DIRS,
+    is_manifest_file,
+    tool_for,
+)
 
 logger = logging.getLogger("solus.local.scan")
 
@@ -80,7 +87,7 @@ def _walk(root: Path) -> Iterator[tuple[str, Path]]:
         )
         # Sorted per directory so the capped walk is deterministic.
         for name in sorted(filenames):
-            if tool_for(name) is None:
+            if tool_for(name) is None and not is_manifest_file(name):
                 continue
             absolute = current / name
             if absolute.is_symlink() or not absolute.is_file():
@@ -123,23 +130,30 @@ def _candidates(root: Path) -> tuple[list[tuple[str, Path]], bool]:
     return collected, False
 
 
-def _collect(root: Path) -> tuple[list[FileEntry], bool]:
-    """The sorted, capped file list and whether it was truncated."""
+def _collect(root: Path) -> tuple[list[FileEntry], list[list[str]], bool]:
+    """The sorted, capped tool-file list, the manifest paths (dependencies only) and
+    whether the walk was truncated."""
     try:
         candidates, truncated = _candidates(root)
     except OSError:
-        return [], False
+        return [], [], False
     candidates.sort(key=lambda item: item[0])
-    files = [entry for rel, absolute in candidates if (entry := _entry(rel, absolute))]
-    return files, truncated
+    files: list[FileEntry] = []
+    manifests: list[list[str]] = []
+    for rel, absolute in candidates:
+        if is_manifest_file(rel):
+            manifests.append(rel.split("/"))
+        elif entry := _entry(rel, absolute):
+            files.append(entry)
+    return files, manifests, truncated
 
 
 def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str, Any]:
     """The full §4 `scan_folder` shape for `root`."""
-    files, truncated = _collect(root)
+    files, manifests, truncated = _collect(root)
     git = git_info(root)
     dependencies, truncated_dependencies = collect_dependencies(
-        root, [entry["parts"] for entry in files]
+        root, sorted([entry["parts"] for entry in files] + manifests)
     )
     sketches = [entry["parts"] for entry in files if entry["tool"] == "arduino"]
     return {
@@ -159,5 +173,5 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
 
 def folder_digest(root: Path) -> dict[str, Any]:
     """`{digest, truncated}` — the same digest `scan_folder` reports."""
-    files, truncated = _collect(root)
+    files, _, truncated = _collect(root)
     return {"digest": compute_digest(files, git_info(root)), "truncated": truncated}

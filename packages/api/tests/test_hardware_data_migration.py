@@ -28,15 +28,12 @@ from solus_api.models import (
     GraphEdge,
     GraphEntity,
     Project,
-    SolusEntry,
-    SolusEntryKind,
-    SolusSection,
     Team,
     utcnow,
 )
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 API_DIR = Path(__file__).resolve().parents[1]
 FIXTURE = Path(__file__).parent / "fixtures/hardware_migration/nested.json"
@@ -153,6 +150,36 @@ def migration_db(monkeypatch: pytest.MonkeyPatch) -> Iterator[MigrationDatabase]
         db.reset()
 
 
+async def _seed_entry(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    node_id: uuid.UUID,
+    label: str,
+    payload: dict[str, Any],
+) -> uuid.UUID:
+    """A pre-320 `hardware` CONFIG row, inserted by SQL: the ORM model now carries the
+    `subsection` column, which this revision's schema does not have yet. `clock_timestamp()`,
+    not `now()`: the backfill orders duplicates by `created_at`, and two rows stamped with the
+    transaction time would tie (the ORM used to stamp them in insertion order)."""
+    entry_id = uuid.uuid4()
+    await session.execute(
+        text(
+            "INSERT INTO solus_entries (id, project_id, section, kind, entity_id, text, payload, "
+            "author, config_version, created_at, updated_at) VALUES (:id, :pid, 'hardware', "
+            "'config', :node, :label, CAST(:payload AS jsonb), 'user', 0, clock_timestamp(), "
+            "clock_timestamp())"
+        ),
+        {
+            "id": entry_id,
+            "pid": project_id,
+            "node": node_id,
+            "label": label,
+            "payload": json.dumps(payload),
+        },
+    )
+    return entry_id
+
+
 async def _seed(url: str, variant: str) -> dict[str, uuid.UUID]:
     engine = create_async_engine(url)
     try:
@@ -202,15 +229,9 @@ async def _seed(url: str, variant: str) -> dict[str, uuid.UUID]:
                 payload["provenance"] = {}
             if variant == "missing_subject":
                 payload["robot_entity_id"] = str(uuid.uuid4())
-            entry = SolusEntry(
-                project_id=project.id,
-                section=SolusSection.HARDWARE,
-                kind=SolusEntryKind.CONFIG,
-                entity_id=config_node.id,
-                text="Original configuration",
-                payload=payload,
+            entry_id = await _seed_entry(
+                session, project.id, config_node.id, "Original configuration", payload
             )
-            session.add(entry)
             session.add_all(
                 [
                     GraphEdge(
@@ -245,15 +266,8 @@ async def _seed(url: str, variant: str) -> dict[str, uuid.UUID]:
                 duplicate = json.loads(json.dumps(payload))
                 if variant == "conflict":
                     duplicate["parts"][str(part_ids[0])]["calibration"]["values"]["offset"] = 99
-                session.add(
-                    SolusEntry(
-                        project_id=project.id,
-                        section=SolusSection.HARDWARE,
-                        kind=SolusEntryKind.CONFIG,
-                        entity_id=duplicate_node.id,
-                        text="Duplicate configuration",
-                        payload=duplicate,
-                    )
+                await _seed_entry(
+                    session, project.id, duplicate_node.id, "Duplicate configuration", duplicate
                 )
                 session.add_all(
                     [
@@ -281,7 +295,7 @@ async def _seed(url: str, variant: str) -> dict[str, uuid.UUID]:
                 "owner": owner,
                 "part": part_ids[0],
                 "part2": part_ids[1],
-                "entry": entry.id,
+                "entry": entry_id,
                 "node": config_node.id,
                 "section": section.id,
             }

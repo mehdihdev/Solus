@@ -443,7 +443,7 @@ def test_dependency_declarations_are_validated_at_the_boundary() -> None:
         _dep(["requirements.txt"], "Torch"),  # not normalised
         _dep(["requirements.txt"], "torch", "x" * 129),
         _dep([".."], "torch"),
-        {"parts": ["requirements.txt"], "name": "torch", "ecosystem": "npm"},
+        {"parts": ["requirements.txt"], "name": "torch", "ecosystem": "cargo"},
     ):
         with pytest.raises(ValidationError):
             _scan(dependencies=[bad])

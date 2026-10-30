@@ -46,7 +46,8 @@ async def _project_with_graph(client: AsyncClient, headers: dict[str, str]) -> t
     entities = (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=headers)
     ).json()["data"]
-    entity = entities[0]
+    # The `.solus` tree is listed too; the synced entity is the one with a source key.
+    entity = next(e for e in entities if e["source_key"])
     return project_id, entity["id"], entity["source_key"]
 
 
@@ -323,6 +324,7 @@ class TapConn:
         self.tap: Any = None
         self.callback: BatchCallback | None = None
         self.closed = False
+        self.device_facts: dict[str, Any] | None = None
         self._status = LiveStatus.DISCONNECTED
 
     async def subscribe(self, window: TelemetryWindow) -> str:

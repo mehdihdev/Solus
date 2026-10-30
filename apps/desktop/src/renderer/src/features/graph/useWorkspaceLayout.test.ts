@@ -443,3 +443,62 @@ it('adopting a newer layout keeps the banner while the user still has unsaved mo
   expect(result.current.status).toBe('error')
   expect(result.current.error).toMatch(/could not be saved/i)
 })
+
+// SOLUSDEV-320 P4-T4 — Re-layout clears a level's saved positions through the
+// same versioned PUT; other ids are untouched and a 409 adopts the latest.
+it('clear removes only the named ids and PUTs the rest with the current version', async () => {
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({
+    version: 2,
+    positions: { a: { x: 1, y: 1 }, b: { x: 2, y: 2 }, other: { x: 3, y: 3 } }
+  })
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  act(() => result.current.move('b', { x: 9, y: 9 }))
+  act(() => result.current.clear(['a', 'b']))
+  expect(result.current.positions).toEqual({ other: { x: 3, y: 3 } })
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  expect(workspace.saveWorkspaceLayout).toHaveBeenLastCalledWith(
+    'p1',
+    { version: expect.any(Number), positions: { other: { x: 3, y: 3 } } },
+    expect.any(Object)
+  )
+  expect(result.current.positions).toEqual({ other: { x: 3, y: 3 } })
+  // A default placement that follows the clear is persisted like any auto move.
+  act(() => result.current.move('a', { x: 5, y: 5 }, 'auto'))
+  await waitFor(() =>
+    expect(workspace.saveWorkspaceLayout).toHaveBeenLastCalledWith(
+      'p1',
+      { version: expect.any(Number), positions: { other: { x: 3, y: 3 }, a: { x: 5, y: 5 } } },
+      expect.any(Object)
+    )
+  )
+})
+
+it('a 409 on clear adopts the latest layout without a banner', async () => {
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({
+    version: 1,
+    positions: { a: { x: 1, y: 1 } }
+  })
+  vi.mocked(workspace.saveWorkspaceLayout).mockRejectedValueOnce(conflict())
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  vi.mocked(workspace.getWorkspaceLayout).mockResolvedValue({
+    version: 3,
+    positions: { a: { x: 7, y: 7 }, mate: { x: 8, y: 8 } }
+  })
+  act(() => result.current.clear(['a']))
+  await waitFor(() =>
+    expect(result.current.positions).toEqual({ a: { x: 7, y: 7 }, mate: { x: 8, y: 8 } })
+  )
+  expect(result.current.status).toBe('ready')
+  expect(result.current.error).toBeNull()
+  expect(workspace.saveWorkspaceLayout).toHaveBeenCalledTimes(1)
+})
+
+it('clear before load or with nothing to drop writes nothing', async () => {
+  const { result } = renderHook(() => useWorkspaceLayout('p1', true))
+  act(() => result.current.clear(['a']))
+  await waitFor(() => expect(result.current.status).toBe('ready'))
+  act(() => result.current.clear(['never-saved']))
+  expect(workspace.saveWorkspaceLayout).not.toHaveBeenCalled()
+})

@@ -181,6 +181,8 @@ class SolusEntryIn(StrictModel):
     already-uploaded artifact to file as a document node."""
 
     kind: Literal["text", "artifact"]
+    #: Validated per section by `services.solus_config.validate_subsection` (solus.md §1).
+    subsection: str | None = Field(default=None, min_length=1, max_length=32)
     text: str | None = Field(default=None, max_length=4000)
     artifact_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
@@ -202,6 +204,13 @@ class SolusEntryIn(StrictModel):
 
 class SolusEntryPatch(StrictModel):
     text: str = Field(min_length=1, max_length=4000)
+
+
+class SolusEntryPayloadPatch(StrictModel):
+    """PATCH /solus/entries/{id}/payload (solus.md §3.2): the whole typed metadata document,
+    validated by the entry's (section, subsection) model."""
+
+    payload: dict[str, Any]
 
 
 SourceTypeLiteral = Literal["github", "gitlab", "kicad", "onshape", "ros", "altium", "local"]
@@ -507,6 +516,8 @@ def serialize_relation(relation: GraphEdge) -> dict[str, Any]:
         "type": relation.relation_type,
         "from_entity_id": relation.src_id,
         "to_entity_id": relation.dst_id,
+        "confidence": relation.confidence,
+        "domain_pair": relation.domain_pair,
         "properties": relation.attrs,
         "created_at": relation.created_at,
     }
@@ -745,6 +756,9 @@ def serialize_activity(activity: Activity) -> dict[str, Any]:
         "actor_id": activity.actor_id,
         "project_id": activity.project_id,
         "payload": activity.payload,
+        # SOLUSDEV-320 P5-T7 (solus.md §9): additive on the team feed, the history row's shape.
+        "entity_ids": activity.entity_ids,
+        "why_ref": activity.why_ref,
         "created_at": activity.created_at,
     }
 

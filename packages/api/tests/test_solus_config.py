@@ -1,9 +1,10 @@
 """Project-level `.solus` (SOLUSDEV-240 / WORKSPACE W1, docs/api/solus.md).
 
-Every project gets a `.solus` graph node at creation; five sections hold typed
-text, SOL-filed text, and imported artifacts (which become `document` graph nodes
-hanging off the `.solus` node so Impact can reach them). Retained artifacts are
-exempt from the TTL sweep. The `add_solus_entry` tool lets SOL file entries.
+Every project gets a `.solus` graph node at creation; seven sections (with
+subsections, SOLUSDEV-320) hold typed text, SOL-filed text, and imported artifacts
+(which become `document` graph nodes hanging off the `.solus` node so Impact can
+reach them). Retained artifacts are exempt from the TTL sweep. The `add_solus_entry`
+tool lets SOL file entries.
 """
 
 import io
@@ -18,7 +19,31 @@ from solus_api.storage import LocalArtifactStore
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-SECTIONS = ("hardware", "details", "errors", "docs", "code")
+SECTIONS = ("goals", "constraints", "documentation", "errors", "environment", "members", "history")
+FIXED_SUBSECTIONS = {
+    "constraints": ("rules", "compliance", "style", "budgets"),
+    "documentation": ("datasheets", "guides", "references", "decisions"),
+    "environment": ("spec", "hardware", "software", "divergences"),
+}
+LABELS = {
+    "goals": "Goals",
+    "constraints": "Constraints",
+    "documentation": "Documentation",
+    "errors": "Error logging",
+    "environment": "Environment",
+    "members": "Members",
+    "history": "History",
+}
+#: `.solus` + seven sections + twelve fixed subsection nodes, created lazily by ensure().
+TREE_NODES = 1 + len(SECTIONS) + sum(len(v) for v in FIXED_SUBSECTIONS.values())
+TREE_EDGES = TREE_NODES - 1
+#: A sync (or a hardware config write) recomputes `environment/spec` and
+#: `environment/divergences`: two CONFIG entries, each with its own entry node (SOLUSDEV-320 P5-T3).
+SYNCED_CONFIG_NODES = 2
+SYNCED_CONFIG_NAMES = ["Environment spec", "Environment divergences"]
+TREE_NAMES = sorted(
+    [".solus", *LABELS.values(), *(s for subs in FIXED_SUBSECTIONS.values() for s in subs)]
+)
 
 
 async def _project(client: AsyncClient, headers: dict[str, str]) -> tuple[str, str]:
@@ -84,7 +109,7 @@ async def test_project_creation_creates_the_solus_node(
     assert node.origin == "manual"
 
 
-async def test_get_returns_five_empty_sections_and_the_node_id(
+async def test_get_returns_seven_empty_sections_and_the_node_id(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
@@ -117,15 +142,16 @@ async def test_type_it_persists_a_text_entry(
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     resp = await _post(
-        client, alice_headers, project_id, "details", {"kind": "text", "text": "Spec: 48 V bus"}
+        client, alice_headers, project_id, "goals", {"kind": "text", "text": "Spec: 48 V bus"}
     )
     assert resp.status_code == 201, resp.text
     entry = resp.json()["data"]
     assert entry["kind"] == "text"
     assert entry["author"] == "user"
     assert entry["text"] == "Spec: 48 V bus"
+    assert entry["subsection"] == "general" and entry["payload"] is None
     data = await _get(client, alice_headers, project_id)
-    assert [e["id"] for e in data["sections"]["details"]] == [entry["id"]]
+    assert [e["id"] for e in data["sections"]["goals"]] == [entry["id"]]
 
 
 async def test_import_files_an_artifact_as_a_document_node_under_solus(
@@ -137,8 +163,13 @@ async def test_import_files_an_artifact_as_a_document_node_under_solus(
         client,
         alice_headers,
         project_id,
-        "details",
-        {"kind": "artifact", "artifact_id": artifact_id, "name": "FSAE Rules 2027.pdf"},
+        "documentation",
+        {
+            "kind": "artifact",
+            "artifact_id": artifact_id,
+            "name": "FSAE Rules 2027.pdf",
+            "subsection": "references",
+        },
     )
     assert resp.status_code == 201, resp.text
     entry = resp.json()["data"]
@@ -186,7 +217,7 @@ async def test_filing_a_foreign_or_unknown_artifact_is_404(
         client,
         bob_headers,
         bob_project,
-        "docs",
+        "documentation",
         {"kind": "artifact", "artifact_id": alice_artifact, "name": "x.pdf"},
     )
     assert resp.status_code == 404
@@ -194,7 +225,7 @@ async def test_filing_a_foreign_or_unknown_artifact_is_404(
         client,
         alice_headers,
         alice_project,
-        "docs",
+        "documentation",
         {"kind": "artifact", "artifact_id": str(uuid.uuid4()), "name": "x.pdf"},
     )
     assert resp.status_code == 404
@@ -209,14 +240,22 @@ async def test_validation_rejects_bad_section_unknown_fields_and_long_text(
     ).status_code == 404
     assert (
         await _post(
-            client, alice_headers, project_id, "docs", {"kind": "text", "text": "x", "evil": 1}
+            client,
+            alice_headers,
+            project_id,
+            "documentation",
+            {"kind": "text", "text": "x", "evil": 1},
         )
     ).status_code == 422
     assert (
-        await _post(client, alice_headers, project_id, "docs", {"kind": "text", "text": "x" * 4001})
+        await _post(
+            client, alice_headers, project_id, "documentation", {"kind": "text", "text": "x" * 4001}
+        )
     ).status_code == 422
     assert (
-        await _post(client, alice_headers, project_id, "docs", {"kind": "text", "text": "   "})
+        await _post(
+            client, alice_headers, project_id, "documentation", {"kind": "text", "text": "   "}
+        )
     ).status_code == 422
 
 
@@ -241,7 +280,7 @@ async def test_edit_and_delete_entries(
             client,
             alice_headers,
             project_id,
-            "docs",
+            "documentation",
             {"kind": "artifact", "artifact_id": artifact_id, "name": "a.pdf"},
         )
     ).json()["data"]
@@ -258,7 +297,7 @@ async def test_edit_and_delete_entries(
     )
     assert deleted.status_code == 204
     data = await _get(client, alice_headers, project_id)
-    assert data["sections"]["docs"] == []
+    assert data["sections"]["documentation"] == []
     document = await db.get(GraphEntity, uuid.UUID(art["entity_id"]))
     assert document is not None and document.deleted_at is not None
     artifact = await db.get(Artifact, uuid.UUID(artifact_id))
@@ -287,7 +326,7 @@ async def test_other_team_cannot_read_or_write(
         await client.get(f"/api/v1/projects/{project_id}/solus", headers=bob_headers)
     ).status_code == 404
     assert (
-        await _post(client, bob_headers, project_id, "docs", {"kind": "text", "text": "x"})
+        await _post(client, bob_headers, project_id, "documentation", {"kind": "text", "text": "x"})
     ).status_code == 404
 
 
@@ -301,7 +340,7 @@ async def test_viewer_reads_but_cannot_write(
         await client.get(f"/api/v1/projects/{project_id}/solus", headers=bob_headers)
     ).status_code == 200
     assert (
-        await _post(client, bob_headers, project_id, "docs", {"kind": "text", "text": "x"})
+        await _post(client, bob_headers, project_id, "documentation", {"kind": "text", "text": "x"})
     ).status_code == 403
 
 
@@ -318,7 +357,7 @@ async def test_retained_artifacts_survive_the_sweep(
         client,
         alice_headers,
         project_id,
-        "docs",
+        "documentation",
         {"kind": "artifact", "artifact_id": kept, "name": "keep.pdf"},
     )
     store = LocalArtifactStore(tmp_path)

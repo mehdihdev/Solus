@@ -15,12 +15,21 @@ export const SECTION_TITLES: Readonly<Record<PaletteKind, string>> = {
   page: 'Pages',
   project: 'Projects',
   team: 'Teams',
-  node: 'Nodes'
+  node: 'Nodes',
+  solus: '.solus'
 }
 
-const KIND_ORDER: readonly PaletteKind[] = ['page', 'project', 'team', 'node']
+const KIND_ORDER: readonly PaletteKind[] = ['page', 'project', 'team', 'node', 'solus']
 /** Per-kind cap under "All" so a big graph cannot push pages off the list. */
-const ALL_CAP: Readonly<Record<PaletteKind, number>> = { page: 8, project: 6, team: 4, node: 8 }
+const ALL_CAP: Readonly<Record<PaletteKind, number>> = {
+  page: 8,
+  project: 6,
+  team: 4,
+  node: 8,
+  solus: 6
+}
+/** Kinds that come from the open project and need a query (never a dump of the graph). */
+const QUERIED_KINDS: readonly PaletteKind[] = ['node', 'solus']
 const FILTERED_CAP = 50
 const RECENTS_CAP = 6
 
@@ -40,6 +49,14 @@ function scoreText(text: string, q: string): number | null {
 }
 
 export function scoreItem(item: PaletteItem, query: string): number | null {
+  const local = localScore(item, query)
+  // An index match is a floor: a local label prefix still outranks it, a hit on
+  // text the label never shows still appears.
+  if (item.matched === undefined) return local
+  return Math.max(local ?? 0, item.matched)
+}
+
+function localScore(item: PaletteItem, query: string): number | null {
   const q = query.trim().toLowerCase()
   if (!q) return 0
   const label = scoreText(item.label, q)
@@ -86,8 +103,8 @@ export function buildSections(
     ).slice(0, FILTERED_CAP)
     return matches.length ? [{ title: SECTION_TITLES[filter], items: matches }] : []
   }
-  // An empty "All" is a jump list, not a dump of the whole graph: nodes need a query.
-  const kinds = empty ? KIND_ORDER.filter((kind) => kind !== 'node') : KIND_ORDER
+  // An empty "All" is a jump list, not a dump of the whole graph: nodes and .solus need a query.
+  const kinds = empty ? KIND_ORDER.filter((kind) => !QUERIED_KINDS.includes(kind)) : KIND_ORDER
   const sections = kinds
     .map((kind) => ({
       title: SECTION_TITLES[kind],

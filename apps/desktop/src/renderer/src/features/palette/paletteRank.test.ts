@@ -113,3 +113,31 @@ describe('flattenSections', () => {
     ).toEqual([a, b])
   })
 })
+
+describe('index matches', () => {
+  it('an index match is a floor: it surfaces a text hit and never lowers a local label match', () => {
+    const textHit = item('node:p1:e9', 'node', 'VBUS', { matched: 40.5 })
+    // Matched on text the label never shows: surfaces at the index floor.
+    expect(scoreItem(textHit, 'power')).toBe(40.5)
+    expect(scoreItem({ ...textHit, matched: undefined }, 'power')).toBeNull()
+    // A local match still outranks the floor.
+    expect(scoreItem(textHit, 'bus')).toBe(61)
+    expect(scoreItem(item('node:p1:e1', 'node', 'IMU', { matched: 70 }), 'im')).toBe(101)
+  })
+
+  it('.solus rows get their own section after Nodes and, like nodes, need a query under All', () => {
+    const items = [
+      item('page:home', 'page', 'Home'),
+      item('node:p1:e1', 'node', 'Power stage', { matched: 70 }),
+      item('solus:p1:s1', 'solus', 'Power budget', { matched: 71 })
+    ]
+    expect(buildSections(items, '', 'all', []).map((s) => s.title)).toEqual(['Pages'])
+    expect(buildSections(items, 'power', 'all', []).map((s) => s.title)).toEqual([
+      'Nodes',
+      '.solus'
+    ])
+    expect(buildSections(items, 'budget', 'solus', [])).toEqual([
+      { title: '.solus', items: [items[2]] }
+    ])
+  })
+})

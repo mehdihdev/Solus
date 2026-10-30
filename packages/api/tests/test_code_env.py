@@ -1,6 +1,7 @@
 """Code environments as first-class `.solus` entries (SOLUSDEV-252 S5, docs/api/solus.md
-§2.1). A `code` CONFIG entry's payload is a validated `CodeEnvironment`; one entry per
-(type, name/path); the POST route accepts `{kind: "config", payload}` for `code` only."""
+§2.1). An `environment/software` CONFIG entry's payload is a validated `CodeEnvironment`;
+one entry per (type, name/path); the POST route accepts `{kind: "config", payload}` for
+that cell only."""
 
 import uuid
 from typing import Any
@@ -65,14 +66,19 @@ def test_document_is_capped_and_forbids_extras() -> None:
 
 
 def test_config_payload_validation_dispatches_by_section() -> None:
-    env = validate_config_payload(SolusSection.CODE, _env())
+    env = validate_config_payload(SolusSection.ENVIRONMENT, "software", _env())
     assert isinstance(env, CodeEnvironment)
     with pytest.raises(APIError) as bad:
-        validate_config_payload(SolusSection.CODE, {"type": "venv"})
+        validate_config_payload(SolusSection.ENVIRONMENT, "software", {"type": "venv"})
     assert bad.value.status_code == 422
-    with pytest.raises(APIError) as wrong_section:
-        validate_config_payload(SolusSection.DOCS, _env())
-    assert wrong_section.value.status_code == 422
+    for section, subsection in (
+        (SolusSection.DOCUMENTATION, "guides"),
+        (SolusSection.ENVIRONMENT, None),
+        (SolusSection.ENVIRONMENT, "spec"),
+    ):
+        with pytest.raises(APIError) as wrong_cell:
+            validate_config_payload(section, subsection, _env())
+        assert wrong_cell.value.status_code == 422
 
 
 # ---------------------------------------------------------------------- service
@@ -88,11 +94,12 @@ async def test_upsert_is_one_entry_per_type_and_name(
     )
     await db.commit()
     assert first.kind is SolusEntryKind.CONFIG
-    assert first.section is SolusSection.CODE
+    assert first.section is SolusSection.ENVIRONMENT and first.subsection == "software"
     assert first.text == "robot-venv"
     assert first.payload == env.model_dump(mode="json")
     node = await db.get(GraphEntity, first.entity_id)
-    assert node is not None and node.attrs["section"] == "code"
+    assert node is not None and node.attrs["section"] == "environment"
+    assert node.attrs["subsection"] == "software" and node.kind == "solus_note"
 
     updated_env = CodeEnvironment.model_validate(
         _env(packages=[{"name": "numpy", "version": "2.2.0"}])
@@ -156,8 +163,9 @@ async def test_post_config_entry_into_code_section(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
-    url = f"/api/v1/projects/{project_id}/solus/code/entries"
-    resp = await client.post(url, json={"kind": "config", "payload": _env()}, headers=alice_headers)
+    url = f"/api/v1/projects/{project_id}/solus/environment/entries"
+    software = {"kind": "config", "subsection": "software", "payload": _env()}
+    resp = await client.post(url, json=software, headers=alice_headers)
     assert resp.status_code == 201, resp.text
     data = resp.json()["data"]
     assert data["kind"] == "config"
@@ -165,24 +173,25 @@ async def test_post_config_entry_into_code_section(
     assert data["payload"]["type"] == "venv"
     assert data["payload"]["provenance"] == "detected"
     # upsert: same (type, name) → same entry
-    again = await client.post(
-        url, json={"kind": "config", "payload": _env()}, headers=alice_headers
-    )
+    again = await client.post(url, json=software, headers=alice_headers)
     assert again.status_code == 201
     assert again.json()["data"]["id"] == data["id"]
     listing = await client.get(f"/api/v1/projects/{project_id}/solus", headers=alice_headers)
-    assert [e["id"] for e in listing.json()["data"]["sections"]["code"]] == [data["id"]]
+    assert [e["id"] for e in listing.json()["data"]["sections"]["environment"]] == [data["id"]]
 
     bad = await client.post(
-        url, json={"kind": "config", "payload": {"type": "venv"}}, headers=alice_headers
+        url, json={**software, "payload": {"type": "venv"}}, headers=alice_headers
     )
     assert bad.status_code == 422
-    hardware = await client.post(
-        f"/api/v1/projects/{project_id}/solus/hardware/entries",
-        json={"kind": "config", "payload": _env()},
-        headers=alice_headers,
+    for cell in ({"subsection": "hardware"}, {"subsection": "spec"}, {}):
+        wrong = await client.post(
+            url, json={"kind": "config", "payload": _env(), **cell}, headers=alice_headers
+        )
+        assert wrong.status_code == 422, cell
+    goals = await client.post(
+        f"/api/v1/projects/{project_id}/solus/goals/entries", json=software, headers=alice_headers
     )
-    assert hardware.status_code == 422
+    assert goals.status_code == 422
     text_still_works = await client.post(
         url, json={"kind": "text", "text": "uses python 3.12"}, headers=alice_headers
     )

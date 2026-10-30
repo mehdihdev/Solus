@@ -9,21 +9,23 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 import { useDetectedDevicesFeed } from './hardware/useDetectedDevicesFeed'
-import type { Entity, Relation } from '../../lib/api/resources'
+import type { Entity, Relation, Source } from '../../lib/api/resources'
 import type { Point } from '../../lib/api/workspace'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
 import { useGraphJump } from './useGraphJump'
 import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnline'
-import { NodeSidebar } from './sidebar/NodeSidebar'
-import { accountDocuments, isAccountAnchor, withAccountAnchors } from './accountAnchors'
-import { AccountNodeContent } from './AccountNodeContent'
+import { NodeSidebar, type EdgeSelection } from './sidebar/NodeSidebar'
+import { useFindings, type FindingsBySubject } from './useFindings'
+import { baseSourceId, isAccountAnchor, withAccountAnchors } from './accountAnchors'
 import { placementNearRail } from './hardware/deviceCardRules'
 import { PendingDeviceCards } from './hardware/PendingDeviceCards'
 import { editableRobot } from './robots/robotSession'
-import { useSolusNodes } from './useSolusNodes'
+import { askSolAbout } from '../sol/pinnedContextStore'
+import { sectionOf, subsectionOf, useSolusNodes } from './useSolusNodes'
+import { findSolusEntry, targetLabel } from './solusActions'
 import { usePhysicalRobots } from './robots/usePhysicalRobots'
-import { WorkspaceAdd } from './WorkspaceAdd'
+import { WorkspaceAdd, type SolusUpload } from './WorkspaceAdd'
 import { useWorkspaceEvents } from './useWorkspaceEvents'
 import { serviceRoot, type ServiceSelection } from './serviceAttachments'
 import { reconcileWorkspaceFocus } from './workspaceFocus'
@@ -128,11 +130,14 @@ type SelectionPath = readonly { entity: Entity; relation: string }[]
 
 function useWorkspaceSelection(
   projectId: string | null,
-  setSelectedAnchorId: (id: string | null) => void
+  setSelectedAnchorId: (id: string | null) => void,
+  setSelectedEdgeId: (id: string | null) => void
 ) {
   return useCallback(
     (entity: Entity, ancestors: SelectionPath): void => {
       if (!projectId || useWorkspaceStore.getState().project?.id !== projectId) return
+      // Selecting a card closes the edge (SOLUSDEV-320); the EdgePanel is a later task.
+      setSelectedEdgeId(null)
       // An account anchor is presentation only: it never enters the shared focus.
       if (isAccountAnchor(entity.id)) {
         setSelectedAnchorId(entity.id)
@@ -154,7 +159,7 @@ function useWorkspaceSelection(
       })
       void useFocusStore.getState().focus(entity.id, path)
     },
-    [projectId, setSelectedAnchorId]
+    [projectId, setSelectedAnchorId, setSelectedEdgeId]
   )
 }
 
@@ -195,6 +200,11 @@ interface GraphBodyProps {
   reveal?: { entityId: string; sequence: number }
   overlay?: React.ReactNode
   onSuggestionsChanged?: () => void
+  onSelectEdge?: (relation: Relation) => void
+  selectedEdgeId?: string | null
+  onRelayout?: (levelIds: readonly string[]) => void
+  findings?: FindingsBySubject
+  onEscape?: () => boolean
 }
 
 function WorkspaceGraphBody({
@@ -211,7 +221,12 @@ function WorkspaceGraphBody({
   toolbar,
   reveal,
   overlay,
-  onSuggestionsChanged
+  onSuggestionsChanged,
+  onSelectEdge,
+  selectedEdgeId,
+  onRelayout,
+  findings,
+  onEscape
 }: GraphBodyProps): React.JSX.Element {
   if (summary.status === 'loading') return <LoadingOverlay />
   const canRender =
@@ -241,8 +256,32 @@ function WorkspaceGraphBody({
       onContextMenu={onContextMenu}
       renderContent={renderContent}
       toolbar={toolbar}
+      onSelectEdge={onSelectEdge}
+      selectedEdgeId={selectedEdgeId}
+      onRelayout={onRelayout}
+      findings={findings}
+      onEscape={onEscape}
     />
   )
+}
+
+/** The clicked edge resolved against the drawn graph; gone with the relation. */
+function useSelectedEdge(
+  graph: { entities: Entity[]; relations: Relation[] },
+  selectedEdgeId: string | null
+): EdgeSelection | null {
+  return useMemo(() => {
+    const relation = selectedEdgeId
+      ? graph.relations.find((edge) => edge.id === selectedEdgeId)
+      : undefined
+    if (!relation) return null
+    const byId = new Map(graph.entities.map((entity) => [entity.id, entity]))
+    return {
+      relation,
+      from: byId.get(relation.from_entity_id),
+      to: byId.get(relation.to_entity_id)
+    }
+  }, [graph, selectedEdgeId])
 }
 
 /** The bottom line: real counts, then the layout's saving/error state and the live-stream state. */
@@ -274,6 +313,8 @@ export interface WorkspaceScreenProps {
   openAddRequest?: { tab: 'hardware'; sequence: number }
   onAddRequestConsumed?: (sequence: number) => void
   onOpenBench?: () => void
+  /** The design's Ask SOL: the node is pinned to the active chat and the SOL page opens. */
+  onOpenSol?: () => void
   onOpenWidget?: (slug: string) => void
 }
 
@@ -414,6 +455,12 @@ function useWorkspaceSnapshot() {
     return withAccountAnchors(registered.entities, registered.relations, summary.sources)
   }, [base, summary.sources, projectId])
   const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
+  // Local like the anchor: a drawn edge the user clicked (synthetic ids never arrive here).
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+  const onSelectEdge = useCallback((relation: Relation) => setSelectedEdgeId(relation.id), [])
+  const clearEdge = useCallback(() => setSelectedEdgeId(null), [])
+  const clearAnchor = useCallback(() => setSelectedAnchorId(null), [])
+  const selectedEdge = useSelectedEdge(merged, selectedEdgeId)
   // Looked up, not stored: an anchor that vanishes with its source deselects itself.
   const selectedAnchor = merged.entities.find((entity) => entity.id === selectedAnchorId) ?? null
   // Real entities only, so LayoutSession.move refuses an anchor id and never saves it.
@@ -430,7 +477,7 @@ function useWorkspaceSnapshot() {
     [move]
   )
   const copy = graphEmptyCopy(summary, useOfflineReason())
-  const select = useWorkspaceSelection(projectId, setSelectedAnchorId)
+  const select = useWorkspaceSelection(projectId, setSelectedAnchorId, setSelectedEdgeId)
   const [addRequest, setAddRequest] = useState<AddRequest>()
   const onOpenAdd = useCallback(
     (tab: 'service' | 'hardware') =>
@@ -452,6 +499,11 @@ function useWorkspaceSnapshot() {
     base,
     merged,
     selectedAnchor,
+    selectedEdgeId,
+    selectedEdge,
+    clearEdge,
+    clearAnchor,
+    onSelectEdge,
     layout,
     onMove,
     copy,
@@ -509,6 +561,11 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     base,
     merged,
     selectedAnchor,
+    selectedEdgeId,
+    selectedEdge,
+    clearEdge,
+    clearAnchor,
+    onSelectEdge,
     layout,
     onMove,
     copy,
@@ -518,6 +575,13 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     onGraphChanged
   } = useWorkspaceSnapshot()
   useOpenAddRequest(callbacks, onOpenAdd)
+  const findings = useFindings(projectId)
+  // A confirmed or declined edge: the graph re-reads (the server also emits
+  // graph.changed) and the panel closes.
+  const onEdgeDecided = useCallback(() => {
+    onGraphChanged()
+    clearEdge()
+  }, [onGraphChanged, clearEdge])
   const { liveError, registrations } = useWorkspaceSync(
     { projectId, summary, validateGraph, onDevices },
     onGraphChanged
@@ -562,6 +626,13 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     merged,
     projectId,
     selectedAnchor,
+    selectedEdgeId,
+    selectedEdge,
+    clearEdge,
+    clearAnchor,
+    onEdgeDecided,
+    onSelectEdge,
+    findings: findings.bySubject,
     focusedId,
     reveal,
     rail,
@@ -581,6 +652,13 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
   }
 }
 
+/** The selected node's connector type for the panel label, resolved through the real snapshot. */
+function sourceTypeOf(entity: Entity | null, sources: readonly Source[]): string | null {
+  if (!entity) return null
+  const id = baseSourceId(entity)
+  return (id && sources.find((source) => source.id === id)?.type) ?? null
+}
+
 function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
   const {
     nodes,
@@ -588,6 +666,13 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
     merged,
     projectId,
     selectedAnchor,
+    selectedEdgeId,
+    selectedEdge,
+    clearEdge,
+    clearAnchor,
+    onEdgeDecided,
+    onSelectEdge,
+    findings,
     focusedId,
     reveal,
     rail,
@@ -605,6 +690,20 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
     onOpenAdd,
     onGraphChanged
   } = useProjectWorkspace(callbacks)
+  const selectedEntity =
+    selectedAnchor ?? base.entities.find((entity) => entity.id === focusedId) ?? null
+  const hasSelection = Boolean(selectedEntity || selectedEdge)
+  // The design's ✕ / Escape: drop the selection but keep the neighbourhood cache warm.
+  const closePanel = (): void => {
+    useFocusStore.getState().clearFocus()
+    clearAnchor()
+    clearEdge()
+  }
+  const onEscape = (): boolean => {
+    if (!hasSelection) return false
+    closePanel()
+    return true
+  }
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
       {nodes.overlays}
@@ -629,20 +728,42 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
           onSelect={select}
           onMove={onMove}
           onSuggestionsChanged={onGraphChanged}
+          onSelectEdge={onSelectEdge}
+          selectedEdgeId={selectedEdgeId}
+          findings={findings}
+          onRelayout={layout.clear}
           onContextMenu={nodes.onContextMenu}
           renderContent={renderContent}
           toolbar={toolbar}
+          onEscape={onEscape}
         />
         <GraphCounts summary={summary} layout={layout} liveError={liveError} />
         <WidgetInitialization registrations={registrations} />
       </div>
-      <NodeSidebar
-        projectId={projectId}
-        entity={selectedAnchor ?? base.entities.find((entity) => entity.id === focusedId) ?? null}
-        robots={robots}
-        nodes={nodes}
-        account={{ entities: merged.entities, relations: merged.relations, onReveal, onOpenAdd }}
-      />
+      {hasSelection && (
+        <NodeSidebar
+          projectId={projectId}
+          entity={selectedEntity}
+          robots={robots}
+          nodes={nodes}
+          account={{ entities: merged.entities, relations: merged.relations, onReveal, onOpenAdd }}
+          edge={selectedEdge}
+          onEdgeDecided={onEdgeDecided}
+          onEdgeClose={clearEdge}
+          onClose={closePanel}
+          onReveal={onReveal}
+          findings={findings}
+          sourceType={sourceTypeOf(selectedEntity, summary.sources)}
+          onAskSol={
+            callbacks.onOpenSol && projectId
+              ? (entity) => {
+                  askSolAbout(projectId, entity)
+                  callbacks.onOpenSol?.()
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
   )
 }
@@ -704,18 +825,15 @@ function useWorkspaceContent(
           onOpenBench={onOpenBench}
           onOpenWidget={onOpenWidget}
         />
-      ) : entity.type === 'integration_account' ? (
-        <AccountNodeContent
-          entity={entity}
-          count={accountDocuments(entity.id, merged.entities, merged.relations).length}
-        />
-      ) : entity.type === 'physical_robot' || entity.type === 'robot_category' ? (
+      ) : entity.type === 'integration_account' ? null : entity.type === 'physical_robot' ||
+        entity.type === 'robot_category' ? (
         robotContent(entity)
       ) : (
         solusContent(entity)
       ),
     [merged, robotContent, solusContent, projectId, mode, onOpenBench, onOpenWidget]
   )
+  const solusUpload = useSolusUpload(nodes, merged.entities)
   const toolbar = useMemo(
     () => (
       <WorkspaceAdd
@@ -723,9 +841,34 @@ function useWorkspaceContent(
         onSelected={onServiceSelected}
         hardware={robots.hardware}
         openRequest={addRequest}
+        solusUpload={solusUpload}
       />
     ),
-    [projectId, onServiceSelected, robots.hardware, addRequest]
+    [projectId, onServiceSelected, robots.hardware, addRequest, solusUpload]
   )
   return { renderContent, toolbar }
+}
+
+/** Where the Add modal's .solus uploads land: the focused .solus node's section (an entry's
+ *  own section, a section/subsection node's), else Documentation. */
+function useSolusUpload(
+  nodes: ReturnType<typeof useSolusNodes>,
+  entities: readonly Entity[]
+): SolusUpload {
+  const focusedId = useFocusStore((state) => state.focusedEntityId)
+  const { onImport, importFile } = nodes
+  const sections = nodes.state.sections
+  return useMemo(() => {
+    const focused = entities.find((entity) => entity.id === focusedId)
+    const entry = focused ? findSolusEntry(sections, focused.id) : undefined
+    const section = entry?.section ?? (focused ? sectionOf(focused) : null) ?? 'documentation'
+    const subsection = entry ? entry.subsection : focused ? subsectionOf(focused) : null
+    return {
+      target: targetLabel(section, subsection),
+      choose: () => onImport(section, subsection),
+      importFiles: async (files: File[]) => {
+        for (const file of files) await importFile(section, file, subsection)
+      }
+    }
+  }, [entities, focusedId, sections, onImport, importFile])
 }

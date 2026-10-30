@@ -8,26 +8,35 @@ This reconciles the incoming navigator/sidebar flow with independent hardware co
 and the current SOL window. Completion evidence is recorded separately from this wireflow.
 
 ```
-| rail | [Add]                    [parent chip]            [?] | sidebar   |
-|      |                                                       |           |
-|      |         typed node cards and distinct cross-links      | robot:    |
-|      |                    .solus (center)                     |  rename · |
-|      |                                                       |  parts ·  |
-|      |                                                       |  connect ·|
-|      |                                                       |  delete   |
-|      | real graph counts · saving status  Previous / Next     | .solus:   |
-|      |                                                       |  actions  |
-|      |                                                       | entity:   |
-|      |                                                       |  focus ·  |
-|      |                                                       |  neighbors|
+| rail | [+ Add] [Graph › parent]  N NODES INSIDE · ESC…   [?] | panel (380px, on selection) |
+|      |                                                       | ● KICAD · PCB            ✕ |
+|      |   cluster cards (header strip · child chips · footer)  | Main board rev B            |
+|      |   dashed cross-links           .solus (center)         | AUTHORED BY / LAST EDITED*  |
+|      |                                                       | body A (.solus) / B (conns) |
+|      |                                                       | / robot tools               |
+|      | real graph counts · saving status  Previous / Next     | footer: actions             |
+|      |                                        [− 100% + Fit] |                             |
 ```
 
-Add is a top-left corner button over the canvas; Help `?` (top-right) opens a small
-popover with the navigation instructions, the current trail and **Project overview**;
-the parent chip on stage is the up affordance. The sidebar (formerly "inspector") shows,
-by selected type: physical robot — rename, parts by category, connection, pending
-suggestions, unassigned parts, delete; `.solus` root/section/entry — sections, the three
-actions, composer, edit/delete; any other entity — focus summary and neighbors.
+Design template (Claude Design `templates/workspace/Workspace.dc.html`, 2026-10-24). Top-left,
+over the canvas: the accent **Add** button, a breadcrumb pill (`Graph › parent › …`, a back
+arrow when deeper than root) and a mono level stat (`N ROOTS · M NODES · DOUBLE-CLICK TO ZOOM
+IN` at the root, `N NODES INSIDE · ESC TO ZOOM OUT` deeper). Help `?` (top-right) keeps its
+popover with the navigation instructions, the current trail and **Project overview**. A zoom
+pill sits bottom-right (`−` · `NN%` resets to 100% · `+` · `Fit`; camera only, 50–200%). The
+side panel (380px) exists only for a selection; its ✕ and Escape close it (the neighbourhood
+cache stays warm), and a second Escape goes up one level. Dialogs and editors consume Escape
+before the canvas does. Every panel has the same chrome — the node's domain dot, a mono label
+(`SOURCE · ONSHAPE` for an account anchor, `<source type or domain> · <type>` otherwise), the
+name, and `AUTHORED BY` / `LAST EDITED` only when the record carries them (`.solus` entries:
+SOL authorship and `updated_at`; nothing is invented) — then a body by type: physical robot —
+rename, parts by category, connection, pending suggestions, unassigned parts, delete; `.solus`
+root/section/entry — `CONTENT OVERVIEW`, `NODES UNDERNEATH` / `CONTENTS`, the composer, and a
+footer of **Add / Edit · Upload · Ask SOL**; any other entity — **CONNECTIONS · N** (one card per
+neighbourhood edge: the other node, the relation, the edge sentence, and a status pill
+`In sync` / `Review` / `Broken` from open findings on either endpoint) with a search box and
+the footer **Ask SOL about this node**. Ask SOL pins the node to the project's active chat and
+opens the SOL page with the composer seeded (`sol-page.md`).
 
 ## Navigator
 
@@ -44,7 +53,7 @@ the latest layout; it does not discard teammate positions silently.
 
 Hover a card and scroll inward to reveal its immediate children with a transition
 from that card. Scroll outward goes up one level. Double-click, explicit enter/back
-controls, keyboard, the parent chip and Help › Project overview provide equivalent
+controls, keyboard, the breadcrumb pill and Help › Project overview provide equivalent
 navigation. Clicking any
 entity updates the shared focus, including Live Bench. Leaves select without
 zooming. Zoom never triggers source synchronization. Reduced-motion settings are
@@ -56,13 +65,23 @@ onto visible ancestor cards; outside-level connections remain discoverable.
 
 ### September 15 graph presentation amendment
 
-The UI brief governs card presentation: rounded domain-bordered cards on a dark dot-grid,
-monospaced names, actual type labels and metadata, and two-column child previews with actual
-descendant counts. Unbound/proposal states use dashed borders only when supported by evidence.
-Default placement is deterministic organic packing with non-aligned offsets, preserving every
-saved point. Curved links display actual aggregated relationship counts at their midpoint;
-cross-domain links are accented and dashed. Real pending proposals float beside their candidate
-and expose evidence plus existing accept/decline controls. No fabricated proposals or metadata.
+Superseded 2026-10-24 by the design template: 300×184 cluster cards on the dot grid (22px) with
+a `--sur2` header strip — a 34px mark tile (the Solus mark for `.solus`, the provider logo for
+an account anchor, else the domain dot), the bold name, a `⋮⋮` grip — a body of up to four child
+chips (domain dot · name · real descendant count) or a mono `TYPE · PROVIDER` line plus the
+node's own clamped content, and a mono footer (`double-click to zoom` · `N nodes` /
+`no nodes inside`). The selected card carries a 1px accent inset ring. Unbound/proposal states
+keep dashed borders only when supported by evidence. Default placement is tidy rows of three
+below the parent (centre, right, left; saved points are never recomputed) and the level opens on
+its first row — the frame hugs the cards, never an empty half above the parent's point. There is
+no parent chip inside a level (the breadcrumb owns "up"). Containment is drawn: dashed muted
+lines from one stem at the frame's top edge into a bus and down into each card, and at the root from the project's
+`.solus` hub out to the other roots — real `contains` and project membership, never an invented
+relation. Curved cross-links with real aggregated counts and accented dashed cross-domain links
+are unchanged; the bottom cross-link legend and endpoint list are gone (paging shows only when a
+level has more than 24 cards). Holding the pointer on the canvas background and dragging pans.
+Section cards show their count only; adding lives in the side panel footer and the right-click
+menu. No fabricated proposals or metadata.
 
 Enter `.solus` to see five section nodes: Hardware configs, Project details,
 Error logging, Documentation, Code environment. Right-click any section gives
@@ -81,17 +100,27 @@ deleted selection. No automatic error-filing capability is implied.
 
 ## Add
 
-Top-left **Add** opens a panel with **Integrations** and **Hardware** tabs.
-**Hardware** is three sections in reading order — Devices found · Search · Describe
-something new — then a collapsed **Unassigned parts** disclosure; no card grid,
-preserving file/connector parts and the private-source subsection (`hardware-onboarding.md`). Offline it shows one
-honest line and disables every control.
-Integrations lists the accounts connected in Home and cached document/repo
-choices. Reopening a dropdown reuses its loaded listing. Missing cached data is
-an honest empty state with an explicit refresh action; opening the panel itself
-never spends provider quota. Selecting a new document creates a project node and
-starts its first sync. Re-selecting an existing node only focuses it. A second
-Onshape document or Git repository creates a second root of that type.
+Top-left **Add** opens a centred two-column modal titled **Add to graph** (design template).
+The left column, **INTEGRATIONS**, lists the accounts connected in Home (provider logo tile ·
+login · the cached listing's real document count; non-connected or unsupported rows disabled),
+a **.solus** row (Upload documents) and a **Hardware** row. The right pane follows the selected
+row. For an account: `Connected as <login>`, a search box, and the cached documents as checkbox
+rows — a document already attached shows an **In graph** pill and re-selecting it only focuses
+its node; the others toggle into a pick set. Tree-shaped providers keep their document tree.
+For **.solus**: a dashed dropzone (`Drop documents here or click to choose`, `MD · PDF · CSV ·
+PNG — saved to .solus › <section>`), landing in the focused `.solus` node's section, else
+Documentation, through the existing import handler (8 MiB cap). For **Hardware**: the three
+sections in reading order — Devices found · Search · Describe something new — then a collapsed
+**Unassigned parts** disclosure; no card grid, preserving file/connector parts and the
+private-source subsection (`hardware-onboarding.md`); offline it shows one honest line and
+disables every control. The footer reads `Adds to <target>`, offers Cancel, and confirms with
+**Add N documents** (`Select documents` while nothing is picked) or **Choose files**; picked
+documents import in order through the existing attach/sync path, then a shell toast names the
+count and source and the modal closes; a failed import stays open and visible.
+Reopening reuses loaded listings. Missing cached data is an honest empty state with an explicit
+refresh action; opening the modal itself never spends provider quota. A new document creates a
+project node and starts its first sync. A second Onshape document or Git repository creates a
+second root of that type.
 
 Onshape: document → assemblies → parts. Git: repository → directories → files.
 Loading/sync failures are shown on the selected source; unrelated nodes remain
@@ -137,12 +166,12 @@ of the legacy onboarding completion flag, subject to server role checks.
 
 ### Service picker recovery and live updates
 
-The first account expansion reads only I1's cache. A missing listing offers **Load documents**;
+Selecting an account row reads only I1's cache. A missing listing offers **Load documents**;
 **Refresh documents** is explicit and disabled while a read/import is pending. **Refresh accounts**
-finds newly connected Home accounts. Closing/reopening Add retains expanded accounts and choices.
-Selecting a new document shows import progress, then reveals/focuses its real root. A failure stays
-visible on subsequent clicks, with guidance to inspect Sources; no repeated sync is started.
-Escape closes Add before affecting graph navigation; an outside click also closes it.
+finds newly connected Home accounts. Closing/reopening Add retains loaded listings. Confirming
+picks shows `Importing document…`, then reveals/focuses each real root. A failure stays visible on
+subsequent clicks, with guidance to inspect connected accounts; no repeated sync is started.
+Escape and the backdrop close Add before affecting graph navigation.
 
 Committed source changes reach the current canvas through the existing project event stream.
 A disconnected stream shows reconnection status; permission failures stop retrying and explain
@@ -156,10 +185,12 @@ on the saved node and retry uses that node's identity. A session UUID is not rec
 proof. Serial-less device cards and sidebar both say “no serial number — identity is tied to
 this USB port; keep it plugged in here”.
 
-**Ask SOL about this node** opens the existing SOL window with the selected real entity as
-subject. Selection alone makes no model call. The eventual send uses the current project,
-Guide/Expert and action modes, budget/confirmation gates and entity mention. Changing selection
-does not retarget an already submitted turn; account/project switches reject stale results.
+**Ask SOL about this node** (the panel's accent footer action) pins the selected real entity to
+the project's active chat (`solus_sol_pinned_v1`, client-side) and opens the SOL page with the
+composer seeded `About <name>: `; the SOL window keeps its own subject hand-off. Selection alone
+makes no model call. The eventual send carries the pinned node in `mentions`, uses the current
+project, Guide/Expert and action modes, budget/confirmation gates. Changing selection does not
+retarget an already submitted turn; account/project switches reject stale results.
 Existing Import files/Add note actions keep their section/artifact handlers and limits. Broader
 context actions for every arbitrary node remain follow-up work where no handler exists.
 

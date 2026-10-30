@@ -22,15 +22,20 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from solus_api.connectors.code_host import (
+    MAX_MANIFEST_BYTES,
     REPO_ROOT_KEY,
+    REQUIRES,
     file_entity,
+    manifest_entities,
     module_entity,
     parent_key,
+    root_manifest_blobs,
     solus_config_blob,
     solus_config_entity,
 )
 from solus_api.connectors.contracts import (
     AccountInfo,
+    Capability,
     ConnectorError,
     Credentials,
     Domain,
@@ -82,6 +87,9 @@ class GitLabConnector(OAuthConnector):
     """Connector for GitLab projects, gitlab.com or self-hosted (CLAUDE.md §2.1)."""
 
     provider: ClassVar[str] = "gitlab"
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CHANGE_SIGNAL, Capability.STRUCTURE, Capability.CONSTRUCTION_HISTORY}
+    )
     scopes: ClassVar[tuple[str, ...]] = ("read_api", "read_user")
     config_fields: ClassVar[tuple[str, ...]] = ("repo", "branch")
     #: How the app lets a user choose what to track: exactly one repository.
@@ -220,9 +228,12 @@ class GitLabConnector(OAuthConnector):
             sha = await self._head_sha(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
             solus_text, solus_errors = await self._solus_config_text(client, repo, sha, tree)
+            manifests, manifest_errors = await self._root_manifests(client, repo, sha, tree)
 
-        entities, relations, errors = self._build_graph(repo, branch, sha, tree, solus_text)
-        errors = [*solus_errors, *errors]
+        entities, relations, errors = self._build_graph(
+            repo, branch, sha, tree, solus_text, manifests
+        )
+        errors = [*solus_errors, *manifest_errors, *errors]
         if truncated:
             errors.append(
                 SyncError(
@@ -263,29 +274,49 @@ class GitLabConnector(OAuthConnector):
         received; a fault is a SyncError on that path, never a failed sync."""
         if solus_config_blob(tree) is None:
             return None, []
-        url = f"{self._project_url(repo)}/repository/files/{quote(SOLUS_CONFIG_PATH, safe='')}/raw"
+        return await self._raw_text(client, repo, sha, SOLUS_CONFIG_PATH, MAX_PROJECT_TOML_BYTES)
+
+    async def _raw_text(
+        self, client: httpx.AsyncClient, repo: str, sha: str, path: str, limit: int
+    ) -> tuple[str | None, list[SyncError]]:
+        """One bounded raw-file read at `sha`; a fault is a SyncError on that path."""
+        url = f"{self._project_url(repo)}/repository/files/{quote(path, safe='')}/raw"
         try:
             async with client.stream("GET", url, params={"ref": sha}) as response:
-                return await self._read_bounded_text(response), []
+                return await self._read_bounded_text(response, path, limit), []
         except (ConnectorError, ValueError) as exc:
-            return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+            return None, [SyncError(item=path, message=str(exc))]
+
+    async def _root_manifests(
+        self, client: httpx.AsyncClient, repo: str, sha: str, tree: list[dict[str, Any]]
+    ) -> tuple[list[tuple[str, str]], list[SyncError]]:
+        """SOLUSDEV-320: root-level `package.json` / `package.xml` as `(path, text)`."""
+        manifests: list[tuple[str, str]] = []
+        errors: list[SyncError] = []
+        for item in root_manifest_blobs(tree):
+            path = str(item["path"])
+            text, faults = await self._raw_text(client, repo, sha, path, MAX_MANIFEST_BYTES)
+            errors.extend(faults)
+            if text is not None:
+                manifests.append((path, text))
+        return manifests, errors
 
     @staticmethod
-    async def _read_bounded_text(response: httpx.Response) -> str:
+    async def _read_bounded_text(response: httpx.Response, path: str, limit: int) -> str:
         """The raw-file body, bounded AS IT STREAMS (the Onshape `_read_export`
         pattern): the declared length is checked first, then the running total,
         so an oversized committed file is never held in memory (CLAUDE.md §7)."""
         if response.status_code >= httpx.codes.BAD_REQUEST:
             raise ConnectorError("gitlab_error", f"GitLab request failed ({response.status_code}).")
-        too_large = ConnectorError("too_large", f"{SOLUS_CONFIG_PATH}: exceeds size cap")
+        too_large = ConnectorError("too_large", f"{path}: exceeds size cap")
         declared = response.headers.get("content-length")
-        if declared and declared.isdigit() and int(declared) > MAX_PROJECT_TOML_BYTES:
+        if declared and declared.isdigit() and int(declared) > limit:
             raise too_large
         chunks: list[bytes] = []
         total = 0
         async for chunk in response.aiter_bytes():
             total += len(chunk)
-            if total > MAX_PROJECT_TOML_BYTES:
+            if total > limit:
                 raise too_large
             chunks.append(chunk)
         return b"".join(chunks).decode("utf-8")
@@ -297,6 +328,7 @@ class GitLabConnector(OAuthConnector):
         sha: str,
         tree: list[dict[str, Any]],
         solus_text: str | None = None,
+        manifests: list[tuple[str, str]] | None = None,
     ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
         errors: list[SyncError] = []
         entities_by_key: dict[str, EntityOut] = {
@@ -322,7 +354,14 @@ class GitLabConnector(OAuthConnector):
             for key in entities_by_key
             if key != REPO_ROOT_KEY
         ]
-        return list(entities_by_key.values()), relations, errors
+        requirements = [
+            entity for path, text in manifests or () for entity in manifest_entities(path, text)
+        ]
+        relations.extend(
+            RelationOut(from_key=REPO_ROOT_KEY, to_key=entity.source_key, type=REQUIRES)
+            for entity in requirements
+        )
+        return [*entities_by_key.values(), *requirements], relations, errors
 
     def _land_item(
         self,

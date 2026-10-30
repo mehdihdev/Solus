@@ -21,7 +21,7 @@ from solus_api.models import (
     Team,
     User,
 )
-from solus_api.services.local_links import CLONE_OF, DERIVED_ORIGIN, reconcile_local_links
+from solus_api.services.local_links import CLONE_OF, CLONE_ORIGIN, reconcile_local_links
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,7 +109,7 @@ async def test_clone_links_to_matching_repo(db: AsyncSession) -> None:
     edges = await _clone_edges(db, project)
     assert len(edges) == 1
     edge = edges[0]
-    assert edge.origin == DERIVED_ORIGIN
+    assert edge.origin == CLONE_ORIGIN
     assert edge.source_id == local.id
     assert edge.domain_pair == "code<->code"
     assert edge.confidence == 1.0

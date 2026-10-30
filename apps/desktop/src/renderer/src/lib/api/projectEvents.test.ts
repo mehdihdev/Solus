@@ -175,6 +175,29 @@ it('decodes every contract frame type for the subscribed project', async () => {
   ])
 })
 
+// SOLUSDEV-320: finding frames carry the finding id and its status; a bad status is dropped.
+const findingRaised = {
+  type: 'finding.raised',
+  project_id: PROJECT_ID,
+  finding_id: '66666666-6666-4666-8666-666666666666',
+  status: 'open',
+  at: '2026-09-30T12:00:00+00:00'
+}
+it('decodes finding.raised|updated|resolved for the subscribed project only', async () => {
+  const events = await collectFor([
+    sse('finding.raised', findingRaised),
+    sse('finding.updated', { ...findingRaised, type: 'finding.updated', status: 'acknowledged' }),
+    sse('finding.resolved', { ...findingRaised, type: 'finding.resolved', status: 'resolved' }),
+    sse('finding.raised', { ...findingRaised, project_id: 'other' }),
+    sse('finding.raised', { ...findingRaised, status: 'exploded' })
+  ])
+  expect(events).toEqual([
+    { type: 'finding.raised', findingId: findingRaised.finding_id, status: 'open' },
+    { type: 'finding.updated', findingId: findingRaised.finding_id, status: 'acknowledged' },
+    { type: 'finding.resolved', findingId: findingRaised.finding_id, status: 'resolved' }
+  ])
+})
+
 it('accepts access.revoked scoped to a team (project_id null) on a project stream', async () => {
   const revoked = { ...projectAccessRevoked, project_id: null, team_id: 'team-1' }
   expect(await collectFor([sse('access.revoked', revoked)])).toEqual([{ type: 'access.revoked' }])

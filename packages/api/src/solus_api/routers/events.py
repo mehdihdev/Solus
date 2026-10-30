@@ -134,7 +134,7 @@ class SearchPaletteOpenedPayload(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["page", "project", "team", "node"]
+    kind: Literal["page", "project", "team", "node", "solus"]
     rank: Annotated[int, Field(ge=0, le=199)]
     query_length: Annotated[int, Field(ge=0, le=200)]
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from solus_api.connectors.contracts import Capability
 from solus_api.connectors.eda import EdaExportConnector, Netlist
 from solus_api.connectors.protel_netlist import parse_protel_netlist
 
@@ -35,6 +36,11 @@ class AltiumConnector(EdaExportConnector):
     proprietary path is a scaffolded post-launch stub (see module docstring)."""
 
     provider: ClassVar[str] = "altium"
+    #: No NETLIST: the netlist-derived inference modules are gated on that capability and
+    #: the approved provider set is KiCad only (T4); widening it is a tier-2 change.
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CHANGE_SIGNAL, Capability.STRUCTURE}
+    )
     #: `export` — the committed Protel netlist CONTENT, sufficient on its own
     #: (§2.1 invariant 3). `project_path` — additive, read by the injected
     #: `BridgeExportAcquirer` (mcp_acquire.py) to locate the project on the

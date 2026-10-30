@@ -94,6 +94,20 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 # builds bake the real backend origin at build time (SOLUSDEV-148/149);
 # setting SOLUS_COMPANION_ALLOWED_HOSTS is the explicit user/app consent.
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
+#: SOLUSDEV-320: the fixed developer tools `machine.tool_versions` asks `--version` of.
+#: Resolved with `shutil.which` at call time; an absent one is omitted, never invented.
+DEFAULT_VERSION_BINARIES: tuple[str, ...] = (
+    "python3",
+    "node",
+    "git",
+    "kicad-cli",
+    "arduino-cli",
+    "ros2",
+    "docker",
+    "uv",
+    "pip",
+    "conda",
+)
 _LOCAL_HOSTS = frozenset(DEFAULT_ALLOWED_HOSTS)
 
 # The bridge WS path (bridge-protocol.md §8); the artifact upload origin and
@@ -251,6 +265,8 @@ class CompanionConfig:
     # `workspace_root()` fails closed rather than confining to an arbitrary
     # cwd (docs/architecture — kicad fork `solus/workspace.py`).
     workspace: str | None = None
+    # SOLUSDEV-320: what `machine.tool_versions` may ask `--version` of (argv only).
+    version_binaries: tuple[str, ...] = DEFAULT_VERSION_BINARIES
 
 
 @dataclass(frozen=True)

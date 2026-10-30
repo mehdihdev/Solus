@@ -17,8 +17,9 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
+from solus_contracts.relations import normalize_domain_pair
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -34,8 +35,11 @@ from solus_api.connectors.contracts import (
 from solus_api.connectors.github_app import is_installation_ref, resolve_installation_credentials
 from solus_api.connectors.secrets import SecretNotFoundError, SecretStore
 from solus_api.connectors.sync_events import emit_sync_outcome
+from solus_api.graph import kinds
+from solus_api.graph.inference import infer_after_sync
 from solus_api.graph.live import graph_changed_frame
 from solus_api.models import (
+    Domain,
     GraphEdge,
     GraphEntity,
     Job,
@@ -47,7 +51,12 @@ from solus_api.models import (
     SyncTrigger,
     utcnow,
 )
+from solus_api.services.activity import record_activity
+from solus_api.services.environment_divergence import recompute_divergences_guarded
 from solus_api.services.local_links import reconcile_local_links
+
+if TYPE_CHECKING:
+    from solus_api.connectors.registry import ConnectorRegistry
 
 logger = logging.getLogger("solus.connectors.runtime")
 
@@ -237,7 +246,7 @@ async def _reconcile_relations(
     counts: _Counts,
     errors: list[dict[str, str]],
 ) -> None:
-    # Only CONNECTOR-origin edges are the sync's to reconcile. A `derived` edge
+    # Only CONNECTOR-origin edges are the sync's to reconcile. A `system` edge
     # (SOLUSDEV-249: the local clone's `clone_of` link to its code-host repo)
     # sits under the same source_id but is owned by `services/local_links.py`,
     # which reconciles it after every relevant sync — tombstoning it here would
@@ -269,7 +278,9 @@ async def _reconcile_relations(
         edge = (from_id, to_id, rel.type)
         desired[edge] = dict(rel.properties)
         # domain_pair is derived from the endpoints' domains at write time (W0-05).
-        domain_pairs[edge] = f"{key_to_domain[rel.from_key]}<->{key_to_domain[rel.to_key]}"
+        domain_pairs[edge] = normalize_domain_pair(
+            key_to_domain[rel.from_key], key_to_domain[rel.to_key]
+        )
 
     for edge, props in desired.items():
         row = existing_map.get(edge)
@@ -417,6 +428,7 @@ async def run_sync(
     acting_user_id: uuid.UUID | None = None,
     force: bool = False,
     hub: Any | None = None,
+    registry: ConnectorRegistry | None = None,
 ) -> uuid.UUID | None:
     """Run one sync end-to-end. Records a Sync row and returns its id; failures
     are recorded on the Sync/Source/Job (never raised) so the caller's 202 stands
@@ -490,7 +502,7 @@ async def run_sync(
         return sync_id
 
     try:
-        await _commit_success(sessionmaker, source_id, sync_id, job_id, result, hub)
+        await _commit_success(sessionmaker, source_id, sync_id, job_id, result, hub, registry)
     except asyncio.CancelledError:
         await _record_cancelled_sync(sessionmaker, source_id, sync_id, job_id)
         raise
@@ -656,6 +668,43 @@ async def _begin_sync(
         return sync.id, dict(source.config), dict(source.cursor), source.secret_ref
 
 
+#: The history row's domain per connector family (`Activity.domain` is a filter, not a fact
+#: about the entities landed); absent for a family that spans several.
+_SYNC_DOMAIN: dict[SourceType, str] = {
+    SourceType.GITHUB: Domain.CODE.value,
+    SourceType.GITLAB: Domain.CODE.value,
+    SourceType.LOCAL: Domain.CODE.value,
+    SourceType.ROS: Domain.CODE.value,
+    SourceType.KICAD: Domain.ELECTRICAL.value,
+    SourceType.ALTIUM: Domain.ELECTRICAL.value,
+    SourceType.ONSHAPE: Domain.MECHANICAL.value,
+}
+#: The one entity a sync "is about" when the graph has such a root (a repo, a clone, a
+#: folder, a CAD document, an export); else the history row names nothing.
+_SOURCE_ROOT_KINDS = (
+    kinds.CODE_REPO,
+    kinds.LOCAL_CLONE,
+    kinds.LOCAL_FOLDER,
+    kinds.CAD_DOCUMENT,
+    kinds.DESIGN_EXPORT,
+)
+
+
+async def _source_root_entity(session: AsyncSession, source: Source) -> uuid.UUID | None:
+    root: uuid.UUID | None = await session.scalar(
+        select(GraphEntity.id)
+        .where(
+            GraphEntity.project_id == source.project_id,
+            GraphEntity.source_id == source.id,
+            GraphEntity.kind.in_(_SOURCE_ROOT_KINDS),
+            GraphEntity.deleted_at.is_(None),
+        )
+        .order_by(GraphEntity.created_at, GraphEntity.id)
+        .limit(1)
+    )
+    return root
+
+
 async def _commit_success(
     sessionmaker: async_sessionmaker[AsyncSession],
     source_id: uuid.UUID,
@@ -663,6 +712,7 @@ async def _commit_success(
     job_id: uuid.UUID | None,
     result: SyncResult,
     hub: Any | None = None,
+    registry: ConnectorRegistry | None = None,
 ) -> None:
     async with sessionmaker() as session:
         source = await session.get(Source, source_id)
@@ -675,6 +725,20 @@ async def _commit_success(
         # derived from BOTH sides — reconcile it whenever either side moved.
         if source.type in _LINKABLE_TYPES:
             await reconcile_local_links(session, source.project_id)
+        # SOLUSDEV-320: edges inferred from what this sync landed, in the same
+        # transaction. `infer_after_sync` guards every module; it never fails the sync.
+        if registry is not None:
+            try:
+                await infer_after_sync(
+                    session, source.project_id, source_id=source_id, registry=registry
+                )
+            except Exception:  # noqa: BLE001 — inference is best-effort, the sync stands
+                logger.exception(
+                    "inference failed project=%s source=%s", source.project_id, source_id
+                )
+        # SOLUSDEV-320 P5: the environment spec and per-machine divergences follow the
+        # graph; guarded the same way, never failing the sync.
+        await recompute_divergences_guarded(session, source.project_id)
         source.last_synced_at = utcnow()
         source.status = SourceStatus.CONNECTED
         source.last_error = None
@@ -685,6 +749,26 @@ async def _commit_success(
         sync.relations_deleted = counts.relations_deleted
         sync.errors = errors
         sync.finished_at = utcnow()
+        # SOLUSDEV-320 P5-T7 (solus.md §9): one history row per completed sync, naming the
+        # source's root entity when the graph has one.
+        root_id = await _source_root_entity(session, source)
+        record_activity(
+            session,
+            team_id=source.team_id,
+            activity_type="sync.completed",
+            project_id=source.project_id,
+            domain=_SYNC_DOMAIN.get(source.type),
+            payload={
+                "source_id": str(source_id),
+                "sync_id": str(sync_id),
+                "entities_created": counts.entities_created,
+                "entities_updated": counts.entities_updated,
+                "relations_created": counts.relations_created,
+                "relations_deleted": counts.relations_deleted,
+                "errors": len(errors),
+            },
+            entity_ids=[root_id] if root_id is not None else [],
+        )
         await _mark_job(session, job_id, JobStatus.SUCCEEDED, progress=100)
         await emit_sync_outcome(session, job_id=job_id, source=source, sync=sync)
         await session.commit()

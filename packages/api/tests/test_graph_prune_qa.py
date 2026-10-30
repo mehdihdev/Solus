@@ -80,7 +80,7 @@ async def test_dry_run_apply_and_idempotency(db: AsyncSession) -> None:
         entity_id=node.id,
         created_by=user.id,
         kind=SolusEntryKind.TEXT,
-        section=SolusSection.DETAILS,
+        section=SolusSection.GOALS,
     )
     db.add_all([entry, suggestion])
     await db.commit()
@@ -191,7 +191,7 @@ async def _add_reference(
             SolusEntry(
                 project_id=project.id,
                 created_by=user.id,
-                section=SolusSection.HARDWARE,
+                section=SolusSection.ENVIRONMENT,
                 kind=SolusEntryKind.ARTIFACT if guard == "artifact" else SolusEntryKind.CONFIG,
                 entity_id=other.id if guard in {"external_config", "legacy_config"} else node.id,
                 configured_entity_id=(other.id if guard == "real_config_subject" else node.id)
@@ -221,7 +221,7 @@ async def test_project_scope_and_entry_only_attribution(db: AsyncSession) -> Non
             entity_id=node.id,
             created_by=user.id,
             kind=SolusEntryKind.TEXT,
-            section=SolusSection.DETAILS,
+            section=SolusSection.GOALS,
         )
     )
     await db.commit()
@@ -282,7 +282,7 @@ async def test_apply_rollback_restores_every_mutation(db: AsyncSession) -> None:
         project_id=project.id,
         entity_id=node.id,
         created_by=user.id,
-        section=SolusSection.DETAILS,
+        section=SolusSection.GOALS,
         kind=SolusEntryKind.TEXT,
     )
     suggestion = HardwareSuggestion(
@@ -321,7 +321,7 @@ async def test_apply_revalidates_cached_rows(db: AsyncSession, changed: str) -> 
         project_id=project.id,
         entity_id=node.id,
         created_by=user.id,
-        section=SolusSection.DETAILS,
+        section=SolusSection.GOALS,
         kind=SolusEntryKind.TEXT,
     )
     event = await db.scalar(select(DataEvent))

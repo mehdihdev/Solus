@@ -1,101 +1,11 @@
-// SOLUSDEV-233: the SOL page's right-panel "CONTEXT IN USE" — the user's
-// standing instruction (editable), plus the last turn's context manifest from
-// the context_used frame: document citations as a file list, graph citations
-// as entity chips. Labels only — section text never reaches the client.
-import { useState } from 'react'
-import { Button } from '../../components/ui/Button'
+// SOLUSDEV-233: the SOL page's "CONTEXT IN USE" — the last turn's context manifest from
+// the context_used frame: document citations as a file list, graph citations as entity
+// chips. Labels only — section text never reaches the client. (The standing instruction
+// moved to CustomInstructionCard with the design-template right column.)
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import type { ContextUsedInfo } from './solStream'
-import { useCustomInstruction } from './useCustomInstruction'
 import { citationLabel } from './citationLabel'
-
-const INSTRUCTION_CAP = 500
-
-const INSTRUCTION_TEXTAREA_STYLE: React.CSSProperties = {
-  width: '100%',
-  boxSizing: 'border-box',
-  background: 'var(--bg)',
-  color: 'var(--tx)',
-  border: '1px solid var(--bd)',
-  borderRadius: 4,
-  padding: '8px 10px',
-  fontSize: 11.5,
-  fontFamily: 'var(--font-ui)',
-  resize: 'vertical',
-  outline: 'none'
-}
-
-function CustomInstructionCard(): React.JSX.Element {
-  const { instruction, status, save } = useCustomInstruction()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
-  const [failed, setFailed] = useState(false)
-
-  const beginEdit = (): void => {
-    setDraft(instruction ?? '')
-    setFailed(false)
-    setEditing(true)
-  }
-  const submit = async (): Promise<void> => {
-    const ok = await save(draft)
-    setFailed(!ok)
-    if (ok) setEditing(false)
-  }
-
-  return (
-    <Card pad={12} className="sol-panel-in" style={{ marginTop: 10 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ fontSize: 12, fontWeight: 600 }}>Custom instruction</div>
-        {status === 'ready' && !editing && (
-          <Button kind="bare" size="sm" onClick={beginEdit}>
-            {instruction ? 'Edit' : 'Add'}
-          </Button>
-        )}
-      </div>
-      {!editing && (
-        <div
-          style={{
-            fontSize: 11.5,
-            color: instruction ? 'var(--tx)' : 'var(--mut)',
-            marginTop: 6,
-            lineHeight: 1.5
-          }}
-        >
-          {status === 'offline'
-            ? 'Unavailable offline.'
-            : (instruction ?? 'None set. SOL follows your saved preferences here.')}
-        </div>
-      )}
-      {editing && (
-        <div style={{ marginTop: 8 }}>
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={INSTRUCTION_CAP}
-            rows={3}
-            aria-label="Custom instruction"
-            placeholder="Prefer metric units. Flag servo commands past URDF limits."
-            style={INSTRUCTION_TEXTAREA_STYLE}
-          />
-          {failed && (
-            <div style={{ fontSize: 10.5, color: 'var(--err)', marginTop: 4 }}>
-              Couldn&apos;t save — try again.
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', marginTop: 6 }}>
-            <Button kind="ghost" size="sm" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-            <Button kind="primary" size="sm" onClick={() => void submit()}>
-              Save
-            </Button>
-          </div>
-        </div>
-      )}
-    </Card>
-  )
-}
 
 function ContextFilesCard({ labels }: { labels: readonly string[] }): React.JSX.Element {
   return (
@@ -229,10 +139,11 @@ export function ContextPanel({
   contextUsed: ContextUsedInfo | null
 }): React.JSX.Element {
   return (
-    <div>
-      <Mono size={9.5}>CONTEXT IN USE</Mono>
-      <CustomInstructionCard />
+    <section aria-label="Context in use">
+      <Mono size={10} ls="0.08em">
+        CONTEXT IN USE
+      </Mono>
       <ManifestCards context={contextUsed} />
-    </div>
+    </section>
   )
 }

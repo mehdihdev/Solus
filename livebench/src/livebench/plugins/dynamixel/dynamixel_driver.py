@@ -165,6 +165,7 @@ class DynamixelSource:
 
 class DynamixelDriver:
     driver_id: ClassVar[str] = DRIVER_ID
+    requires_packages: ClassVar[tuple[str, ...]] = ("dynamixel-sdk",)
     display_name: ClassVar[str] = "Dynamixel Protocol 2.0 servo bus"
     transports: ClassVar[frozenset[TransportKind]] = frozenset({TransportKind.USB_SERIAL})
     params_model: ClassVar[type[BaseModel]] = DynamixelParams

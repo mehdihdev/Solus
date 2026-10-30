@@ -158,6 +158,15 @@ Tests: `tests/test_context_layers.py` (the machinery), `tests/test_sol_reasoner.
 wiring — the manifest names the `.solus` and screen layers, the preference/conversation notes reach
 the prompt, and the screen read is sent exactly once).
 
+## SOL page labels (2026-10-24)
+
+The SOL page's right column labels the per-user `custom_instruction` "CUSTOM INSTRUCTIONS —
+applies to every chat on this account": it is a system-prompt input, not a layer, and there is no
+per-chat variant. Its FILES & IMAGES section lists the project's `.solus` artifact entries, which
+reach the model through layer 3 as `file <name> (<media_type>)` only — hence "SOL sees them by
+name". Its NODES IN CONTEXT pins travel as `MessageCreate.mentions` (merged with typed
+`@`-mentions, capped at 8) and so enter the graph layer like any mention.
+
 ## SOLUSDEV-260 repository content follow-up
 
 `read_code_file` is a read-only, project-bound in-process tool. It resolves an

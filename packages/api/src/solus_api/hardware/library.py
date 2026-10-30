@@ -41,6 +41,7 @@ MAX_SPECS: Final = 32
 MAX_REGISTERS: Final = 64
 MAX_TELEMETRY: Final = 32
 MAX_PLATFORM_PARTS: Final = 64
+MAX_PINS: Final = 256
 DEFAULT_LIMIT: Final = 50
 
 DefinitionKind = Literal["part", "platform"]
@@ -48,6 +49,20 @@ MachineClass = Literal["arm", "quadrotor", "mobile_base", "quadruped", "humanoid
 Text = Annotated[str, Field(min_length=1, max_length=MAX_TEXT)]
 DriverId = Annotated[str, Field(pattern=DRIVER_ID_PATTERN)]
 HttpsUrl = Annotated[str, Field(max_length=MAX_TEXT, pattern=r"^https://")]
+PinCapability = Literal[
+    "pwm", "adc", "dac", "i2c", "spi", "uart", "can", "input_only", "power", "ground", "gpio"
+]
+BehaviourClass = Literal[
+    "switcher",
+    "precision_analog",
+    "heat_source",
+    "magnetic",
+    "high_speed",
+    "power",
+    "structural",
+    "device",
+    "none",
+]
 
 
 class DefinitionError(ValueError):
@@ -86,6 +101,25 @@ class TelemetrySpec(FrozenModel):
     unit: str | None = Field(default=None, max_length=32)
 
 
+class PinSpec(FrozenModel):
+    name: str = Field(min_length=1, max_length=64)
+    capabilities: list[PinCapability] = Field(default_factory=list)
+
+
+class PartLimitsSpec(FrozenModel):
+    """Operating limits a budget or checker may read (SOLUSDEV-320 T6); absent = unknown."""
+
+    current_a: float | None = None
+    stall_current_a: float | None = None
+    temp_c: float | None = None
+    voltage_min_v: float | None = None
+    voltage_max_v: float | None = None
+    torque_nm: float | None = None
+    position_min: float | None = None
+    position_max: float | None = None
+    velocity_max: float | None = None
+
+
 class PartDefinition(_Definition):
     category: str
     specs: dict[str, Scalar] = Field(default_factory=dict)
@@ -96,6 +130,13 @@ class PartDefinition(_Definition):
     telemetry: list[TelemetrySpec] = Field(default_factory=list, max_length=MAX_TELEMETRY)
     calibration_mode: CalibrationMode | None = None
     datasheet_url: HttpsUrl | None = None
+    # SOLUSDEV-320 T6: inputs for the inference modules. All optional; a definition states
+    # only what its datasheet states (nothing here is ever guessed).
+    pins: list[PinSpec] | None = Field(default=None, max_length=MAX_PINS)
+    behaviour_class: BehaviourClass | None = None
+    limits: PartLimitsSpec | None = None
+    mass_g: float | None = Field(default=None, ge=0)
+    spice_model_ref: str | None = Field(default=None, max_length=256)
 
     _category = field_validator("category")(_known_category)
 

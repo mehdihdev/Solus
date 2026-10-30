@@ -6,12 +6,14 @@ import uuid
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from solus_contracts.relations import normalize_domain_pair
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
 from solus_api.agent.tools.isaac_models import SimulationModel
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain, GraphEdge, GraphEntity, Project
 
@@ -87,20 +89,18 @@ class SimulationModelService:
         )
         self.session.add(root)
         await self.session.flush()
-        self.session.add_all(
-            [
-                GraphEdge(
-                    project_id=project_id,
-                    src_id=root.id,
-                    dst_id=component.id,
-                    relation_type="contains",
-                    domain_pair=f"simulation<->{component.domain.value}",
-                    origin="manual",
-                )
-                for component in components
-            ]
-        )
-        await self.session.flush()
+        for component in components:
+            await write_edge(
+                self.session,
+                project_id=project_id,
+                src_id=root.id,
+                dst_id=component.id,
+                relation_type="contains",
+                origin="manual",
+                confidence=1.0,
+                evidence=[],
+                created_by=None,
+            )
         return root, body.model, True
 
     async def _components(self, project_id: uuid.UUID, model: SimulationModel) -> list[GraphEntity]:
@@ -146,7 +146,9 @@ class SimulationModelService:
                 )
             )
         )
-        expected = {row.id: f"simulation<->{row.domain.value}" for row in components}
+        expected = {
+            row.id: normalize_domain_pair(root.domain.value, row.domain.value) for row in components
+        }
         if len(edges) != len(expected) or {edge.dst_id for edge in edges} != set(expected):
             raise _conflict()
         if any(

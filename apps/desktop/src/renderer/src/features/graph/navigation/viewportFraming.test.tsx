@@ -111,3 +111,31 @@ it('offers accessible Fit and 100% controls without modifying saved positions', 
   expect(screen.getByTestId('graph-node-0')).toHaveAttribute('data-x', '-700')
   expect(onMove).not.toHaveBeenCalled()
 })
+
+it('steps the zoom with − and +, clamps at 50 % and 200 %, and reports the level', () => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+  const onMove = vi.fn()
+  const view = render(
+    <GraphNavigator
+      projectId="p"
+      entities={entities}
+      relations={[]}
+      positions={positions}
+      focusedId={null}
+      onSelect={vi.fn()}
+      onMove={onMove}
+    />
+  )
+  const stage = view.container.querySelector<HTMLElement>('.graph-level')!
+  fireEvent.click(screen.getByRole('button', { name: 'Show graph at 100%' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+  expect(stage.style.getPropertyValue('zoom')).toBe('1.1')
+  expect(screen.getByRole('button', { name: 'Show graph at 100%' })).toHaveTextContent('110%')
+  for (let i = 0; i < 20; i += 1) fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+  expect(stage.style.getPropertyValue('zoom')).toBe('0.5')
+  expect(screen.getByRole('button', { name: 'Show graph at 100%' })).toHaveTextContent('50%')
+  for (let i = 0; i < 30; i += 1) fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+  expect(stage.style.getPropertyValue('zoom')).toBe('2')
+  expect(onMove).not.toHaveBeenCalled()
+})

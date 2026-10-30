@@ -6,26 +6,34 @@ the `errors` section as author `sol`, through the same `add_text_entry` the
 `add_solus_entry` tool uses. Failure is both kinds: the call itself failing
 (`ok=False`), and a call that was delivered fine and reported a failed run —
 non-zero exit code or timeout (`run_failure`). The person edits or deletes it
-from the Workspace like any note. This module never raises: a filing failure is a
-warning line naming the exception class, never a failed turn.
+from the Workspace like any note. Filings dedupe on `sha1(tool, redacted command,
+error code)` (`ErrorMeta.dedupe_key`, SOLUSDEV-320): an open entry with the same key
+gets `count += 1` and a fresh `last_seen`; a resolved one becomes `recurring`. This
+module never raises: a filing failure is a warning line naming the exception class,
+never a failed turn.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolResult
 from solus_api.agent.tools.untrusted import REDACTED, redact_text, redact_value
-from solus_api.models import Project, SolusSection, User
+from solus_api.models import GraphEntity, Project, SolusEntry, SolusSection, User
 from solus_api.services.events import emit_event
 from solus_api.services.solus_config import MAX_TEXT_CHARS, add_text_entry
+from solus_api.services.solus_graph import lock_project
+from solus_api.services.solus_payloads import ErrorMeta
 
 logger = logging.getLogger("solus.agent.errors_filing")
 
@@ -57,10 +65,54 @@ def _entity_of(args: dict[str, Any]) -> str:
     return ", ".join(found) if found else "-"
 
 
+def _entity_ref(args: Mapping[str, Any]) -> uuid.UUID | None:
+    """The first entity the call named, when it is a UUID (`ErrorMeta.entity_id`)."""
+    for key in _ENTITY_KEYS:
+        value = args.get(key)
+        value = value[0] if isinstance(value, list) and value else value
+        if not value:
+            continue
+        try:
+            return uuid.UUID(str(value))
+        except ValueError:
+            continue
+    return None
+
+
+async def _project_entity(
+    session: AsyncSession, project_id: Any, entity_id: uuid.UUID | None
+) -> uuid.UUID | None:
+    """The proposed id only when it names one of THIS project's entities: tool args are
+    model-proposed, so a stored reference is verified, never copied."""
+    if entity_id is None:
+        return None
+    found: uuid.UUID | None = await session.scalar(
+        select(GraphEntity.id).where(
+            GraphEntity.id == entity_id, GraphEntity.project_id == project_id
+        )
+    )
+    return found
+
+
+def _redacted_command(call: ToolCall) -> str:
+    return json.dumps(redact_value(_redact_args(call.args)), sort_keys=True, default=str)
+
+
+def _error_code(result: ToolResult) -> str:
+    return result.error.code.value if result.error else "tool_error"
+
+
+def error_dedupe_key(tool: str, redacted_command: str, code: str) -> str:
+    """sha1 hex over (tool, redacted command, error code): the same failure again."""
+    return hashlib.sha1(  # noqa: S324 — an identity, not a security hash
+        f"{tool}\n{redacted_command}\n{code}".encode()
+    ).hexdigest()
+
+
 def format_error_entry(call: ToolCall, result: ToolResult, *, now: datetime | None = None) -> str:
     """The bounded, redacted text the entry carries — the fields the wireflow lists."""
     error = result.error
-    command = json.dumps(redact_value(_redact_args(call.args)), sort_keys=True, default=str)
+    command = _redacted_command(call)
     lines = [
         f"Tool failure: {call.tool}",
         f"When: {(now or datetime.now(UTC)).isoformat(timespec='seconds')}",
@@ -73,7 +125,7 @@ def format_error_entry(call: ToolCall, result: ToolResult, *, now: datetime | No
             ),
             default=str,
         )[:_FIELD_CAP],
-        f"Error [{error.code.value if error else 'tool_error'}]: "
+        f"Error [{_error_code(result)}]: "
         # `error.message` was already redacted at the bridge ingress
         # (`bridge/service.py`); `run_failure` reads the RESULT VALUE, whose only
         # gate there is `redact_value` — key names and single high-entropy tokens.
@@ -193,13 +245,8 @@ async def file_tool_error(
     try:
         async with sessionmaker() as session:
             try:
-                entry = await add_text_entry(
-                    session,
-                    project_id,
-                    SolusSection.ERRORS,
-                    format_error_entry(call, result),
-                    author="sol",
-                    created_by=user_id,
+                entry, event_type = await _file_or_bump(
+                    session, project_id=project_id, user_id=user_id, call=call, result=result
                 )
                 user = await session.get(User, user_id)
                 project = await session.get(Project, project_id)
@@ -207,12 +254,13 @@ async def file_tool_error(
                     emit_event(
                         session,
                         user=user,
-                        event_type="solus.entry_added",
+                        event_type=event_type,
                         team_id=project.team_id if project is not None else None,
                         project_id=project_id,
                         payload={
                             "entry_id": str(entry.id),
                             "section": SolusSection.ERRORS.value,
+                            "subsection": None,
                             "kind": entry.kind.value,
                             "tool": call.tool,
                             "auto": True,
@@ -233,3 +281,49 @@ async def file_tool_error(
             project_id,
             type(exc).__name__,
         )
+
+
+async def _file_or_bump(
+    session: AsyncSession, *, project_id: Any, user_id: Any, call: ToolCall, result: ToolResult
+) -> tuple[SolusEntry, str]:
+    """One row per distinct failure: bump the live entry with this key, else file a new one.
+    Returns the entry and the event it warrants."""
+    now = datetime.now(UTC)
+    key = error_dedupe_key(call.tool, _redacted_command(call), _error_code(result))
+    await lock_project(session, project_id)
+    existing = await session.scalar(
+        select(SolusEntry).where(
+            SolusEntry.project_id == project_id,
+            SolusEntry.section == SolusSection.ERRORS,
+            SolusEntry.deleted_at.is_(None),
+            SolusEntry.payload["dedupe_key"].astext == key,
+        )
+    )
+    if existing is not None:
+        meta = ErrorMeta.model_validate(existing.payload)
+        status = "recurring" if meta.status == "resolved" else meta.status
+        existing.payload = meta.model_copy(
+            update={"count": meta.count + 1, "last_seen": now, "status": status}
+        ).model_dump(mode="json")
+        await session.flush()
+        return existing, "solus.entry_updated"
+    meta = ErrorMeta(
+        entity_id=await _project_entity(session, project_id, _entity_ref(call.args)),
+        machine_id=None,
+        dedupe_key=key,
+        count=1,
+        status="open",
+        fix_ref=None,
+        first_seen=now,
+        last_seen=now,
+    )
+    entry = await add_text_entry(
+        session,
+        project_id,
+        SolusSection.ERRORS,
+        format_error_entry(call, result, now=now),
+        author="sol",
+        created_by=user_id,
+        payload=meta.model_dump(mode="json"),
+    )
+    return entry, "solus.entry_added"

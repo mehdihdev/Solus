@@ -8,7 +8,7 @@ CANDIDATE `PartDefinition`; when the pages did not say enough to validate one,
 the candidate is null and `notes` says why. Empty beats invented.
 
 `propose_part_definition` is the gated hand-off: it files that candidate into the
-project's `.solus` Hardware section as a cited text block, after the person
+project's `.solus` Documentation section (datasheets) as a cited text block, after the person
 approves the exact rows. The curated library (`hardware/library.py`, R4) is
 file-based and human-reviewed, so the `.solus` entry IS the candidate — a human
 promotes it to a definition file, or does not.
@@ -137,9 +137,9 @@ PROPOSE_PART_DEFINITION_DESCRIPTOR = ToolDescriptor(
     name="propose_part_definition",
     description=(
         "File a candidate part definition (as returned by read_document) into this "
-        "project's .solus Hardware section, with the datasheet artifact and pages it came "
-        "from. The person approves the exact fields first. It becomes a team-visible "
-        "candidate for the curated parts library, not a library entry."
+        "project's .solus Documentation section (datasheets), with the datasheet artifact "
+        "and pages it came from. The person approves the exact fields first. It becomes a "
+        "team-visible candidate for the curated parts library, not a library entry."
     ),
     params={
         "type": "object",
@@ -163,7 +163,8 @@ PROPOSE_PART_DEFINITION_DESCRIPTOR = ToolDescriptor(
     },
     requires_confirmation=True,
     consent_summary=(
-        "Add this part definition (from the datasheet) to the project's .solus Hardware section"
+        "Add this part definition (from the datasheet) to the project's .solus "
+        "Documentation section"
     ),
 )
 
@@ -430,15 +431,20 @@ class _DocumentTools:
                 entry = await add_text_entry(
                     session,
                     self._project_id,
-                    SolusSection.HARDWARE,
+                    SolusSection.DOCUMENTATION,
                     text,
                     author="sol",
                     created_by=self._user_id,
+                    subsection="datasheets",
                 )
                 await session.commit()
             except APIError as exc:
                 raise _invalid(exc.message) from None
-        return {"id": str(entry.id), "section": SolusSection.HARDWARE.value, "text": entry.text}
+        return {
+            "id": str(entry.id),
+            "section": SolusSection.DOCUMENTATION.value,
+            "text": entry.text,
+        }
 
 
 def _register_text(spec: object) -> str:

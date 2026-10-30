@@ -400,8 +400,16 @@ async def test_robot_removal_retires_host_connectivity(
         json={**body, "proposal_digest": proposal.json()["data"]["proposal_digest"]},
     )
     assert confirmed.status_code == 200, confirmed.text
+    # SOLUSDEV-320: the host confirm binds the robot to the machine (attrs.host_machine_id)
+    # and bumps its version, so the delete must carry the CURRENT version.
+    current = await client.get(
+        f"/api/v1/projects/{project}/entities/{robot}", headers=alice_headers
+    )
+    assert current.status_code == 200, current.text
+    assert current.json()["data"]["version"] == 2
     removed = await client.delete(
-        f"/api/v1/projects/{project}/entities/{robot}", headers={**alice_headers, "If-Match": "1"}
+        f"/api/v1/projects/{project}/entities/{robot}",
+        headers={**alice_headers, "If-Match": str(current.json()["data"]["version"])},
     )
     assert removed.status_code == 200, removed.text
     assert (

@@ -35,7 +35,7 @@ export function HelpPopover({ trail, onOverview }: HelpPopoverProps): React.JSX.
         ?
       </button>
       {open && (
-        <div role="dialog" aria-label="Workspace help" className="workspace-add-panel">
+        <div role="dialog" aria-label="Workspace help" className="graph-help-panel">
           <header>
             <strong>Workspace help</strong>
             <button type="button" aria-label="Close help" onClick={close}>

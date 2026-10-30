@@ -26,16 +26,21 @@ from urllib.parse import quote, urlencode, urlsplit
 import httpx
 
 from solus_api.connectors.code_host import (
+    MAX_MANIFEST_BYTES,
     REPO_ROOT_KEY,
+    REQUIRES,
+    blob_too_large,
     file_entity,
+    manifest_entities,
     module_entity,
     parent_key,
+    root_manifest_blobs,
     solus_config_blob,
     solus_config_entity,
-    solus_config_too_large,
 )
 from solus_api.connectors.contracts import (
     AccountInfo,
+    Capability,
     ConnectorError,
     Credentials,
     Domain,
@@ -47,7 +52,7 @@ from solus_api.connectors.contracts import (
     SyncResult,
 )
 from solus_api.connectors.github_app import next_page_url
-from solus_api.widgets.solus_config import SOLUS_CONFIG_PATH
+from solus_api.widgets.solus_config import MAX_PROJECT_TOML_BYTES, SOLUS_CONFIG_PATH
 
 GITHUB_API: Final = "https://api.github.com"
 GITHUB_OAUTH: Final = "https://github.com/login/oauth"
@@ -118,6 +123,9 @@ class GitHubConnector(OAuthConnector):
     """Connector for GitHub repositories (CLAUDE.md §2.1)."""
 
     provider: ClassVar[str] = "github"
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CHANGE_SIGNAL, Capability.STRUCTURE, Capability.CONSTRUCTION_HISTORY}
+    )
     scopes: ClassVar[tuple[str, ...]] = ("repo", "read:user")
     config_fields: ClassVar[tuple[str, ...]] = ("repo", "branch")
     #: How the app lets a user choose what to track: exactly one repository.
@@ -295,9 +303,12 @@ class GitHubConnector(OAuthConnector):
             sha, etag = await self._head_sha_and_etag(client, repo, branch)
             tree, truncated = await self._tree(client, repo, sha)
             solus_text, solus_errors = await self._solus_config_text(client, repo, tree)
+            manifests, manifest_errors = await self._root_manifests(client, repo, tree)
 
-        entities, relations, errors = self._build_graph(repo, branch, sha, tree, solus_text)
-        errors = [*solus_errors, *errors]
+        entities, relations, errors = self._build_graph(
+            repo, branch, sha, tree, solus_text, manifests
+        )
+        errors = [*solus_errors, *manifest_errors, *errors]
         if truncated:
             # GitHub caps the recursive tree (~100k objects) and returns a partial
             # list — surface it so a partial graph isn't mistaken for complete.
@@ -371,10 +382,16 @@ class GitHubConnector(OAuthConnector):
         item = solus_config_blob(tree)
         if item is None:
             return None, []
-        if solus_config_too_large(item):
-            return None, [
-                SyncError(item=SOLUS_CONFIG_PATH, message=f"{SOLUS_CONFIG_PATH}: exceeds size cap")
-            ]
+        return await self._blob_text(client, repo, item, MAX_PROJECT_TOML_BYTES)
+
+    async def _blob_text(
+        self, client: httpx.AsyncClient, repo: str, item: dict[str, Any], limit: int
+    ) -> tuple[str | None, list[SyncError]]:
+        """One bounded blob read: refused from the tree's declared size before any
+        fetch; a fault is a SyncError on that path, never a failed sync."""
+        path = str(item.get("path", "<unknown>"))
+        if blob_too_large(item, limit):
+            return None, [SyncError(item=path, message=f"{path}: exceeds size cap")]
         try:
             blob_sha = quote(str(item["sha"]), safe="")
             response = await client.get(f"/repos/{repo}/git/blobs/{blob_sha}")
@@ -382,7 +399,20 @@ class GitHubConnector(OAuthConnector):
             raw = base64.b64decode(str(body.get("content", "")), validate=False)
             return raw.decode("utf-8"), []
         except (ConnectorError, ValueError, KeyError) as exc:
-            return None, [SyncError(item=SOLUS_CONFIG_PATH, message=str(exc))]
+            return None, [SyncError(item=path, message=str(exc))]
+
+    async def _root_manifests(
+        self, client: httpx.AsyncClient, repo: str, tree: list[dict[str, Any]]
+    ) -> tuple[list[tuple[str, str]], list[SyncError]]:
+        """SOLUSDEV-320: root-level `package.json` / `package.xml` as `(path, text)`."""
+        manifests: list[tuple[str, str]] = []
+        errors: list[SyncError] = []
+        for item in root_manifest_blobs(tree):
+            text, faults = await self._blob_text(client, repo, item, MAX_MANIFEST_BYTES)
+            errors.extend(faults)
+            if text is not None:
+                manifests.append((str(item["path"]), text))
+        return manifests, errors
 
     def _build_graph(
         self,
@@ -391,6 +421,7 @@ class GitHubConnector(OAuthConnector):
         sha: str,
         tree: list[dict[str, Any]],
         solus_text: str | None = None,
+        manifests: list[tuple[str, str]] | None = None,
     ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
         errors: list[SyncError] = []
         entities_by_key: dict[str, EntityOut] = {
@@ -420,7 +451,14 @@ class GitHubConnector(OAuthConnector):
             for key in entities_by_key
             if key != REPO_ROOT_KEY
         ]
-        return list(entities_by_key.values()), relations, errors
+        requirements = [
+            entity for path, text in manifests or () for entity in manifest_entities(path, text)
+        ]
+        relations.extend(
+            RelationOut(from_key=REPO_ROOT_KEY, to_key=entity.source_key, type=REQUIRES)
+            for entity in requirements
+        )
+        return [*entities_by_key.values(), *requirements], relations, errors
 
     def _land_item(
         self,

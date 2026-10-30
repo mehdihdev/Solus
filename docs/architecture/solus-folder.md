@@ -20,6 +20,14 @@
 > (`add_solus_entry`). Route plan: `docs/api/solus.md`; ADR-034 amendment 2026-09-05. Layer 2's
 > repo TOML remains the later connector-ingested feeder.
 >
+> **SOLUSDEV-320 (2026-10-17): the server-stored project `.solus` becomes the full tree** —
+> seven sections (Goals, Constraints, Documentation, Error logging, Environment, Members, History)
+> with a nullable `subsection` per entry, typed payload models per `(section, subsection)`,
+> error dedupe, goals/constraints metadata, a per-member mirror of the `shared` engineering
+> preferences, system-written `environment/spec`, `environment/divergences` and
+> `constraints/budgets`, and `history` as a view over `activities`. Route plan: `docs/api/solus.md`
+> §1–§3, §9. ADR-034 amendment text is proposed in the SOLUSDEV-320 completion report.
+>
 > Governing docs: DECISIONS.md ADR-034 (this design), ADR-021 (branch discipline), ADR-027 (graph
 > schema conventions), ADR-030 (parse committed Git exports, not live plugins), ADR-032 (two-tier
 > governance), CLAUDE.md §7 (security).
@@ -205,4 +213,6 @@ ADR-034). **2 and 4 remain open** for Tickets D and C respectively.
 | `sol_mode`, consent, onboarding step       | server (cross-machine by design)      | `~/.solus`, repo          |
 | Auth tokens (Supabase), BYO-license creds  | Supabase session storage / never disk | `~/.solus`, repo          |
 | Root engineering preferences               | `~/.solus/preferences.json` (user-authored, ADR-034 2026-09-06) | server, repo              |
+| `shared`-flagged preference sections       | mirrored to `.solus` `members/<uid>` (SOLUSDEV-320); `freeText` never | repo                |
+| Machine identity, OS, tool versions        | `.solus` `environment/software` CONFIG bound to the `machine` node (SOLUSDEV-320) | credentials, paths |
 | Team/project SOL instructions              | TBD via Ticket D ADR                  | prompt without gating     |

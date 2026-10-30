@@ -35,6 +35,7 @@ import asyncio
 import dataclasses
 import functools
 import hashlib
+import json
 import logging
 import random
 import re
@@ -49,6 +50,7 @@ import httpx
 
 from solus_api.connectors.contracts import (
     AccountInfo,
+    Capability,
     ConnectorError,
     Credentials,
     EntityOut,
@@ -300,6 +302,24 @@ def _raise_for_status(response: httpx.Response, what: str) -> None:
     raise ConnectorError("api_error", f"Onshape returned {response.status_code} for {what}")
 
 
+def mirrored_payload_key(
+    account_ref: str,
+    document_id: str,
+    microversion: str,
+    path: str,
+    params: Mapping[str, Any] | None,
+) -> str:
+    """The shared-cache key a mirrored SOL read lands under (`onshape_read_cache.mirrored_get`),
+    spelled ONCE so the sync's zero-call mates read finds what the read tools mirrored."""
+    # read_cache imports this module at load; the version tag is read lazily to avoid a cycle.
+    from solus_api.connectors.onshape_read_cache import _MIRROR_KEY_VERSION
+
+    params_text = json.dumps(dict(params or {}), sort_keys=True, separators=(",", ":"))
+    return IntegrationCache.payload_key(
+        "onshape", account_ref, document_id, microversion, _MIRROR_KEY_VERSION, path, params_text
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class _Target:
     """One exportable assembly: the (document, workspace, element) triple the
@@ -485,6 +505,17 @@ class OnshapeConnector(OAuthConnector):
     mechanical parser, enrich part numbers from Onshape's parts metadata."""
 
     provider: ClassVar[str] = "onshape"
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {
+            Capability.CHANGE_SIGNAL,
+            Capability.WEBHOOK,
+            Capability.STRUCTURE,
+            Capability.GEOMETRY,
+            Capability.CONSTRUCTION_HISTORY,
+            Capability.WRITE_FEATURE,
+            Capability.WRITE_PARAMETER,
+        }
+    )
     #: READ ONLY. Every operation here is a read — the translation POST sets
     #: `storeInDocument: False` precisely so it writes nothing to the customer's
     #: document. Requesting write scope would mean a leaked Solus token could
@@ -818,8 +849,37 @@ class OnshapeConnector(OAuthConnector):
             recorder,
             scope=target.scope,
             provenance={**target.provenance, "observed_microversion": version},
+            mates=await self._mirrored_mates(target, version),
         )
         return target_entities, target_relations
+
+    async def _mirrored_mates(self, target: _Target, version: str) -> list[Any]:
+        """Mates from the assembly definition ALREADY mirrored at this microversion by a
+        SOL read (SOLUSDEV-320). Reading one live would spend quota on every sync, so an
+        absent mirror means no mates this time — never a request."""
+        from solus_api.connectors.onshape_assembly_read import mates_from_definition
+
+        if target.collection != _ASSEMBLIES:
+            return []
+        if self._cache is None or not self._account_ref:
+            logger.info("mates skipped: not mirrored (no mirror) %s", target.scope)
+            return []
+        path = f"/api/v6/{_ASSEMBLIES}/d/{target.document_id}/m/{version}/e/{target.element_id}"
+        key = mirrored_payload_key(
+            self._account_ref,
+            target.document_id,
+            version,
+            path,
+            {"includeMateFeatures": "true", "includeMateConnectors": "true"},
+        )
+        # `IntegrationCache.fetch` (what `mirrored_get` stores through) pins an envelope
+        # `{value, fetched_at, fetched_ts}` under the key, never the bare body.
+        entry = await self._cache.get(key)
+        payload = entry.get("value") if isinstance(entry, dict) else None
+        if payload is None:
+            logger.info("mates skipped: not mirrored %s@%s", target.scope, version)
+            return []
+        return mates_from_definition(payload)
 
     async def _geometry_export(
         self, client: httpx.AsyncClient, target: _Target, version: str

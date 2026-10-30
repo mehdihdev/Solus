@@ -24,6 +24,7 @@ from solus_api.fingerprint.contract import (
 from solus_api.linking import LinkResult, link, link_from_fingerprint, link_from_mock
 from solus_api.linking.linker import LINK_ORIGIN, RELATION_SAME_AS
 from solus_api.models import Domain, GraphEdge, GraphEntity, Project, Team
+from solus_contracts.relations import normalize_domain_pair
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -177,7 +178,7 @@ async def test_link_creates_cross_domain_same_as_edge(db: AsyncSession) -> None:
     # confidence is the weakest link of the pair, capped by the part's own belief
     assert edge.confidence == pytest.approx(0.9)
     expected = {circuit.id: circuit.domain.value, cad.id: cad.domain.value}
-    assert edge.domain_pair == f"{expected[edge.src_id]}<->{expected[edge.dst_id]}"
+    assert edge.domain_pair == normalize_domain_pair(expected[edge.src_id], expected[edge.dst_id])
     assert edge.attrs["canonical_id"] == str(part.canonical_id)
 
 
@@ -344,12 +345,16 @@ async def test_retraction_soft_deletes_only_linker_edges(db: AsyncSession) -> No
     only_p2 = _output(_part("P2", (_mm(_ref("A", entity_id=a.id)), _mm(_ref("C", entity_id=c.id)))))
     result = await link(db, only_p2, project_id=project.id)
 
-    assert result.retracted == 1
+    # SOLUSDEV-320: one edge per (src, dst, type) key. The linker's (A, B) assertion
+    # landed on the user's manual edge (never downgraded), so nothing linker-owned
+    # exists for that pair to retract; the manual edge survives with its origin.
+    assert result.retracted == 0
     live = await _live_link_edges(db, project)
     assert len(live) == 1
     assert {live[0].src_id, live[0].dst_id} == {a.id, c.id}
     refreshed_manual = await db.get(GraphEdge, manual.id)
     assert refreshed_manual is not None and refreshed_manual.deleted_at is None
+    assert refreshed_manual.origin == "manual" and refreshed_manual.confidence == 1.0
 
 
 # --- Refusals ----------------------------------------------------------------------

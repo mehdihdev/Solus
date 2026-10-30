@@ -14,7 +14,7 @@ from solus_api.models import GraphEntity, SolusEntry
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-SECTIONS = ("hardware", "details", "errors", "docs", "code")
+SECTIONS = ("goals", "constraints", "documentation", "errors", "environment", "members", "history")
 
 
 async def _project(client: AsyncClient, headers: dict[str, str]) -> tuple[str, str]:
@@ -27,7 +27,7 @@ async def _project(client: AsyncClient, headers: dict[str, str]) -> tuple[str, s
 def test_add_solus_entry_descriptor_is_ungated_and_scope_free() -> None:
     assert ADD_SOLUS_ENTRY_DESCRIPTOR.requires_confirmation is False
     props = ADD_SOLUS_ENTRY_DESCRIPTOR.params["properties"]
-    assert set(props) == {"section", "text"}
+    assert set(props) == {"section", "subsection", "text"}
     assert props["section"]["enum"] == list(SECTIONS)
     assert ADD_SOLUS_ENTRY_DESCRIPTOR.params["additionalProperties"] is False
 
@@ -62,7 +62,7 @@ async def test_sol_files_an_entry_and_bad_input_never_raises(
     assert row.entity_id is not None
     node = await db.get(GraphEntity, row.entity_id)
     assert node is not None and node.kind == "solus_error"
-    assert node.attrs == {"solus_entry_id": str(row.id), "section": "errors"}
+    assert node.attrs == {"solus_entry_id": str(row.id), "section": "errors", "subsection": None}
 
     bad = await registry.invoke(
         ToolCall(call_id="c2", tool="add_solus_entry", args={"section": "secrets", "text": "x"})

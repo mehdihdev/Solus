@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.models import Domain, GraphEdge, GraphEntity, SolusSection
 from solus_api.services.artifacts import create_artifact
 from solus_api.services.solus_config import add_artifact_entry
@@ -208,17 +209,22 @@ async def propose(
     service.session.add(row)
     await service.session.flush()
     for target in (robot_id, source_id):
-        service.session.add(
-            GraphEdge(
-                project_id=service.project_id,
-                src_id=row.id,
-                dst_id=target,
-                relation_type="references",
-                domain_pair="simulation<->project",
-                origin="manual",
-            )
-        )
+        await _references(service, row.id, target)
     return row
+
+
+async def _references(service: SceneService, src_id: uuid.UUID, dst_id: uuid.UUID) -> None:
+    await write_edge(
+        service.session,
+        project_id=service.project_id,
+        src_id=src_id,
+        dst_id=dst_id,
+        relation_type="references",
+        origin="manual",
+        confidence=1.0,
+        evidence=[],
+        created_by=service.user_id,
+    )
 
 
 def status(row: GraphEntity) -> dict[str, Any]:
@@ -301,7 +307,8 @@ async def materialize(
     entry = await add_artifact_entry(
         service.session,
         service.project_id,
-        SolusSection.DOCS,
+        SolusSection.DOCUMENTATION,
+        subsection="guides",
         artifact_id=artifact.id,
         name=f"{root.name} CAD geometry"[:120],
         created_by=service.user_id,
@@ -332,15 +339,7 @@ async def materialize(
     service.session.add(entity)
     await service.session.flush()
     for target in {root.id, uuid.UUID(row.attrs["robot_id"]), entry.entity_id}:
-        service.session.add(
-            GraphEdge(
-                project_id=service.project_id,
-                src_id=entity.id,
-                dst_id=target,
-                relation_type="references",
-                domain_pair="simulation<->project",
-                origin="manual",
-            )
-        )
+        if target is not None:  # attached by add_artifact_entry
+            await _references(service, entity.id, target)
     row.attrs = {**row.attrs, "status": "complete", "model_id": str(entity.id)}
     row.version += 1

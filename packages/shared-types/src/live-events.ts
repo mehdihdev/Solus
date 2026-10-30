@@ -73,6 +73,37 @@ export interface ProjectUpdated {
   at: string;
 }
 
+export type FindingStatusName =
+  | "open"
+  | "acknowledged"
+  | "dismissed"
+  | "resolved";
+
+/** SOLUSDEV-320: a finding node was created. Refetch `GET /findings?status=open`. */
+export interface FindingRaised {
+  type: "finding.raised";
+  project_id: string;
+  finding_id: string;
+  status: FindingStatusName;
+  at: string;
+}
+
+export interface FindingUpdated {
+  type: "finding.updated";
+  project_id: string;
+  finding_id: string;
+  status: FindingStatusName;
+  at: string;
+}
+
+export interface FindingResolved {
+  type: "finding.resolved";
+  project_id: string;
+  finding_id: string;
+  status: "resolved";
+  at: string;
+}
+
 export interface JobUpdated {
   type: "job.updated";
   project_id: string;
@@ -156,6 +187,9 @@ export type ProjectFrame =
   | SourcesChanged
   | ProjectUpdated
   | JobUpdated
+  | FindingRaised
+  | FindingUpdated
+  | FindingResolved
   | AccessRevoked;
 
 export type AccountFrame =
@@ -175,6 +209,9 @@ export const PROJECT_EVENT_TYPES = [
   "sources.changed",
   "project.updated",
   "job.updated",
+  "finding.raised",
+  "finding.updated",
+  "finding.resolved",
   "access.revoked",
 ] as const satisfies readonly ProjectFrame["type"][];
 
@@ -227,6 +264,15 @@ export const PROJECT_UPDATED_FIELDS: CompleteKeysOf<ProjectUpdated, typeof PU> =
   PU;
 const JU = ["type", "project_id", "job_id", "status", "at"] as const;
 export const JOB_UPDATED_FIELDS: CompleteKeysOf<JobUpdated, typeof JU> = JU;
+const FR = ["type", "project_id", "finding_id", "status", "at"] as const;
+export const FINDING_RAISED_FIELDS: CompleteKeysOf<FindingRaised, typeof FR> =
+  FR;
+export const FINDING_UPDATED_FIELDS: CompleteKeysOf<FindingUpdated, typeof FR> =
+  FR;
+export const FINDING_RESOLVED_FIELDS: CompleteKeysOf<
+  FindingResolved,
+  typeof FR
+> = FR;
 const PSR = ["project_id"] as const;
 export const PROJECT_STREAM_READY_FIELDS: CompleteKeysOf<
   ProjectStreamReady,

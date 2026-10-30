@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from solus_api.graph.edges import projected_copy
 from solus_api.models import (
     GraphEdge,
     GraphEntity,
@@ -71,10 +72,11 @@ class GraphReadScope:
     def project_edge(self, edge: GraphEdge) -> GraphEdge:
         if not self.root_replacements:
             return edge
-        values = {column.key: getattr(edge, column.key) for column in GraphEdge.__table__.columns}
-        values["src_id"] = self.project_id_for_entity(edge.src_id)
-        values["dst_id"] = self.project_id_for_entity(edge.dst_id)
-        return GraphEdge(**values)
+        return projected_copy(
+            edge,
+            src_id=self.project_id_for_entity(edge.src_id),
+            dst_id=self.project_id_for_entity(edge.dst_id),
+        )
 
 
 _CURRENT: ContextVar[GraphReadScope | None] = ContextVar("graph_read_scope", default=None)

@@ -55,7 +55,7 @@ async def test_ensure_config_creates_one_entry_and_references_it_from_the_robot(
     again, _ = await ensure_config(db, project_id, robot, created_by=None)
     await db.commit()
     assert again.id == entry.id
-    assert entry.kind is SolusEntryKind.CONFIG and entry.section is SolusSection.HARDWARE
+    assert entry.kind is SolusEntryKind.CONFIG and entry.section is SolusSection.ENVIRONMENT
     assert config.robot_entity_id == robot_id and config.parts == {}
     assert isinstance(config_of(entry), EntityHardwareConfig)
     assert await resolve_runtime_config(db, project_id, robot_id) == config
@@ -76,7 +76,9 @@ async def test_ensure_config_creates_one_entry_and_references_it_from_the_robot(
     rows = (
         await db.scalars(
             select(SolusEntry).where(
-                SolusEntry.project_id == project_id, SolusEntry.kind == SolusEntryKind.CONFIG
+                SolusEntry.project_id == project_id,
+                SolusEntry.kind == SolusEntryKind.CONFIG,
+                SolusEntry.subsection == "hardware",  # P5 adds the system spec/divergences
             )
         )
     ).all()

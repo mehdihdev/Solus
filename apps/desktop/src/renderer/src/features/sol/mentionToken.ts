@@ -66,3 +66,14 @@ export interface PickedMention {
   id: string
   name: string
 }
+
+/** What a send carries: typed `@`-mentions first (explicit intent), then the chat's pinned
+ *  nodes, deduped and capped at the server's limit — a silent cap beats a 422. */
+export function mergeMentions(typed: readonly string[], pinned: readonly string[]): string[] {
+  const out: string[] = []
+  for (const id of [...typed, ...pinned]) {
+    if (out.length === MAX_MENTIONS) break
+    if (!out.includes(id)) out.push(id)
+  }
+  return out
+}

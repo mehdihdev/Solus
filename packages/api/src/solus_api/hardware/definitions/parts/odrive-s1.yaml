@@ -18,3 +18,8 @@ telemetry:
   - {quantity: velocity, unit: rev/s}
   - {quantity: current, unit: A}
 datasheet_url: https://docs.odriverobotics.com/
+mass_g: 40
+limits:
+  voltage_min_v: 12
+  voltage_max_v: 50
+  current_a: 40

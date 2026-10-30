@@ -83,6 +83,7 @@ class Lb06Source:
 
 class Lb06Driver:
     driver_id: ClassVar[str] = "lb06"
+    requires_packages: ClassVar[tuple[str, ...]] = ()
     display_name: ClassVar[str] = "Solus telemetry (LB-06 lines)"
     transports: ClassVar[frozenset[TransportKind]] = LINE_TRANSPORTS
     params_model: ClassVar[type[BaseModel]] = LineTransportParams

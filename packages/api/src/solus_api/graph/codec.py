@@ -1,7 +1,7 @@
 """LB-06 telemetry packet codec — msgpack on the wire, JSON for debugging (SOLUSDEV-126).
 
 ONE canonical wire mapping (`to_wire` / `from_wire`), two transports over it: msgpack for
-throughput and JSON for eyeballing and for JSON-only carriers (Foxglove's `json` message
+throughput and JSON for eyeballing and for JSON-only carriers (a telemetry viewer's `json` message
 encoding). Keeping a single mapping is what lets the TypeScript decoder be one implementation
 instead of two, and what makes the golden-fixture corpus meaningful.
 
@@ -152,7 +152,7 @@ def decode(raw: bytes) -> TelemetryPacket:
 
 def encode_json(packet: TelemetryPacket) -> str:
     """The debug form — the SAME wire dict, JSON-encoded. Readable in a log, and the payload for
-    JSON-only carriers (e.g. a Foxglove WS channel using the `json` message encoding)."""
+    JSON-only carriers (e.g. a telemetry viewer's WS channel using the `json` message encoding)."""
     return json.dumps(to_wire(packet), separators=(",", ":"), sort_keys=True)
 
 

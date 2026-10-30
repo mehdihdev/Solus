@@ -87,7 +87,8 @@ async def save(
         await add_artifact_entry(
             session,
             entity.project_id,
-            SolusSection.DOCS,
+            SolusSection.DOCUMENTATION,
+            subsection="guides",
             artifact_id=artifact.id,
             name=f"{info.name}.bench-run.json",
             created_by=user_id,

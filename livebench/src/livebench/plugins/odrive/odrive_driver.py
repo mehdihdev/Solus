@@ -110,6 +110,7 @@ class OdriveSource:
 
 class OdriveCanDriver:
     driver_id: ClassVar[str] = DRIVER_ID
+    requires_packages: ClassVar[tuple[str, ...]] = ("python-can",)
     display_name: ClassVar[str] = "ODrive CAN (CANSimple) axes"
     transports: ClassVar[frozenset[TransportKind]] = frozenset({TransportKind.USB_CAN})
     params_model: ClassVar[type[BaseModel]] = OdriveParams

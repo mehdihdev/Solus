@@ -23,7 +23,7 @@ back to the (connector, external_ref) pair, because the pair could land on a
 re-synced, physically different component (the same rule FP-02's write path
 enforces). Only the mock path opts into the fallback — its ids are fixtures.
 
-Ownership: linker edges are `origin="linking"`, `source_id` NULL. Retraction
+Ownership: linker edges are `origin="fingerprint"`, `source_id` NULL. Retraction
 soft-deletes only linker-owned rows — connector-owned and manual edges are never
 modified (the connector runtime's reconciliation likewise ignores source-less
 edges, so each writer owns exactly its own rows).
@@ -47,6 +47,7 @@ import logging
 import uuid
 from pathlib import Path
 
+from solus_contracts.relations import EdgeEvidence, EvidenceKind
 from sqlalchemy import Text, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +60,7 @@ from solus_api.fingerprint.contract import (
     load_mock_output,
 )
 from solus_api.fingerprint.matcher import match, observations_from_hints
+from solus_api.graph.edges import write_edge
 from solus_api.graph.read_scope import GraphReadScope
 from solus_api.models import GraphEdge, GraphEntity, utcnow
 
@@ -67,7 +69,7 @@ logger = logging.getLogger(__name__)
 #: `graph_edge.relation_type` for cross-domain identity (the model docstring's
 #: blessed value); `origin` marking linker ownership.
 RELATION_SAME_AS = "same_as"
-LINK_ORIGIN = "linking"
+LINK_ORIGIN = "fingerprint"
 
 #: Pairing bound per part: modality hints are connector-ingested, attacker-
 #: influenceable data, and pairwise linking is O(n²) — a crafted part claiming
@@ -331,43 +333,47 @@ async def link(
 
     created = updated = retracted = low_confidence = 0
     for (src_id, dst_id), support in desired.items():
-        domain_pair = f"{entities[src_id].domain.value}<->{entities[dst_id].domain.value}"
         attrs = {
             "canonical_id": str(support.canonical_id),
             "part_number": support.part_number,
             "modalities": sorted(support.modalities),
             "matched": support.matched,
         }
-        row = existing.pop((src_id, dst_id), None)
-        if row is None:
-            # A previously retracted pair that reappears gets a fresh row; the
-            # tombstone stays as history (mirrors connector reconciliation).
-            session.add(
-                GraphEdge(
-                    project_id=project_id,
-                    src_id=src_id,
-                    dst_id=dst_id,
-                    relation_type=RELATION_SAME_AS,
-                    domain_pair=domain_pair,
-                    confidence=support.confidence,
-                    origin=LINK_ORIGIN,
-                    attrs=attrs,
+        previous = existing.pop((src_id, dst_id), None)
+        before = None if previous is None else (previous.confidence, previous.attrs)
+        # A previously retracted pair that reappears gets a fresh row; the
+        # tombstone stays as history (mirrors connector reconciliation).
+        row = await write_edge(
+            session,
+            project_id=project_id,
+            src_id=src_id,
+            dst_id=dst_id,
+            relation_type=RELATION_SAME_AS,
+            origin=LINK_ORIGIN,
+            confidence=support.confidence,
+            evidence=[
+                EdgeEvidence(
+                    kind=EvidenceKind.FINGERPRINT,
+                    ref=str(support.canonical_id),
+                    detail=", ".join(sorted(support.modalities)),
                 )
-            )
-            created += 1
-            if not support.matched:
-                low_confidence += 1
-        elif (
-            row.confidence != support.confidence
-            or row.domain_pair != domain_pair
-            or row.attrs != attrs
-        ):
+            ],
+            created_by=None,
+            attrs=attrs,
+        )
+        # The linker reconciles its own edges wholesale: the fingerprint's belief is
+        # authoritative, downward too (the writer's max rule is for independent writers).
+        # A manual edge on the same key keeps its own confidence.
+        if row.origin == LINK_ORIGIN:
             row.confidence = support.confidence
-            row.domain_pair = domain_pair
-            row.attrs = attrs  # new dict, never mutated in place (JSONB change detection)
+        if before is None:
+            created += 1
+        elif (row.confidence, row.attrs) != before:
             updated += 1
-            if not support.matched:
-                low_confidence += 1
+        else:
+            continue
+        if not support.matched:
+            low_confidence += 1
 
     for row in existing.values():
         row.deleted_at = utcnow()

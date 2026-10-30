@@ -47,6 +47,31 @@ describe('PreferencesEditor', () => {
     })
     expect(INITIAL.freeText).toBe('')
   })
+})
+
+describe('PreferencesEditor — shared flags (SOLUSDEV-320)', () => {
+  it('offers one "Share with the project" checkbox per structured section, saved as shared flags', async () => {
+    const onSave = vi.fn()
+    render(
+      <PreferencesEditor
+        initial={{ ...INITIAL, shared: { electrical: true } }}
+        fieldCap={800}
+        freeTextCap={2400}
+        failed={false}
+        onCancel={vi.fn()}
+        onSave={onSave}
+      />
+    )
+    const boxes = screen.getAllByRole('checkbox', { name: 'Share with the project' })
+    expect(boxes).toHaveLength(5)
+    expect(boxes[2]).toBeChecked()
+    await userEvent.click(boxes[1]!)
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSave).toHaveBeenCalledWith({
+      ...INITIAL,
+      shared: { electrical: true, mechanical: true }
+    })
+  })
 
   it('caps each field at its limit via maxLength', () => {
     render(

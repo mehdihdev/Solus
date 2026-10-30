@@ -464,6 +464,20 @@ async def test_search_palette_opened_is_a_typed_client_event(
     assert rows[0].payload == {"kind": "node", "rank": 2, "query_length": 5}
 
 
+async def test_search_palette_opened_accepts_a_solus_result(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-320 merge: the palette also opens `.solus` entries from the search index."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    event = {
+        "event_type": "search.palette_opened",
+        "payload": {"kind": "solus", "rank": 0, "query_length": 5},
+    }
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+
+
 @pytest.mark.parametrize(
     "payload",
     [

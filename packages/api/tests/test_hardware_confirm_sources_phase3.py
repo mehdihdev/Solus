@@ -61,8 +61,12 @@ async def test_confirm_keeps_saved_config_when_calibration_changes_before_sessio
         )
     )
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    # Hardware configs only: a config write also recomputes the environment spec and
+    # divergences CONFIG entries (SOLUSDEV-320 P5-T3).
     query = select(SolusEntry).where(
-        SolusEntry.project_id == uuid.UUID(project), SolusEntry.kind == SolusEntryKind.CONFIG
+        SolusEntry.project_id == uuid.UUID(project),
+        SolusEntry.kind == SolusEntryKind.CONFIG,
+        SolusEntry.subsection == "hardware",
     )
     persisted: dict[uuid.UUID, str] = {}
     original_publish = app.state.graph_hub.publish

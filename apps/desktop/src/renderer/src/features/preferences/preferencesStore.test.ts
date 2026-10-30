@@ -160,4 +160,20 @@ function registerPreferencesPromptSanitizationTests(): void {
     const forTurn = await preferencesForTurn()
     expect(forTurn?.electrical).toBe(DOC.electrical)
   })
+
+  it('never attaches the shared flags to a turn — the API forbids unknown fields', async () => {
+    fakeBridge({ ...DOC, shared: { electrical: true } })
+    const forTurn = await preferencesForTurn()
+    expect(forTurn?.electrical).toBe(DOC.electrical)
+    expect(forTurn).not.toHaveProperty('shared')
+  })
+
+  it('persists the shared flags through the same write', async () => {
+    const b = fakeBridge(DOC)
+    await usePreferencesStore.getState().load()
+    expect(
+      await usePreferencesStore.getState().save({ ...DOC, shared: { mechanical: true } })
+    ).toBe(true)
+    expect(b.write.mock.calls[0]?.[0]).toMatchObject({ shared: { mechanical: true } })
+  })
 }

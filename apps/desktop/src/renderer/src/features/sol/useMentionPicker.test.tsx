@@ -5,25 +5,29 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useMentionPicker } from './useMentionPicker'
+import type { EntityHit } from '../../lib/api/search'
+import { clearSearchCache } from '../workspace/useProjectSearch'
 import { MENTION_DEBOUNCE_MS } from './useMentionSearch'
 
-vi.mock('../../lib/api/resources', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../lib/api/resources')>()),
-  listEntities: vi.fn()
-}))
+vi.mock('../../lib/api/search', () => ({ searchProject: vi.fn() }))
 
-const { listEntities } = await import('../../lib/api/resources')
-const mockListEntities = vi.mocked(listEntities)
+const { searchProject } = await import('../../lib/api/search')
+const mockSearch = vi.mocked(searchProject)
 
-function entity(id: string, name: string): Record<string, string> {
-  return { id, name, type: 'part', domain: 'mechanical', source_key: `k-${id}` }
+function entity(id: string, name: string): EntityHit {
+  return { id, name, kind: 'part', domain: 'mechanical', snippet: '', score: 1, why: 'name_match' }
 }
 
 let submitted = 0
 
 function Harness(): React.JSX.Element {
   const [text, setText] = useState('')
-  const picker = useMentionPicker('p1', text, setText)
+  // Destructured so the ref does not taint the rest for react-hooks/refs.
+  const { inputRef, listOpen, active, mentionIds, onInput, onKeyDown } = useMentionPicker(
+    'p1',
+    text,
+    setText
+  )
   return (
     <form
       onSubmit={(e) => {
@@ -32,24 +36,24 @@ function Harness(): React.JSX.Element {
       }}
     >
       <input
-        ref={picker.inputRef}
+        ref={inputRef}
         aria-label="Message SOL"
         value={text}
         onChange={(e) => {
           setText(e.target.value)
-          picker.onInput(e.target)
+          onInput(e.target)
         }}
         onKeyDown={(e) => {
-          if (picker.onKeyDown(e)) return
+          if (onKeyDown(e)) return
           if (e.key === 'Enter') {
             e.preventDefault()
             submitted += 1
           }
         }}
       />
-      <div data-testid="open">{String(picker.listOpen)}</div>
-      <div data-testid="active">{picker.active?.name ?? ''}</div>
-      <div data-testid="ids">{picker.mentionIds.join(',')}</div>
+      <div data-testid="open">{String(listOpen)}</div>
+      <div data-testid="active">{active?.name ?? ''}</div>
+      <div data-testid="ids">{mentionIds.join(',')}</div>
     </form>
   )
 }
@@ -68,10 +72,12 @@ beforeEach(() => {
   submitted = 0
   vi.clearAllMocks()
   vi.useFakeTimers()
-  mockListEntities.mockResolvedValue([
-    entity('e-1', 'Bracket A'),
-    entity('e-2', 'Bracket B')
-  ] as never)
+  clearSearchCache()
+  mockSearch.mockResolvedValue({
+    entities: [entity('e-1', 'Bracket A'), entity('e-2', 'Bracket B')],
+    solus: [],
+    truncated: false
+  })
 })
 
 afterEach(() => {

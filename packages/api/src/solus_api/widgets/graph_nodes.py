@@ -21,6 +21,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.graph.edges import write_edge
 from solus_api.models import (
     Domain,
     Extension,
@@ -38,7 +39,6 @@ LIVE_BENCH_KIND = "solus:live_bench"
 WIDGET_KIND = "solus:widget"
 SYSTEM_ORIGIN = "system"
 CONTAINS = "contains"
-WORKSPACE_PAIR = "workspace<->workspace"
 #: What SOL's graph feed reads by default: everything the robot is made of, and
 #: never the layer describing the workspace (widget-bundles.md §10).
 NON_WORKSPACE_DOMAINS: tuple[Domain, ...] = tuple(d for d in Domain if d is not Domain.WORKSPACE)
@@ -172,17 +172,17 @@ async def _ensure_edge(
     )
     if edge is not None:
         return edge, False
-    edge = GraphEdge(
+    edge = await write_edge(
+        session,
         project_id=project_id,
         src_id=src.id,
         dst_id=dst.id,
         relation_type=CONTAINS,
-        domain_pair=WORKSPACE_PAIR,
         origin=SYSTEM_ORIGIN,
-        attrs={},
+        confidence=1.0,
+        evidence=[],
+        created_by=None,
     )
-    session.add(edge)
-    await session.flush()
     return edge, True
 
 

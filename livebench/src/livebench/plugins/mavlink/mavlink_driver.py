@@ -171,6 +171,7 @@ class MavlinkSource:
 
 class MavlinkDriver:
     driver_id: ClassVar[str] = DRIVER_ID
+    requires_packages: ClassVar[tuple[str, ...]] = ("pymavlink",)
     display_name: ClassVar[str] = "MAVLink autopilot link"
     transports: ClassVar[frozenset[TransportKind]] = frozenset(
         {TransportKind.WIFI, TransportKind.ETHERNET, TransportKind.USB_SERIAL}

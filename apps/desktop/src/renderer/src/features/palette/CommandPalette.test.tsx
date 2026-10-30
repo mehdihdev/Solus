@@ -142,6 +142,8 @@ describe('CommandPalette', () => {
     expect(optionLabels()).toEqual(['page:home', 'page:bench'])
     fireEvent.keyDown(input, { key: 'Tab', shiftKey: true })
     fireEvent.keyDown(input, { key: 'Tab', shiftKey: true })
+    expect(screen.getByRole('tab', { name: '.solus' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true })
     expect(screen.getByRole('tab', { name: 'Nodes' })).toHaveAttribute('aria-selected', 'true')
     expect(optionLabels()).toEqual(['node:p1:e1'])
   })
@@ -172,10 +174,37 @@ describe('CommandPalette', () => {
     setup({ hasProject: false, items: ITEMS.filter((i) => i.kind !== 'node') })
     fireEvent.click(screen.getByRole('tab', { name: 'Nodes' }))
     expect(screen.getByText('Open a project to search its nodes.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: '.solus' }))
+    expect(screen.getByText('Open a project to search its .solus.')).toBeInTheDocument()
   })
 
   it('shows a quiet loading line while projects or nodes are still arriving', () => {
     setup({ loading: true })
     expect(screen.getByRole('status')).toHaveTextContent('Loading…')
+  })
+})
+
+describe('CommandPalette — search index', () => {
+  it('reports every edit of the field to the host and says Searching… until the index answers', () => {
+    const onQueryChange = vi.fn()
+    const { input } = setup({ onQueryChange, searching: true })
+    fireEvent.change(input, { target: { value: 'zzz' } })
+    expect(onQueryChange).toHaveBeenCalledWith('zzz')
+    expect(screen.getByText('Searching…')).toBeInTheDocument()
+  })
+
+  it('lists .solus rows under their own section with the file icon', () => {
+    const entry: PaletteItem = {
+      key: 'solus:p1:s1',
+      kind: 'solus',
+      label: 'Power budget',
+      detail: 'constraints › budgets',
+      matched: 71,
+      target: { type: 'node', projectId: 'p1', entityId: 'n1' }
+    }
+    const { input } = setup({ items: [...ITEMS, entry] })
+    fireEvent.change(input, { target: { value: 'budget' } })
+    expect(screen.getByRole('group', { name: '.solus' })).toHaveTextContent('Power budget')
+    expect(screen.getByText('constraints › budgets')).toBeInTheDocument()
   })
 })

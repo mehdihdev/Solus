@@ -151,7 +151,7 @@ async def test_get_config_on_a_fresh_robot_leaves_the_document_absent(
     assert refreshed.json()["data"]["properties"].get("hardware_config_ref") is None
 
     solus = await client.get(f"/api/v1/projects/{project_id}/solus", headers=alice_headers)
-    hardware_entries = solus.json()["data"]["sections"]["hardware"]
+    hardware_entries = solus.json()["data"]["sections"]["environment"]
     assert hardware_entries == []
 
 
@@ -164,7 +164,7 @@ async def test_get_config_is_idempotent_across_repeat_reads(
     second = await _hw_get_config(client, alice_headers, project_id, robot["id"])
     assert first["entry_id"] == second["entry_id"]
     solus = await client.get(f"/api/v1/projects/{project_id}/solus", headers=alice_headers)
-    assert solus.json()["data"]["sections"]["hardware"] == []
+    assert solus.json()["data"]["sections"]["environment"] == []
 
 
 async def test_put_config_replaces_the_document(

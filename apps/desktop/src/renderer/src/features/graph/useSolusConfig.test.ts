@@ -15,10 +15,53 @@ beforeEach(() => {
 })
 
 describe('useSolusConfig', () => {
-  it('labels all five sections in order', () => {
-    expect(Object.keys(SECTION_LABELS)).toEqual(['hardware', 'details', 'errors', 'docs', 'code'])
-    expect(SECTION_LABELS.errors).toBe('Error logging')
+  it('labels all seven sections in order from the one source in resources', () => {
+    expect([...resources.SOLUS_SECTIONS]).toEqual([
+      'goals',
+      'constraints',
+      'documentation',
+      'errors',
+      'environment',
+      'members',
+      'history'
+    ])
+    expect(SECTION_LABELS).toBe(resources.SOLUS_SECTION_LABELS)
+    expect(Object.values(SECTION_LABELS)).toEqual([
+      'Goals',
+      'Constraints',
+      'Documentation',
+      'Error logging',
+      'Environment',
+      'Members',
+      'History'
+    ])
+    expect(Object.keys(emptySections())).toEqual([...resources.SOLUS_SECTIONS])
     expect(Object.values(emptySections()).every((v) => v.length === 0)).toBe(true)
+  })
+
+  it('fixes the subsection lists per section; free or absent ones are empty', () => {
+    expect(resources.SOLUS_SUBSECTIONS).toEqual({
+      goals: [],
+      constraints: ['rules', 'compliance', 'style', 'budgets'],
+      documentation: ['datasheets', 'guides', 'references', 'decisions'],
+      errors: [],
+      environment: ['spec', 'hardware', 'software', 'divergences'],
+      members: [],
+      history: []
+    })
+  })
+
+  it('keeps history and members read-only for people', () => {
+    expect(resources.SOLUS_WRITABLE_SECTIONS).toEqual([
+      'goals',
+      'constraints',
+      'documentation',
+      'errors',
+      'environment'
+    ])
+    expect(resources.isWritableSection('history')).toBe(false)
+    expect(resources.isWritableSection('members')).toBe(false)
+    expect(resources.isWritableSection('goals')).toBe(true)
   })
 
   it('is offline without a linked project and never fetches', () => {
@@ -31,7 +74,7 @@ describe('useSolusConfig', () => {
     useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover' } })
     vi.mocked(resources.getSolus).mockResolvedValue({
       entity_id: 'solus-1',
-      sections: { ...emptySections(), details: [] }
+      sections: { ...emptySections(), goals: [] }
     })
     const { result } = renderHook(() => useSolusConfig('p1'))
     expect(result.current.status).toBe('loading')

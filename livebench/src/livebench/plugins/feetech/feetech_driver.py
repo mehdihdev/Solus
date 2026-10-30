@@ -262,6 +262,7 @@ class FeetechPacketSource:
 
 class FeetechStsDriver:
     driver_id: ClassVar[str] = "feetech-sts"
+    requires_packages: ClassVar[tuple[str, ...]] = ("pyserial",)
     display_name: ClassVar[str] = "Feetech STS/SCS servo bus"
     transports: ClassVar[frozenset[TransportKind]] = frozenset({TransportKind.USB_SERIAL})
     params_model: ClassVar[type[BaseModel]] = FeetechParams

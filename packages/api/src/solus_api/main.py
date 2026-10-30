@@ -1,7 +1,7 @@
 """App factory. Run with: uvicorn --factory solus_api.main:create_app"""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -45,6 +45,7 @@ from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.live import LiveHub
 from solus_api.graph.live_access import StreamLimiter
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
+from solus_api.graph.search_text import SOLUS_PAYLOAD_TEXT_STATEMENTS
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.hardware import hardware_router, library_router
 from solus_api.hardware.connections import HardwareConnections
@@ -68,21 +69,26 @@ from solus_api.routers import (
     code_environment,
     code_processes,
     connections,
+    edges,
     entities,
     events,
     extensions,
+    findings,
+    history,
     hosted,
     integrations,
     invites,
     jobs,
     live,
     local_folder,
+    machines,
     members,
     meta,
     notifications,
     orchestration,
     panel,
     projects,
+    search,
     simulation_models,
     sol,
     solus_config,
@@ -100,6 +106,7 @@ from solus_api.routers import (
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
+from solus_api.services.budgets import budget_job_id, make_budget_trigger
 from solus_api.services.cad_purge import run_startup_cad_purges
 from solus_api.services.stripe_cancel import run_startup_stripe_cancels
 from solus_api.services.supabase_admin import build_supabase_admin
@@ -112,10 +119,14 @@ from solus_api.toolkb import router as toolkb
 async def create_all_tables(engine: AsyncEngine) -> None:
     """Create tables from ORM metadata (dev only — production uses migrations).
 
-    The pgvector extension must exist before the embedding columns can be created.
+    The pgvector extension must exist before the embedding columns can be created; `pg_trgm`
+    and `solus_payload_text()` before the generated search columns (SOLUSDEV-320 T7).
     """
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        for statement in SOLUS_PAYLOAD_TEXT_STATEMENTS:
+            await conn.execute(text(statement))
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_warn_on_missing_columns)
 
@@ -225,6 +236,17 @@ def _scrub_sentry_event(event: Any, _hint: Any) -> Any:
 _REDIS_CONNECT_TIMEOUT_SECONDS = 5.0
 
 
+def _enqueue_budgets_job(app: FastAPI) -> Callable[[str, str], Awaitable[Any]]:
+    """`enqueue(job_name, project_id)` over the one ARQ pool per process, resolved at call
+    time so a Redis that is down at boot never fails startup."""
+
+    async def enqueue(job_name: str, project_id: str) -> None:
+        pool = await sources._arq_pool(app)
+        await pool.enqueue_job(job_name, project_id, _job_id=budget_job_id(project_id))
+
+    return enqueue
+
+
 def create_app(settings: Settings | None = None, engine: AsyncEngine | None = None) -> FastAPI:
     # Settings' required fields (the JWT secret) come from the environment at
     # runtime; mypy can't see env-driven init, hence the targeted ignore.
@@ -283,6 +305,17 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # Register before startup so partial startup and body failures also
             # release resources. ExitStack still closes later resources if one fails.
             cleanup.push_async_callback(served.state.graph_hub.stop)
+            # SOLUSDEV-320 resolution 18: every published `graph.changed` re-queues the
+            # project's budgets (by name, when a queue exists) or recomputes them inline.
+            served.state.graph_hub.on_graph_changed = make_budget_trigger(
+                sessionmaker=served.state.sessionmaker,
+                enqueue=(
+                    _enqueue_budgets_job(served)
+                    if resolved_settings.redis_url and not resolved_settings.sync_inline
+                    else None
+                ),
+            )
+            cleanup.callback(served.state.graph_hub.on_graph_changed.close)
             cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
             cleanup.push_async_callback(served.state.bench_runs.aclose)
             cleanup.push_async_callback(served.state.hardware_connections.aclose)
@@ -556,6 +589,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(library_router.router)
     app.include_router(workspace_layout.router)
     app.include_router(entities.router)
+    app.include_router(edges.router)
+    app.include_router(search.router)
+    app.include_router(findings.router)
+    app.include_router(history.router)
+    app.include_router(machines.router)
     app.include_router(simulation_models.router)
     from solus_api.routers import isaac_connection
 

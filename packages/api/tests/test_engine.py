@@ -68,6 +68,9 @@ async def _edge(
     src: GraphEntity,
     dst: GraphEntity,
     relation: str,
+    *,
+    origin: str = "connector",
+    confidence: float = 1.0,
 ) -> GraphEdge:
     row = GraphEdge(
         project_id=project.id,
@@ -75,8 +78,8 @@ async def _edge(
         dst_id=dst.id,
         relation_type=relation,
         domain_pair=f"{src.domain.value}<->{dst.domain.value}",
-        confidence=1.0,
-        origin="connector",
+        confidence=confidence,
+        origin=origin,
         attrs={},
     )
     db.add(row)
@@ -153,6 +156,17 @@ async def test_direct_neighbor_distance_one_path_starts_at_focus(db: AsyncSessio
     assert node.path[0].relation == "driven_by"
     assert node.severity is Severity.CRITICAL
     ImpactResult.model_validate(result.model_dump())
+
+
+async def test_candidate_edge_is_not_walked(db: AsyncSession) -> None:
+    project = await _project(db, "imp-candidate")
+    motor = await _entity(db, project, "drive_motor", domain=Domain.MECHANICAL)
+    driver = await _entity(db, project, "U3 TB6612FNG")
+    await _edge(db, project, driver, motor, "powers", origin="inferred", confidence=0.7)
+
+    result = await _impact(db, project, motor, {driver.id: [_cons("c1", Severity.CRITICAL)]})
+
+    assert result.nodes == []
 
 
 async def test_two_hop_path_carries_each_relation(db: AsyncSession) -> None:

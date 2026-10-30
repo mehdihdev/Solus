@@ -321,18 +321,18 @@ describe('artifacts on a turn (SOLUSDEV-252 S5)', () => {
     })
     await sendMessage('p1', 'draw', 'guide')
     addSolusEntry.mockResolvedValue({ id: 'e1' } as resources.SolusEntry)
-    await fileArtifact('p1', 'a1', 'docs')
-    expect(addSolusEntry).toHaveBeenCalledWith('p1', 'docs', {
+    await fileArtifact('p1', 'a1', 'documentation')
+    expect(addSolusEntry).toHaveBeenCalledWith('p1', 'documentation', {
       kind: 'artifact',
       artifact_id: 'a1',
       name: 'Power tree'
     })
     const filed = selectSession(useSolChatStore.getState(), 'p1').items[1].artifacts?.[0]
-    expect(filed?.filedTo).toBe('docs')
-    await fileArtifact('p1', 'a1', 'hardware')
+    expect(filed?.filedTo).toBe('documentation')
+    await fileArtifact('p1', 'a1', 'environment')
     expect(addSolusEntry).toHaveBeenCalledTimes(1)
     expect(selectSession(useSolChatStore.getState(), 'p1').items[1].artifacts?.[0].filedTo).toBe(
-      'docs'
+      'documentation'
     )
   })
 
@@ -351,7 +351,7 @@ describe('artifacts on a turn (SOLUSDEV-252 S5)', () => {
   })
 
   it('an unknown artifact id is a no-op, not a request', async () => {
-    await fileArtifact('p1', 'nope', 'docs')
+    await fileArtifact('p1', 'nope', 'documentation')
     expect(addSolusEntry).not.toHaveBeenCalled()
   })
 })

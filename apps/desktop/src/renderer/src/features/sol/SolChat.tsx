@@ -12,6 +12,8 @@
 //   inert, images dropped; pinned by Markdown.test.tsx).
 import { memo, useCallback, useEffect, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
+import { SolusLogo } from '../../components/ui/SolusLogo'
+import { citationDomain, citationEntityId, DomainDot } from './domainDot'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
 import { commandHeader } from './commandCard'
@@ -101,47 +103,87 @@ function ArtifactsView({
   )
 }
 
-function CitationsView({ citations }: { citations: readonly string[] }): React.JSX.Element | null {
+const CHIP: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 5,
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10.5,
+  color: 'var(--mut)',
+  background: 'var(--sur2)',
+  border: '1px solid var(--bd)',
+  borderRadius: 999,
+  padding: '2px 8px'
+}
+
+/** Provenance chips (design template): the raw `[connector:ref]` token, a domain dot when
+ *  the connector maps to one, and — for `[entity:id]` on the page — a jump to the node. */
+function CitationsView({
+  citations,
+  page,
+  onFocusEntity
+}: {
+  citations: readonly string[]
+  page: boolean
+  onFocusEntity?: (entityId: string) => void
+}): React.JSX.Element | null {
   if (citations.length === 0) return null
   return (
     <div
       data-testid="citations-region"
-      style={{ marginTop: 8, borderTop: '1px solid var(--bd)', paddingTop: 6 }}
+      style={{ marginTop: 8, borderTop: page ? 0 : '1px solid var(--bd)', paddingTop: 6 }}
     >
-      <Mono size={9}>CITATIONS</Mono>
+      {!page && <Mono size={9}>CITATIONS</Mono>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-        {citations.slice(0, MAX_CITATIONS).map((token, i) => (
-          <span
-            key={`${token}-${i}`}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              color: 'var(--mut)',
-              background: 'var(--sur2)',
-              border: '1px solid var(--bd)',
-              borderRadius: 3,
-              padding: '2px 6px'
-            }}
-          >
-            {capCitation(token)}
-          </span>
-        ))}
+        {citations.slice(0, MAX_CITATIONS).map((token, i) => {
+          const entityId = onFocusEntity ? citationEntityId(token) : null
+          const body = (
+            <>
+              <DomainDot d={citationDomain(token)} size={5} />
+              {capCitation(token)}
+            </>
+          )
+          return entityId ? (
+            <button
+              key={`${token}-${i}`}
+              type="button"
+              className="interactive"
+              style={{ ...CHIP, cursor: 'pointer' }}
+              onClick={() => onFocusEntity?.(entityId)}
+            >
+              {body}
+            </button>
+          ) : (
+            <span key={`${token}-${i}`} style={CHIP}>
+              {body}
+            </span>
+          )
+        })}
       </div>
     </div>
   )
 }
 
 /** A message the person sent. */
-function UserRow({ item, rowClass }: { item: ChatItem; rowClass: string }): React.JSX.Element {
+function UserRow({
+  item,
+  rowClass,
+  page
+}: {
+  item: ChatItem
+  rowClass: string
+  page: boolean
+}): React.JSX.Element {
   return (
-    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: '85%' }}>
+    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: page ? '78%' : '85%' }}>
       <div
         style={{
           background: 'var(--sur2)',
           border: '1px solid var(--bd)',
           borderRadius: 6,
-          padding: '8px 10px',
+          padding: page ? '10px 13px' : '8px 10px',
           fontSize: 12.5,
+          lineHeight: 1.5,
           whiteSpace: 'pre-wrap'
         }}
       >
@@ -219,6 +261,8 @@ const MessageRow = memo(function MessageRow({
   onDecide,
   onFile,
   settled,
+  page,
+  onFocusEntity,
   onShowMe
 }: {
   item: ChatItem
@@ -226,11 +270,13 @@ const MessageRow = memo(function MessageRow({
   onDecide: SolChat['decide']
   onFile: SolChat['fileArtifact']
   settled: boolean
+  page: boolean
+  onFocusEntity?: (entityId: string) => void
   /** SOLUSDEV-319 (pill): given, non-command approvals render as one PlanCard. */
   onShowMe?: () => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
-  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} />
+  if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} page={page} />
   if (item.role === 'tool') {
     return (
       <div
@@ -242,8 +288,8 @@ const MessageRow = memo(function MessageRow({
     )
   }
   const confirmations = item.confirmations
-  return (
-    <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+  const body = (
+    <>
       <TraceView trace={item.trace} />
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
       {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
@@ -270,11 +316,49 @@ const MessageRow = memo(function MessageRow({
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
       <div style={{ minHeight: item.pending ? CITATIONS_RESERVE_PX : undefined }}>
-        <CitationsView citations={item.citations} />
+        <CitationsView citations={item.citations} page={page} onFocusEntity={onFocusEntity} />
+      </div>
+    </>
+  )
+  return (
+    <AssistantFrame page={page} rowClass={rowClass}>
+      {body}
+    </AssistantFrame>
+  )
+})
+
+/** Page (design template): the Solus mark in a gutter and a mono SOL label; the window
+ *  and the pill keep their compact rows. */
+function AssistantFrame({
+  page,
+  rowClass,
+  children
+}: {
+  page: boolean
+  rowClass: string
+  children: React.ReactNode
+}): React.JSX.Element {
+  if (!page) {
+    return (
+      <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+        {children}
+      </div>
+    )
+  }
+  return (
+    <div className={rowClass} style={{ alignSelf: 'stretch', display: 'flex', gap: 12 }}>
+      <div style={{ flex: 'none', paddingTop: 2 }} aria-hidden="true">
+        <SolusLogo size={18} />
+      </div>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Mono size={10} ls="0.08em">
+          SOL
+        </Mono>
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>{children}</div>
       </div>
     </div>
   )
-})
+}
 
 /** Stick-to-bottom margin: within this many px of the bottom counts as "following". */
 const FOLLOW_SLACK_PX = 48
@@ -284,12 +368,14 @@ function MessageList({
   projectId,
   page,
   onDecide,
+  onFocusEntity,
   onShowMe
 }: {
   chat: SolChat
   projectId: string
   page: boolean
   onDecide: SolChat['decide']
+  onFocusEntity?: (entityId: string) => void
   onShowMe?: () => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
@@ -329,8 +415,9 @@ function MessageList({
         overflowY: 'auto',
         display: 'flex',
         flexDirection: 'column',
-        gap: 10,
-        padding: page ? '12px 24px' : 12
+        gap: page ? 20 : 10,
+        padding: page ? '24px 24px' : 12,
+        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
       }}
     >
       {chat.status === 'offline' && <Mono size={9.5}>SOL HISTORY UNAVAILABLE — OFFLINE</Mono>}
@@ -347,6 +434,8 @@ function MessageList({
           onDecide={onDecide}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
+          page={page}
+          onFocusEntity={onFocusEntity}
           onShowMe={onShowMe}
         />
       ))}
@@ -367,6 +456,13 @@ export interface SolChatProps {
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
    *  context panel from the same one). Omitted, the surface owns its own. */
   chat?: SolChat
+  /** Page: the chat's pinned nodes, merged into every send and counted in the header. */
+  pinnedMentionIds?: readonly string[]
+  /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
+  /** Page: an `[entity:id]` citation chip focuses that node in the Workspace. */
+  onFocusEntity?: (entityId: string) => void
 }
 
 /** The circled region (SOL window only — main pushes it to that renderer).
@@ -445,8 +541,7 @@ function Surface(p: SurfaceParts): React.JSX.Element {
         minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
-        width: '100%',
-        ...(p.layout === 'page' ? { maxWidth: 800, margin: '0 auto' } : {})
+        width: '100%'
       }}
     >
       {p.thread}
@@ -463,7 +558,11 @@ export function SolChat({
   chat: shared,
   pillTop,
   pillFooterStart,
-  pillFooterEnd
+  pillFooterEnd,
+  pinnedMentionIds,
+  onUpload,
+  onAddNodeFromGraph,
+  onFocusEntity
 }: SolChatProps): React.JSX.Element {
   // Hooks run unconditionally; with a shared instance the internal hook is
   // parked on a null project, which is inert (no fetch, no store writes).
@@ -501,6 +600,7 @@ export function SolChat({
             projectId={projectId}
             page={layout === 'page'}
             onDecide={decideInMode}
+            onFocusEntity={onFocusEntity}
             onShowMe={layout === 'pill' ? showMeHow : undefined}
           />
         }
@@ -528,6 +628,9 @@ export function SolChat({
             pill={layout === 'pill'}
             footerStart={pillFooterStart}
             footerEnd={pillFooterEnd}
+            pinnedMentionIds={pinnedMentionIds}
+            onUpload={onUpload}
+            onAddNodeFromGraph={onAddNodeFromGraph}
           />
         }
       />

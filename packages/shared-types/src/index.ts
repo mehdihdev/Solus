@@ -152,6 +152,7 @@ export {
   isEmptyPreferences,
   parseEngineeringPreferences,
   preferencesPromptChars,
+  sharedSubset,
   type EngineeringPreferences,
   type PreferenceSection,
   type PreferencesParseResult,
@@ -236,6 +237,9 @@ export {
 // SOLUSDEV-312 (ADR-037) — live change-hint frames. docs/contracts/live-events.md
 export {
   ACCOUNT_EVENT_TYPES,
+  FINDING_RAISED_FIELDS,
+  FINDING_RESOLVED_FIELDS,
+  FINDING_UPDATED_FIELDS,
   JOB_STATUSES,
   KEEPALIVE_SECONDS,
   PROJECT_EVENT_TYPES,
@@ -247,6 +251,10 @@ export {
   type GraphChanged,
   type HardwareDevicesChanged,
   type JobStatusName,
+  type FindingRaised,
+  type FindingResolved,
+  type FindingStatusName,
+  type FindingUpdated,
   type JobUpdated,
   type LayoutChanged,
   type MembershipChanged,
@@ -261,3 +269,25 @@ export {
   type TeamProjectsChanged,
   type TeamUpdated,
 } from "./live-events";
+
+// SOLUSDEV-320 — the relation vocabulary. docs/api/relations.md
+export {
+  CANDIDATE_THRESHOLD,
+  EDGE_EVIDENCE_FIELDS,
+  EDGE_ORIGINS,
+  EVIDENCE_KINDS,
+  MATRIX_CELLS,
+  RELATION_CLASS,
+  RELATION_CLASSES,
+  RELATION_TYPES,
+  isCandidate,
+  matrixCell,
+  normalizeDomainPair,
+  relationClass,
+  type EdgeEvidence,
+  type EdgeOrigin,
+  type EvidenceKind,
+  type MatrixCell,
+  type RelationClass,
+  type RelationType,
+} from "./relations";

@@ -1,22 +1,28 @@
 # Wireflow — SOL Page (SOLUSDEV-233)
 
 The full-page SOL surface (`MainScreen 'sol'`). Three columns inside the shell
-(below the topbar); the orb popover keeps its own compact layout and shares the
-chat surface (`OrbChat`) and stream protocol unchanged.
+(below the topbar), per the design template (Claude Design
+`templates/workspace/Workspace.dc.html`, 2026-10-24); the SOL window keeps its own
+compact layout and shares the chat surface (`SolChat`, `layout="panel"`) and stream
+protocol unchanged.
 
 ```
-| CHATS (224px) | SOL header + transcript + composer (flex) | CONTEXT/USAGE (288px) |
+| CHATS (250px) | 44px header + thread (full width) + composer | CONTEXT (320px) |
 ```
 
 ## Left — CHATS sidebar
 
-- Header: `CHATS` + a bordered `+` button ("New chat").
-- Rows: conversation title (seeded from the first message, 60-char cap;
-  "New chat" fallback) over a relative timestamp. Newest first, from
-  `GET /sol/conversations`. Active row is highlighted (`aria-current`).
+- A **New chat** card at the top with the platform hint (`⌘N` / `Ctrl N`); the chord
+  really starts a new chat while the page is mounted.
+- Rows grouped by last activity (`updated_at`, computed on the client):
+  `TODAY` / `THIS WEEK` / `EARLIER`, newest first within a group, from
+  `GET /sol/conversations`. A row is the conversation title (seeded from the first
+  message, 60-char cap; "New chat" fallback) over a relative time — never a message
+  count, which the API does not carry. Active row is highlighted (`aria-current`).
 - Click a row → the transcript reloads that conversation (any live turn is
-  cancelled first). `+` → clears the active conversation; the next send
+  cancelled first). New chat → clears the active conversation; the next send
   creates a fresh one server-side.
+- The **SOL USAGE** card sits at the bottom of this column (see below).
 - **Right-click a row** → context menu: **Rename** (name dialog →
   `PATCH /sol/conversations/{id}`) and **Delete** (confirm dialog →
   soft-delete; the chat's `~/.solus` cache file is removed; deleting the open
@@ -26,22 +32,30 @@ chat surface (`OrbChat`) and stream protocol unchanged.
 
 ## Center — chat column
 
-- Header: SOL orb (pulses while streaming), "SOL", then a mono subtitle:
-  the project name, plus `· GROUNDED IN N CONNECTIONS` **only when N is the
-  project's real connected-source count from the server** (SOLUSDEV-152
-  charter: never a fabricated number; no server truth → no line).
+- Header (44px): the active chat's title (`New chat` before the first send), a mono
+  `N NODES IN CONTEXT` — the chat's pinned nodes, the one honest count on the page
+  (the former `GROUNDED IN N CONNECTIONS` line is retired with its extra fetch) — and
+  **Open SOL window** under Electron.
 - The header has no Guide/Expert selector. The universal tone preference remains
   in Settings (ADR-016); the stored server mode still governs the next turn.
-- Transcript: user bubbles right, assistant markdown left, mono tool lines in
-  the backend's persisted format (`tool → outcome`), citations region,
-  confirmation cards (unchanged CTR-03 flow). Messages enter with a short
-  fade-rise.
-- Composer: input + Guide/Build action-mode toggle + Send (unchanged), routing
-  line underneath — ALWAYS present (SOLUSDEV-233): with a classification it
-  reads `tier · type · model` (click to override); with none (empty input /
-  endpoint hiccup) it shows the honest idle line "auto routing · sizes each
-  message to the cheapest capable model" in the same spot — no layout shift,
-  never a fabricated tier.
+- Transcript (full column width between the two side panels): user bubbles right (`--sur2`); SOL replies lead
+  with the Solus mark in a gutter and a mono `SOL` label, then markdown, mono tool
+  lines in the backend's persisted format (`tool → outcome`), confirmation cards
+  (unchanged CTR-03 flow) and the citation chips — the raw `[connector:ref]` token
+  in a pill, a domain dot only when the connector maps to one of the four domains,
+  and an `[entity:id]` chip focuses that node in the Workspace. Messages enter with
+  a short fade-rise.
+- Composer: a bordered box with a **+** attach button (menu: **Upload file or
+  image** → the project's `.solus/documentation`; **Add node from graph** →
+  Workspace), an autosizing textarea (`Ask SOL about this project…`; Enter sends,
+  Shift+Enter newline; Ctrl/Cmd+Enter stays with the command cards, SOLUSDEV-317)
+  and the accent **Send**; the box's footer row keeps the Guide/Build action-mode
+  badge, **Think harder**, **Confirm every change** and the routing line — ALWAYS
+  present (SOLUSDEV-233): with a classification it reads `tier · type · model`
+  (click to override); with none (empty input / endpoint hiccup) it shows the
+  honest idle line "auto routing · sizes each message to the cheapest capable model"
+  in the same spot — no layout shift, never a fabricated tier. Every send carries
+  the typed `@`-mentions first, then the chat's pinned nodes, deduped and capped at 8.
   Typing `@` in the input opens a **graph-entity picker** (SOLUSDEV-168): a
   listbox above the composer, debounced ~400ms against
   `GET /projects/{id}/entities?q=&limit=8`, matching names and connected code paths,
@@ -84,18 +98,34 @@ After a successful decision, the entry reports that decision and no longer says
 it is waiting when its final card is removed. Identical pending proposals in
 later turns reuse the original card; typing acceptance does not approve it.
 
-## Right — CONTEXT IN USE
+## Right — context column (320px)
 
-- **Custom instruction** card: the user's standing preference note
-  (Add/Edit → textarea, 500-char cap, Save/Cancel; failed save keeps the
-  editor open with an error). Stored per user; enters the prompt only as a
-  fenced data block (§7).
-- **Context files** card: the `document` sections of the last turn's
-  `context_used` frame, rendered as mono file labels (citation refs).
-- **From the graph** card: the `graph` sections as pill chips; a muted
-  footnote counts telemetry/error sections and notes budget truncation.
-- Empty state before the first turn: "Send a message and SOL will show what
-  it grounded the answer in…". Labels only — section text never reaches the
+- **CUSTOM INSTRUCTIONS**: the user's standing preference note (Add/Edit → textarea,
+  500-char cap, Save/Cancel; failed save keeps the editor open with an error). It is
+  the per-ACCOUNT setting and the card says "Applies to every chat on this account" —
+  there is no per-chat instruction. Enters the prompt only as a fenced data block (§7).
+- **FILES & IMAGES**: the project's `.solus` file entries (`kind: artifact`, every
+  section) as ext-labelled tiles; **+ Upload** = `uploadArtifact` + `POST
+/solus/documentation/entries` through the existing import handler. SOL reads
+  `.solus` into context by file name (the bytes never reach the model), and the empty
+  copy says so.
+- **NODES IN CONTEXT**: the chat's pinned nodes (client-side, `localStorage
+solus_sol_pinned_v1`, keyed by project and conversation; a fresh chat's pins follow
+  the conversation the first send creates; cleared when the account ends). Rows show
+  the domain dot, name and type with ✕ to unpin; **From graph →** opens the Workspace,
+  whose panel's **Ask SOL** pins the selected node and seeds the composer `About
+<name>: `. Above 8 pins a note says only the first 8 ride along.
+- **ARTIFACTS**: what SOL produced in this chat — this session only (reloaded turns
+  carry no artifact bytes). Right-click: **Save to .solus folder** (the same
+  idempotent `fileArtifact` as the transcript card, into Documentation; a filed one
+  shows the green `.solus` pill and the item is disabled with `Filed to …`), **Show in
+  chat** (scrolls to the card; there is no honest "open" for a bearer-protected blob),
+  **Copy contents** (text media only).
+- **CONTEXT IN USE**: the last turn's manifest, unchanged — **Context files** (the
+  `document` sections as mono file labels) and **From the graph** (the `graph`
+  sections as pill chips; a muted footnote counts telemetry/error sections and notes
+  budget truncation). Empty state before the first turn: "Send a message and SOL will
+  show what it grounded the answer in…". Labels only — section text never reaches the
   client.
 
 ## Session lifetime (SOLUSDEV-233)
@@ -112,15 +142,17 @@ later turns reuse the original card; typing acceptance does not approve it.
   server load then wins, and a cached chat stays readable when the API is
   down. The server remains the source of truth.
 
-## Right — SOL USAGE
+## SOL USAGE (bottom of the CHATS column)
 
 - "This cycle `used / allowance`" in credits (ADR-018 — credit-denominated,
-  never raw tokens) from `GET /users/me/usage`, with a progress bar (accent →
-  warn ≥70% → err ≥90%; fill width eases). Balance line underneath.
-- **Top-up card** ("Running low on credits" / "Out of credits" after a 402):
-  the ADR-024 packs from `GET /billing/packs` as `$N` buttons through the same
-  Stripe checkout flow as the Billing screen. Shown when the balance is low
-  (≤100 credits, provisional) or a turn was rejected with 402.
+  never raw tokens) from `GET /users/me/usage`, with a 3px progress bar (accent →
+  warn ≥70% → err ≥90%; fill width eases). Balance line underneath. An accent **+**
+  (`Add credits`) beside the meter opens the packs on demand.
+- **Top-up card** ("Running low on credits" / "Out of credits" after a 402; "Add
+  credits" when opened by the +): the ADR-024 packs from `GET /billing/packs` as
+  `$N` buttons through the same Stripe checkout flow as the Billing screen. Shown
+  when the balance is low (≤100 credits, provisional), a turn was rejected with 402,
+  or the + was pressed.
 
 ## Motion
 

@@ -114,9 +114,12 @@ function menuInteractionsTests(): void {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
-  it('carries the right cluster: badge count, bell and sign out', async () => {
+  it('carries the right cluster: badge count, search, bell and sign out', async () => {
     const { onBell, onSignOut } = renderBar({ openCount: 2 })
     expect(screen.getByText('2')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /Search pages, projects, nodes/ })
+    ).toBeInTheDocument()
     await userEvent.click(screen.getByTestId('rail-bell'))
     expect(onBell).toHaveBeenCalledOnce()
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))

@@ -197,3 +197,49 @@ def test_feature_page_exposes_full_basis_for_rigid_alignment() -> None:
     row = select(root, tree)["items"][0]
     assert row["world_x_axis"] == [0, 1, 0]
     assert row["world_y_axis"] == [-1, 0, 0]
+
+
+def test_instance_names_parse_in_linear_time_and_keep_their_shape() -> None:
+    import time
+
+    from solus_api.connectors.onshape_assembly_read import _instance_segment
+
+    assert _instance_segment("Peg <1>") == "Peg"
+    assert _instance_segment(" Peg <2> ") == "Peg[1]"
+    assert _instance_segment("a<b> <3>") == "a<b>[2]"
+    assert _instance_segment("Peg <>") == "Peg <>"
+    assert _instance_segment("Peg <x>") == "Peg <x>"
+    assert _instance_segment("   ") is None and _instance_segment(7) is None
+    hostile = "a" + " " * 200_000 + "x"
+    started = time.perf_counter()
+    assert _instance_segment(hostile) == hostile
+    assert time.perf_counter() - started < 0.5
+
+
+def test_mate_type_outside_the_vendor_enum_is_skipped() -> None:
+    from solus_api.connectors.onshape_assembly_read import mates_from_definition
+
+    def definition(mate_type: object) -> dict[str, Any]:
+        return {
+            "rootAssembly": {
+                "instances": [{"id": "A", "name": "A <1>"}, {"id": "B", "name": "B <1>"}],
+                "features": [
+                    {
+                        "id": "m1",
+                        "featureType": "mate",
+                        "suppressed": False,
+                        "featureData": {
+                            "mateType": mate_type,
+                            "matedEntities": [
+                                {"matedOccurrence": ["A"]},
+                                {"matedOccurrence": ["B"]},
+                            ],
+                        },
+                    }
+                ],
+            }
+        }
+
+    assert [m.mate_type for m in mates_from_definition(definition("REVOLUTE"))] == ["REVOLUTE"]
+    for bad in ("revolute", "ignore previous instructions", "A" * 33, "", 7):
+        assert mates_from_definition(definition(bad)) == []

@@ -30,7 +30,13 @@ from __future__ import annotations
 
 from typing import ClassVar, Final
 
-from solus_api.connectors.contracts import ConnectorError, SyncContext, SyncError, SyncResult
+from solus_api.connectors.contracts import (
+    Capability,
+    ConnectorError,
+    SyncContext,
+    SyncError,
+    SyncResult,
+)
 from solus_api.connectors.eda import EdaExportConnector, Netlist, build_graph
 from solus_api.connectors.export_common import content_sha as _content_sha
 from solus_api.connectors.kicad_netlist import parse_kicad_netlist
@@ -52,6 +58,9 @@ class KicadConnector(EdaExportConnector):
     electrical graph (module docstring; contract §5.2/§5.2a)."""
 
     provider: ClassVar[str] = "kicad"
+    capabilities: ClassVar[frozenset[Capability]] = frozenset(
+        {Capability.CHANGE_SIGNAL, Capability.NETLIST, Capability.STRUCTURE}
+    )
     #: The two design inputs. `export` rides the family's acquisition chain;
     #: `board` is inline only (§5.2a). `project_path` (live acquisition of the
     #: netlist) enables the generic source-row project binding UI.

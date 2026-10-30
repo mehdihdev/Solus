@@ -1,5 +1,5 @@
 // The project's `.solus` on Home (SOLUSDEV-253): what SOL knows about THIS
-// project — five sections of typed notes, SOL-filed notes and imported files
+// project — seven sections of typed notes, SOL-filed notes and imported files
 // (docs/api/solus.md) — readable and editable where the project is chosen,
 // not only from the Workspace nodes. Reuses the Workspace's own hook and
 // actions, so a note added here is the same node the graph shows. Honest
@@ -11,14 +11,20 @@ import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import { SOLUS_SECTIONS, type SolusEntry, type SolusSection } from '../../lib/api/resources'
+import {
+  SOLUS_SECTIONS,
+  isWritableSection,
+  type SolusEntry,
+  type SolusSection
+} from '../../lib/api/resources'
 import { relativeTime } from '../../lib/relativeTime'
 import { SolusComposer } from '../graph/SolusComposer'
 import {
   formatSize,
   sectionCountLabel,
   useSolusActions,
-  type Composer
+  type Composer,
+  type ComposerSubmit
 } from '../graph/solusActions'
 import { SECTION_LABELS, useSolusConfig } from '../graph/useSolusConfig'
 import './solusCard.css'
@@ -58,8 +64,10 @@ export function SolusCard({ projectId, projectName }: SolusCardProps): React.JSX
     if (file && importTarget) void actions.importFile(importTarget, file)
     if (fileInput.current) fileInput.current.value = ''
   }
-  const submit = async (text: string): Promise<void> => {
-    if (composer && (await actions.submit(composer, text))) setComposer(null)
+  const submit: ComposerSubmit = async (text, subsection) => {
+    if (!composer) return
+    const target = subsection ? { ...composer, subsection } : composer
+    if (await actions.submit(target, text)) setComposer(null)
   }
 
   return (
@@ -123,7 +131,7 @@ interface SectionRowProps {
   onCompose: (next: Composer | null) => void
   onImport: () => void
   onRemove: (entry: SolusEntry) => Promise<boolean>
-  onSubmit: (text: string) => Promise<void>
+  onSubmit: ComposerSubmit
 }
 
 function SectionRow({
@@ -178,22 +186,25 @@ function SectionRow({
                 <SolusComposer
                   kind="type"
                   initial=""
+                  section={section}
                   onCancel={() => onCompose(null)}
                   onSubmit={onSubmit}
                 />
               ) : (
-                <div style={{ display: 'flex', gap: 6, marginTop: entries.length ? 8 : 0 }}>
-                  <Button
-                    kind="ghost"
-                    size="sm"
-                    onClick={() => onCompose({ section, kind: 'type' })}
-                  >
-                    Add a note
-                  </Button>
-                  <Button kind="ghost" size="sm" onClick={onImport}>
-                    Import file
-                  </Button>
-                </div>
+                isWritableSection(section) && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: entries.length ? 8 : 0 }}>
+                    <Button
+                      kind="ghost"
+                      size="sm"
+                      onClick={() => onCompose({ section, kind: 'type' })}
+                    >
+                      Add a note
+                    </Button>
+                    <Button kind="ghost" size="sm" onClick={onImport}>
+                      Import file
+                    </Button>
+                  </div>
+                )
               )}
             </div>
           )}

@@ -34,7 +34,8 @@ vi.mock('../sol/solChatStore', async (importOriginal) => {
 function entry(over: Partial<resources.SolusEntry>): resources.SolusEntry {
   return {
     id: 'e1',
-    section: 'details',
+    section: 'goals',
+    subsection: null,
     kind: 'text',
     author: 'user',
     text: 'Spec: 48 V bus',
@@ -50,8 +51,18 @@ function entry(over: Partial<resources.SolusEntry>): resources.SolusEntry {
   }
 }
 
-function config(details: resources.SolusEntry[] = []): resources.SolusConfig {
-  return { entity_id: 'solus-1', sections: { ...emptySections(), details } }
+function config(goals: resources.SolusEntry[] = []): resources.SolusConfig {
+  return { entity_id: 'solus-1', sections: { ...emptySections(), goals } }
+}
+
+/** One persisted subsection node, as the API's graph would carry it. */
+const GUIDES: resources.Entity = {
+  id: 'subsection-documentation-guides',
+  name: 'Documentation › guides',
+  type: 'solus_subsection',
+  domain: 'project',
+  source_key: '',
+  properties: { section: 'documentation', subsection: 'guides' }
 }
 
 const graphChanged = vi.fn()
@@ -68,6 +79,7 @@ function SolusNodesHarness(): React.JSX.Element {
       source_key: '',
       properties: { section }
     },
+    ...(section === 'documentation' ? [GUIDES] : []),
     ...nodes.state.sections[section].map((item) => ({
       id: item.entity_id!,
       name: item.name ?? 'Note',
@@ -84,7 +96,11 @@ function SolusNodesHarness(): React.JSX.Element {
           {nodes.renderContent(entity)}
         </article>
       ))}
-      <aside>{entities.filter((entity) => entity.id === focusedId).map(nodes.renderSidebar)}</aside>
+      <aside>
+        {entities
+          .filter((entity) => entity.id === focusedId)
+          .map((entity) => nodes.renderSidebar(entity))}
+      </aside>
       {nodes.overlays}
     </>
   )
@@ -112,28 +128,30 @@ describe('pure helpers', () => {
   it('labels counts honestly and formats the SOL query', () => {
     expect(sectionCountLabel(0)).toBe('EMPTY')
     expect(sectionCountLabel(3)).toBe('3')
-    expect(askSolMessage('Project details', '  fusing rules ')).toBe(
-      'Find for .solus › Project details: fusing rules'
-    )
+    expect(askSolMessage('Goals', '  fusing rules ')).toBe('Find for .solus › Goals: fusing rules')
     expect(formatSize(null)).toBe('')
     expect(formatSize(2748812)).toBe('2.6 MB')
   })
 })
 
 describe('SolusNodesHarness — rendering and writes', () => {
-  it('shows five EMPTY sections and no invented entries', async () => {
+  it('shows seven EMPTY sections and no invented entries', async () => {
     link()
     render(<SolusNodesHarness />)
     for (const label of [
-      'Hardware configs',
-      'Project details',
-      'Error logging',
+      'Goals',
+      'Constraints',
       'Documentation',
-      'Code environment'
+      'Error logging',
+      'Environment',
+      'Members',
+      'History'
     ]) {
       expect(await screen.findByText(label)).toBeInTheDocument()
     }
-    expect(screen.getAllByText('EMPTY')).toHaveLength(5)
+    // Six empty sections (history renders the activity view, never EMPTY) plus the one
+    // subsection node in the harness.
+    expect(screen.getAllByText('EMPTY')).toHaveLength(7)
     expect(screen.getByText('AUTO + YOU')).toBeInTheDocument()
   })
 
@@ -166,10 +184,73 @@ describe('SolusNodesHarness — rendering and writes', () => {
   it('offers the same three actions on every section', async () => {
     link()
     render(<SolusNodesHarness />)
-    fireEvent.contextMenu(await screen.findByText('Code environment'))
-    expect(screen.getByText('CODE ENVIRONMENT')).toBeInTheDocument()
+    fireEvent.contextMenu(await screen.findByText('Environment'))
+    expect(screen.getByText('ENVIRONMENT')).toBeInTheDocument()
     const items = screen.getAllByRole('menuitem').map((el) => el.textContent)
     expect(items).toEqual(['Import files…', 'Ask SOL to find…', 'Type it'])
+  })
+
+  it('a subsection node opens the same menu and files into its subsection', async () => {
+    link()
+    vi.mocked(resources.addSolusEntry).mockResolvedValue(
+      entry({ section: 'documentation', subsection: 'guides' })
+    )
+    vi.mocked(resources.uploadArtifact).mockResolvedValue({
+      artifact_id: 'a1',
+      uri: '/x',
+      media_type: 'application/pdf',
+      storage: 'local',
+      size_bytes: 12,
+      summary: null
+    })
+    render(<SolusNodesHarness />)
+    fireEvent.contextMenu(await screen.findByText('Documentation › guides'))
+    expect(screen.getByText('DOCUMENTATION › GUIDES')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
+    expect(screen.getByRole('combobox', { name: 'Subsection' })).toHaveValue('guides')
+    await userEvent.type(screen.getByPlaceholderText('Type it — plain text'), 'Crimp guide')
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() =>
+      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'documentation', {
+        kind: 'text',
+        text: 'Crimp guide',
+        subsection: 'guides'
+      })
+    )
+    fireEvent.contextMenu(await screen.findByText('Documentation › guides'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
+    await userEvent.upload(
+      screen.getByLabelText('Import a file into .solus'),
+      new File(['%PDF'], 'crimp.pdf', { type: 'application/pdf' })
+    )
+    await waitFor(() =>
+      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenLastCalledWith('p1', 'documentation', {
+        kind: 'artifact',
+        artifact_id: 'a1',
+        name: 'crimp.pdf',
+        subsection: 'guides'
+      })
+    )
+  })
+
+  it('offers a subsection picker on a fixed-list section, defaulting to its first value', async () => {
+    link()
+    vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({ section: 'constraints' }))
+    render(<SolusNodesHarness />)
+    fireEvent.contextMenu(await screen.findByText('Constraints'))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
+    const picker = screen.getByRole('combobox', { name: 'Subsection' })
+    expect(picker).toHaveValue('rules')
+    await userEvent.selectOptions(picker, 'budgets')
+    await userEvent.type(screen.getByPlaceholderText('Type it — plain text'), '40 A fuse max')
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() =>
+      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'constraints', {
+        kind: 'text',
+        text: '40 A fuse max',
+        subsection: 'budgets'
+      })
+    )
   })
 })
 
@@ -178,14 +259,14 @@ describe('SolusNodesHarness — type and import', () => {
     link()
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({}))
     render(<SolusNodesHarness />)
-    fireEvent.contextMenu(await screen.findByText('Project details'))
+    fireEvent.contextMenu(await screen.findByText('Goals'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
     const box = screen.getByPlaceholderText('Type it — plain text')
     await userEvent.type(box, 'Spec: 48 V bus')
     vi.mocked(resources.getSolus).mockResolvedValue(config([entry({})]))
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
     await waitFor(() =>
-      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'details', {
+      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'goals', {
         kind: 'text',
         text: 'Spec: 48 V bus'
       })
@@ -206,13 +287,13 @@ describe('SolusNodesHarness — type and import', () => {
     })
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({ kind: 'artifact' }))
     render(<SolusNodesHarness />)
-    fireEvent.contextMenu(await screen.findByText('Project details'))
+    fireEvent.contextMenu(await screen.findByText('Goals'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
     const input = screen.getByLabelText('Import a file into .solus') as HTMLInputElement
     const file = new File(['%PDF'], 'rules.pdf', { type: 'application/pdf' })
     await userEvent.upload(input, file)
     await waitFor(() =>
-      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'details', {
+      expect(vi.mocked(resources.addSolusEntry)).toHaveBeenCalledWith('p1', 'goals', {
         kind: 'artifact',
         artifact_id: 'a1',
         name: 'rules.pdf'
@@ -250,20 +331,27 @@ describe('SolusNodesHarness — SOL and editing', () => {
       entity_id: 'solus-1',
       sections: {
         ...emptySections(),
-        docs: [entry({ id: 'e9', section: 'docs', kind: 'sol', author: 'sol', text: 'EV.7.2' })]
+        documentation: [
+          entry({ id: 'e9', section: 'documentation', kind: 'sol', author: 'sol', text: 'EV.7.2' })
+        ]
       }
     })
+    // Documentation has fixed subsections, so the ask names the picked one (first by default)
+    // and SOL files there with add_solus_entry.
+    expect(screen.getByRole('combobox', { name: 'Subsection' })).toHaveValue('datasheets')
     await userEvent.click(screen.getByRole('button', { name: 'Ask SOL' }))
     await waitFor(() =>
       expect(vi.mocked(chat.sendMessage)).toHaveBeenCalledWith(
         'p1',
-        'Find for .solus › Documentation: fusing rules',
+        'Find for .solus › Documentation › datasheets: fusing rules',
         'do'
       )
     )
     expect(vi.mocked(chat.startNewChat)).toHaveBeenCalledWith('p1')
     await waitFor(() =>
-      expect(useShellStore.getState().toast?.title).toBe('Filed to .solus › Documentation')
+      expect(useShellStore.getState().toast?.title).toBe(
+        'Filed to .solus › Documentation › datasheets'
+      )
     )
   })
 
@@ -353,7 +441,7 @@ describe('SolusNodesHarness — deletion', () => {
   it('is honest when offline: no mutations offered', () => {
     render(<SolusNodesHarness />)
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
-    fireEvent.contextMenu(screen.getByText('Project details'))
+    fireEvent.contextMenu(screen.getByText('Goals'))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 })
@@ -364,7 +452,7 @@ describe('canvas mutation regressions', () => {
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({}))
     vi.mocked(resources.deleteSolusEntry).mockResolvedValue(undefined)
     render(<SolusNodesHarness />)
-    fireEvent.contextMenu(await screen.findByText('Project details'))
+    fireEvent.contextMenu(await screen.findByText('Goals'))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Type it' }))
     await userEvent.type(screen.getByRole('textbox'), 'Spec: 48 V bus')
     vi.mocked(resources.getSolus).mockResolvedValue(config([entry({})]))
@@ -406,8 +494,10 @@ describe('pending file import scope', () => {
         })
       )
       const { unmount } = render(<SolusNodesHarness />)
-      await waitFor(() => expect(screen.getAllByRole('button', { name: 'Add a note' })[0]).toBeEnabled())
-      fireEvent.contextMenu(await screen.findByText('Documentation'))
+      // Online: the section cards show their counts, not the offline dash.
+      await screen.findByText('Documentation')
+      await waitFor(() => expect(screen.queryAllByText('—')).toHaveLength(0))
+      fireEvent.contextMenu(screen.getByText('Documentation'))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Import files…' }))
       await userEvent.upload(
         screen.getByLabelText('Import a file into .solus'),
@@ -435,10 +525,11 @@ describe('pending file import scope', () => {
   )
 })
 
-it('offers deletion of a CODE config record without a text editor or environment removal', async () => {
+it('offers deletion of a software config record without a text editor or environment removal', async () => {
   link()
   const environment = entry({
-    section: 'code',
+    section: 'environment',
+    subsection: 'software',
     kind: 'config',
     text: 'perception',
     payload: {
@@ -451,7 +542,7 @@ it('offers deletion of a CODE config record without a text editor or environment
   })
   vi.mocked(resources.getSolus).mockResolvedValue({
     entity_id: 'solus-1',
-    sections: { ...emptySections(), code: [environment] }
+    sections: { ...emptySections(), environment: [environment] }
   })
   render(<SolusNodesHarness />)
   fireEvent.contextMenu(await screen.findByText('perception'))

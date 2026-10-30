@@ -93,7 +93,10 @@ export async function preferencesForTurn(): Promise<EngineeringPreferences | nul
   await usePreferencesStore.getState().load()
   const { status, preferences } = usePreferencesStore.getState()
   if (status !== 'ready' || isEmptyPreferences(preferences)) return null
-  return preferences
+  // The `shared` flags are desktop-only (SOLUSDEV-320): the API's turn schema
+  // forbids unknown fields, and the mirror is sent by MAIN, not per turn.
+  const { shared, ...document } = preferences
+  return shared === undefined ? preferences : document
 }
 
 // SEC review H1 (H3): the document is machine-local and shared by every

@@ -37,7 +37,7 @@ async def setup_graph(
         dst_id=known,
         relation_type="same_as",
         domain_pair="mechanical<->mechanical",
-        origin="linking",
+        origin="fingerprint",
         confidence=0.92,
         attrs={
             "matched": True,
@@ -60,7 +60,8 @@ async def test_propose_then_accept_attaches_same_cad_entity_once(
     [suggestion] = await propose_cad_suggestions(db, project, cad, await actor(db))
     assert suggestion.candidate_robot_id == robot
     assert suggestion.evidence[0]["modality"] == "cad_model"
-    assert not (await db.get(GraphEntity, cad)).attrs.get("robot_id")
+    cad_row = await db.get(GraphEntity, cad)
+    assert cad_row is not None and not cad_row.attrs.get("robot_id")
     await decide_suggestion(db, project, suggestion.id, True, user)
     result = await accept_cad_suggestion(db, project, suggestion, user)
     assert result["bound"] is True and result["robot_id"] == robot

@@ -1,110 +1,102 @@
-// SOL screen (SOLUSDEV-233 redesign): three columns — the caller's saved chats,
-// the chat column (the same SolChat surface the SOL window uses, driven by ONE
-// shared chat instance), and the CONTEXT IN USE / SOL USAGE panel. The header
-// keeps the SOL wordmark, the window opener, and
-// a grounded line driven by the project's REAL connected-source count
-// (SOLUSDEV-152 charter: never a fabricated number).
-import { useEffect, useState } from 'react'
+// SOL page (design template): three columns — the caller's saved chats (grouped, with
+// the usage card at the bottom), the chat column (the active chat's title, the pinned
+// count, the SOL window opener, the thread and the composer), and the context column
+// (instructions · files · pinned nodes · artifacts · last-turn manifest). ONE shared chat
+// instance drives all three. Nothing here invents a number: the header count is the
+// chat's pinned nodes, and the files are the project's real .solus entries.
+import { useEffect } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
-import { getProject } from '../../lib/api/resources'
 import { getDesktopSolBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
-import { ChatsSidebar } from './ChatsSidebar'
-import { ContextPanel } from './ContextPanel'
+import { useSolusActions } from '../graph/solusActions'
+import { useSolusConfig } from '../graph/useSolusConfig'
+import { useFocusStore } from '../workspace/focusStore'
+import type { MainScreen } from '../workspace/shellStore'
+import { ChatsSidebar, UNTITLED } from './ChatsSidebar'
+import { chatKey, selectPins, usePinnedContextStore } from './pinnedContextStore'
 import { SolChat } from './SolChat'
+import { SolRightPanel } from './SolRightPanel'
 import { UsagePanel } from './UsagePanel'
 import { useSolChat } from './useSolChat'
+import { useSolConversations } from './useSolConversations'
 
-/** The project's real connected-source count, or null while unknown/offline.
- *  Keyed by project and derived, so a switch reads null until ITS count lands. */
-function useGroundedSources(projectId: string | null): number | null {
-  const fetchEnabled = useWorkspaceFetchEnabled()
-  const [loaded, setLoaded] = useState<{ projectId: string; count: number } | null>(null)
-  useEffect(() => {
-    if (!projectId || !fetchEnabled) return
-    let stale = false
-    getProject(projectId)
-      .then((detail) => {
-        if (!stale) setLoaded({ projectId, count: detail.sources.length })
-      })
-      .catch(() => undefined)
-    return () => {
-      stale = true
-    }
-  }, [projectId, fetchEnabled])
-  return fetchEnabled && loaded?.projectId === projectId ? loaded.count : null
-}
-
-export function SolScreen(): React.JSX.Element {
+export function SolScreen({
+  onNavigate
+}: {
+  onNavigate: (screen: MainScreen) => void
+}): React.JSX.Element {
   const project = useWorkspaceStore((s) => s.project)
   const projectId = project?.id ?? null
   const chat = useSolChat(projectId)
-  const sourceCount = useGroundedSources(projectId)
+  const conversations = useSolConversations(projectId, chat.activeConversationId)
+  const solus = useSolusConfig(projectId)
+  const actions = useSolusActions(projectId, solus)
+  const pins = usePinnedContextStore((s) => selectPins(s, projectId, chat.activeConversationId))
+  // The first send created the conversation: pins made on the fresh chat follow it.
+  const active = chat.activeConversationId
+  useEffect(() => {
+    if (projectId && active) usePinnedContextStore.getState().adoptConversation(projectId, active)
+  }, [projectId, active])
+  const unpin = (entityId: string): void => {
+    if (projectId) usePinnedContextStore.getState().unpin(chatKey(projectId, active), entityId)
+  }
+  const upload = (file: File): void => {
+    void actions.importFile('documentation', file)
+  }
+  const title = conversations.conversations.find((c) => c.id === active)?.title?.trim() || UNTITLED
 
   return (
     <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
       <ChatsSidebar
         projectId={projectId}
-        activeConversationId={chat.activeConversationId}
+        activeConversationId={active}
+        data={conversations}
         onSelect={chat.selectConversation}
         onNewChat={chat.startNewChat}
+        footer={<UsagePanel creditsExhausted={chat.creditsExhausted} />}
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <SolHeader projectName={project?.name ?? null} sourceCount={sourceCount} />
-        <SolChat projectId={projectId} layout="page" chat={chat} />
+        <SolHeader title={title} pinned={pins.length} />
+        <SolChat
+          projectId={projectId}
+          layout="page"
+          chat={chat}
+          pinnedMentionIds={pins.map((pin) => pin.id)}
+          onUpload={projectId ? upload : undefined}
+          onAddNodeFromGraph={() => onNavigate('workspace')}
+          onFocusEntity={(entityId) => {
+            void useFocusStore.getState().focus(entityId)
+            onNavigate('workspace')
+          }}
+        />
       </div>
-      <div
-        style={{
-          width: 288,
-          flexShrink: 0,
-          borderLeft: '1px solid var(--bd)',
-          overflowY: 'auto',
-          padding: '14px 16px 24px'
-        }}
-      >
-        <ContextPanel contextUsed={chat.contextUsed} />
-        <UsagePanel creditsExhausted={chat.creditsExhausted} />
-      </div>
+      {projectId && (
+        <SolRightPanel
+          projectId={projectId}
+          chat={chat}
+          solus={solus}
+          pins={pins}
+          onUnpin={unpin}
+          onUpload={upload}
+          onNavigate={onNavigate}
+        />
+      )}
     </div>
   )
 }
 
-function SolHeader({
-  projectName,
-  sourceCount
-}: {
-  projectName: string | null
-  sourceCount: number | null
-}): React.JSX.Element {
+function SolHeader({ title, pinned }: { title: string; pinned: number }): React.JSX.Element {
   // SOLUSDEV-252 S3 (wireflow §F): the summon-free way into the SOL window —
   // the path that still works where hotkeys cannot (Wayland). Electron only.
   const solBridge = getDesktopSolBridge()
-  const grounded =
-    sourceCount !== null && sourceCount > 0
-      ? ` · GROUNDED IN ${sourceCount} CONNECTION${sourceCount === 1 ? '' : 'S'}`
-      : ''
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-        padding: '16px 24px 10px',
-        maxWidth: 800,
-        width: '100%',
-        margin: '0 auto',
-        boxSizing: 'border-box'
-      }}
-    >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 16, fontWeight: 600 }}>SOL</div>
-        <Mono size={9.5} color="var(--mut)">
-          {projectName ?? 'NO PROJECT'}
-          {grounded}
-        </Mono>
-      </div>
+    <div className="sol-page-head">
+      <span className="sol-page-title">{title}</span>
+      <Mono size={10} ls="0.08em">
+        {pinned} NODE{pinned === 1 ? '' : 'S'} IN CONTEXT
+      </Mono>
+      <div style={{ flex: 1 }} />
       {solBridge && (
         <Button kind="ghost" size="sm" onClick={() => void solBridge.open()}>
           Open SOL window

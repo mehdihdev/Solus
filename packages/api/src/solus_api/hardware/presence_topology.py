@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.graph.read_scope import resolve_scope
 from solus_api.hardware.presence import digest
 from solus_api.hardware.runtime import resolve_runtime_config
@@ -290,18 +291,17 @@ class WiringService:
         )
         self.session.add(entity)
         await self.session.flush()
-        self.session.add(
-            GraphEdge(
-                project_id=self.project_id,
-                src_id=entity.id,
-                dst_id=brain,
-                relation_type="wiring_proposed_for",
-                domain_pair="runtime:runtime",
-                origin="system",
-                attrs={},
-            )
+        await write_edge(
+            self.session,
+            project_id=self.project_id,
+            src_id=entity.id,
+            dst_id=brain,
+            relation_type="wiring_proposed_for",
+            origin="system",
+            confidence=1.0,
+            evidence=[],
+            created_by=self.presence.user_id,
         )
-        await self.session.flush()
         return {
             "proposal_id": str(entity.id),
             "digest": fingerprint,

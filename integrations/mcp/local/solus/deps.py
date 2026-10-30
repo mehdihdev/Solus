@@ -15,6 +15,7 @@ threshold, extras at MAX_EXTRAS. `-r`/`-c`/`-e`/option lines are skipped and
 NEVER followed. Nothing here raises: a hostile file yields fewer entries.
 """
 
+import json
 import logging
 import re
 import tomllib
@@ -22,11 +23,19 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TypedDict
 
-from .toolmap import is_dependency_file
+from .toolmap import is_dependency_file, is_manifest_file
 
 logger = logging.getLogger("solus.local.deps")
 
 ECOSYSTEM = "python"
+#: SOLUSDEV-320: npm (`package.json`) and ROS (`package.xml`) manifests. The cloud twin of
+#: these shape rules is `solus_api/graph/inference/manifests.py`.
+_NPM_NAME_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
+_NPM_RANGE_ATOM = r"(?:[\^~<>=|v]*\d[\w.+-]*|\*|x|latest|next|[a-z]+:\S*|[\w.@/-]+@\S*|-|\|\|)"
+_NPM_RANGE_RE = re.compile(rf"^(?:{_NPM_RANGE_ATOM}(?: {_NPM_RANGE_ATOM}){{0,3}})?$", re.I)
+_ROS_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_NPM_GROUPS = ("dependencies", "devDependencies")
+_ROS_GROUPS = ("depend", "build_depend", "exec_depend")
 #: Scan ceiling for dependency entries (route plan §3).
 MAX_DEPENDENCIES = 500
 #: Dependency files over this size are skipped outright.
@@ -236,12 +245,88 @@ def parse_environment_yml(text: str) -> list[Requirement]:
     return found
 
 
+def parse_package_json(text: str) -> list[Requirement]:
+    """`dependencies` then `devDependencies` of an npm manifest; a name or range out of
+    shape (a sentence is not a version) is dropped."""
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    lines = text.splitlines()
+    found: list[Requirement] = []
+    cursor = 0
+    for group in _NPM_GROUPS:
+        table = data.get(group)
+        if not isinstance(table, dict):
+            continue
+        for raw_name, raw_range in table.items():
+            if not isinstance(raw_name, str) or not isinstance(raw_range, str):
+                continue
+            name, specifier = raw_name.strip().lower(), raw_range.strip()
+            if (
+                len(name) > MAX_WIRE_CHARS
+                or len(specifier) > MAX_WIRE_CHARS
+                or not _NPM_NAME_RE.match(name)
+                or not _NPM_RANGE_RE.match(specifier)
+            ):
+                continue
+            line = _locate(lines, f'"{raw_name}"', cursor)
+            cursor = max(cursor, line - 1) if line else cursor
+            found.append({"name": name, "specifier": specifier, "extras": [], "line": line})
+    return found
+
+
+def parse_package_xml(text: str) -> list[Requirement]:
+    """`<depend>`, `<build_depend>`, `<exec_depend>` of a ROS package manifest. Any DTD is
+    refused outright (stdlib etree still expands internal entities)."""
+    if len(text) > MAX_DEP_FILE_BYTES or "<!DOCTYPE" in text or "<!ENTITY" in text:
+        return []
+    from xml.etree.ElementTree import fromstring  # noqa: S405 — DTDs refused above
+
+    try:
+        root = fromstring(text)  # noqa: S314 — DTDs refused above
+    except Exception:  # noqa: BLE001 - a hostile file yields nothing, never a crash
+        return []
+    if root.tag != "package":
+        return []
+    lines = text.splitlines()
+    found: list[Requirement] = []
+    cursor = 0
+    for element in root:
+        name = (element.text or "").strip()
+        if (
+            element.tag not in _ROS_GROUPS
+            or len(name) > MAX_WIRE_CHARS
+            or not _ROS_NAME_RE.match(name)
+        ):
+            continue
+        line = _locate(lines, f"<{element.tag}>{name}<", cursor)
+        cursor = max(cursor, line - 1) if line else cursor
+        found.append({"name": name, "specifier": "", "extras": [], "line": line})
+    return found
+
+
+def ecosystem_for(name: str) -> str:
+    lower = name.lower()
+    if lower == "package.json":
+        return "npm"
+    if lower == "package.xml":
+        return "ros"
+    return ECOSYSTEM
+
+
 def parser_for(name: str) -> Parser | None:
     lower = name.lower()
     if lower == "pyproject.toml":
         return parse_pyproject
     if lower == "environment.yml":
         return parse_environment_yml
+    if lower == "package.json":
+        return parse_package_json
+    if lower == "package.xml":
+        return parse_package_xml
     return parse_requirements_txt if is_dependency_file(lower) else None
 
 
@@ -269,7 +354,8 @@ def parse_dependency_file(path: Path, parts: list[str]) -> list[Dependency]:
     except Exception as exc:  # noqa: BLE001 - a hostile file yields nothing, never a crash
         logger.warning("dependency parse of %s failed: %s", "/".join(parts), type(exc).__name__)
         return []
-    return [{"parts": list(parts), "ecosystem": ECOSYSTEM, **item} for item in requirements]
+    ecosystem = ecosystem_for(parts[-1])
+    return [{"parts": list(parts), "ecosystem": ecosystem, **item} for item in requirements]
 
 
 def collect_dependencies(
@@ -278,7 +364,7 @@ def collect_dependencies(
     """`(dependencies, truncated)` over the scan's (sorted) file `parts`."""
     collected: list[Dependency] = []
     for parts in file_parts:
-        if not parts or not is_dependency_file(parts[-1]):
+        if not parts or not (is_dependency_file(parts[-1]) or is_manifest_file(parts[-1])):
             continue
         for dependency in parse_dependency_file(root.joinpath(*parts), parts):
             if len(collected) == MAX_DEPENDENCIES:

@@ -38,7 +38,7 @@ class DictEntityResolver:
 class CachingEntityResolver:
     """TTL cache over another resolver for hot streaming paths (SOLUSDEV-72).
 
-    A 50 Hz MuJoCo run emits one packet per joint per tick — resolving each
+    A 50 Hz physics-simulator run emits one packet per joint per tick — resolving each
     against the DB is hundreds of queries per second for identical answers.
     POSITIVE results are cached for `ttl_seconds`; negative results are never
     cached, so a device that gets linked to an entity mid-stream attaches on

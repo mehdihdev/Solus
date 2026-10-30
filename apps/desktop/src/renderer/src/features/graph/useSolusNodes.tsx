@@ -5,7 +5,8 @@ import {
   SOLUS_SECTIONS,
   type Entity,
   type SolusEntry,
-  type SolusSection
+  type SolusSection,
+  isWritableSection
 } from '../../lib/api/resources'
 import { useSettingsStore } from '../../store/settingsStore'
 import { selectSession, useSolChatStore } from '../sol/solChatStore'
@@ -13,13 +14,27 @@ import { useFocusStore } from '../workspace/focusStore'
 import { SolusSidebar } from './sidebar/SolusSidebar'
 import { useSolusConfig, type SolusState } from './useSolusConfig'
 import { SolusNodeContent } from './SolusNodeContent'
-import { findSolusEntry, useSolusActions, type Composer } from './solusActions'
+import {
+  entriesIn,
+  findSolusEntry,
+  isHardwareConfig,
+  useSolusActions,
+  type Composer
+} from './solusActions'
 
-function sectionOf(entity: Entity): SolusSection | null {
+const SECTION_NODE_TYPES = new Set(['solus_section', 'solus_subsection'])
+
+export function sectionOf(entity: Entity): SolusSection | null {
   const section = entity.properties?.section
-  return entity.type === 'solus_section' && SOLUS_SECTIONS.some((key) => key === section)
+  return SECTION_NODE_TYPES.has(entity.type) && SOLUS_SECTIONS.some((key) => key === section)
     ? (section as SolusSection)
     : null
+}
+
+/** The subsection a `solus_subsection` node stands for; null for every other node. */
+export function subsectionOf(entity: Entity): string | null {
+  const subsection = entity.properties?.subsection
+  return entity.type === 'solus_subsection' && typeof subsection === 'string' ? subsection : null
 }
 
 interface SolusNodes {
@@ -28,7 +43,10 @@ interface SolusNodes {
   renderContent: (entity: Entity) => ReactNode
   /** The hidden file input and the context menu — no modals (SOLUSDEV-250 P4). */
   overlays: ReactNode
-  renderSidebar: (entity: Entity) => ReactNode
+  renderSidebar: (entity: Entity, extras?: { onAskSol?: () => void }) => ReactNode
+  /** Open the file picker for a section (the Add modal's .solus row reuses it). */
+  onImport: (section: SolusSection, subsection?: string | null) => void
+  importFile: (section: SolusSection, file: File, subsection?: string | null) => Promise<void>
 }
 
 /** Attach W1 actions to persisted graph identities; never synthesize graph nodes. */
@@ -46,15 +64,16 @@ function useSolusNodeActions(projectId: string | null, onGraphChanged: () => voi
   const onContextMenu = useCallback(
     (event: React.MouseEvent, entity: Entity): void => {
       const entry = findSolusEntry(sections, entity.id)
-      if (entry?.kind === 'config' && entry.section === 'hardware') {
+      if (entry && isHardwareConfig(entry)) {
         event.preventDefault()
         return
       }
       const section = entry?.section ?? sectionOf(entity)
-      if (!section || !online) return
+      if (!section || !online || (!entry && !isWritableSection(section))) return
       event.preventDefault()
       setMenu({
         section,
+        subsection: subsectionOf(entity),
         entry,
         entityId: entity.id,
         ...clampMenuPosition(event.clientX, event.clientY)
@@ -71,8 +90,10 @@ function useSolusNodeActions(projectId: string | null, onGraphChanged: () => voi
   const submit = useRef(actions.submit)
   submit.current = actions.submit
   const onSubmit = useCallback(
-    async (text: string): Promise<void> => {
-      if (composer && (await submit.current(composer, text))) setComposer(null)
+    async (text: string, subsection?: string): Promise<void> => {
+      if (!composer) return
+      const target = subsection ? { ...composer, subsection } : composer
+      if (await submit.current(target, text)) setComposer(null)
     },
     [composer]
   )
@@ -135,13 +156,15 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
   const renderContent = useCallback(
     (entity: Entity): ReactNode => {
       const section = sectionOf(entity)
+      const subsection = subsectionOf(entity)
       return (
         <SolusNodeContent
           projectId={projectId}
           entity={entity}
           entry={findSolusEntry(sections, entity.id)}
           section={section}
-          count={section ? sections[section].length : 0}
+          subsection={subsection}
+          count={section ? entriesIn(sections, section, subsection).length : 0}
           online={online}
           composer={composer}
           onCompose={setComposer}
@@ -151,13 +174,14 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
     },
     [projectId, sections, online, composer, onSubmit, setComposer]
   )
-  const renderSidebar = (entity: Entity): ReactNode => (
+  const renderSidebar = (entity: Entity, extras?: { onAskSol?: () => void }): ReactNode => (
     <SolusSidebar
       key={entity.id}
       projectId={projectId}
       entity={entity}
       entry={findSolusEntry(state.sections, entity.id)}
       section={sectionOf(entity)}
+      subsection={subsectionOf(entity)}
       state={state}
       mode={mode}
       composer={composer}
@@ -165,6 +189,7 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
       onSubmit={onSubmit}
       remove={actions.remove}
       onImport={onImport}
+      onAskSol={extras?.onAskSol}
       streaming={streaming}
       online={online}
       armedDeleteId={armedDeleteId}
@@ -172,14 +197,24 @@ export function useSolusNodes(projectId: string | null, onGraphChanged: () => vo
       disarm={() => setArmedDeleteId(null)}
     />
   )
-  return { state, onContextMenu, renderContent, overlays, renderSidebar }
+  return {
+    state,
+    onContextMenu,
+    renderContent,
+    overlays,
+    renderSidebar,
+    onImport,
+    importFile: actions.importFile
+  }
 }
 
-function useSolusImport(importFile: (section: SolusSection, file: File) => Promise<void>) {
+function useSolusImport(
+  importFile: (section: SolusSection, file: File, subsection?: string | null) => Promise<void>
+) {
   const fileInput = useRef<HTMLInputElement | null>(null)
-  const importTarget = useRef<SolusSection | null>(null)
-  const onImport = (section: SolusSection): void => {
-    importTarget.current = section
+  const importTarget = useRef<{ section: SolusSection; subsection?: string | null } | null>(null)
+  const onImport = (section: SolusSection, subsection?: string | null): void => {
+    importTarget.current = { section, subsection }
     fileInput.current?.click()
   }
   const input = (
@@ -191,7 +226,8 @@ function useSolusImport(importFile: (section: SolusSection, file: File) => Promi
       onChange={(event) => {
         const file = event.currentTarget.files?.[0]
         event.currentTarget.value = ''
-        if (file && importTarget.current) void importFile(importTarget.current, file)
+        const target = importTarget.current
+        if (file && target) void importFile(target.section, file, target.subsection)
       }}
     />
   )

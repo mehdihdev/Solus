@@ -15,6 +15,13 @@ DEPENDENCY_FILE_NAMES: frozenset[str] = frozenset({"pyproject.toml", "environmen
 _REQUIREMENTS_PREFIX = "requirements"
 _REQUIREMENTS_SUFFIX = ".txt"
 DEPENDENCY_TOOL = "python"
+#: Non-python dependency manifests (SOLUSDEV-320): scanned for `dependencies` only —
+#: they belong to no tool, so they stay out of `files` and the digest.
+MANIFEST_FILE_NAMES: frozenset[str] = frozenset({"package.json", "package.xml"})
+
+
+def is_manifest_file(path: str | PurePath) -> bool:
+    return PurePath(path).name.lower() in MANIFEST_FILE_NAMES
 
 
 def is_dependency_file(path: str | PurePath) -> bool:

@@ -1,10 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { useShellStore } from '../workspace/shellStore'
 import { WorkspaceAdd } from './WorkspaceAdd'
 import { clearServiceCatalog } from './useServiceCatalog'
 vi.mock('../../lib/api/resources', async (importOriginal) => ({
@@ -63,13 +64,18 @@ beforeEach(() => {
 it('keeps the account dropdown mounted through close/reopen with zero extra reads', async () => {
   render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  expect(screen.getByRole('tab', { name: 'Integrations' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('dialog', { name: 'Add to graph' })).toBeInTheDocument()
   expect(screen.queryByRole('tab', { name: 'From a service' })).toBeNull()
-  await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
-  expect(await screen.findByRole('button', { name: 'Arm · Added' })).toBeInTheDocument()
+  expect(screen.queryByRole('tab', { name: 'Integrations' })).toBeNull()
+  // The first usable account is selected on open; its rows carry the In graph pill.
+  expect(await screen.findByRole('tab', { name: 'onshape · builder' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(await screen.findByRole('button', { name: 'Arm · In graph' })).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Close Add' }))
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  expect(screen.getByRole('button', { name: 'Arm · Added' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Arm · In graph' })).toBeInTheDocument()
   expect(resources.listConnections).toHaveBeenCalledTimes(1)
   expect(resources.listAllSources).toHaveBeenCalledTimes(1)
   expect(resources.listConnectionDocuments).toHaveBeenCalledTimes(1)
@@ -77,8 +83,7 @@ it('keeps the account dropdown mounted through close/reopen with zero extra read
 it('reselects an existing document without any mutation or job request', async () => {
   render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'Arm · Added' }))
+  await userEvent.click(await screen.findByRole('button', { name: 'Arm · In graph' }))
   expect(selected).toHaveBeenCalledWith({ source, jobId: null }, 'd1')
   expect(resources.createSource).not.toHaveBeenCalled()
   expect(resources.addSourceDocument).not.toHaveBeenCalled()
@@ -98,12 +103,17 @@ it('adds the second document once and updates the graph after its accepted job',
   })
   render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
+  expect(screen.getByRole('button', { name: 'Select documents' })).toBeDisabled()
   await userEvent.click(await screen.findByRole('button', { name: 'Gripper' }))
+  expect(screen.getByRole('button', { name: 'Gripper' })).toHaveAttribute('aria-pressed', 'true')
+  await userEvent.click(screen.getByRole('button', { name: 'Add 1 document' }))
   await waitFor(() => expect(selected).toHaveBeenCalledTimes(1))
   expect(resources.addSourceDocument).toHaveBeenCalledTimes(1)
   expect(resources.addSourceDocument).toHaveBeenCalledWith('p1', 's1', 'd2', expect.anything())
   expect(resources.triggerSync).not.toHaveBeenCalled()
+  // Confirmed picks toast and close the modal.
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  expect(useShellStore.getState().toast?.title).toBe('Added 1 document from builder')
 })
 
 it.each(['project', 'account'])(
@@ -119,8 +129,8 @@ it.each(['project', 'account'])(
     )
     render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-    await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
     await userEvent.click(await screen.findByRole('button', { name: 'Arm' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Add 1 document' }))
     await waitFor(() => expect(resources.createSource).toHaveBeenCalledOnce())
     act(() => {
       if (boundary === 'project') {
@@ -147,7 +157,6 @@ it('requires explicit loading for an uncached listing and shows job failures wit
   )
   render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
   await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-  await userEvent.click(await screen.findByRole('button', { name: 'onshape · builder' }))
   const load = await screen.findByRole('button', { name: 'Load documents' })
   expect(resources.listConnectionDocuments).toHaveBeenCalledTimes(1)
   await userEvent.click(load)
@@ -168,8 +177,11 @@ it('requires explicit loading for an uncached listing and shows job failures wit
     error: { message: 'Export unavailable' }
   })
   await userEvent.click(await screen.findByRole('button', { name: 'Gripper' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Add 1 document' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Export unavailable')
-  await userEvent.click(screen.getByRole('button', { name: 'Gripper · Added' }))
+  // A failed import stays open and visible; re-selecting the now-attached row repeats it.
+  expect(screen.getByRole('dialog')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Gripper · In graph' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('Export unavailable')
   expect(resources.addSourceDocument).toHaveBeenCalledOnce()
   expect(resources.triggerSync).not.toHaveBeenCalled()
@@ -200,5 +212,43 @@ it('opens on the requested tab when a sequence-keyed request arrives', async () 
       openRequest={{ tab: 'hardware', sequence: 1 }}
     />
   )
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+})
+
+it('the .solus row offers the dropzone and Choose files, both through the import handler', async () => {
+  const choose = vi.fn()
+  const importFiles = vi.fn().mockResolvedValue(undefined)
+  render(
+    <WorkspaceAdd
+      projectId="p1"
+      onSelected={selected}
+      solusUpload={{ target: 'Documentation', choose, importFiles }}
+    />
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+  await userEvent.click(screen.getByRole('tab', { name: '.solus' }))
+  expect(screen.getByText('.solus › Documentation')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Choose files' }))
+  expect(choose).toHaveBeenCalledOnce()
+  const file = new File(['x'], 'notes.md', { type: 'text/markdown' })
+  fireEvent.drop(screen.getByRole('button', { name: 'Upload documents' }), {
+    dataTransfer: { files: [file] }
+  })
+  expect(importFiles).toHaveBeenCalledWith([file])
+})
+
+it('closes on the backdrop and opens on the first account for a service request', async () => {
+  const view = render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
+  view.rerender(
+    <WorkspaceAdd
+      projectId="p1"
+      onSelected={selected}
+      openRequest={{ tab: 'service', sequence: 1 }}
+    />
+  )
+  expect(
+    await screen.findByRole('tab', { name: 'onshape · builder', selected: true })
+  ).toBeInTheDocument()
+  fireEvent.click(document.querySelector('.modal-backdrop-in')!)
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })

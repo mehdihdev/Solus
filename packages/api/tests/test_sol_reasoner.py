@@ -405,7 +405,7 @@ async def _project_with_solus(maker: async_sessionmaker[AsyncSession]) -> uuid.U
         await add_text_entry(
             db,
             project_id,
-            SolusSection.HARDWARE,
+            SolusSection.ENVIRONMENT,
             "the IMU sits on I2C bus 1 at 0x68",
             author="user",
             created_by=None,

@@ -1,9 +1,12 @@
 // The SOL composer: the message box with its `@` picker, the mode badge,
 // Think harder, the review preference and the routing preview. Moved out of
 // SolChat.tsx (SOLUSDEV-319) so the pill variant has room to grow.
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Switch } from '../../components/ui/Switch'
+import { Icons } from '../../components/ui/icons.constants'
+import { mergeMentions } from './mentionToken'
+import { takeDraft } from './pinnedContextStore'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { COMPOSER_ATTR } from './commandHotkey'
 import { ModeBadge } from './ModeBadge'
@@ -90,6 +93,18 @@ function MentionList({
   )
 }
 
+const COMPOSER_MAX_HEIGHT = 160
+
+/** Grow with the draft up to a ceiling (jsdom reports no scrollHeight, so this is a no-op there). */
+function useAutosize(ref: MentionPicker['inputRef'], value: string): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    if (el.scrollHeight) el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`
+  }, [ref, value])
+}
+
 /** The message box plus its `@` picker. Split from Composer so each stays
  *  readable — the composer owns text/mode/send, this owns the input element. */
 function MessageInput({
@@ -97,6 +112,7 @@ function MessageInput({
   inputRef,
   value,
   onChange,
+  onSubmitRequest,
   page,
   placeholder,
   pill = false
@@ -107,11 +123,14 @@ function MessageInput({
   inputRef: MentionPicker['inputRef']
   value: string
   onChange: (text: string) => void
+  /** Enter (no Shift, no Ctrl/Cmd — those belong to the command cards) sends. */
+  onSubmitRequest: () => void
   page: boolean
   placeholder: string
   /** SOLUSDEV-319: the borderless input inside the Ember Pill bar. */
   pill?: boolean
 }): React.JSX.Element {
+  useAutosize(inputRef, value)
   return (
     <>
       {mention.listOpen && (
@@ -122,14 +141,27 @@ function MessageInput({
           page={page}
         />
       )}
-      <input
-        ref={inputRef}
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement | null>}
+        rows={1}
         value={value}
         onChange={(e) => {
           onChange(e.target.value)
           mention.onInput(e.target)
         }}
-        onKeyDown={(e) => void mention.onKeyDown(e)}
+        onKeyDown={(e) => {
+          if (mention.onKeyDown(e)) return
+          if (
+            e.key === 'Enter' &&
+            !e.shiftKey &&
+            !e.ctrlKey &&
+            !e.metaKey &&
+            !e.nativeEvent.isComposing
+          ) {
+            e.preventDefault()
+            onSubmitRequest()
+          }
+        }}
         onKeyUp={(e) => mention.onCaretMove(e.currentTarget)}
         onClick={(e) => mention.onCaretMove(e.currentTarget)}
         role="combobox"
@@ -150,18 +182,104 @@ function MessageInput({
 const INPUT_STYLE: React.CSSProperties = {
   flex: 1,
   minWidth: 0,
-  background: 'var(--sur)',
-  border: '1px solid var(--bd)',
-  borderRadius: 4,
+  minHeight: 20,
+  resize: 'none',
+  background: 'transparent',
+  border: 0,
   color: 'var(--tx)',
   fontFamily: 'var(--font-ui)',
-  fontSize: 12.5,
-  padding: '8px 10px',
+  fontSize: 13,
+  lineHeight: 1.5,
+  padding: '6px 4px',
   outline: 'none'
+}
+
+/** The design's "+" beside the composer: upload a file or image into .solus, or go pick a
+ *  node from the graph. Rendered only when the surface offers those paths (the page). */
+function AttachMenu({
+  onUpload,
+  onAddNodeFromGraph
+}: {
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const file = useRef<HTMLInputElement | null>(null)
+  return (
+    <div style={{ position: 'relative', flex: 'none' }}>
+      <button
+        type="button"
+        aria-label="Attach"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="interactive"
+        onClick={() => setOpen((on) => !on)}
+        style={{
+          width: 32,
+          height: 32,
+          borderRadius: 4,
+          background: 'var(--sur2)',
+          border: '1px solid var(--bd)',
+          color: 'var(--tx)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer'
+        }}
+      >
+        <Icons.plus size={15} />
+      </button>
+      <input
+        ref={file}
+        type="file"
+        aria-label="Upload file or image"
+        style={{ display: 'none' }}
+        onChange={(event) => {
+          const picked = event.currentTarget.files?.[0]
+          event.currentTarget.value = ''
+          if (picked) onUpload?.(picked)
+        }}
+      />
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+          <div role="menu" className="popover-in sol-attach-menu">
+            {onUpload && (
+              <button
+                type="button"
+                role="menuitem"
+                className="interactive"
+                onClick={() => {
+                  setOpen(false)
+                  file.current?.click()
+                }}
+              >
+                Upload file or image
+              </button>
+            )}
+            {onAddNodeFromGraph && (
+              <button
+                type="button"
+                role="menuitem"
+                className="interactive"
+                onClick={() => {
+                  setOpen(false)
+                  onAddNodeFromGraph()
+                }}
+              >
+                Add node from graph
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 /** The composer placeholder: the region, when attached, is the subject. */
 const PLACEHOLDER = 'Ask about a signal, a change, a part…'
+const PAGE_PLACEHOLDER = 'Ask SOL about this project…'
 const PLACEHOLDER_WITH_REGION = 'What would you like to know about it?'
 /** SOLUSDEV-319: the pill acts in the tool in front, not just answers. */
 const PILL_PLACEHOLDER = 'Ask SOL, or tell it what to do…'
@@ -195,11 +313,8 @@ function ReviewPreference({
         ariaLabel="Confirm every change"
         disabled={streaming}
       />
-      <span>
+      <span title="Choose before sending. Review each proposed change before SOL applies it.">
         Confirm every change
-        <span style={{ display: 'block', fontSize: 10 }}>
-          Choose before sending. Review each proposed change before SOL applies it.
-        </span>
       </span>
     </div>
   )
@@ -220,9 +335,13 @@ export function Composer({
   onSend,
   pill = false,
   footerStart,
-  footerEnd
+  footerEnd,
+  pinnedMentionIds,
+  onUpload,
+  onAddNodeFromGraph
 }: ComposerProps): React.JSX.Element {
-  const [input, setInput] = useState('')
+  // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
+  const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
   const classify = useClassifyPreview(input)
   const empty = input.trim() === ''
 
@@ -232,7 +351,11 @@ export function Composer({
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(text, mention.mentionIds, classify.override.thinkHarder)
+    onSend(
+      text,
+      mergeMentions(mention.mentionIds, pinnedMentionIds ?? []),
+      classify.override.thinkHarder
+    )
     setInput('')
     mention.reset()
     classify.resetOverride() // also drops "Think harder" — it is per message
@@ -255,7 +378,7 @@ export function Composer({
   return pill ? (
     <PillForm {...form} footerStart={footerStart} footerEnd={footerEnd} />
   ) : (
-    <ColumnForm {...form} page={page} />
+    <ColumnForm {...form} page={page} onUpload={onUpload} onAddNodeFromGraph={onAddNodeFromGraph} />
   )
 }
 
@@ -276,7 +399,7 @@ interface FormState {
   onForceConfirmationChange: (checked: boolean) => void
 }
 
-/** The panel / page composer (unchanged layout). */
+/** The panel / page composer: the boxed input over a footer of preferences. */
 function ColumnForm({
   mention,
   input,
@@ -291,8 +414,15 @@ function ColumnForm({
   classify,
   forceConfirmation,
   onForceConfirmationChange,
-  page
-}: FormState & { page: boolean }): React.JSX.Element {
+  page,
+  onUpload,
+  onAddNodeFromGraph
+}: FormState & {
+  page: boolean
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
+}): React.JSX.Element {
+  const attach = Boolean(onUpload || onAddNodeFromGraph)
   return (
     <form
       onSubmit={(e) => {
@@ -300,47 +430,58 @@ function ColumnForm({
         submit()
       }}
       style={{
-        borderTop: '1px solid var(--bd)',
-        padding: page ? '10px 24px 14px' : 10,
+        padding: page ? '12px 20px 18px' : 10,
         display: 'flex',
         flexDirection: 'column',
-        gap: 6
+        gap: 6,
+        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
       }}
     >
       {regionAttached && <RegionChip onDismiss={onDismissRegion} />}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
-        <MessageInput
-          mention={mention}
-          inputRef={mention.inputRef}
-          value={input}
-          onChange={setInput}
-          page={page}
-          placeholder={regionAttached ? PLACEHOLDER_WITH_REGION : PLACEHOLDER}
-        />
-        {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
-            Electron) — the same badge the SOL window header shows. */}
-        <ModeBadge mode={mode} onChange={onModeChange} />
-        {/* S1-W3: one tier up for THIS message. Lives in the classify override
-            state so the routing preview reflects it and the post-send reset
-            clears it — one source, two controls (this and the popover). */}
-        <Switch
-          checked={classify.override.thinkHarder}
-          onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
-          ariaLabel="Think harder"
-        />
-        <SendButton streaming={streaming} empty={empty} />
+      <div className="sol-composer-box">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
+          {attach && <AttachMenu onUpload={onUpload} onAddNodeFromGraph={onAddNodeFromGraph} />}
+          <MessageInput
+            mention={mention}
+            inputRef={mention.inputRef}
+            value={input}
+            onChange={setInput}
+            onSubmitRequest={submit}
+            page={page}
+            placeholder={
+              regionAttached ? PLACEHOLDER_WITH_REGION : page ? PAGE_PLACEHOLDER : PLACEHOLDER
+            }
+          />
+          <SendButton streaming={streaming} empty={empty} />
+        </div>
+        <div className="sol-composer-foot">
+          {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
+              Electron) — the same badge the SOL window header shows. */}
+          <ModeBadge mode={mode} onChange={onModeChange} />
+          {/* S1-W3: one tier up for THIS message. Lives in the classify override
+              state so the routing preview reflects it and the post-send reset
+              clears it — one source, two controls (this and the popover). */}
+          <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
+            <Switch
+              checked={classify.override.thinkHarder}
+              onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
+              ariaLabel="Think harder"
+            />
+            Think harder
+          </span>
+          <ReviewPreference
+            checked={forceConfirmation}
+            onChange={onForceConfirmationChange}
+            streaming={streaming}
+          />
+          <ClassifyIndicator
+            preview={classify.preview}
+            override={classify.override}
+            onOverride={classify.setOverride}
+            onReset={classify.resetOverride}
+          />
+        </div>
       </div>
-      <ReviewPreference
-        checked={forceConfirmation}
-        onChange={onForceConfirmationChange}
-        streaming={streaming}
-      />
-      <ClassifyIndicator
-        preview={classify.preview}
-        override={classify.override}
-        onOverride={classify.setOverride}
-        onReset={classify.resetOverride}
-      />
     </form>
   )
 }
@@ -357,11 +498,13 @@ function SendButton({
       type="submit"
       disabled={streaming || empty}
       style={{
+        height: 32,
+        flex: 'none',
         background: 'var(--acc)',
         color: 'var(--acc-ink)',
         border: 'none',
         borderRadius: 4,
-        padding: '7px 14px',
+        padding: '0 14px',
         fontSize: 12,
         fontWeight: 600,
         cursor: streaming ? 'wait' : 'pointer',
@@ -389,6 +532,11 @@ export interface ComposerProps {
   /** Pill footer, leading (SOL, sees-screen) and trailing (hide) slots. */
   footerStart?: React.ReactNode
   footerEnd?: React.ReactNode
+  /** Page: the chat's pinned nodes, merged into every send. */
+  pinnedMentionIds?: readonly string[]
+  /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
+  onUpload?: (file: File) => void
+  onAddNodeFromGraph?: () => void
 }
 
 const MODE_OPTIONS = [MODE_LABEL.guide, MODE_LABEL.do] as const
@@ -457,6 +605,7 @@ function PillForm(p: PillFormProps): React.JSX.Element {
           inputRef={p.mention.inputRef}
           value={p.input}
           onChange={p.setInput}
+          onSubmitRequest={p.submit}
           page={false}
           pill
           placeholder={p.regionAttached ? PLACEHOLDER_WITH_REGION : PILL_PLACEHOLDER}

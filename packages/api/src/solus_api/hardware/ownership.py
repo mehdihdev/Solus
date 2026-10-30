@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.graph.edges import write_edge
 from solus_api.hardware.bindings import disable_part_bindings
 from solus_api.models import GraphEdge, GraphEntity, utcnow
 from solus_api.services.physical_robots import ROBOT_CATEGORIES
@@ -130,15 +131,16 @@ async def assign_parent(
         for edge in rows:
             edge.deleted_at = utcnow()
     if wanted is not None:
-        session.add(
-            GraphEdge(
-                project_id=project_id,
-                src_id=wanted.id,
-                dst_id=part.id,
-                relation_type="contains",
-                domain_pair=f"project<->{part.domain.value}",
-                origin="manual",
-            )
+        await write_edge(
+            session,
+            project_id=project_id,
+            src_id=wanted.id,
+            dst_id=part.id,
+            relation_type="contains",
+            origin="manual",
+            confidence=1.0,
+            evidence=[],
+            created_by=None,
         )
     # Attributes from providers are facts. Manual convenience metadata may track ownership.
     if part.origin == "manual" and part.source_id is None:

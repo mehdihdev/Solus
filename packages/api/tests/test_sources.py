@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.connectors.contracts import Connector
 from solus_api.connectors.registry import ConnectorContext, ConnectorRegistry
+from test_solus_config import SYNCED_CONFIG_NAMES, SYNCED_CONFIG_NODES, TREE_NAMES, TREE_NODES
 
 
 @pytest.fixture(autouse=True)
@@ -69,8 +70,8 @@ async def test_sync_lands_entities_and_relations(
     entities = (
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
-    # 3 synced entities + `.solus` and five sections (SOLUSDEV-242).
-    assert len(entities) == 9
+    # 3 synced entities + the `.solus` tree (SOLUSDEV-242, seven sections + fixed subsections).
+    assert len(entities) == 3 + TREE_NODES + SYNCED_CONFIG_NODES
     kinds = {e["type"] for e in entities}
     assert "design_export" in kinds  # W0-08 committed export surfaced
 
@@ -135,14 +136,7 @@ async def test_disconnect_cascades_entities_by_default(
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
     # The entire manual `.solus` hierarchy survives a source cascade.
-    assert sorted(e["name"] for e in entities) == [
-        ".solus",
-        "Code environment",
-        "Documentation",
-        "Error logging",
-        "Hardware configs",
-        "Project details",
-    ]
+    assert sorted(e["name"] for e in entities) == sorted([*TREE_NAMES, *SYNCED_CONFIG_NAMES])
 
 
 async def test_disconnect_can_retain_entities(
@@ -162,7 +156,7 @@ async def test_disconnect_can_retain_entities(
         await client.get(f"/api/v1/projects/{project_id}/entities", headers=alice_headers)
     ).json()["data"]
     # 3 retained (orphaned to manual) + the six manual `.solus` nodes.
-    assert len(entities) == 9
+    assert len(entities) == 3 + TREE_NODES + SYNCED_CONFIG_NODES
     assert all(e["origin"] == "manual" and e["source_id"] is None for e in entities)
 
 

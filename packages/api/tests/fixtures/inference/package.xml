@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rover_bringup</name>
+  <version>0.1.0</version>
+  <description>Fixture for graph/inference/manifests (SOLUSDEV-320)</description>
+  <maintainer email="team@example.test">Solus</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>rclcpp</build_depend>
+  <depend>std_msgs</depend>
+  <exec_depend>rclpy</exec_depend>
+  <test_depend>ament_lint_auto</test_depend>
+</package>

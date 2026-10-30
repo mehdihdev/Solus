@@ -186,7 +186,9 @@ export const COMPOSER_ATTR = 'data-sol-composer'
 
 function isComposerDraft(target: EventTarget | null): boolean {
   return (
-    target instanceof HTMLInputElement && target.hasAttribute(COMPOSER_ATTR) && target.value !== ''
+    (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+    target.hasAttribute(COMPOSER_ATTR) &&
+    target.value !== ''
   )
 }
 

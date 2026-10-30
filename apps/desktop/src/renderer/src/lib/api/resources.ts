@@ -162,6 +162,11 @@ export interface Relation {
   type: string
   from_entity_id: string
   to_entity_id: string
+  origin?: string
+  confidence?: number
+  domain_pair?: string
+  /** `attrs` on the wire: may carry `evidence`, `matrix_cell`, `created_by`, `confirmed_at`, `declined_reason`. */
+  properties?: Record<string, unknown>
 }
 
 /**
@@ -1691,8 +1696,49 @@ export function listLocalTools(client: ApiClient = api): Promise<LocalTool[]> {
 
 /* ---------------- .solus (SOLUSDEV-240, docs/api/solus.md) ---------------- */
 
-export const SOLUS_SECTIONS = ['hardware', 'details', 'errors', 'docs', 'code'] as const
+export const SOLUS_SECTIONS = [
+  'goals',
+  'constraints',
+  'documentation',
+  'errors',
+  'environment',
+  'members',
+  'history'
+] as const
 export type SolusSection = (typeof SOLUS_SECTIONS)[number]
+/** The fixed subsection vocabularies (SOLUSDEV-320). Empty means the section has no
+ *  picker: goals takes a free slug (API default "general"), members a user id, and
+ *  errors/history none. The one source — the UI derives its pickers from here. */
+export const SOLUS_SUBSECTIONS: Readonly<Record<SolusSection, readonly string[]>> = {
+  goals: [],
+  constraints: ['rules', 'compliance', 'style', 'budgets'],
+  documentation: ['datasheets', 'guides', 'references', 'decisions'],
+  errors: [],
+  environment: ['spec', 'hardware', 'software', 'divergences'],
+  members: [],
+  history: []
+}
+/** Sections a person can write into. `history` is a view over activities and owns no rows;
+ *  `members` holds only the preferences mirror written by `PUT /members/me/preferences`. */
+export const SOLUS_WRITABLE_SECTIONS: readonly SolusSection[] = [
+  'goals',
+  'constraints',
+  'documentation',
+  'errors',
+  'environment'
+]
+export function isWritableSection(section: SolusSection): boolean {
+  return SOLUS_WRITABLE_SECTIONS.includes(section)
+}
+export const SOLUS_SECTION_LABELS: Readonly<Record<SolusSection, string>> = {
+  goals: 'Goals',
+  constraints: 'Constraints',
+  documentation: 'Documentation',
+  errors: 'Error logging',
+  environment: 'Environment',
+  members: 'Members',
+  history: 'History'
+}
 export type SolusEntryKind = 'text' | 'artifact' | 'sol' | 'config'
 
 /** One row under a `.solus` section. `name`/`media_type`/`size_bytes` are set for
@@ -1700,6 +1746,7 @@ export type SolusEntryKind = 'text' | 'artifact' | 'sol' | 'config'
 export interface SolusEntry {
   id: string
   section: SolusSection
+  subsection: string | null
   kind: SolusEntryKind
   author: 'user' | 'sol'
   text: string | null
@@ -1733,7 +1780,7 @@ export function getSolus(projectId: string, client: ApiClient = api): Promise<So
 export function addSolusEntry(
   projectId: string,
   section: SolusSection,
-  input: SolusEntryInput,
+  input: SolusEntryInput & { subsection?: string },
   client: ApiClient = api
 ): Promise<SolusEntry> {
   return client.request<SolusEntry>(`/projects/${projectId}/solus/${section}/entries`, {

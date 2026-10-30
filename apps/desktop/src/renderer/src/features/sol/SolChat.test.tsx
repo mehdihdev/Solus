@@ -6,6 +6,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import * as solApi from './solApi'
 import * as resources from '../../lib/api/resources'
+import * as searchApi from '../../lib/api/search'
+import { clearSearchCache } from '../workspace/useProjectSearch'
 import { useSolSessionStore } from './solSessionStore'
 import { resetSolChatSessions } from './solChatStore'
 import { SolChat } from './SolChat'
@@ -24,20 +26,40 @@ vi.mock('../../lib/api/resources', async (importOriginal) => ({
   // `ConfirmationRefused` error class) are not silently undefined here.
   ...(await importOriginal<typeof resources>()),
   classifyQuery: vi.fn(),
-  decideSolConfirmation: vi.fn(),
-  listEntities: vi.fn()
+  decideSolConfirmation: vi.fn()
 }))
+vi.mock('../../lib/api/search', () => ({ searchProject: vi.fn() }))
 const createSolConversation = vi.mocked(solApi.createSolConversation)
 const listSolTurns = vi.mocked(solApi.listSolTurns)
 const streamSolMessage = vi.mocked(solApi.streamSolMessage)
 const classifyQuery = vi.mocked(resources.classifyQuery)
 const decideSolConfirmation = vi.mocked(resources.decideSolConfirmation)
-const listEntities = vi.mocked(resources.listEntities)
+const searchProject = vi.mocked(searchApi.searchProject)
+
+/** Graph hits in the shape `GET /projects/{id}/search` returns (SOLUSDEV-320). */
+function hits(
+  ...rows: { id: string; name: string; kind?: string; snippet?: string }[]
+): searchApi.SearchResponse {
+  return {
+    entities: rows.map((r) => ({
+      id: r.id,
+      kind: r.kind ?? 'part',
+      domain: 'mechanical',
+      name: r.name,
+      snippet: r.snippet ?? '',
+      score: 1,
+      why: 'name_match'
+    })),
+    solus: [],
+    truncated: false
+  }
+}
 
 const LONG_CITATION = `entity:${'x'.repeat(90)}`
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearSearchCache()
   localStorage.clear()
   // Sessions outlive components (SOLUSDEV-233) — reset the singleton per test.
   resetSolChatSessions()
@@ -436,25 +458,16 @@ describe('SolChat artifacts and machine failures (SOLUSDEV-252 S5)', () => {
   })
 })
 
-it('distinguishes duplicate code filenames by stored path and sends the chosen id', async () => {
+// SOLUSDEV-320: a search hit's snippet is the matched text — the stored path for a
+// code file — so two files that share a name are still told apart in the list.
+it('distinguishes duplicate code filenames by the search snippet (the path)', async () => {
   streamSolMessage.mockResolvedValue(undefined)
-  listEntities.mockResolvedValue([
-    {
-      id: 'src-file',
-      name: 'index.ts',
-      type: 'code_file',
-      domain: 'code',
-      source_key: 'src/index.ts'
-    },
-    {
-      id: 'test-file',
-      name: 'index.ts',
-      type: 'code_file',
-      domain: 'code',
-      source_key: 'opaque',
-      properties: { path: 'tests/index.ts' }
-    }
-  ])
+  searchProject.mockResolvedValue(
+    hits(
+      { id: 'src-file', name: 'index.ts', kind: 'code_file', snippet: 'src/index.ts' },
+      { id: 'test-file', name: 'index.ts', kind: 'code_file', snippet: 'tests/index.ts' }
+    )
+  )
   vi.useFakeTimers()
   try {
     render(<SolChat projectId="p1" />)
@@ -630,9 +643,7 @@ function composerMentionSelectionTests(): void {
     // guesses which "bracket" they meant. The id travels beside the prose, so
     // the composer's trim() and any later edit cannot invalidate an offset.
     streamSolMessage.mockResolvedValue(undefined)
-    listEntities.mockResolvedValue([
-      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
-    ])
+    searchProject.mockResolvedValue(hits({ id: 'e-1', name: 'Camera Bracket' }))
     vi.useFakeTimers()
     try {
       render(<SolChat projectId="p1" />)
@@ -642,7 +653,7 @@ function composerMentionSelectionTests(): void {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(400)
       })
-      expect(listEntities).toHaveBeenCalledWith('p1', { q: 'cam', limit: 8 })
+      expect(searchProject).toHaveBeenCalledWith('p1', 'cam', { scope: 'all', limit: 8 })
 
       fireEvent.mouseDown(screen.getByRole('option', { name: /Camera Bracket/ }))
       expect(box).toHaveValue('will @Camera Bracket ')
@@ -664,9 +675,7 @@ function composerMentionSelectionTests(): void {
     // The id list is not the source of truth — the surviving `@Name` in the text
     // is. Otherwise deleting a mention would still ground SOL on it.
     streamSolMessage.mockResolvedValue(undefined)
-    listEntities.mockResolvedValue([
-      { id: 'e-1', name: 'Camera Bracket', type: 'part', domain: 'mechanical', source_key: 'k1' }
-    ])
+    searchProject.mockResolvedValue(hits({ id: 'e-1', name: 'Camera Bracket' }))
     vi.useFakeTimers()
     try {
       render(<SolChat projectId="p1" />)
@@ -693,7 +702,7 @@ function composerMentionSelectionTests(): void {
 
 function composerRoutingTests(): void {
   it('does not open the picker for an email address', async () => {
-    listEntities.mockResolvedValue([])
+    searchProject.mockResolvedValue(hits())
     vi.useFakeTimers()
     try {
       render(<SolChat projectId="p1" />)
@@ -707,7 +716,7 @@ function composerRoutingTests(): void {
       vi.useRealTimers()
     }
 
-    expect(listEntities).not.toHaveBeenCalled()
+    expect(searchProject).not.toHaveBeenCalled()
     expect(screen.queryByRole('listbox', { name: 'Graph entities' })).not.toBeInTheDocument()
   })
 

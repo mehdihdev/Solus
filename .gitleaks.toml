@@ -46,6 +46,13 @@ regexes = [
   # assignment. It is a probe signal name, never a credential. Surfaced by the
   # full-history scan a policy change triggers.
   '''key == "probe\.i2c\.responding"''',
+  # SOLUSDEV-317: the command-gate/preview redaction fixture — a made-up
+  # alphabet-sequence token (also with a `ghp_` prefix) in
+  # packages/api/tests/test_command_gate.py and test_command_previews.py. Main
+  # pinned it by fingerprint at the lines the same commit then moved (494/489/188
+  # vs 496/201), and every merge of main re-attributes it to the merge commit
+  # (SOLUSDEV-320's 69223577 was the first). A value rule holds for both.
+  '''aB3dE5fG7hJ9kL1mN2pQ4rS6tU8vW0xY2zA4b''',
 ]
 
 # You can also pin the exact findings by fingerprint (most surgical):

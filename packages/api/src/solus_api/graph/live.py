@@ -43,7 +43,7 @@ import contextlib
 import json
 import logging
 import uuid
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, NamedTuple
 
 from solus_contracts.live_events import CHANNEL_KINDS, ChannelKind, channel_name
@@ -201,6 +201,10 @@ class LiveHub:
         # Pre-ADR-037 per-project queues, kept for `subscribe`/`unsubscribe` callers.
         self._subscribers: dict[uuid.UUID, set[asyncio.Queue[str]]] = {}
         self._reader: asyncio.Task[None] | None = None
+        #: SOLUSDEV-320 resolution 18: awaited with the project id after every published
+        #: `graph.changed` frame (the budgets recompute trigger). Set by `main.lifespan` and
+        #: `worker._on_startup`; errors are logged, never raised into the publisher.
+        self.on_graph_changed: Callable[[uuid.UUID], Awaitable[None]] | None = None
 
     @property
     def fanout_mode(self) -> str:
@@ -277,6 +281,11 @@ class LiveHub:
         production and never in a test.
         """
         payload = json.dumps(frame, separators=(",", ":"))
+        await self._fan_out(target, payload)
+        if target.kind == "project" and frame.get("type") == "graph.changed":
+            await self._notify_graph_changed(target.scope_id)
+
+    async def _fan_out(self, target: Channel, payload: str) -> None:
         if self._redis is not None:
             try:
                 await asyncio.wait_for(
@@ -286,6 +295,16 @@ class LiveHub:
             except Exception:  # noqa: BLE001 — never fail a request or sync on fan-out
                 logger.warning("redis publish failed or timed out; delivering locally instead")
         self._deliver(target, payload)
+
+    async def _notify_graph_changed(self, project_id: uuid.UUID) -> None:
+        """Fire the budgets trigger in the PUBLISHING process only (never on relay, which
+        would fire once per process); a failing callback is logged, never raised."""
+        if self.on_graph_changed is None:
+            return
+        try:
+            await self.on_graph_changed(project_id)
+        except Exception:  # noqa: BLE001 — a derived recompute must never fail the publisher
+            logger.exception("on_graph_changed failed project=%s", project_id)
 
     async def publish(self, project_id: uuid.UUID, frame: dict[str, Any]) -> None:
         """Fan a frame out to this project's subscribers (the pre-ADR-037 entry point)."""

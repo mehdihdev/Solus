@@ -24,6 +24,7 @@ import { SolusCard } from './SolusCard'
 
 function entry(over: Partial<SolusEntry> & { id: string; section: SolusSection }): SolusEntry {
   return {
+    subsection: null,
     kind: 'text',
     author: 'user',
     text: 'Battery is 6S; never charge above 25.2 V',
@@ -60,27 +61,29 @@ function solusNoteEditingTests(): void {
   it('asks for a project when none is open, and is honest when offline', () => {
     const { unmount } = render(<SolusCard projectId={null} projectName={null} />)
     expect(screen.getByText(/Open or switch to a project/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Hardware configs/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Environment/ })).toBeNull()
     unmount()
     state.current = { ...ready(), status: 'offline' }
     render(<SolusCard projectId="p1" projectName="Rover" />)
     expect(screen.getByRole('note')).toHaveTextContent("can't reach its API")
   })
 
-  it('lists the five sections with honest counts and opens one in place', async () => {
+  it('lists the seven sections with honest counts and opens one in place', async () => {
     state.current = ready([
       entry({ id: 'a', section: 'errors', author: 'sol', text: 'pytest exited 1' }),
-      entry({ id: 'b', section: 'details' })
+      entry({ id: 'b', section: 'goals' })
     ])
     render(<SolusCard projectId="p1" projectName="Rover" />)
     expect(screen.getByText('.SOLUS')).toBeInTheDocument()
     expect(screen.getByText('Rover')).toBeInTheDocument()
     for (const label of [
-      'Hardware configs',
-      'Project details',
-      'Error logging',
+      'Goals',
+      'Constraints',
       'Documentation',
-      'Code environment'
+      'Error logging',
+      'Environment',
+      'Members',
+      'History'
     ]) {
       expect(row(label)).toHaveAttribute('aria-expanded', 'false')
     }
@@ -92,26 +95,51 @@ function solusNoteEditingTests(): void {
     expect(panel).toHaveTextContent('pytest exited 1')
     expect(panel).toHaveTextContent('filed by SOL')
     // An empty section says so instead of inventing a row.
-    await userEvent.click(row('Hardware configs'))
+    await userEvent.click(row('Environment'))
     expect(screen.getByText('Nothing here yet.')).toBeInTheDocument()
   })
 
   it('adds a note through the shared composer and actions', async () => {
     render(<SolusCard projectId="p1" projectName="Rover" />)
-    await userEvent.click(row('Project details'))
+    await userEvent.click(row('Goals'))
     await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    expect(screen.queryByRole('combobox', { name: 'Subsection' })).toBeNull()
     await userEvent.type(screen.getByRole('textbox'), 'Wheelbase 1.6 m')
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
     expect(actions.submit).toHaveBeenCalledWith(
-      { section: 'details', kind: 'type' },
+      { section: 'goals', kind: 'type' },
       'Wheelbase 1.6 m'
     )
     // The composer closes once the action reports success.
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 
+  it('shows no note or import buttons on History and Members', async () => {
+    render(<SolusCard projectId="p1" projectName="Rover" />)
+    await userEvent.click(row('History'))
+    expect(screen.queryByRole('button', { name: 'Add a note' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Import file' })).toBeNull()
+    await userEvent.click(row('Members'))
+    expect(screen.queryByRole('button', { name: 'Add a note' })).toBeNull()
+  })
+
+  it('adds a note under a chosen subsection where the section has fixed ones', async () => {
+    render(<SolusCard projectId="p1" projectName="Rover" />)
+    await userEvent.click(row('Environment'))
+    await userEvent.click(screen.getByRole('button', { name: 'Add a note' }))
+    const picker = screen.getByRole('combobox', { name: 'Subsection' })
+    expect(picker).toHaveValue('spec')
+    await userEvent.selectOptions(picker, 'divergences')
+    await userEvent.type(screen.getByRole('textbox'), 'Sim gear ratio is 1:3, real is 1:4')
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(actions.submit).toHaveBeenCalledWith(
+      { section: 'environment', subsection: 'divergences', kind: 'type' },
+      'Sim gear ratio is 1:3, real is 1:4'
+    )
+  })
+
   it('edits a note in place, prefilled', async () => {
-    const note = entry({ id: 'n1', section: 'docs', text: 'old text' })
+    const note = entry({ id: 'n1', section: 'documentation', text: 'old text' })
     state.current = ready([note])
     render(<SolusCard projectId="p1" projectName="Rover" />)
     await userEvent.click(row('Documentation'))
@@ -122,7 +150,7 @@ function solusNoteEditingTests(): void {
     await userEvent.type(box, 'new text')
     await userEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(actions.submit).toHaveBeenCalledWith(
-      { section: 'docs', kind: 'edit', entry: note },
+      { section: 'documentation', kind: 'edit', entry: note },
       'new text'
     )
   })
@@ -132,7 +160,7 @@ function solusNoteSafetyAndImportTests(): void {
   it('deletes only on the second, confirming click', async () => {
     const file = entry({
       id: 'f1',
-      section: 'hardware',
+      section: 'environment',
       kind: 'artifact',
       text: null,
       name: 'rules.pdf',
@@ -141,7 +169,7 @@ function solusNoteSafetyAndImportTests(): void {
     })
     state.current = ready([file])
     render(<SolusCard projectId="p1" projectName="Rover" />)
-    await userEvent.click(row('Hardware configs'))
+    await userEvent.click(row('Environment'))
     const card = screen.getByTestId('solus-entry-f1')
     expect(card).toHaveTextContent('rules.pdf')
     expect(card).toHaveTextContent('application/pdf')
@@ -161,10 +189,10 @@ function solusNoteSafetyAndImportTests(): void {
   })
 
   it('never deletes on a double-click, and names the note it would delete', async () => {
-    const note = entry({ id: 'n2', section: 'details', text: 'Keep the 6S pack under 45 °C' })
+    const note = entry({ id: 'n2', section: 'goals', text: 'Keep the 6S pack under 45 °C' })
     state.current = ready([note])
     render(<SolusCard projectId="p1" projectName="Rover" />)
-    await userEvent.click(row('Project details'))
+    await userEvent.click(row('Goals'))
     const button = within(screen.getByTestId('solus-entry-n2')).getByRole('button', {
       name: 'Delete Keep the 6S pack under 45 °C'
     })
@@ -205,6 +233,6 @@ function solusNoteSafetyAndImportTests(): void {
     fireEvent.change(screen.getByLabelText('Import a file into .solus'), {
       target: { files: [picked] }
     })
-    expect(actions.importFile).toHaveBeenCalledWith('docs', picked)
+    expect(actions.importFile).toHaveBeenCalledWith('documentation', picked)
   })
 }

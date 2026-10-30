@@ -34,10 +34,12 @@ eval/exec/subprocess and under a size bound (CLAUDE.md §7).
 from __future__ import annotations
 
 import abc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Final
+from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from pydantic import ValidationError
+from solus_contracts.relations import EdgeEvidence, EvidenceKind, MatrixCell
 
 from solus_api.connectors.contracts import (
     AccountInfo,
@@ -54,6 +56,9 @@ from solus_api.connectors.contracts import (
 )
 from solus_api.connectors.export_common import ErrorRecorder, content_sha, label
 
+if TYPE_CHECKING:
+    from solus_api.connectors.onshape_assembly_read import MateRecord
+
 #: CAD exports dwarf netlists — a real robot assembly's STEP runs to tens of MB,
 #: so the EDA family's 8 MiB bound would refuse ordinary files. Larger than this
 #: is refused rather than parsed (§7 — one artifact must not exhaust the worker).
@@ -62,6 +67,10 @@ MAX_CAD_EXPORT_BYTES: Final = 64 * 1024 * 1024
 #: The assembly-hierarchy edge (§5.5 / ADR-027). `mounted_on` exists but means
 #: something else; `part_of` is the value the contract names for hierarchy.
 PART_OF: Final = "part_of"
+
+#: A semantic mate between two occurrences (SOLUSDEV-320), carried in `attrs.mate_type`.
+#: Only an acquisition that READ the assembly definition supplies records; STEP has none.
+MATES_WITH: Final = "mates_with"
 
 #: The product-structure entity kind (§5.5). Geometry-only bodies carrying no
 #: product identity (STL, §5.6) map to `cad_body` — deferred, since STL has no
@@ -140,12 +149,58 @@ def _entity(node: CadNode, scope: str, provenance: dict[str, Any]) -> EntityOut:
     )
 
 
+def _resolve_occurrence(occurrence: str, keys: set[str]) -> str | None:
+    """The exported node key an assembly-definition occurrence path names.
+
+    ponytail: exact key, else the one key ending in `/<path>`, else the same with the
+    first-instance `[0]` suffix. Ambiguity resolves to nothing (a SyncError, never a guess).
+    """
+    for candidate in (occurrence, f"{occurrence}[0]"):
+        if candidate in keys:
+            return candidate
+        matches = [key for key in keys if key.endswith(f"/{candidate}")]
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
+def _mate_relations(
+    mates: Sequence[MateRecord], keys: set[str], scope: str, recorder: ErrorRecorder
+) -> list[RelationOut]:
+    relations: list[RelationOut] = []
+    for record in mates:
+        a = _resolve_occurrence(record.a_occurrence, keys)
+        b = _resolve_occurrence(record.b_occurrence, keys)
+        if a is None or b is None or a == b:
+            recorder.record(label(record.feature_id), "mate endpoint is not a node of this export")
+            continue
+        relations.append(
+            RelationOut(
+                from_key=_scoped(a, scope),
+                to_key=_scoped(b, scope),
+                type=MATES_WITH,
+                properties={
+                    "mate_type": record.mate_type,
+                    "feature_id": record.feature_id,
+                    "evidence": [
+                        EdgeEvidence(kind=EvidenceKind.MATE, ref=record.feature_id).model_dump(
+                            mode="json"
+                        )
+                    ],
+                    "matrix_cell": MatrixCell.MECHANICAL_MECHANICAL.value,
+                },
+            )
+        )
+    return relations
+
+
 def build_mechanical_graph(
     model: CadModel,
     recorder: ErrorRecorder | None = None,
     *,
     scope: str = "",
     provenance: dict[str, Any] | None = None,
+    mates: Sequence[MateRecord] = (),
 ) -> tuple[list[EntityOut], list[RelationOut], list[SyncError]]:
     """CAD IR → intra-source graph records.
 
@@ -170,6 +225,9 @@ def build_mechanical_graph(
     `provenance` is merged into every entity's properties (e.g. the document and
     element a part came from), so one source spanning many documents can still
     say where each entity originated.
+
+    `mates` (SOLUSDEV-320) are semantic mates an acquisition read from the assembly
+    definition; each lands as one `mates_with` edge between the two resolved nodes.
     """
     recorder = recorder if recorder is not None else ErrorRecorder()
     provenance = provenance or {}
@@ -222,6 +280,7 @@ def build_mechanical_graph(
                 properties=properties,
             )
         )
+    relations.extend(_mate_relations(mates, emitted, scope, recorder))
 
     return entities, relations, recorder.finish()
 

@@ -19,8 +19,8 @@ Keyless degradation: no embedder (or an embedder that fails / returns the wrong
 dimension — FP-02's exact tolerance) downgrades to project-scoped Postgres
 full-text search over the same rows, same result shapes. Scores are comparable
 WITHIN one result list only (ANN: 1 - cosine distance; degraded: ts_rank).
-# ponytail: on-the-fly to_tsvector, no GIN — add a generated tsvector column +
-# GIN index when per-project row counts make this measurable.
+Entities match on the stored `graph_entity.search_tsv` (SOLUSDEV-320 T7: generated,
+GIN-indexed, same `simple` config); error solutions still build their tsvector on the fly.
 """
 
 from __future__ import annotations
@@ -165,7 +165,9 @@ async def _entity_hits(
             )
             for entity_id, name, dist in (await session.execute(stmt)).all()
         ]
-    predicate, rank = _text_match(GraphEntity.name, text)
+    query = func.plainto_tsquery("simple", text)
+    predicate = GraphEntity.search_tsv.op("@@")(query)
+    rank = func.ts_rank(GraphEntity.search_tsv, query)
     stmt = (
         select(GraphEntity.id, GraphEntity.name, rank.label("score"))
         .where(*scope, predicate)

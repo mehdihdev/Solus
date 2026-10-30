@@ -10,6 +10,7 @@ import {
   useLiveRevisionStore
 } from '../../store/liveRevisionStore'
 import { LiveStreamHttpError } from '../../lib/api/liveStream'
+import { findingsLiveKey } from './useFindings'
 import { useWorkspaceEvents } from './useWorkspaceEvents'
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))
 beforeEach(() => {
@@ -137,6 +138,25 @@ it('maps project frames to live revisions and records the layout version', async
   })
   expect(useLiveRevisionStore.getState().layoutVersions).toEqual({ p1: 7 })
   expect(changed).not.toHaveBeenCalled()
+})
+
+// SOLUSDEV-320: finding frames and graph.changed both bump the findings key, so the
+// badges refetch; only graph.changed invalidates the snapshot.
+it('bumps the findings revision on finding.* and graph.changed', async () => {
+  vi.mocked(streamProjectEvents).mockImplementation(async function* () {
+    yield 'ready'
+    yield { type: 'finding.raised', findingId: 'f1', status: 'open' as const }
+    yield { type: 'finding.updated', findingId: 'f1', status: 'acknowledged' as const }
+    yield { type: 'finding.resolved', findingId: 'f1', status: 'resolved' as const }
+    yield 'graph.changed'
+    await new Promise(() => undefined)
+  })
+  const changed = vi.fn()
+  renderHook(() => useWorkspaceEvents('p1', changed))
+  await act(async () => {})
+  await flush()
+  expect(revisions()).toEqual({ [findingsLiveKey('p1')]: 1 })
+  expect(changed).toHaveBeenCalledOnce()
 })
 
 const BANNER = 'Live updates unavailable. Check project access.'

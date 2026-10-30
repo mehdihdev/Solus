@@ -10,6 +10,27 @@
     "team_ids",
     "user_id"
   ],
+  "FindingRaised": [
+    "at",
+    "finding_id",
+    "project_id",
+    "status",
+    "type"
+  ],
+  "FindingResolved": [
+    "at",
+    "finding_id",
+    "project_id",
+    "status",
+    "type"
+  ],
+  "FindingUpdated": [
+    "at",
+    "finding_id",
+    "project_id",
+    "status",
+    "type"
+  ],
   "GraphChangeCounts": [
     "entities_created",
     "entities_deleted",

@@ -1,0 +1,58 @@
+{
+  "rootAssembly": {
+    "documentMicroversion": "abc123def456",
+    "configuration": "default",
+    "instances": [
+      { "id": "MBasePlate", "name": "BasePlate <1>", "type": "Part" },
+      { "id": "MPegPair", "name": "PegPair <1>", "type": "Assembly" },
+      { "id": "MPeg0", "name": "Peg <1>", "type": "Part" },
+      { "id": "MPeg1", "name": "Peg <2>", "type": "Part" }
+    ],
+    "features": [
+      {
+        "id": "fastenA",
+        "featureType": "mate",
+        "suppressed": false,
+        "featureData": {
+          "mateType": "FASTENED",
+          "name": "Fastened 1",
+          "matedEntities": [
+            { "matedOccurrence": ["MBasePlate"] },
+            { "matedOccurrence": ["MPegPair", "MPeg0"] }
+          ]
+        }
+      },
+      {
+        "message": {
+          "id": "revoluteB",
+          "featureType": "mate",
+          "suppressed": false,
+          "featureData": {
+            "mateType": "REVOLUTE",
+            "name": "Revolute 1",
+            "matedEntities": [
+              { "matedOccurrence": ["MBasePlate"] },
+              { "matedOccurrence": ["MPegPair", "MPeg1"] }
+            ]
+          }
+        }
+      },
+      {
+        "id": "connectorC",
+        "featureType": "mateConnector",
+        "suppressed": false,
+        "featureData": { "occurrence": ["MBasePlate"] }
+      },
+      {
+        "id": "dangling",
+        "featureType": "mate",
+        "suppressed": false,
+        "featureData": {
+          "mateType": "FASTENED",
+          "matedEntities": [{ "matedOccurrence": ["MBasePlate"] }]
+        }
+      }
+    ],
+    "occurrences": []
+  }
+}

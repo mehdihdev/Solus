@@ -1,14 +1,14 @@
 // The .solus sidebar (SOLUSDEV-250 P4): the W1 actions, the inline composer, the entry
 // list and the two-step delete — the context menu's work, reachable without a modal.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as resources from '../../../lib/api/resources'
 import { useAuthStore } from '../../../store/authStore'
 import { useSettingsStore } from '../../../store/settingsStore'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { useFocusStore } from '../../workspace/focusStore'
-import { useSolChatStore, EMPTY_SESSION } from '../../sol/solChatStore'
+import { useSolChatStore } from '../../sol/solChatStore'
 import { useSolusNodes } from '../useSolusNodes'
 import { SECTION_LABELS, emptySections } from '../useSolusConfig'
 
@@ -28,7 +28,8 @@ vi.mock('../../../lib/api/resources', async (importOriginal) => {
 function entry(over: Partial<resources.SolusEntry>): resources.SolusEntry {
   return {
     id: 'e1',
-    section: 'details',
+    section: 'goals',
+    subsection: null,
     kind: 'text',
     author: 'user',
     text: 'Spec: 48 V bus',
@@ -52,8 +53,8 @@ const FILE = entry({
   media_type: 'application/pdf',
   size_bytes: 1024
 })
-function config(details: resources.SolusEntry[] = []): resources.SolusConfig {
-  return { entity_id: 'solus-1', sections: { ...emptySections(), details } }
+function config(goals: resources.SolusEntry[] = []): resources.SolusConfig {
+  return { entity_id: 'solus-1', sections: { ...emptySections(), goals } }
 }
 const ROOT: resources.Entity = {
   id: 'solus-1',
@@ -63,12 +64,20 @@ const ROOT: resources.Entity = {
   source_key: ''
 }
 const DETAILS: resources.Entity = {
-  id: 'section-details',
-  name: 'Project details',
+  id: 'section-goals',
+  name: 'Goals',
   type: 'solus_section',
   domain: 'project',
   source_key: '',
-  properties: { section: 'details' }
+  properties: { section: 'goals' }
+}
+const GUIDES: resources.Entity = {
+  id: 'subsection-documentation-guides',
+  name: 'guides',
+  type: 'solus_subsection',
+  domain: 'project',
+  source_key: '',
+  properties: { section: 'documentation', subsection: 'guides' }
 }
 const NOTE: resources.Entity = {
   id: 'e1-node',
@@ -115,63 +124,94 @@ beforeEach(() => {
 })
 
 describe('.solus root', () => {
-  it('lists the five sections with honest counts and a mode-aware line', async () => {
+  it('lists the seven sections with honest counts and no tagline', async () => {
     link()
     render(<Harness entity={ROOT} />)
     expect(await screen.findByText('2')).toBeInTheDocument()
     for (const label of Object.values(SECTION_LABELS))
       expect(screen.getByText(label)).toBeInTheDocument()
-    expect(screen.getAllByText('EMPTY')).toHaveLength(4)
-    expect(screen.getByText(/Zoom into a section/)).toBeInTheDocument()
-    act(() => useSettingsStore.setState({ solMode: 'Expert' }))
-    expect(screen.getByText('Project knowledge · zoom in to open sections.')).toBeInTheDocument()
-    expect(screen.getByTestId('focused-name')).toBeInTheDocument()
+    expect(screen.getAllByText('EMPTY')).toHaveLength(6)
+    expect(screen.queryByText(/Project knowledge/)).toBeNull()
+    expect(screen.queryByText(/Zoom into a section/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Add / Edit' })).toBeDisabled()
   })
 })
 
 describe('a section', () => {
-  it('offers the three W1 actions in order and lists selectable entries', async () => {
+  it('offers the footer actions (no action row at the top) and lists selectable entries', async () => {
     link()
     render(<Harness entity={DETAILS} />)
-    expect(await screen.findByRole('heading', { name: 'Project details' })).toBeInTheDocument()
-    const actions = screen.getByRole('group', { name: 'Section actions' })
-    expect(
-      Array.from(actions.querySelectorAll('button')).map((button) => button.textContent)
-    ).toEqual(['Import files…', 'Ask SOL to find…', 'Type it'])
+    expect(await screen.findByRole('heading', { name: 'Goals' })).toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Section actions' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Ask SOL to find/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Add / Edit' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeEnabled()
     await userEvent.click(screen.getByRole('button', { name: 'FSAE Rules 2027.pdf' }))
     expect(useFocusStore.getState().focusedEntityId).toBe('e2-node')
   })
 
-  it('disables Ask SOL while a turn is streaming, with the hint', async () => {
-    link()
-    useSolChatStore.setState({ sessions: { p1: { ...EMPTY_SESSION, streaming: true } } })
-    render(<Harness entity={DETAILS} />)
-    const ask = await screen.findByRole('button', { name: /Ask SOL to find/ })
-    expect(ask).toBeDisabled()
-    expect(screen.getByText('SOL is busy with another turn')).toBeInTheDocument()
-  })
-
-  it('Type it opens the inline composer and posts to this section', async () => {
+  it('Add / Edit opens the inline composer and posts to this section', async () => {
     link()
     vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({ id: 'e3' }))
     render(<Harness entity={DETAILS} />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Type it' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Add / Edit' }))
     await userEvent.type(screen.getByPlaceholderText('Type it — plain text'), 'Bus is 48 V')
     await userEvent.click(screen.getByRole('button', { name: 'Add' }))
     await waitFor(() =>
-      expect(resources.addSolusEntry).toHaveBeenCalledWith('p1', 'details', {
+      expect(resources.addSolusEntry).toHaveBeenCalledWith('p1', 'goals', {
         kind: 'text',
         text: 'Bus is 48 V'
       })
     )
     await waitFor(() => expect(screen.queryByRole('textbox')).not.toBeInTheDocument())
+    // Goals is a free-subsection section: no picker was offered.
+    expect(screen.queryByRole('combobox', { name: 'Subsection' })).not.toBeInTheDocument()
   })
 
-  it('Import files… opens the hidden file input for this section', async () => {
+  it('a subsection node names its place, lists only its entries, and files into it', async () => {
+    link()
+    const guide = entry({
+      id: 'g1',
+      section: 'documentation',
+      subsection: 'guides',
+      text: 'Wiring'
+    })
+    const sheet = entry({
+      id: 'd1',
+      section: 'documentation',
+      subsection: 'datasheets',
+      text: 'STS'
+    })
+    vi.mocked(resources.getSolus).mockResolvedValue({
+      entity_id: 'solus-1',
+      sections: { ...emptySections(), documentation: [guide, sheet] }
+    })
+    vi.mocked(resources.addSolusEntry).mockResolvedValue(entry({ id: 'g2' }))
+    render(<Harness entity={GUIDES} />)
+    expect(
+      await screen.findByRole('heading', { name: 'Documentation › guides' })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Wiring' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'STS' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Add / Edit' }))
+    expect(screen.getByRole('combobox', { name: 'Subsection' })).toHaveValue('guides')
+    await userEvent.type(screen.getByPlaceholderText('Type it — plain text'), 'Crimp guide')
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    await waitFor(() =>
+      expect(resources.addSolusEntry).toHaveBeenCalledWith('p1', 'documentation', {
+        kind: 'text',
+        text: 'Crimp guide',
+        subsection: 'guides'
+      })
+    )
+  })
+
+  it('Upload opens the hidden file input for this section', async () => {
     link()
     const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
     render(<Harness entity={DETAILS} />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Import files…' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Upload' }))
     expect(click).toHaveBeenCalledOnce()
     click.mockRestore()
   })
@@ -184,7 +224,8 @@ describe('a section', () => {
     view.unmount()
     useWorkspaceStore.getState().reset()
     render(<Harness entity={DETAILS} />)
-    expect(screen.queryByRole('group', { name: 'Section actions' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add / Edit' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Upload' })).toBeDisabled()
   })
 })
 

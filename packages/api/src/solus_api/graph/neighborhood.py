@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
+from solus_api.graph.edges import is_candidate
 from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain, GraphEdge, GraphEntity
 
@@ -281,8 +282,10 @@ async def load_neighborhood(
 def to_graph_context(neighborhood: Neighborhood) -> GraphContext:
     """Adapt to the W0-07 shape a real `SolSystems.get_graph_context` returns. Model-consumable:
     `EntityRead` drops the embedding, since a 1536-float vector is noise in a reasoning context."""
+    # Candidates (inferred, below CANDIDATE_THRESHOLD) are proposals, not facts: SOL,
+    # the checker tool and impact never see them. The canvas (GET /relations) does.
     return GraphContext(
         entities=[EntityRead.model_validate(e) for e in neighborhood.entities],
-        edges=[EdgeRead.model_validate(e) for e in neighborhood.edges],
+        edges=[EdgeRead.model_validate(e) for e in neighborhood.edges if not is_candidate(e)],
         truncated=neighborhood.truncated,
     )

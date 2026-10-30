@@ -49,12 +49,17 @@ export interface EngineeringPreferences {
   readonly electrical: string;
   readonly documentation: string;
   readonly unitsStandards: string;
+  /** SOLUSDEV-320: the structured sections the user lets the project mirror
+   *  (`PUT /members/me/preferences`). Absent = nothing shared. `freeText` is
+   *  never shareable, so it has no flag. */
+  readonly shared?: Partial<Record<PreferenceSection, boolean>>;
 }
 
 const FIELDS = [
   "schema_version",
   "updatedAt",
   "freeText",
+  "shared",
   ...PREFERENCE_SECTIONS,
 ] as const;
 export const ENGINEERING_PREFERENCES_FIELDS: CompleteKeysOf<
@@ -127,23 +132,69 @@ const KNOWN_FIELDS: readonly string[] = FIELDS;
 /** `schema_version` as an integer ≥ 1, or null when it is not one. */
 function parseVersion(value: Record<string, unknown>): number | null {
   const version = value.schema_version;
-  return typeof version === "number" && Number.isInteger(version) && version >= 1
+  return typeof version === "number" &&
+    Number.isInteger(version) &&
+    version >= 1
     ? version
     : null;
 }
 
-/** The five structured sections, cleaned and capped; null if any is missing
- *  or not a string. */
-function parseSections(
+const SECTION_KEYS: readonly string[] = PREFERENCE_SECTIONS;
+
+/** `shared` normalised: known section keys only (anything else rejects →
+ *  undefined), non-boolean values dropped. Null when the field is absent. */
+function parseShared(
+  value: unknown,
+): Partial<Record<PreferenceSection, boolean>> | null | undefined {
+  if (value === undefined) return null;
+  if (
+    !isPlainObject(value) ||
+    !Object.getOwnPropertyNames(value).every((key) =>
+      SECTION_KEYS.includes(key),
+    )
+  )
+    return undefined;
+  const shared: Partial<Record<PreferenceSection, boolean>> = {};
+  for (const key of PREFERENCE_SECTIONS) {
+    const flag = value[key];
+    if (typeof flag === "boolean") shared[key] = flag;
+  }
+  return shared;
+}
+
+/** The flagged, non-empty sections — the only text that ever leaves the
+ *  machine for the project's `members/<uid>` mirror. */
+export function sharedSubset(
+  preferences: EngineeringPreferences,
+): Partial<Record<PreferenceSection, string>> {
+  const subset: Partial<Record<PreferenceSection, string>> = {};
+  for (const key of PREFERENCE_SECTIONS) {
+    if (preferences.shared?.[key] === true && preferences[key].trim() !== "")
+      subset[key] = preferences[key];
+  }
+  return subset;
+}
+
+/** Everything but `schema_version` and `updatedAt`, cleaned and capped; null
+ *  when a section is missing, not a string, or `shared` is malformed. */
+function parseBody(
   value: Record<string, unknown>,
-): Record<PreferenceSection, string> | null {
+): Omit<EngineeringPreferences, "schema_version" | "updatedAt"> | null {
+  const { freeText } = value;
+  if (typeof freeText !== "string") return null;
   const sections: Partial<Record<PreferenceSection, string>> = {};
   for (const key of PREFERENCE_SECTIONS) {
     const raw = value[key];
     if (typeof raw !== "string") return null;
     sections[key] = cleanText(raw, PREFERENCES_FIELD_CAP);
   }
-  return sections as Record<PreferenceSection, string>;
+  const shared = parseShared(value.shared);
+  if (shared === undefined) return null;
+  return {
+    freeText: cleanText(freeText, PREFERENCES_FREE_TEXT_CAP),
+    ...(sections as Record<PreferenceSection, string>),
+    ...(shared !== null ? { shared } : {}),
+  };
 }
 
 /**
@@ -159,25 +210,25 @@ export function parseEngineeringPreferences(
   // from JSON.parse and must not be silently accepted.
   if (
     !isPlainObject(value) ||
-    !Object.getOwnPropertyNames(value).every((key) => KNOWN_FIELDS.includes(key))
+    !Object.getOwnPropertyNames(value).every((key) =>
+      KNOWN_FIELDS.includes(key),
+    )
   )
     return INVALID;
   const version = parseVersion(value);
   if (version === null) return INVALID;
   if (version > ENGINEERING_PREFERENCES_SCHEMA_VERSION)
     return { ok: false, reason: "newer" };
-  const { updatedAt, freeText } = value;
+  const { updatedAt } = value;
   if (updatedAt !== undefined && typeof updatedAt !== "string") return INVALID;
-  if (typeof freeText !== "string") return INVALID;
-  const sections = parseSections(value);
-  if (sections === null) return INVALID;
+  const body = parseBody(value);
+  if (body === null) return INVALID;
   return {
     ok: true,
     preferences: {
       schema_version: version,
       ...(updatedAt !== undefined ? { updatedAt } : {}),
-      freeText: cleanText(freeText, PREFERENCES_FREE_TEXT_CAP),
-      ...sections,
+      ...body,
     },
   };
 }

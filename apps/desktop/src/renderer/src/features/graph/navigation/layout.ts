@@ -1,21 +1,27 @@
 import type { Entity } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
 
-export const CARD_WIDTH = 280
-export const CARD_HEIGHT = 250
+export const CARD_WIDTH = 300
+export const CARD_HEIGHT = 184
 export const STEP_X = CARD_WIDTH + 72
 export const STEP_Y = CARD_HEIGHT + 64
 export const ORIGIN: Point = { x: 0, y: 0 }
 
-/** Golden-angle candidates avoid rows/columns without a time-dependent force solver. */
+const COLUMNS: readonly number[] = [0, 1, -1]
+const BOUND = 100_000
+/** Breathing room around the outermost cards; also where a level's containment stem starts. */
+export const PAD = 80
+
+/** Rows of three under the anchor — centre, right, left — then the next row down (design
+ *  template: tidy rows, not organic packing). A cell past the coordinate boundary mirrors to
+ *  the other side so a dragged-to-the-edge parent still gets children. */
 function* cells(anchor: Point): Generator<Point> {
-  yield anchor
-  const angle = Math.PI * (3 - Math.sqrt(5))
-  for (let step = 1; ; step++) {
-    const radius = Math.sqrt(step) * 0.8
-    yield {
-      x: anchor.x + Math.round(Math.cos(step * angle) * radius * STEP_X),
-      y: anchor.y + Math.round(Math.sin(step * angle) * radius * STEP_Y)
+  for (let row = 0; ; row++) {
+    const down = anchor.y + row * STEP_Y
+    const y = Math.abs(down) <= BOUND ? down : anchor.y - row * STEP_Y
+    for (const column of COLUMNS) {
+      const right = anchor.x + column * STEP_X
+      yield { x: Math.abs(right) <= BOUND ? right : anchor.x - column * STEP_X, y }
     }
   }
 }
@@ -38,7 +44,7 @@ export function boundedPoint(point: Point): Point {
 }
 
 /** Lay out only this page. Saved coordinates are authoritative; new defaults
- *  avoid them and spiral out from `anchor` — the parent's point, or the origin at the root. */
+ *  avoid them and fill rows below `anchor` — the parent's point, or the origin at the root. */
 export function layoutLevel(
   entities: readonly Entity[],
   saved: Readonly<Record<string, Point>>,
@@ -82,15 +88,16 @@ export function levelBounds(
   anchor: Point = ORIGIN
 ): LevelBounds {
   const values = Object.values(points)
-  const halfWidth =
-    Math.max(0, ...values.map((point) => Math.abs(point.x - anchor.x))) + CARD_WIDTH / 2 + 80
-  const halfHeight =
-    Math.max(0, ...values.map((point) => Math.abs(point.y - anchor.y))) + CARD_HEIGHT / 2 + 80
-  // Center the anchor, never the current cluster's uneven bounding box.
+  const xs = values.length ? values.map((point) => point.x) : [anchor.x]
+  const ys = values.length ? values.map((point) => point.y) : [anchor.y]
+  // Frame the cards themselves (design template: rows start at the top, no empty half above
+  // the parent's point); an empty level frames the anchor.
+  const left = Math.min(...xs) - CARD_WIDTH / 2 - PAD
+  const top = Math.min(...ys) - CARD_HEIGHT / 2 - PAD
   return {
-    left: anchor.x - halfWidth,
-    top: anchor.y - halfHeight,
-    width: halfWidth * 2,
-    height: halfHeight * 2
+    left,
+    top,
+    width: Math.max(...xs) + CARD_WIDTH / 2 + PAD - left,
+    height: Math.max(...ys) + CARD_HEIGHT / 2 + PAD - top
   }
 }
