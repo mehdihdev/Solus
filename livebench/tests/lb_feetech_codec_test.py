@@ -243,6 +243,20 @@ def test_read_register_tolerates_garbage_and_short_replies() -> None:
     assert bus.read_register(1, "Present_Load") is None  # servo answers nothing for this register
 
 
+def test_sts_present_position_is_sign_magnitude_like_lerobot() -> None:
+    """Below its burned Homing_Offset an STS servo reports bit 15 + magnitude; lerobot decodes
+    that as negative. Read raw it is a ~32k spike every time a joint crosses the offset."""
+    bus = FeetechBus(as_bus_port(FeetechFakeChannel({1: 0x8000 | 37, 2: 2047})))
+    assert bus.read_register(1, "Present_Position") == -37
+    assert bus.read_register(2, "Present_Position") == 2047
+
+
+def test_scs_registers_carry_no_sign_magnitude_encoding() -> None:
+    channel = FeetechFakeChannel({1: 0x8000 | 37}, byteorder="big")
+    bus = FeetechBus(as_bus_port(channel), FeetechCodec(protocol_version=1))
+    assert bus.read_register(1, "Present_Position") == 0x8000 | 37
+
+
 # ── vendor hygiene ratchet ───────────────────────────────────────────────────────
 
 

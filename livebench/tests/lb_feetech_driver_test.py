@@ -157,6 +157,50 @@ async def test_a_calibrated_range_owns_the_conversion_like_the_repo_does() -> No
     assert packet.values["gripper.position"] == 0.0
 
 
+async def test_position_below_the_homing_offset_stays_continuous() -> None:
+    """0x8000|5 is -5 ticks (sign-magnitude), so the joint reads just past its range end —
+    not a jump to +2700 deg."""
+    config = _config(
+        [BusMapEntry(protocol=DRIVER, address="1", part_entity_id=SHOULDER, model="STS3215")],
+        {
+            str(SHOULDER): PartConfig(
+                calibration=PartCalibration(
+                    mode=CalibrationMode.DEGREES, values={"range_min": 0, "range_max": 4095}
+                ),
+                telemetry=[TelemetryChannel(name="wrist_roll.position", unit="deg")],
+            )
+        },
+    )
+    (packet,) = await _packets(_open(FeetechFakeChannel({1: 0x8000 | 5}), config), 1)
+    assert packet.values["wrist_roll.position"] == pytest.approx((-5 - 2047.5) * 360 / 4095)
+
+
+@pytest.mark.parametrize(
+    ("mode", "ticks", "expected"),
+    [
+        (CalibrationMode.RANGE_0_100, 1000, 100.0),  # lerobot: 100 - norm
+        (CalibrationMode.RANGE_M100_100, 1250, 50.0),  # lerobot: -norm
+        (CalibrationMode.DEGREES, 1500, (1500 - 1500) * 360 / 4095),  # degrees ignore it
+    ],
+)
+async def test_drive_mode_inverts_normalized_joints_like_lerobot(
+    mode: CalibrationMode, ticks: int, expected: float
+) -> None:
+    config = _config(
+        [BusMapEntry(protocol=DRIVER, address="1", part_entity_id=GRIPPER, model="STS3215")],
+        {
+            str(GRIPPER): PartConfig(
+                calibration=PartCalibration(
+                    mode=mode, values={"range_min": 1000, "range_max": 2000, "drive_mode": 1}
+                ),
+                telemetry=[TelemetryChannel(name="joint.position")],
+            )
+        },
+    )
+    (packet,) = await _packets(_open(FeetechFakeChannel({1: ticks}), config), 1)
+    assert packet.values["joint.position"] == pytest.approx(expected)
+
+
 async def test_center_and_ticks_per_rev_come_from_params() -> None:
     (packet,) = await _packets(_open(FeetechFakeChannel({1: 2048}), _arm(center=2048)), 1)
     assert packet.values["shoulder_pan.position"] == 0.0

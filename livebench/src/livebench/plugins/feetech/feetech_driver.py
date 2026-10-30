@@ -77,6 +77,7 @@ class _FeetechJoint:
     center: int
     mode: CalibrationMode | None
     span: tuple[float, float] | None  # range_min..range_max for percent modes
+    inverted: bool = False  # lerobot `drive_mode`: flips percent modes, never degrees
 
     def position(self, ticks: int) -> tuple[float, str]:
         """The part's calibration owns the conversion (the repo's convention, not ours):
@@ -99,14 +100,20 @@ class _FeetechJoint:
         ):
             low, high = self.span
             fraction = (min(high, max(low, ticks)) - low) / (high - low)
+            if self.inverted:
+                fraction = 1.0 - fraction
             if self.mode is CalibrationMode.RANGE_M100_100:
                 return fraction * 200.0 - 100.0, unit
             return fraction * 100.0, unit
         return float(ticks), _TICK_UNIT
 
 
+def _calibration_values(part: PartConfig | None) -> dict[str, float | int]:
+    return part.calibration.values if part is not None and part.calibration else {}
+
+
 def _span(part: PartConfig | None) -> tuple[float, float] | None:
-    values = part.calibration.values if part is not None and part.calibration else {}
+    values = _calibration_values(part)
     low, high = values.get("range_min"), values.get("range_max")
     if low is None or high is None or high <= low:
         return None
@@ -128,6 +135,7 @@ def _joint(
         center=params.center if params.center is not None else resolution // 2 - 1,
         mode=part.calibration.mode if part is not None and part.calibration else None,
         span=_span(part),
+        inverted=bool(_calibration_values(part).get("drive_mode")),
     )
 
 

@@ -22,6 +22,7 @@ from livebench.plugins.feetech.feetech_definitions import (
     DEFAULT_CANDIDATE_IDS,
     FEETECH_MODELS,
     HOMING_OFFSET_SIGN_BIT,
+    SIGN_MAGNITUDE_BITS_BY_PROTOCOL,
     FeetechRegister,
 )
 
@@ -72,6 +73,13 @@ class FeetechCodec:
 
     def unword(self, data: bytes) -> int:
         return int.from_bytes(data[:2], self._byteorder)
+
+    def signed(self, name: str, raw: int) -> int:
+        """A register value with this protocol's sign-magnitude encoding applied, if it has one."""
+        bit = SIGN_MAGNITUDE_BITS_BY_PROTOCOL[self.protocol_version].get(name)
+        if bit is None or not raw & (1 << bit):
+            return raw
+        return -(raw & ((1 << bit) - 1))
 
     @staticmethod
     def frame(servo_id: int, instruction: int, params: bytes = b"") -> bytes:
@@ -170,7 +178,9 @@ class FeetechBus:
         params = self.transact(servo_id, self.codec.read(servo_id, register), reply_len)
         if params is None or len(params) < register.size:
             return None
-        return self.codec.unword(params) if register.size == 2 else params[0]
+        return self.codec.signed(
+            name, self.codec.unword(params) if register.size == 2 else params[0]
+        )
 
     def discover(
         self,
