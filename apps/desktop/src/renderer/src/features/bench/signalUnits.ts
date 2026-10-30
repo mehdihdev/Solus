@@ -73,6 +73,23 @@ const MIN_CHART_SPAN: Readonly<Record<string, number>> = {
   m: 0.005
 }
 
+/** Decimals shown per unit, about one encoder step (0.088 deg on a 4096-tick servo): finer
+ *  digits are quantization noise that churns on every sample. Unknown units keep 6 sig. digits. */
+const DISPLAY_DECIMALS: Readonly<Record<string, number>> = {
+  deg: 1,
+  rad: 3,
+  '%': 1,
+  tick: 0,
+  mm: 1,
+  cm: 2,
+  m: 3
+}
+
+export function formatValue(value: number, unit: string | null): string {
+  const decimals = unit === null ? undefined : DISPLAY_DECIMALS[unit]
+  return decimals === undefined ? String(Number(value.toPrecision(6))) : value.toFixed(decimals)
+}
+
 export function valueDomain(
   values: readonly number[],
   unit: string | null

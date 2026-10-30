@@ -114,7 +114,9 @@ export function useBenchRealtime(
     .forEach((snapshot) =>
       snapshot.devices.forEach((device) => byDevice.set(device.device_id, device))
     )
-  const devices = [...byDevice.values()]
+  // Newest frame wins per device, but display order is by id: each session streams on its own
+  // clock, so arrival order reshuffles every card ~10x a second.
+  const devices = [...byDevice.values()].sort((a, b) => a.device_id.localeCompare(b.device_id))
   const receivedAt = Math.max(0, ...Object.values(snapshots).map((s) => s.at))
   const signature = JSON.stringify(devices.map((d) => [d.device_id, d.resolved_entity_id]).sort())
   const allowed = useFocusedDevices(project, scope, signature, focusId, generation)

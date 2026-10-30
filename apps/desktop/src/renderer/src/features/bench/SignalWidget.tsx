@@ -3,7 +3,14 @@ import type { BenchSignalSeries } from '../../lib/api/resources'
 import { anomalyMarkers } from './signalAnomalies'
 import type { ObserverEventOut } from '../../widgets/livebench/telemetry'
 import { chartSegments } from '../../widgets/livebench/telemetry'
-import { convertUnit, displayGroups, displayPoints, unitOptions, valueDomain } from './signalUnits'
+import {
+  convertUnit,
+  displayGroups,
+  displayPoints,
+  formatValue,
+  unitOptions,
+  valueDomain
+} from './signalUnits'
 
 interface Props {
   userId: string | null
@@ -193,7 +200,7 @@ function ScopedSignalWidget({
         )}
       </div>
       <div className="bench-signal-value" aria-label={`${view.name} value`}>
-        {view.value === null ? '—' : Number(view.value.toPrecision(6))}
+        {view.value === null ? '—' : formatValue(view.value, view.unit)}
         {view.unit ? (
           <span className="bench-unit">{view.unit}</span>
         ) : (

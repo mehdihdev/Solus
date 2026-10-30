@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { SignalWidget } from './SignalWidget'
-import { convertUnit, displayPoints, unitOptions, valueDomain } from './signalUnits'
+import { convertUnit, displayPoints, formatValue, unitOptions, valueDomain } from './signalUnits'
 
 beforeEach(() => localStorage.clear())
 
@@ -67,13 +67,13 @@ describe('signal widget preferences', () => {
     fireEvent.change(screen.getByLabelText('Display unit for position'), {
       target: { value: 'deg' }
     })
-    expect(screen.getByLabelText('position value')).toHaveTextContent(/180\s*deg/)
+    expect(screen.getByLabelText('position value')).toHaveTextContent(/180\.0\s*deg/)
     fireEvent.click(screen.getByRole('button', { name: 'Rename position' }))
     fireEvent.change(screen.getByLabelText('Signal name'), { target: { value: 'Wrist angle' } })
     fireEvent.keyDown(screen.getByLabelText('Signal name'), { key: 'Enter' })
     first.unmount()
     const second = render(<SignalWidget {...props} />)
-    expect(screen.getByLabelText('Wrist angle value')).toHaveTextContent(/180\s*deg/)
+    expect(screen.getByLabelText('Wrist angle value')).toHaveTextContent(/180\.0\s*deg/)
     second.unmount()
     const third = render(<SignalWidget {...props} projectId="p2" />)
     expect(screen.getByLabelText('position value')).toBeInTheDocument()
@@ -140,5 +140,21 @@ describe('chart value domain', () => {
 
   it('leaves unknown units on their own range', () => {
     expect(valueDomain([1, 1.001], null)).toEqual({ vMin: 1, vMax: 1.001 })
+  })
+})
+
+describe('displayed value', () => {
+  it('rounds to the sensor resolution with fixed decimals, so digits do not churn', () => {
+    // One STS3215 tick is 0.088 deg; six significant digits flicker on every sample.
+    expect(formatValue(-3.0769231, 'deg')).toBe('-3.1')
+    expect(formatValue(17, 'deg')).toBe('17.0')
+    expect(formatValue(1.02249, '%')).toBe('1.0')
+    expect(formatValue(2047.6, 'tick')).toBe('2048')
+    expect(formatValue(0.0536993, 'rad')).toBe('0.054')
+  })
+
+  it('keeps six significant digits for units without a known resolution', () => {
+    expect(formatValue(3.14159265, 'V')).toBe('3.14159')
+    expect(formatValue(3.14159265, null)).toBe('3.14159')
   })
 })
