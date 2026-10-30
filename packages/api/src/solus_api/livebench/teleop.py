@@ -121,6 +121,8 @@ class TeleopManager:
         self._teleops: dict[UUID, _Teleop] = {}
         #: Starts in flight, so stop / session end / shutdown can reach them before they run.
         self._starting: dict[UUID, _Teleop] = {}
+        #: Robots whose torque-off is on the bus right now: never started or paired meanwhile.
+        self._releasing: set[str] = set()
         self._start_lock = asyncio.Lock()
         self._recording: set[asyncio.Task[None]] = set()  # keep stop-event tasks referenced
         sessions.add_end_listener(self._session_ended)
@@ -132,7 +134,7 @@ class TeleopManager:
     def _busy(self) -> set[str]:
         """Physical robots in any running or starting teleop, across every project."""
         live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
-        return {key for teleop in live for key in teleop.keys}
+        return {key for teleop in live for key in teleop.keys} | self._releasing
 
     @staticmethod
     def _end(session_id: UUID, label: str) -> dict[str, str]:
@@ -220,6 +222,14 @@ class TeleopManager:
             if not teleop.running:
                 return
             teleop.stop_reason, teleop.stopped_at = reason, utcnow()
+            logger.info(
+                "teleop stopped: project=%s teleop=%s leader=%s follower=%s reason=%s",
+                project_id,
+                teleop.id,
+                teleop.leader["session_id"],
+                teleop.follower["session_id"],
+                reason,
+            )
             if record_stop is not None:
                 task = asyncio.get_running_loop().create_task(record_stop(teleop.out()))
                 self._recording.add(task)
@@ -260,10 +270,17 @@ class TeleopManager:
 
     async def release(self, project_id: UUID, session_id: UUID) -> None:
         out, conn = self._sessions.connection(project_id, session_id)
-        live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
-        if _device_key(out) in {teleop.keys[1] for teleop in live}:
-            raise TeleopRunningError("stop teleoperation before releasing its follower")
-        await asyncio.to_thread(self._local().robot_release, conn)
+        key = _device_key(out)
+        async with self._start_lock:  # checked and claimed atomically against starts
+            live = [t for t in self._teleops.values() if t.running]
+            live += list(self._starting.values())
+            if key in {teleop.keys[1] for teleop in live} or key in self._releasing:
+                raise TeleopRunningError("stop teleoperation before releasing its follower")
+            self._releasing.add(key)
+        try:
+            await asyncio.to_thread(self._local().robot_release, conn)
+        finally:
+            self._releasing.discard(key)
 
     async def _session_ended(self, project_id: UUID, session_id: UUID) -> None:
         starting = self._starting.get(project_id)

@@ -13,6 +13,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict
 
+from solus_api.bridge.service import ConnectRateLimiter
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
@@ -29,6 +30,10 @@ from solus_api.services.events import emit_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/projects/{project_id}/bench")
+#: Per user. The dialog previews ~2x a second; starts and releases are deliberate clicks.
+#: Stop is the safety control and is never limited.
+PREVIEWS_PER_MINUTE = 240
+DRIVES_PER_MINUTE = 60
 
 
 class TeleopPreviewIn(BaseModel):
@@ -55,6 +60,17 @@ def _manager(request: Request) -> TeleopManager:
     return manager
 
 
+def _limit(request: Request, ctx: ProjectCtx, kind: str) -> None:
+    limits = getattr(request.app.state, "bench_teleop_limits", None)
+    if limits is None:
+        limits = request.app.state.bench_teleop_limits = {
+            "preview": ConnectRateLimiter(PREVIEWS_PER_MINUTE),
+            "drive": ConnectRateLimiter(DRIVES_PER_MINUTE),
+        }
+    if not limits[kind].allow(str(ctx.user.id)):
+        raise APIError(429, "rate_limited", "Too many teleoperation requests; slow down")
+
+
 def _session_errors(exc: Exception) -> APIError:
     if isinstance(exc, SessionStillStartingError):
         return APIError(409, "session_starting", "Session is still starting")
@@ -66,6 +82,7 @@ async def preview_teleop(
     ctx: ProjectCtx, request: Request, body: TeleopPreviewIn
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    _limit(request, ctx, "preview")
     try:
         data = await _manager(request).preview(
             ctx.project.id, body.leader_session_id, body.follower_session_id
@@ -80,6 +97,7 @@ async def start_teleop(
     ctx: ProjectCtx, session: SessionDep, request: Request, body: TeleopStartIn
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    _limit(request, ctx, "drive")
     sessionmaker = request.app.state.sessionmaker
     user_id, team_id, project_id = ctx.user.id, ctx.team.id, ctx.project.id
 
@@ -153,6 +171,7 @@ async def release_robot(
     ctx: ProjectCtx, session: SessionDep, request: Request, session_id: uuid.UUID, body: ReleaseIn
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    _limit(request, ctx, "drive")
     try:
         await _manager(request).release(ctx.project.id, session_id)
     except (SessionNotFoundError, SessionStillStartingError) as exc:

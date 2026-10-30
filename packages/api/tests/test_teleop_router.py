@@ -78,6 +78,7 @@ class TeleopLocal(FakeLocal):
         if self.start_refusal is not None:
             raise self.start_refusal
         self.started_with.append((leader, follower))
+
         def stopped(reason: str) -> None:
             self.events.append(f"stopped:{reason}")
             on_stopped(reason)
@@ -558,3 +559,85 @@ async def test_stop_pressed_while_teleop_is_starting_wins(
     resp = await starting
     assert resp.status_code == 201 and resp.json()["data"]["state"] == "stopped"
     assert teleop_local.loops[0].stop_reason == "user"
+
+
+# ── Phase 4 security review ──────────────────────────────────────────────────────
+
+
+async def test_a_release_in_flight_blocks_a_start_on_the_same_robot(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal
+) -> None:
+    import asyncio
+    import threading
+
+    project, leader, follower = await _pair(client, alice_headers)
+    preview = await _preview(client, alice_headers, project, leader, follower)
+    releasing, finish = threading.Event(), threading.Event()
+    original = teleop_local.robot_release
+
+    def slow_release(conn: TapConn) -> None:
+        releasing.set()
+        finish.wait(5)
+        original(conn)
+
+    teleop_local.robot_release = slow_release  # type: ignore[method-assign]
+    release = asyncio.ensure_future(
+        client.post(
+            f"/api/v1/projects/{project}/bench/sessions/{follower}/release",
+            headers=alice_headers,
+            json={"confirm": True},
+        )
+    )
+    while not releasing.is_set():
+        await asyncio.sleep(0.01)
+    started = await _start(client, alice_headers, project, preview["preview_id"])
+    during = await _preview(client, alice_headers, project, leader, follower)
+    finish.set()
+    assert (await release).status_code == 200
+    assert started.status_code == 409 and started.json()["error"]["code"] == "teleop_running"
+    assert "teleop_running" in [b["code"] for b in during["blockers"]]
+    assert teleop_local.loops == []
+
+
+async def test_previews_and_driving_routes_are_rate_limited(
+    client: AsyncClient, alice_headers: dict[str, str], teleop_local: TeleopLocal, app: FastAPI
+) -> None:
+    from solus_api.bridge.service import ConnectRateLimiter
+
+    project, leader, follower = await _pair(client, alice_headers)
+    app.state.bench_teleop_limits = {
+        "preview": ConnectRateLimiter(2),
+        "drive": ConnectRateLimiter(1),
+    }
+    body = {"leader_session_id": leader, "follower_session_id": follower}
+    url = f"/api/v1/projects/{project}/bench/teleop/preview"
+    codes = [
+        (await client.post(url, headers=alice_headers, json=body)).status_code for _ in range(3)
+    ]
+    assert codes == [200, 200, 429]
+    release = f"/api/v1/projects/{project}/bench/sessions/{leader}/release"
+    ok = await client.post(release, headers=alice_headers, json={"confirm": True})
+    assert ok.status_code == 200
+    limited = await client.post(release, headers=alice_headers, json={"confirm": True})
+    assert limited.status_code == 429 and limited.json()["error"]["code"] == "rate_limited"
+    # Stop is the safety control: never rate limited.
+    stop = f"/api/v1/projects/{project}/bench/teleop/stop"
+    for _ in range(3):
+        assert (await client.post(stop, headers=alice_headers)).status_code == 200
+
+
+async def test_a_stop_is_logged_with_its_teleop_and_project(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    teleop_local: TeleopLocal,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    project, leader, follower = await _pair(client, alice_headers)
+    preview = await _preview(client, alice_headers, project, leader, follower)
+    teleop = (await _start(client, alice_headers, project, preview["preview_id"])).json()["data"]
+    with caplog.at_level(logging.INFO, logger="solus_api.livebench.teleop"):
+        await teleop_local.loops[0].stop("leader_lost")
+    line = next(r.getMessage() for r in caplog.records if "teleop stopped" in r.getMessage())
+    assert teleop["id"] in line and project in line and "leader_lost" in line

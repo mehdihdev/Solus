@@ -1298,7 +1298,10 @@ leader_value, follower_value, delta, within_tolerance}], tolerance:{deg, "%"}}`.
 only when there are no blockers and every pair is within tolerance (15 deg, 20 %); the UI shows
 the table and refreshes it while the confirmation is open. Blocker codes: `not_actuated`,
 `unpaired_joint`, `uncalibrated_joint`, `mode_mismatch`, `same_session`, `teleop_running`,
-`link_unavailable` (a robot's link is mid-reconnect).
+`link_unavailable` (a robot's link is mid-reconnect), `follower_out_of_range` (the follower
+rests more than one step outside its calibrated range). Pairing compares calibration modes, not
+just units (0..100 % and -100..100 % never pair), and a calibrated range outside the servo's
+0..resolution-1 is treated as uncalibrated (calibration can arrive from repo files).
 Teleop shape: `{id, state: running|stopped, leader, follower, rate_hz, started_at, stopped_at,
 stop_reason: user|leader_lost|follower_lost|session_ended|shutdown|null, pairs:[{address,
 leader_signal, follower_signal}]}`.
@@ -1308,7 +1311,10 @@ carry the fresh preview), `410 preview_expired` (unknown, expired, or already us
 are single-use), `409 teleop_running`, and `503 teleop_failed` when the follower cannot be held
 (a servo did not acknowledge). Release refuses with `409 teleop_running` and `409 not_actuated`,
 and reports `503 release_failed` when a servo did not acknowledge torque off. Viewers may `GET`
-the current teleop; every other route needs the member role (`403`). While running, each follower goal is clamped to its
+the current teleop; every other route needs the member role (`403`). Per-user limits: 240
+previews/min and 60 starts+releases/min (`429 rate_limited`); Stop is never limited. Release
+turns torque off on every joint that answers and fails only if a calibrated joint stays on.
+A robot being released is busy: a start or pairing that includes it is refused until it ends. While running, each follower goal is clamped to its
 calibrated range and moves at most a bounded step per tick; three consecutive failed leader reads
 stop it (`leader_lost`), a failed follower write stops it (`follower_lost`), and either session
 ending or API shutdown stops it. Data events: `bench.teleop_started`, `bench.teleop_stopped`

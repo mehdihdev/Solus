@@ -284,12 +284,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # release resources. ExitStack still closes later resources if one fails.
             cleanup.push_async_callback(served.state.graph_hub.stop)
             cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
-            # LIFO: teleop stops (follower holds) before any session's bus closes.
-            cleanup.push_async_callback(served.state.bench_teleop.aclose)
             cleanup.push_async_callback(served.state.bench_runs.aclose)
             cleanup.push_async_callback(served.state.hardware_connections.aclose)
             if served.state.device_watch is not None:
                 cleanup.push_async_callback(served.state.device_watch.stop)
+            # Pushed last so it runs FIRST (LIFO): teleop stops ("shutdown"; the follower holds)
+            # before anything ends a session or closes a bus.
+            cleanup.push_async_callback(served.state.bench_teleop.aclose)
             await served.state.graph_hub.start()
             await served.state.hardware_connections.startup()
             if served.state.device_watch is not None:
@@ -428,9 +429,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         ),
     )
     # SOLUSDEV-319: leader → follower teleoperation beside the sessions (ADR-014 amendment).
-    app.state.bench_teleop = TeleopManager(
-        app.state.bench_sessions, lambda: app.state.bench_local
-    )
+    app.state.bench_teleop = TeleopManager(app.state.bench_sessions, lambda: app.state.bench_local)
     provider_factory = getattr(app.state.bench_local, "presence_provider", None)
     app.state.presence_provider = (
         provider_factory()
