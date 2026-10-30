@@ -316,7 +316,10 @@ class HardwareConnections:
                 label=f"Robot {label}",
                 open_conn=open_robot,
                 window_seconds=attempt.window,
-                device={"device_ref": config.identity.device_ref if config.identity else None},
+                device={
+                    "device_ref": config.identity.device_ref if config.identity else None,
+                    "robot_entity_id": str(attempt.robot),
+                },
             )
             session_id = record.id
             if await self._finish(attempt, "connected", session_id=session_id, stamp=stamp):

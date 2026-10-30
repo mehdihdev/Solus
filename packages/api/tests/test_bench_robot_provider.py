@@ -88,6 +88,7 @@ async def test_robot_session_opens_from_the_config(
     assert record["device"]["driver_id"] == "feetech-sts"
     assert record["device"]["serial_number"] == "5B42134331"
     assert record["device"]["baud"] == 1_000_000
+    assert record["device"]["robot_entity_id"] == robot_id  # the UI's per-robot panel key
     assert "usb:5B42134331" in record["label"]
     opened = robot_local.opened[0]
     assert opened["kind"] == "robot"

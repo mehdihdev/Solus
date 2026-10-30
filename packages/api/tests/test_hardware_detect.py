@@ -313,6 +313,8 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
     assert robot["properties"]["connection"]["status"] == "connecting"
     await app.state.hardware_connections.drain()
     assert detect_local.opened[0]["kind"] == "robot"
+    (session,) = app.state.bench_sessions.list(uuid.UUID(project_id))
+    assert session.device["robot_entity_id"] == robot["id"]  # the UI's per-robot panel key
 
     parts = list(
         await db.scalars(

@@ -55,6 +55,8 @@ from solus_api.livebench.runs.capture import RunCaptureManager
 from solus_api.livebench.runs.router import router as bench_runs_router
 from solus_api.livebench.scene.router import router as bench_scene_router
 from solus_api.livebench.sessions import SessionManager, load_local
+from solus_api.livebench.teleop import TeleopManager
+from solus_api.livebench.teleop_router import router as bench_teleop_router
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.routers import (
@@ -282,6 +284,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # release resources. ExitStack still closes later resources if one fails.
             cleanup.push_async_callback(served.state.graph_hub.stop)
             cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
+            # LIFO: teleop stops (follower holds) before any session's bus closes.
+            cleanup.push_async_callback(served.state.bench_teleop.aclose)
             cleanup.push_async_callback(served.state.bench_runs.aclose)
             cleanup.push_async_callback(served.state.hardware_connections.aclose)
             if served.state.device_watch is not None:
@@ -423,6 +427,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             project_id, ObserverEventIn.model_validate(event)
         ),
     )
+    # SOLUSDEV-319: leader → follower teleoperation beside the sessions (ADR-014 amendment).
+    app.state.bench_teleop = TeleopManager(
+        app.state.bench_sessions, lambda: app.state.bench_local
+    )
     provider_factory = getattr(app.state.bench_local, "presence_provider", None)
     app.state.presence_provider = (
         provider_factory()
@@ -561,6 +569,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     app.include_router(bench_stream_router)
     app.include_router(bench_router)
+    app.include_router(bench_teleop_router)
     app.include_router(bench_runs_router)
     app.include_router(bench_scene_router)
     app.include_router(bridge.router)

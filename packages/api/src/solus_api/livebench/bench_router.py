@@ -543,6 +543,8 @@ async def _robot_opener(
         "serial_number": identity.binding if identity.kind is TransportKind.USB_SERIAL else None,
         "device_path": getattr(identity, "last_seen_path", None),
         "baud": protocol.params.get("baud"),
+        # The UI's per-robot panel key; a part-level (hardware) session names no robot.
+        **({"robot_entity_id": str(robot.id)} if isinstance(cfg, RobotRealConfig) else {}),
     }
     return open_robot, f"Robot {robot.name} ({identity.device_ref})", device
 
