@@ -40,6 +40,7 @@ from solus_api.hardware.config import (
     TransportKind,
 )
 from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
+from solus_api.livebench.teleop import NotActuatedError, TeleopNotReadyError
 
 from livebench.recognition.passive import (
     PORT_BINDING_PREFIX,
@@ -50,7 +51,9 @@ from livebench.recognition.passive import (
 from livebench.telemetry.stream_live import PacketStreamLiveConnection
 
 if TYPE_CHECKING:
+    from livebench.hardware.actuation import Actuator
     from livebench.hardware.connection import RobotConnection
+    from livebench.teleop import TeleopLoop, TeleopPreview
 
 __all__ = [
     "AmbiguousDeviceError",
@@ -65,6 +68,9 @@ __all__ = [
     "open_serial",
     "detect_devices",
     "propose_device",
+    "teleop_preview",
+    "teleop_start",
+    "robot_release",
 ]
 
 logger = logging.getLogger(__name__)
@@ -505,3 +511,92 @@ def session_observers() -> Any:
     from livebench.anomaly.session import SessionObservers
 
     return SessionObservers()
+
+
+# ── teleoperation (SOLUSDEV-319, ADR-014 amendment 2026-10-30) ──────────────────
+
+
+def _actuator(conn: Any) -> "Actuator":
+    actuator = getattr(conn, "actuator", None)
+    if actuator is None:
+        raise NotActuatedError("this robot's driver can be read but not driven")
+    return actuator  # type: ignore[no-any-return]
+
+
+def _preview_wire(result: "TeleopPreview") -> dict[str, Any]:
+    from livebench.teleop import TOLERANCE
+
+    return {
+        "ready": result.ready,
+        "blockers": [{"code": b.code, "message": b.message} for b in result.blockers],
+        "pairs": [
+            {
+                "address": r.pair.address,
+                "leader_signal": r.pair.leader_signal,
+                "follower_signal": r.pair.follower_signal,
+                "unit": r.pair.unit,
+                "leader_value": r.leader_value,
+                "follower_value": r.follower_value,
+                "delta": r.delta,
+                "within_tolerance": r.within_tolerance,
+            }
+            for r in result.pairs
+        ],
+        "tolerance": dict(TOLERANCE),
+    }
+
+
+def teleop_preview(leader_conn: Any, follower_conn: Any) -> dict[str, Any]:
+    """Where both robots are now, joint by joint. BLOCKING (reads both buses)."""
+    from livebench.hardware.actuation import ActuatorUnavailableError
+    from livebench.teleop import Blocker, TeleopPreview, preview
+
+    leader, follower = _actuator(leader_conn), _actuator(follower_conn)
+    try:
+        return _preview_wire(preview(leader, follower))
+    except (ActuatorUnavailableError, OSError):
+        gap = Blocker("link_unavailable", "A robot's link is reconnecting; try again in a moment.")
+        return _preview_wire(TeleopPreview((), (gap,)))
+
+
+class _TeleopHandle:
+    """The running loop as the API sees it: wire-shaped pairs, no livebench types."""
+
+    def __init__(self, loop: "TeleopLoop") -> None:
+        self._loop = loop
+        self.rate_hz = loop.rate_hz
+        self.pairs = [
+            {
+                "address": p.address,
+                "leader_signal": p.leader_signal,
+                "follower_signal": p.follower_signal,
+            }
+            for p in loop.pairs
+        ]
+
+    @property
+    def running(self) -> bool:
+        return self._loop.running
+
+    async def stop(self, reason: str = "user") -> None:
+        await self._loop.stop(reason)  # type: ignore[arg-type]
+
+
+async def teleop_start(
+    leader_conn: Any, follower_conn: Any, *, on_stopped: Callable[[str], object]
+) -> _TeleopHandle:
+    """Re-check the gate on fresh readings, hold the follower, start tracking."""
+    from livebench.teleop import TeleopNotReadyError as GateFailed
+    from livebench.teleop import start_teleop
+
+    leader, follower = _actuator(leader_conn), _actuator(follower_conn)
+    try:
+        loop = await start_teleop(leader, follower, on_stopped=on_stopped)
+    except GateFailed as exc:
+        raise TeleopNotReadyError(_preview_wire(exc.preview)) from None
+    return _TeleopHandle(loop)
+
+
+def robot_release(conn: Any) -> None:
+    """Torque off on the robot's calibrated joints. BLOCKING."""
+    _actuator(conn).release()

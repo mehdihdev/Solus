@@ -12,6 +12,7 @@ error-flagged replies discarded; a malformed reply is `None`, never an exception
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -159,14 +160,17 @@ class FeetechBus:
     def __init__(self, port: FeetechBusPort, codec: FeetechCodec | None = None) -> None:
         self._port = port
         self.codec = codec or FeetechCodec()
+        #: The polling sweep and teleop writes run on different threads; each exchange is atomic.
+        self._lock = threading.Lock()
 
     def transact(self, servo_id: int, frame: bytes, reply_len: int) -> bytes | None:
         """Flush BEFORE asking: the bus is strictly request-response, so anything already queued
         (noise, a stale frame from a prior slip) is by definition not the answer to THIS
         request — accepting it would serve seconds-old positions as fresh readings."""
-        self._port.reset_input_buffer()
-        self._port.write(frame)
-        return self.codec.parse_reply(self._port.read(reply_len), servo_id=servo_id)
+        with self._lock:
+            self._port.reset_input_buffer()
+            self._port.write(frame)
+            return self.codec.parse_reply(self._port.read(reply_len), servo_id=servo_id)
 
     def ping(self, servo_id: int) -> bool:
         return self.transact(servo_id, self.codec.ping(servo_id), _STATUS_OVERHEAD) is not None
@@ -181,6 +185,16 @@ class FeetechBus:
         return self.codec.signed(
             name, self.codec.unword(params) if register.size == 2 else params[0]
         )
+
+    def write_register(self, servo_id: int, name: str, value: int) -> bool:
+        """Write one register and wait for the servo's ack; False when it never acks. Values are
+        written unsigned — a negative or oversized value is refused, never wrapped (Goal_Position
+        is sign-magnitude on the wire)."""
+        register = self.codec.table[name]
+        if not 0 <= value < 1 << (8 * register.size - 1):
+            raise ValueError(f"{name} cannot hold {value}")
+        frame = self.codec.write(servo_id, register, value)
+        return self.transact(servo_id, frame, _STATUS_OVERHEAD) is not None
 
     def discover(
         self,

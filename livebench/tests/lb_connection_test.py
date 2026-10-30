@@ -129,6 +129,30 @@ def test_open_probes_the_transport_eagerly_and_exposes_device_facts() -> None:
     assert connection.device_facts == {"device_ref": "usb:5B42134331", "driver_id": "demo-bus"}
 
 
+def test_connection_carries_the_drivers_actuator_or_none() -> None:
+    transports, drivers, _ = _registries()
+    plain = open_robot_connection(
+        _config(), project_id=None, transports=transports, drivers=drivers
+    )
+    assert plain.actuator is None  # the demo driver declares no actuator
+
+    class _Actuated(_Driver):
+        driver_id: ClassVar[str] = "demo-actuated"
+        handle = object()
+
+        def actuator(self, config: HardwareConfig) -> object:
+            return self.handle
+
+    drivers.register(_Actuated)
+    actuated = open_robot_connection(
+        _config(protocol={"driver_id": "demo-actuated", "params": {}}),
+        project_id=None,
+        transports=transports,
+        drivers=drivers,
+    )
+    assert actuated.actuator is _Actuated.handle
+
+
 def test_open_fails_fast_when_the_transport_cannot_open() -> None:
     transports = TransportRegistry()
     drivers = DriverRegistry()

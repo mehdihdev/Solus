@@ -33,6 +33,7 @@ from solus_api.hardware.config import (
 )
 
 from livebench.hardware.channel import Channel, as_bus_port
+from livebench.plugins.feetech.feetech_actuator import FeetechActuator
 from livebench.plugins.feetech.feetech_codec import FeetechBus, FeetechCodec
 from livebench.plugins.feetech.feetech_definitions import (
     DEFAULT_BAUD,
@@ -107,6 +108,37 @@ class _FeetechJoint:
             return fraction * 100.0, unit
         return float(ticks), _TICK_UNIT
 
+    @property
+    def goal_span(self) -> tuple[int, int] | None:
+        """The calibrated tick range goals are confined to; None means never actuated."""
+        actuated = (
+            CalibrationMode.DEGREES,
+            CalibrationMode.RANGE_0_100,
+            CalibrationMode.RANGE_M100_100,
+        )
+        if self.span is None or self.mode not in actuated:
+            return None
+        return round(self.span[0]), round(self.span[1])
+
+    def goal_ticks(self, value: float) -> int:
+        """Inverse of `position`, clamped into `goal_span`."""
+        span = self.goal_span
+        if span is None:
+            raise ValueError(f"servo {self.servo_id} has no calibrated range to aim within")
+        low, high = span
+        if self.mode is CalibrationMode.DEGREES:
+            ticks = value * (self.resolution - 1) / 360.0 + (low + high) / 2
+        else:
+            fraction = (
+                (value + 100.0) / 200.0
+                if self.mode is CalibrationMode.RANGE_M100_100
+                else value / 100.0
+            )
+            if self.inverted:
+                fraction = 1.0 - fraction
+            ticks = low + fraction * (high - low)
+        return min(high, max(low, round(ticks)))
+
 
 def _calibration_values(part: PartConfig | None) -> dict[str, float | int]:
     return part.calibration.values if part is not None and part.calibration else {}
@@ -156,8 +188,12 @@ class FeetechPacketSource:
         joints: Sequence[_FeetechJoint],
         poll_hz: float,
         seq: Iterator[int],
+        actuator: FeetechActuator | None = None,
     ) -> None:
         self._bus = bus
+        self._actuator = actuator
+        if actuator is not None:
+            actuator.attach(bus, joints)
         self._device_id = device_id
         self._joints = list(joints)
         self._period = 1.0 / poll_hz
@@ -211,6 +247,8 @@ class FeetechPacketSource:
 
     async def aclose(self) -> None:
         self._closed = True  # bookkeeping before the close unblocks the sweep
+        if self._actuator is not None:
+            self._actuator.detach(self._bus)
         try:
             self._bus.close()
         except OSError:  # pragma: no cover - best-effort
@@ -226,6 +264,8 @@ class FeetechStsDriver:
     def __init__(self) -> None:
         #: Per-device monotonic `seq` (packet.py contract): survives reconnect incarnations.
         self._seqs: dict[str, Iterator[int]] = {}
+        #: Per-device actuation handle, re-attached by every incarnation (see `actuator`).
+        self._actuators: dict[str, FeetechActuator] = {}
 
     def open(
         self, channel: Channel, params: BaseModel, config: HardwareConfig
@@ -258,7 +298,16 @@ class FeetechStsDriver:
             joints=joints,
             poll_hz=params.poll_hz,
             seq=self._seqs.setdefault(device_id, itertools.count()),
+            actuator=self._actuators.setdefault(
+                config.identity.device_ref if config.identity else device_id, FeetechActuator()
+            ),
         )
+
+    def actuator(self, config: HardwareConfig) -> FeetechActuator | None:
+        """The robot's actuation handle (ADR-014 amendment 2026-10-30): the one teleop drives."""
+        if config.identity is None:
+            return None
+        return self._actuators.setdefault(config.identity.device_ref, FeetechActuator())
 
     def channel_roles(self, config: HardwareConfig) -> dict[str, str]:
         params = FeetechParams.model_validate(

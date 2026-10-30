@@ -238,3 +238,93 @@ def test_a_port_binding_refuses_a_substitute_device_with_another_vid_pid() -> No
     )
     # no vid/pid from the caller: today's behaviour, the port alone decides
     assert resolve_serial_device("port-3-1.2", identities=[substitute, TEENSY]) == "/dev/ttyUSB3"
+
+
+# ── teleoperation bridge (SOLUSDEV-319): the API's door to livebench.teleop ──────
+
+
+class _Conn:
+    def __init__(self, actuator: Any) -> None:
+        self.actuator = actuator
+
+
+def _arms(follower_pan: int = 2000) -> tuple[_Conn, _Conn]:
+    from lb_teleop_test import FakeActuator, _joint
+
+    leader = FakeActuator([_joint(1, "l-pan"), _joint(6, "l-grip", "%")], {1: 2000, 6: 500})
+    follower = FakeActuator(
+        [_joint(1, "f-pan"), _joint(6, "f-grip", "%")], {1: follower_pan, 6: 500}
+    )
+    return _Conn(leader), _Conn(follower)
+
+
+def test_teleop_preview_wire_carries_pairs_blockers_and_tolerance() -> None:
+    from livebench.local import teleop_preview
+
+    leader, follower = _arms(follower_pan=2100)
+    wire = teleop_preview(leader, follower)
+    assert wire["ready"] is True and wire["blockers"] == []
+    assert wire["tolerance"] == {"deg": 15.0, "%": 20.0}
+    assert wire["pairs"][0] == {
+        "address": 1,
+        "leader_signal": "l-pan.position",
+        "follower_signal": "f-pan.position",
+        "unit": "deg",
+        "leader_value": 200.0,
+        "follower_value": 210.0,
+        "delta": -10.0,
+        "within_tolerance": True,
+    }
+
+
+def test_teleop_preview_refuses_a_connection_without_an_actuator() -> None:
+    from livebench.local import teleop_preview
+    from solus_api.livebench.teleop import NotActuatedError
+
+    leader, _ = _arms()
+    with pytest.raises(NotActuatedError):
+        teleop_preview(leader, _Conn(None))
+
+
+def test_teleop_preview_reports_a_link_gap_as_a_blocker() -> None:
+    from livebench.local import teleop_preview
+
+    leader, follower = _arms()
+    follower.actuator.read_fails = 1
+    wire = teleop_preview(leader, follower)
+    assert wire["ready"] is False and wire["blockers"][0]["code"] == "link_unavailable"
+
+
+async def test_teleop_start_returns_a_handle_with_wire_pairs_and_stops() -> None:
+    from livebench.local import teleop_start
+
+    leader, follower = _arms()
+    reasons: list[str] = []
+    handle = await teleop_start(leader, follower, on_stopped=reasons.append)
+    assert handle.running and handle.rate_hz == 30.0
+    assert [p["address"] for p in handle.pairs] == [1, 6]
+    await handle.stop("user")
+    assert not handle.running and reasons == ["user"]
+    assert follower.actuator.released is False
+
+
+async def test_teleop_start_maps_a_failed_gate_to_the_api_error_with_the_fresh_preview() -> None:
+    from livebench.local import teleop_start
+    from solus_api.livebench.teleop import TeleopNotReadyError
+
+    leader, follower = _arms(follower_pan=4000)  # 200 deg apart
+    with pytest.raises(TeleopNotReadyError) as refused:
+        await teleop_start(leader, follower, on_stopped=lambda reason: None)
+    assert refused.value.preview["pairs"][0]["within_tolerance"] is False
+    assert follower.actuator.held is False
+
+
+def test_robot_release_turns_torque_off_through_the_actuator() -> None:
+    from livebench.local import robot_release
+    from solus_api.livebench.teleop import NotActuatedError
+
+    _, follower = _arms()
+    robot_release(follower)
+    assert follower.actuator.released is True
+    with pytest.raises(NotActuatedError):
+        robot_release(_Conn(None))

@@ -16,6 +16,7 @@ from uuid import UUID
 from solus_api.graph.packet import TelemetryPacket
 from solus_api.hardware.config import HardwareConfig, ProtocolBinding, TransportBinding, part_ref
 
+from livebench.hardware.actuation import Actuator
 from livebench.hardware.channel import TransportRegistry
 from livebench.hardware.driver import DriverRegistry
 from livebench.telemetry.observing_source import EventSink, Observer
@@ -30,10 +31,16 @@ class RobotConnection(PacketStreamLiveConnection):
     provider: ClassVar[str] = "robot"
 
     def __init__(
-        self, source: PacketSource, *, project_id: UUID | None, device_facts: dict[str, Any]
+        self,
+        source: PacketSource,
+        *,
+        project_id: UUID | None,
+        device_facts: dict[str, Any],
+        actuator: Actuator | None = None,
     ) -> None:
         super().__init__(source, project_id=project_id)
         self.device_facts = device_facts
+        self.actuator = actuator  # the driver's optional actuation handle (teleop only)
 
 
 def part_routes(config: HardwareConfig) -> dict[str, str]:
@@ -147,4 +154,5 @@ def open_robot_connection(
             "driver_id": protocol.driver_id,
             **({"channel_roles": channel_roles} if channel_roles else {}),
         },
+        actuator=drivers.actuator(config),
     )
