@@ -12,15 +12,21 @@ the connectors populate; it is accepted and currently unused per-rule rather tha
 """
 
 from collections import defaultdict
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
-from solus_api.agent.interfaces import EntityRead, GraphContext
+from solus_contracts.relations import CANDIDATE_THRESHOLD
+
+from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
 from solus_api.checkers import attributes as av
-from solus_api.checkers.environment import PinConflictChecker
 from solus_api.checkers.interface import Checker, Severity, Warning, run_checkers, severity_rank
 from solus_api.checkers.traversal import GraphView, domains_of
 from solus_api.fingerprint.contract import FingerprintOutput
+from solus_api.graph.inference.power_nets import GROUND_NET, is_power_rail_name
+from solus_api.livebench.findings.rules.rule_base import Needs
+
+if TYPE_CHECKING:
+    from solus_api.checkers.fact_store import FactStore
 
 
 def _worst(severities: list[Severity]) -> Severity:
@@ -28,25 +34,64 @@ def _worst(severities: list[Severity]) -> Severity:
     return max(severities, key=severity_rank)
 
 
-class OpAmpMismatchChecker(Checker):
-    """Flags an op-amp that cannot satisfy the circuit role / load it ``drives``.
+def _confirmed(graph: GraphContext) -> GraphContext:
+    """``graph`` without candidate edges: a context built through ``to_graph_context`` has none;
+    one built any other way may."""
+    edges = [edge for edge in graph.edges if edge.confidence >= CANDIDATE_THRESHOLD]
+    return graph.model_copy(update={"edges": edges})
 
-    Walks each ``drives`` edge and compares the op-amp's capability against the requirement the
-    driven entity carries: gain-bandwidth (degraded response → WARNING), output-current drive and
-    supply-voltage range (won't function / may be damaged → CRITICAL). One warning per bad pairing,
-    aggregating every failed dimension, at the most-severe severity among them."""
+
+class OpAmpMismatchChecker(Checker):
+    """Flags an op-amp that cannot satisfy the load it is wired to.
+
+    Walks each ``wires`` edge (component ↔ component on a net). A wire has no direction — the
+    netlist inference writes one edge per pair — so the op-amp is the end whose ``part_class`` is
+    ``op_amp`` and the load the other; a wire with no op-amp end, or two, is skipped, and so is one
+    that shares only power rails and ground (every part on a board meets there). Compares the
+    op-amp's capability against the requirement the load carries: gain-bandwidth (degraded
+    response → WARNING), output-current drive and supply-voltage range (won't function / may be
+    damaged → CRITICAL). One warning per bad pairing, aggregating every failed dimension, at the
+    most-severe severity among them."""
 
     checker_id = "op_amp_mismatch"
     domains = ("electrical",)
 
-    def check(self, graph: GraphContext, parts: FingerprintOutput) -> list[Warning]:
+    def check(
+        self, graph: GraphContext, parts: FingerprintOutput, facts: "FactStore | None" = None
+    ) -> list[Warning]:
         view = GraphView(graph)
         warnings: list[Warning] = []
-        for op_amp, load in view.edges_of_type(av.DRIVES):
-            failures = _op_amp_failures(op_amp, load)
+        seen: set[tuple[UUID, UUID]] = set()
+        for edge in graph.edges:
+            pair = _op_amp_and_load(view, edge)
+            if pair is None or (pair[0].id, pair[1].id) in seen:
+                continue
+            seen.add((pair[0].id, pair[1].id))
+            failures = _op_amp_failures(*pair)
             if failures:
-                warnings.append(_op_amp_warning(op_amp, load, failures))
+                warnings.append(_op_amp_warning(*pair, failures))
         return warnings
+
+
+def _op_amp_and_load(view: GraphView, edge: EdgeRead) -> tuple[EntityRead, EntityRead] | None:
+    """(op-amp, load) of one ``wires`` edge: the end classified ``op_amp`` and the other. None for
+    another relation, a dangling end, a wire that shares only rails and ground, or a wire with no
+    op-amp end or two (which is the op-amp and which its load is not known)."""
+    a, b = view.entity(edge.src_id), view.entity(edge.dst_id)
+    if edge.relation_type != av.WIRES or a is None or b is None or _rails_only(edge):
+        return None
+    a_is_op_amp, b_is_op_amp = av.part_class(a) == av.OP_AMP, av.part_class(b) == av.OP_AMP
+    if a_is_op_amp == b_is_op_amp:
+        return None
+    return (a, b) if a_is_op_amp else (b, a)
+
+
+def _rails_only(edge: EdgeRead) -> bool:
+    """Whether every net a wire shares (``attrs.nets``) is a power rail or ground, where every part
+    on a board meets every other. A wire that names no nets is judged."""
+    nets = edge.attrs.get("nets")
+    names = [net for net in nets if isinstance(net, str)] if isinstance(nets, list) else []
+    return bool(names) and all(is_power_rail_name(n) or GROUND_NET.search(n) for n in names)
 
 
 def _op_amp_failures(op_amp: EntityRead, load: EntityRead) -> list[dict[str, Any]]:
@@ -125,18 +170,23 @@ def _op_amp_warning(
 class SensorFrequencyConflictChecker(Checker):
     """Flags a sampling-rate conflict spanning the sensor (circuit) and the code that reads it.
 
-    Walks each ``reads_from`` edge (code → sensor) and checks three independent conflicts:
-    the code polling below the signal's Nyquist floor (aliasing → WARNING), the code polling
-    faster than the sensor updates (stale/duplicate reads → WARNING), and the sensor producing
-    data faster than its bus can carry (dropped samples → CRITICAL)."""
+    Walks each confirmed ``reads`` edge (code → sensor) — an inferred one is written at 0.55, a
+    candidate below the threshold that counts only once a person confirms it — and checks three
+    independent conflicts: the code polling below the signal's Nyquist floor (aliasing →
+    WARNING), the code polling faster than the sensor updates (stale/duplicate reads → WARNING),
+    and the sensor producing data faster than its bus can carry (dropped samples → CRITICAL)."""
 
     checker_id = "sensor_frequency_conflict"
     domains = ("code", "electrical")
+    #: What it reads, in the matrix rules' shape: a candidate ``reads`` edge is not one.
+    needs: ClassVar[Needs] = Needs(relations=(av.READS,))
 
-    def check(self, graph: GraphContext, parts: FingerprintOutput) -> list[Warning]:
-        view = GraphView(graph)
+    def check(
+        self, graph: GraphContext, parts: FingerprintOutput, facts: "FactStore | None" = None
+    ) -> list[Warning]:
+        view = GraphView(_confirmed(graph))
         warnings: list[Warning] = []
-        for reader, sensor in view.edges_of_type(av.READS_FROM):
+        for reader, sensor in view.edges_of_type(av.READS):
             warnings.extend(self._conflicts(reader, sensor))
         return warnings
 
@@ -229,7 +279,9 @@ class PowerCompatibilityChecker(Checker):
     checker_id = "power_compatibility"
     domains = ("electrical",)
 
-    def check(self, graph: GraphContext, parts: FingerprintOutput) -> list[Warning]:
+    def check(
+        self, graph: GraphContext, parts: FingerprintOutput, facts: "FactStore | None" = None
+    ) -> list[Warning]:
         view = GraphView(graph)
         loads_by_supply: dict[UUID, list[EntityRead]] = defaultdict(list)
         supply_by_id: dict[UUID, EntityRead] = {}
@@ -317,12 +369,12 @@ def _current_budget_warning(supply: EntityRead, loads: list[EntityRead]) -> Warn
     )
 
 
-#: the default rule set, in a stable order.
+#: the default rule set, in a stable order. The pin conflict is the matrix's
+#: `package_version_conflict` (`checkers/cells/software_software.py`), so it is raised once.
 DEFAULT_CHECKERS: tuple[Checker, ...] = (
     OpAmpMismatchChecker(),
     SensorFrequencyConflictChecker(),
     PowerCompatibilityChecker(),
-    PinConflictChecker(),
 )
 
 

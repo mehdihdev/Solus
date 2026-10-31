@@ -13,7 +13,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from solus_api.agent.feeds import DbSolSystems
+from solus_api.agent.finding_narration import Narrator
 from solus_api.agent.perf import SemanticCache
+from solus_api.agent.project_card import ProjectCardCache
+from solus_api.agent.research import ResearchCache
 from solus_api.agent.runtime import LlmRunner
 from solus_api.billing.stripe_gateway import StripeGateway
 from solus_api.bridge.allowlist import load_allowlist
@@ -42,6 +45,11 @@ from solus_api.core.startup_checks import report_provider_refs
 from solus_api.corpus import router as corpus_router
 from solus_api.extensions.bom_catalog_setup import prepare_catalog
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
+from solus_api.graph.graph_changed_fanout import (
+    FANOUT_JOB_IDS,
+    GraphChangedFanout,
+    graph_changed_callbacks,
+)
 from solus_api.graph.live import LiveHub
 from solus_api.graph.live_access import StreamLimiter
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
@@ -52,12 +60,16 @@ from solus_api.hardware.connections import HardwareConnections
 from solus_api.hardware.device_watch import DeviceWatcher, watcher_wanted
 from solus_api.livebench.bench_router import BenchEventRing, ObserverEventIn
 from solus_api.livebench.bench_router import router as bench_router
+from solus_api.livebench.findings.envelopes import EnvelopeCache
+from solus_api.livebench.findings.rules import SIGNAL_RULES
+from solus_api.livebench.findings.window_evaluator import WindowEvaluator
 from solus_api.livebench.runs.capture import RunCaptureManager
 from solus_api.livebench.runs.router import router as bench_runs_router
 from solus_api.livebench.scene.router import router as bench_scene_router
 from solus_api.livebench.sessions import SessionManager, load_local
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
+from solus_api.orchestration.gateway import complete, default_orchestration_config
 from solus_api.routers import (
     account_hosted,
     activity,
@@ -104,7 +116,6 @@ from solus_api.routers import (
 )
 from solus_api.routers.users import PANEL_APPROVALS_PER_MINUTE
 from solus_api.services.artifacts import FixedWindowLimiter
-from solus_api.services.budgets import budget_job_id, make_budget_trigger
 from solus_api.services.cad_purge import run_startup_cad_purges
 from solus_api.services.stripe_cancel import run_startup_stripe_cancels
 from solus_api.services.supabase_admin import build_supabase_admin
@@ -236,11 +247,12 @@ _REDIS_CONNECT_TIMEOUT_SECONDS = 5.0
 
 def _enqueue_budgets_job(app: FastAPI) -> Callable[[str, str], Awaitable[Any]]:
     """`enqueue(job_name, project_id)` over the one ARQ pool per process, resolved at call
-    time so a Redis that is down at boot never fails startup."""
+    time so a Redis that is down at boot never fails startup. Each job is queued under its own
+    stable id (`FANOUT_JOB_IDS`, SOLUSDEV-321 R46)."""
 
     async def enqueue(job_name: str, project_id: str) -> None:
         pool = await sources._arq_pool(app)
-        await pool.enqueue_job(job_name, project_id, _job_id=budget_job_id(project_id))
+        await pool.enqueue_job(job_name, project_id, _job_id=FANOUT_JOB_IDS[job_name](project_id))
 
     return enqueue
 
@@ -303,17 +315,25 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # Register before startup so partial startup and body failures also
             # release resources. ExitStack still closes later resources if one fails.
             cleanup.push_async_callback(served.state.graph_hub.stop)
-            # SOLUSDEV-320 resolution 18: every published `graph.changed` re-queues the
-            # project's budgets (by name, when a queue exists) or recomputes them inline.
-            served.state.graph_hub.on_graph_changed = make_budget_trigger(
-                sessionmaker=served.state.sessionmaker,
-                enqueue=(
-                    _enqueue_budgets_job(served)
-                    if resolved_settings.redis_url and not resolved_settings.sync_inline
-                    else None
-                ),
+            # SOLUSDEV-320 resolution 18 / SOLUSDEV-321 P0-T5: every published `graph.changed`
+            # runs the one registration list (graph/graph_changed_fanout.py) — the budgets
+            # re-queue (by name, when a queue exists, else inline) and the project-card drop.
+            served.state.graph_hub.on_graph_changed = GraphChangedFanout(
+                graph_changed_callbacks(
+                    sessionmaker=served.state.sessionmaker,
+                    enqueue=(
+                        _enqueue_budgets_job(served)
+                        if resolved_settings.redis_url and not resolved_settings.sync_inline
+                        else None
+                    ),
+                    store=served.state.integration_store,
+                    # P2-T3: the ONE envelope cache the window evaluators read through
+                    envelopes=served.state.envelope_cache,
+                )
             )
             cleanup.callback(served.state.graph_hub.on_graph_changed.close)
+            # P2-T6: closes after the sessions (LIFO): no evaluator hears a closed narrator.
+            cleanup.push_async_callback(served.state.narrator.aclose)
             cleanup.push_async_callback(served.state.bench_sessions.aclose_all)
             cleanup.push_async_callback(served.state.bench_runs.aclose)
             cleanup.push_async_callback(served.state.hardware_connections.aclose)
@@ -336,11 +356,12 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.engine = resolved_engine
     # SOLUSDEV-68 live verification: `/readyz` reported `redis: configured`
     # while nothing ever assigned this, so `check_frequency_cap` always took its
-    # `redis is None` fail-open branch — turn-admission rate limiting (§7) was
+    # `redis is None` branch, then fail-open — turn-admission rate limiting (§7) was
     # off everywhere and the 429 path was dead code. `from_url` is lazy (no
     # connect at startup) and `redis.asyncio` satisfies the gate's `RedisLike`
-    # protocol; a Redis outage still degrades to the gate's existing uniform
-    # fail-open, so this adds enforcement without adding a failure mode.
+    # protocol; a Redis outage now fails CLOSED on the gate's per-process local
+    # window (SOLUSDEV-321), so this adds fleet-wide enforcement without a new
+    # failure mode.
     app.state.redis = (
         # redis.asyncio ships no stubs for from_url; the gate only needs the
         # five sorted-set commands its RedisLike protocol declares.
@@ -360,6 +381,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.integration_store = (
         RedisCacheStore(app.state.redis) if app.state.redis is not None else InMemoryCacheStore()
     )
+    app.state.project_card_cache = ProjectCardCache(app.state.integration_store)
+    # SOLUSDEV-321 P2-T3: ONE part-envelope cache, the same store: the window evaluators read
+    # through it and the graph-changed fan-out drops it (its log-once state is per instance).
+    app.state.envelope_cache = EnvelopeCache(app.state.integration_store)
+    # SOLUSDEV-321 P1-T5: web research digests, per project and question, for a week — a repeat
+    # ask costs no web call. Same store, same backend choice.
+    app.state.research_cache = ResearchCache(app.state.integration_store)
     if app.state.redis is None:
         logging.getLogger("solus.main").warning(
             "integration cache is per-process (no SOLUS_REDIS_URL): concurrent "
@@ -436,24 +464,52 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # Live Bench (SOLUSDEV-66 LB-05): the LNK-06 plumbing goes live — bounded
     # in-memory buffer + DB entity resolver + per-project observer-event ring.
     # Redis buffer backend is a one-line swap here when multi-process serving needs it.
+    telemetry_buffer = InMemoryTelemetryBuffer()
     app.state.telemetry_plumbing = TelemetryPlumbing(
-        InMemoryTelemetryBuffer(),
+        telemetry_buffer,
         # SOLUSDEV-72: positive-TTL cache — a 50 Hz per-joint stream must not
         # cost one DB query per packet. Negatives are never cached, so a
         # freshly-linked entity attaches on the next packet.
         CachingEntityResolver(DbEntityResolver(app.state.sessionmaker)),
     )
     app.state.bench_events = BenchEventRing()
+    # SOLUSDEV-321 P2-T3b: the window evaluator's CPU budget (`observer:` in models.yaml), once.
+    observer = default_orchestration_config().observer
     # SOLUSDEV-72: bench sessions — the server-side start/stop of local
     # connections. `bench_local` is the OPTIONAL runtime import of
     # livebench.local (never a declared dependency): on a server without
     # livebench it is None and every local source reports honestly unavailable.
     app.state.bench_local = load_local()
+    # SOLUSDEV-321 P2-T6: ONE narrator; each robot session's evaluator hands it what a tick raised,
+    # bound below to the session's owner — who is billed for the one call a flush makes.
+    app.state.narrator = Narrator(
+        complete,
+        app.state.sessionmaker,
+        app.state.secret_store,
+        app.state.redis,
+        getattr(app.state, "enqueue", None),
+    )
     app.state.bench_sessions = SessionManager(
         app.state.telemetry_plumbing,
         observer_factory=getattr(app.state.bench_local, "session_observers", None),
         event_sink=lambda project_id, event: app.state.bench_events.append(
             project_id, ObserverEventIn.model_validate(event)
+        ),
+        # SOLUSDEV-321 P2-T3: a robot session's window evaluator — its own ticker over the parts'
+        # buffered telemetry, raising what the live-signal rules find. Built per session; the
+        # artifact store (assigned below) is read when a session starts, for the baseline run.
+        # P2-T6: its `on_raised` is the narrator bound to the session's owner (none: no owner).
+        evaluator_factory=lambda view: WindowEvaluator(
+            telemetry_buffer,
+            app.state.sessionmaker,
+            app.state.envelope_cache,
+            SIGNAL_RULES,
+            app.state.bench_events,
+            on_raised=app.state.narrator.bound(view),
+            artifacts=app.state.artifact_store,
+            artifact_ttl_seconds=resolved_settings.artifact_ttl_seconds,
+            cpu_budget_ms=observer.cpu_budget_ms,
+            cpu_budget_ms_per_part=observer.cpu_budget_ms_per_part,
         ),
     )
     provider_factory = getattr(app.state.bench_local, "presence_provider", None)
@@ -486,7 +542,13 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.sol_systems = DbSolSystems(
         app.state.sessionmaker,
         app.state.telemetry_plumbing,
-        embed=build_embed_fn(app.state.secret_store, allow_unmetered=True),
+        # SOLUSDEV-321 P0-T6: SOL embeds only with SOLUS_FINGERPRINT_EMBEDDING_ENABLED;
+        # off (the default) retrieval runs full-text only — zero embedding calls a turn.
+        embed=(
+            build_embed_fn(app.state.secret_store, allow_unmetered=True)
+            if resolved_settings.fingerprint_embedding_enabled
+            else None
+        ),
         # SYS-05: TTL'd semantic cache over the retrieval feeds (hit-rate logged).
         cache=SemanticCache(),
     )
@@ -592,9 +654,12 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     app.include_router(isaac_connection.router)
     app.include_router(sol.router)
-    from solus_api.routers import sol_confirmations
+    from solus_api.routers import outcomes, sol_confirmations, usage_turns
 
     app.include_router(sol_confirmations.router)
+    # SOLUSDEV-321 P8: proposal outcomes and the caller's own usage rows, per project.
+    app.include_router(outcomes.router)
+    app.include_router(usage_turns.router)
     from solus_api.livebench.stream import router as bench_stream_router
 
     app.include_router(bench_stream_router)

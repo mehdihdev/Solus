@@ -15,7 +15,8 @@ prompt only inside a nonce fence (`agent/prompt.py`).
 
 from __future__ import annotations
 
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -37,6 +38,22 @@ PREFERENCE_LABELS: Final[dict[str, str]] = {
 }
 FREE_TEXT_LABEL: Final = "Notes"
 
+#: SOLUSDEV-321 P6: a person's level in a domain (`agent/expertise.py`), the shared-types
+#: `ExpertiseLevel`.
+ExpertiseLevel = Literal["novice", "working", "expert"]
+
+
+class ExpertiseOverride(BaseModel):
+    """The person's own level per domain (the twin's `expertise`): each one stated wins over the
+    level Solus inferred for the turn's register. Never stored, never a prompt section."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    control: ExpertiseLevel | None = None
+    electronics: ExpertiseLevel | None = None
+    mechanical: ExpertiseLevel | None = None
+    software: ExpertiseLevel | None = None
+
 
 class EngineeringPreferences(BaseModel):
     """The desktop's copy of `~/.solus/preferences.json`, validated at the boundary."""
@@ -53,6 +70,8 @@ class EngineeringPreferences(BaseModel):
     units_standards: str = Field(
         default="", alias="unitsStandards", max_length=PREFERENCE_FIELD_CAP
     )
+    #: SOLUSDEV-321 P6: the person's own levels, read by the route for the register only.
+    expertise: ExpertiseOverride | None = None
 
     def _sections(self) -> dict[str, str]:
         raw = {name: getattr(self, name).strip() for name in PREFERENCE_LABELS}
@@ -72,3 +91,9 @@ class EngineeringPreferences(BaseModel):
         if sections["free_text"]:
             payload[FREE_TEXT_LABEL] = sections["free_text"]
         return payload
+
+
+def code_style_of(payload: Mapping[str, str] | None) -> str:
+    """The `Code style` section of a turn's labelled preferences (`prompt_payload`), or "": the
+    runner binds it for a tool that writes code (SOLUSDEV-321 P6, R134)."""
+    return (payload or {}).get(PREFERENCE_LABELS["code_style"], "")

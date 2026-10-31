@@ -48,7 +48,14 @@ from solus_api.connectors.contracts import (
     SyncError,
     SyncResult,
 )
+from solus_api.graph import kinds
 from solus_api.graph.inference.manifests import Ecosystem, valid_dependency
+from solus_api.software.ros_reader import (
+    RosPackageSources,
+    RosSourceFile,
+    RosWorkspace,
+    parse_ros_workspace,
+)
 
 PROVIDER: Final = "local"
 CLONE_KEY: Final = "clone:"
@@ -59,6 +66,10 @@ DIGEST_TOOL: Final = "local.folder_digest"
 OPEN_TOOL: Final = "local.open_in_tool"
 
 MACHINE_ID_RE: Final = re.compile(r"^[0-9a-f]{32}$")
+#: The local projection's version, for the WHOLE projection (SOLUSDEV-321 P6, R132): a cursor
+#: written under another one re-syncs once, so a folder synced earlier gets what the projection
+#: lands now (the arduino observations, the ROS packages). Bump it when the projection changes.
+PROJECTION_VERSION: Final = "local-observations-v2"
 MAX_SCAN_FILES: Final = 2000
 MAX_LISTED_CAD_FILES: Final = 100
 MAX_LISTED_TOP_DIRS: Final = 50
@@ -214,6 +225,43 @@ class ScannedArduino(_Wire):
         return values
 
 
+#: SOLUSDEV-321 P6 (R132): the companion's bounded ROS reads. The texts are untrusted data the
+#: cloud parses once (`software/ros_reader.py`); here they are only shape-checked.
+MAX_ROS_PACKAGES: Final = 32
+MAX_ROS_FILES: Final = 32
+MAX_ROS_TEXT_CHARS: Final = 32_768
+ROS_MANIFEST: Final = "package.xml"
+
+
+class RosFileScan(_Wire):
+    """One file of a ROS package the companion read: its path segments and its text."""
+
+    parts: list[str] = Field(min_length=1, max_length=MAX_PATH_PARTS)
+    text: str = Field(max_length=MAX_ROS_TEXT_CHARS)
+
+    _parts = field_validator("parts")(_segments)
+
+    @property
+    def path(self) -> str:
+        return "/".join(self.parts)
+
+
+class RosPackageScan(_Wire):
+    """One ROS package: its `package.xml` and the launch files, `setup.py` and Python modules the
+    companion read under its caps. `incomplete` says a cap or an unreadable file left one out."""
+
+    manifest: RosFileScan
+    files: list[RosFileScan] = Field(default_factory=list, max_length=MAX_ROS_FILES)
+    incomplete: bool = False
+
+    @field_validator("manifest")
+    @classmethod
+    def _is_a_manifest(cls, value: RosFileScan) -> RosFileScan:
+        if value.parts[-1] != ROS_MANIFEST:
+            raise ValueError("a ROS package's manifest is its package.xml")
+        return value
+
+
 class FolderScan(_Wire):
     """`local.scan_folder`'s answer (`docs/api/local-folder.md` §4) — untrusted,
     validated at this boundary. `extra="forbid"` so a companion cannot smuggle
@@ -232,6 +280,9 @@ class FolderScan(_Wire):
     truncated_dependencies: bool = False
     arduino: list[ScannedArduino] = Field(default_factory=list, max_length=128)
     truncated_arduino: bool = False
+    #: SOLUSDEV-321 P6 (R132): None from a companion that predates the ROS read; [] when it read
+    #: the folder and found no package.
+    ros: list[RosPackageScan] | None = Field(default=None, max_length=MAX_ROS_PACKAGES)
 
     @field_validator("tools_installed")
     @classmethod
@@ -457,6 +508,57 @@ def _requirements(scan: FolderScan) -> list[EntityOut]:
     return out
 
 
+def ros_entities(workspace: RosWorkspace) -> list[EntityOut]:
+    """A ROS workspace's nodes and topics as entities (SOLUSDEV-321 P6). Each node carries what
+    it publishes and subscribes, the launch line that starts it and each declaring call, which
+    `graph/inference/ros_edges.py` joins into edges; the code hosts land the same shapes
+    (`connectors/code_content.py`)."""
+    nodes = [
+        EntityOut(
+            source_key=f"ros_node:{node.name}",
+            type=kinds.ROS_NODE,
+            domain=Domain.CODE,
+            name=node.name,
+            properties={
+                "package": node.package,
+                "executable": node.executable,
+                "publishes": list(node.publishes),
+                "subscribes": list(node.subscribes),
+                "launched_at": workspace.launched_at.get(node.name),
+                "declared_at": {
+                    topic: ref
+                    for (name, topic), ref in workspace.declared_at.items()
+                    if name == node.name
+                },
+            },
+        )
+        for node in workspace.nodes
+    ]
+    topics = [
+        EntityOut(
+            source_key=f"ros_topic:{topic.name}",
+            type=kinds.ROS_TOPIC,
+            domain=Domain.CODE,
+            name=topic.name,
+            properties={"type": topic.type},
+        )
+        for topic in workspace.topics
+    ]
+    return [*nodes, *topics]
+
+
+def _ros_graph(scan: FolderScan) -> list[EntityOut]:
+    """The scan's ROS packages through the one reader; nothing when the companion read none."""
+    packages = [
+        RosPackageSources(
+            RosSourceFile(package.manifest.path, package.manifest.text),
+            tuple(RosSourceFile(item.path, item.text) for item in package.files),
+        )
+        for package in scan.ros or []
+    ]
+    return ros_entities(parse_ros_workspace(packages)) if packages else []
+
+
 def _root_entity(scan: FolderScan, remote: RemoteRef | None, machine_name: str) -> EntityOut:
     git = scan.git
     return EntityOut(
@@ -538,10 +640,11 @@ def derive_local_graph(
                 or any(record["incomplete"] for record in observations)
             )
     requirements = _requirements(scan)
-    entities = [root, *(entity for entity, _ in projects), *requirements]
+    ros = _ros_graph(scan)
+    entities = [root, *(entity for entity, _ in projects), *requirements, *ros]
     relations = [
         RelationOut(from_key=CLONE_KEY, to_key=entity.source_key, type=CONTAINS)
-        for entity, _ in projects
+        for entity in [*(entity for entity, _ in projects), *ros]
     ] + [RelationOut(from_key=CLONE_KEY, to_key=r.source_key, type=REQUIRES) for r in requirements]
     open_paths = {CLONE_KEY: ".", **{entity.source_key: path for entity, path in projects}}
     return LocalGraph(
@@ -609,7 +712,7 @@ class LocalFolderConnector(Connector):
             raise ConnectorError("api_unreachable", NO_SIGNAL_MESSAGE)
         return (
             digest != ctx.cursor.get("digest")
-            or ctx.cursor.get("projection_version") != "arduino-observations-v1"
+            or ctx.cursor.get("projection_version") != PROJECTION_VERSION
         )
 
     async def sync(self, ctx: SyncContext) -> SyncResult:
@@ -649,7 +752,7 @@ class LocalFolderConnector(Connector):
                 )
             )
         cursor: dict[str, Any] = {
-            "projection_version": "arduino-observations-v1",
+            "projection_version": PROJECTION_VERSION,
             "digest": scan.digest,
             "remote": graph.remote.repo if graph.remote else None,
             "host": graph.remote.host if graph.remote else None,

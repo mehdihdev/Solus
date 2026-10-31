@@ -137,6 +137,7 @@ async def _run(
         redis=redis,
         enqueue=enqueue,
         max_tokens=MAX_TOKENS,
+        purpose="answer",
     )
     candidates = parse_candidates(completion.text)
     if not candidates:

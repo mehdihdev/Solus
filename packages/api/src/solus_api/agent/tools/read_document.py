@@ -61,7 +61,7 @@ SOURCE_TOOL: Final = "read_document"
 #: 12 vision calls, each bounded by the gateway's own timeout — well above the 30 s default.
 READ_TIMEOUT_SECONDS: Final = 300.0
 DEFAULT_ARTIFACT_TTL_SECONDS: Final = 3600
-_PAGES_SCHEMA: Final[dict[str, Any]] = {
+PAGES_SCHEMA: Final[dict[str, Any]] = {
     "type": ["array", "null"],
     "items": {"type": "integer", "minimum": 1},
     "maxItems": MAX_PAGES_PER_CALL,
@@ -101,7 +101,7 @@ READ_DOCUMENT_DESCRIPTOR = ToolDescriptor(
                 },
                 "additionalProperties": False,
             },
-            "pages": _PAGES_SCHEMA,
+            "pages": PAGES_SCHEMA,
             "question": {"type": ["string", "null"], "maxLength": MAX_QUESTION_CHARS},
         },
         "required": ["source"],
@@ -287,6 +287,65 @@ def _parse_uuid(raw: object) -> uuid.UUID:
         raise _invalid("artifact_id must be a UUID") from None
 
 
+async def read_artifact(
+    session: AsyncSession,
+    store: ArtifactStore,
+    *,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    artifact_id: uuid.UUID,
+    ttl_seconds: int,
+) -> tuple[uuid.UUID, bytes]:
+    """A stored PDF of this project with its bytes capped (`fetch_artifact_bytes`, which is
+    non-destructive). An unknown or foreign one is `not_found`. Shared with `extract_rulebook`
+    (SOLUSDEV-321 P3-T4)."""
+    try:
+        artifact, data = await fetch_artifact_bytes(
+            session,
+            store,
+            project_id=project_id,
+            artifact_id=artifact_id,
+            requester_id=user_id,
+            ttl_seconds=ttl_seconds,
+            max_bytes=MAX_PDF_BYTES,
+        )
+    except APIError as exc:
+        code = ToolErrorCode.NOT_FOUND if exc.status_code == 404 else ToolErrorCode.TOOL_ERROR
+        raise ToolException(exc.message, code=code) from None
+    return artifact.id, data
+
+
+async def read_pages(
+    data: bytes,
+    *,
+    pages: Sequence[int] | None,
+    question: str | None,
+    secret_store: SecretStore,
+    user_id: uuid.UUID,
+    session: AsyncSession,
+    redis: Any,
+    enqueue: Any,
+) -> tuple[Rendered, list[DocumentProposal], list[str]]:
+    """The extractor `read_document` runs, shared with `extract_rulebook` (SOLUSDEV-321 P3-T4, R58).
+    The selected pages are rendered (at most 12), then one metered vision call a page
+    (`purpose="extract"`, the requester's identity) turns each into page-cited proposals. A
+    document that does not render is `invalid_args`."""
+    try:
+        rendered: Rendered = await asyncio.to_thread(render_pages, data, pages=pages)
+    except DocumentError as exc:
+        raise _invalid(f"could not read the document: {exc}") from None
+    proposals, notes = await extract_pages(
+        rendered.pages,
+        question=question,
+        secret_store=secret_store,
+        user_id=user_id,
+        session=session,
+        redis=redis,
+        enqueue=enqueue,
+    )
+    return rendered, proposals, notes
+
+
 class _DocumentTools:
     """Both tools bound to ONE project and the requesting user by Solus code."""
 
@@ -334,32 +393,24 @@ class _DocumentTools:
             )
             await session.commit()
             return artifact.id, data, str(url)
-        try:
-            artifact, data = await fetch_artifact_bytes(
-                session,
-                self._store,
-                project_id=self._project_id,
-                artifact_id=_parse_uuid(artifact_id),
-                requester_id=self._user_id,
-                ttl_seconds=self._ttl,
-                max_bytes=MAX_PDF_BYTES,
-            )
-        except APIError as exc:
-            code = ToolErrorCode.NOT_FOUND if exc.status_code == 404 else ToolErrorCode.TOOL_ERROR
-            raise ToolException(exc.message, code=code) from None
-        return artifact.id, data, None
+        stored, data = await read_artifact(
+            session,
+            self._store,
+            project_id=self._project_id,
+            user_id=self._user_id,
+            artifact_id=_parse_uuid(artifact_id),
+            ttl_seconds=self._ttl,
+        )
+        return stored, data, None
 
     async def read_document(self, args: dict[str, Any]) -> dict[str, Any]:
         pages: Sequence[int] | None = args.get("pages")
         question: str | None = args.get("question")
         async with self._sessions() as session:
             artifact_id, data, url = await self._load(session, args["source"])
-            try:
-                rendered: Rendered = await asyncio.to_thread(render_pages, data, pages=pages)
-            except DocumentError as exc:
-                raise _invalid(f"could not read the document: {exc}") from None
-            proposals, notes = await extract_pages(
-                rendered.pages,
+            rendered, proposals, notes = await read_pages(
+                data,
+                pages=pages,
                 question=question,
                 secret_store=self._secret_store,
                 user_id=self._user_id,

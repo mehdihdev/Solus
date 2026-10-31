@@ -53,6 +53,13 @@ BENCH_RUN: Final[str] = "bench_run"
 BENCH_SCENE_MODEL: Final[str] = "bench_scene_model"
 BENCH_SCENE_CAD_IMPORT: Final[str] = "bench_scene_cad_import"
 SIMULATION_MODEL: Final[str] = "simulation_model"
+#: What one simulation run found about one subject (SOLUSDEV-321 P4-T1, `simulation/sim_facts.py`).
+SIM_RESULT: Final[str] = "sim_result"
+
+# software (SOLUSDEV-321 P6, `software/ros_reader.py`): a ROS workspace's launched nodes and the
+# topics their modules declare; `graph/inference/ros_edges.py` joins them.
+ROS_NODE: Final[str] = "ros_node"
+ROS_TOPIC: Final[str] = "ros_topic"
 
 # workspace layer
 WORKSPACE: Final[str] = "solus:workspace"
@@ -64,6 +71,19 @@ SOURCING_RULES: Final[str] = "sourcing_rules"
 FINDING: Final[str] = "finding"
 MACHINE: Final[str] = "machine"
 MEMBER: Final[str] = "member"
+
+#: Nodes that describe another entity and carry its name (`Hardware config — servo 3`, a sim
+#: result's `stress_mpa — bracket`). They are context for that entity, never a second candidate
+#: for its name (SOLUSDEV-321).
+DESCRIPTOR_KINDS: Final[frozenset[str]] = frozenset(
+    {
+        HARDWARE_CONFIG,
+        HARDWARE_EVIDENCE,
+        HARDWARE_PRESENCE_PLAN,
+        HARDWARE_WIRING_PROPOSAL,
+        SIM_RESULT,
+    }
+)
 
 ALL_KINDS: Final[frozenset[str]] = frozenset(
     value

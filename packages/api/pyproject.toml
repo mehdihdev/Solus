@@ -32,6 +32,13 @@ dependencies = [
     "sentry-sdk>=2.0",
     "packaging>=26.2",
     "pypdfium2==5.13.0",
+    "pint>=0.26.2",
+    # The rung-1 simulation providers (simulation/providers/) are closed-form numpy code.
+    "numpy>=2.0",
+    # SOLUSDEV-321 P5: the perception annotator draws the graph's labels onto a checked render
+    # (agent/vision/render_annotate.py). Decoding happens only after the image gate. Below 13: 13.0
+    # was two weeks old when this landed; lift the cap once it has settled.
+    "pillow>=12.3,<13",
 ]
 
 [project.scripts]

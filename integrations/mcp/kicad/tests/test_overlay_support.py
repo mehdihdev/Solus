@@ -77,7 +77,7 @@ def install_import_environment() -> None:
             sys.modules["mcp.server.fastmcp"]
         )
     try:
-        import fastmcp  # type: ignore[import-not-found]  # noqa: F401
+        import fastmcp  # noqa: F401
     except ImportError:
         _install_stub("fastmcp", FastMCP=_StubFastMCP)
     try:

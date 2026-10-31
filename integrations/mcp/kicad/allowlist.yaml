@@ -58,6 +58,20 @@ tools:
   - name: export_netlist
     requires_confirmation: false
     reason: non-destructive kicadxml export confined to the workspace (metadata-extraction.md section 2.1 invariant 5)
+  # SOLUSDEV-321 P4-T3: flagged for ratification
+  - name: export_spice_netlist
+    requires_confirmation: false
+    reason: non-destructive SPICE netlist export through the pinned kicad-cli with a fixed argv, read from the workspace-confined snapshot and returned inline as data (at most 256 KiB, nothing written) for rung-3 circuit simulation; widens this allowlist, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)
+  # SOLUSDEV-321 P5: flagged for ratification (returns_image: the cloud consumes the export's one
+  # uploaded artifact, checks its bytes and never offers the tool to the model directly)
+  - name: export_schematic_pdf
+    requires_confirmation: false
+    returns_image: true
+    reason: non-destructive PDF export of the schematic through the pinned kicad-cli with a fixed argv, read from the workspace-confined snapshot and published as this call's one artifact (at most 2 MiB; the design is never written) for SOL's render of a sheet, whose bytes the cloud checks before rasterising the first page; widens this allowlist, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)
+  - name: export_board_pdf
+    requires_confirmation: false
+    returns_image: true
+    reason: non-destructive PDF export of the board (copper, silkscreen, outline) through the pinned kicad-cli with a fixed argv, read from a no-follow, workspace-confined snapshot and published as this call's one artifact (at most 2 MiB; the design is never written) for SOL's render of the board, whose bytes the cloud checks before rasterising the first page; widens this allowlist, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)
   - name: set_symbol_property
     requires_confirmation: true
     reason: mutates a design file on the customer machine (T2b write tool; implemented and registered via solus/registration.py since 0785fa8 — splice guard, workspace confinement, atomic replace)

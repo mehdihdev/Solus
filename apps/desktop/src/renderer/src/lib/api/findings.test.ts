@@ -1,7 +1,13 @@
 // SOLUSDEV-320 P4-T3 — findings client against docs/api/findings.md §3.
 import { describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from './client'
-import { acknowledgeFinding, dismissFinding, listFindings, resolveFinding } from './findings'
+import {
+  acknowledgeFinding,
+  dismissFinding,
+  getFinding,
+  listFindings,
+  resolveFinding
+} from './findings'
 
 function client(): ApiClient {
   return { request: vi.fn(), requestPage: vi.fn() }
@@ -33,6 +39,13 @@ describe('findings client', () => {
       meta: { has_next: true, next_cursor: 'same' }
     })
     await expect(listFindings('p1', {}, api)).rejects.toThrow(/cursor/i)
+  })
+
+  it('reads one finding from its own route (subjects named)', async () => {
+    const api = client()
+    vi.mocked(api.request).mockResolvedValue({ id: 'f1', subject_entities: [] })
+    expect(await getFinding('p1', 'f1', api)).toEqual({ id: 'f1', subject_entities: [] })
+    expect(api.request).toHaveBeenCalledExactlyOnceWith('/projects/p1/findings/f1')
   })
 
   it('posts resolve, dismiss and acknowledge to the finding routes', async () => {

@@ -1,0 +1,11 @@
+.title KiCad schematic
+.include "/usr/share/kicad/simulation/models/diode.lib"
+.tran 10u 20m
+* a 12 V battery through a 0.1 ohm sense resistor and 0.05 ohm of harness into the motor terminals,
+* a freewheeling diode and a 100 nF snubber across them; the motor itself is Solus's own cards
+V1 /VBAT 0 DC 12
+R1 /VBAT /VSENSE 0.1
+R2 /VSENSE /M+ 0.05
+D1 0 /M+ d_generic
+C1 /M+ 0 100n
+.end

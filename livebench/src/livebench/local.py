@@ -51,6 +51,7 @@ from livebench.telemetry.stream_live import PacketStreamLiveConnection
 
 if TYPE_CHECKING:
     from livebench.hardware.connection import RobotConnection
+    from livebench.hardware.replay import Recording
 
 __all__ = [
     "AmbiguousDeviceError",
@@ -61,6 +62,7 @@ __all__ = [
     "open_mujoco",
     "open_gazebo",
     "open_mcap",
+    "open_replay",
     "open_robot",
     "open_serial",
     "detect_devices",
@@ -337,6 +339,68 @@ async def open_serial(
         return SerialRobotConnection.open(device, baud, project_id=project_id)
 
     return await asyncio.to_thread(_open)
+
+
+def _read_unmoved(path: Path, max_bytes: int | None) -> "Recording | None":
+    """The capture at `path`, read off-loop and at most `max_bytes` long; None when `path` is no
+    longer its own `resolve()`. The API hands it over resolved, so a symlink there now is a swap,
+    and so is a symlink loop, whose error would name the server's path: only its type is logged."""
+    from livebench.hardware.replay import load_recording
+
+    try:
+        moved = path.resolve() != path
+    except (OSError, RuntimeError) as exc:
+        logger.warning("replay recording could not be re-checked: %s", type(exc).__name__)
+        moved = True
+    return None if moved else load_recording(path, max_bytes=max_bytes)
+
+
+async def open_replay(config: Mapping[str, Any], *, project_id: UUID) -> "RobotConnection":
+    """DEV ONLY (SOLUSDEV-321 P2-T4): a recorded capture opened as a configured robot, so the
+    pane and the window evaluator can be driven with no hardware. `config` carries the robot's
+    HardwareConfig as `document` (its protocol the driver the capture is decoded with), the
+    capture's `recording` path (the API has confined it and hands over the resolved one), the
+    `max_bytes` it checked the file against (the read is bounded by it too) and `realtime`
+    (pace the frames by their recorded times; the default).
+
+    The capture opens through the SAME transport → driver → part-routing path as a live robot;
+    only the transport differs. It is registered, for this one connection, on a scratch registry
+    (never the process-wide one) and the link does not reconnect: a replay is not restarted.
+    A capture of another device than the robot's is refused — the robot's parts would be fed by
+    a stranger's frames, or by none — and what the file says, and where it is, is never echoed
+    or logged: a refusal logs the exception's type only."""
+    from livebench.hardware import registries as hardware_registries
+    from livebench.hardware.channel import TransportRegistry
+    from livebench.hardware.connection import open_robot_connection
+    from livebench.hardware.replay import replay_opener
+
+    document = HardwareConfig.model_validate(config["document"])
+    path = Path(config["recording"])
+    try:
+        recording = await asyncio.to_thread(_read_unmoved, path, config.get("max_bytes"))
+    except (OSError, LookupError, TypeError, ValueError, RecursionError) as exc:  # M75: deep nest
+        logger.warning("replay recording unreadable: %s", type(exc).__name__)
+        raise ValueError("the recording could not be read") from None
+    if recording is None:
+        raise ValueError("the recording moved after it was checked")
+    identity = recording.identity
+    if document.identity is None or (identity.kind, identity.binding) != (
+        document.identity.kind,
+        document.identity.binding,
+    ):
+        raise ValueError("the recording was captured from another device than this robot's")
+    transports = TransportRegistry()
+    transports.register(
+        identity.kind, replay_opener(recording, realtime=bool(config.get("realtime", True)))
+    )
+    return await asyncio.to_thread(
+        open_robot_connection,
+        document,
+        project_id=project_id,
+        transports=transports,
+        drivers=hardware_registries.default_registries().drivers,
+        reconnect=False,
+    )
 
 
 def _detected_wire(device: Any) -> dict[str, Any]:

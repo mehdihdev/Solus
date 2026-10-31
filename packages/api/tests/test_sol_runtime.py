@@ -268,7 +268,13 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
     }
     # These owned wrappers invoke only their privately scoped native capabilities;
     # they are not allowed to invoke the public registry or expose raw fallbacks.
-    adapters = {"agent/tools/isaac_tools.py", "agent/tools/machine_writes.py"}
+    # SOLUSDEV-321 P6 (R131): `ros_live.py`'s wrapper is the registered tool itself and invokes
+    # only the one unconfirmed bridge read it wraps, inside the dispatch the gate already made.
+    adapters = {
+        "agent/tools/isaac_tools.py",
+        "agent/tools/machine_writes.py",
+        "agent/tools/ros_live.py",
+    }
 
     offenders = [
         f"{path.relative_to(root)}:{match}"
@@ -368,6 +374,11 @@ async def test_the_s5_write_and_document_tools_register_with_their_dependencies(
         secret_store=InMemorySecretStore(),
     )
     assert {"read_document", "propose_part_definition"} <= set(_tool_names(full))
+    # SOLUSDEV-321 P3-T4 (R58): `extract_rulebook` reads a filed PDF through the same metered
+    # extractor, so it needs both stores; it writes nothing, so it is ungated.
+    assert "extract_rulebook" in _tool_names(full)
+    assert "extract_rulebook" not in with_store and "extract_rulebook" not in without_store
+    assert not next(d for d in full.list() if d.name == "extract_rulebook").requires_confirmation
     # Every write tool stays gated: the registry is a pure dispatcher, so the
     # descriptor flag is what the park-and-approve gate reads.
     gated = {d.name for d in full.list() if d.requires_confirmation}
@@ -377,6 +388,183 @@ async def test_the_s5_write_and_document_tools_register_with_their_dependencies(
         "set_hardware_config_field",
         "propose_part_definition",
     } <= gated
+    # SOLUSDEV-321 P3-T4: `label_motifs` meters a model call, so it needs the user and the
+    # secret store (not the artifact store); it only labels candidates, so it is ungated.
+    assert "label_motifs" not in with_store
+    secret_only = build_sol_registry(
+        _factory(engine), project_id, user_id=user_id, secret_store=InMemorySecretStore()
+    )
+    assert "label_motifs" in _tool_names(secret_only) and "label_motifs" not in gated
+
+
+async def test_render_view_registers_only_with_a_person_and_both_stores(
+    db: AsyncSession, engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """SOLUSDEV-321 P5 (D10): `render_view` reads as the person (the secret store meters its one
+    vision call, the team finds their companion) and draws from and into the artifact store.
+    Missing any of them, it is absent. It is ungated: it draws, reads and files an info finding."""
+    from solus_api.connectors.secrets import InMemorySecretStore
+    from solus_api.storage import LocalArtifactStore
+
+    project_id, _ = await _seed_entity(db)
+    store, secrets = LocalArtifactStore(str(tmp_path)), InMemorySecretStore()
+    person: dict[str, Any] = {"user_id": uuid.uuid4(), "team_id": uuid.uuid4()}
+    partial: list[dict[str, Any]] = [
+        {},
+        {**person, "secret_store": secrets},
+        {**person, "artifact_store": store},
+        {"user_id": person["user_id"], "secret_store": secrets, "artifact_store": store},
+    ]
+    for kwargs in partial:
+        registry = build_sol_registry(_factory(engine), project_id, **kwargs)
+        assert "render_view" not in _tool_names(registry)
+    full = build_sol_registry(
+        _factory(engine), project_id, **person, secret_store=secrets, artifact_store=store
+    )
+    (descriptor,) = [d for d in full.list() if d.name == "render_view"]
+    assert not descriptor.requires_confirmation
+
+
+async def test_a_model_proposed_call_runs_under_the_turns_id(engine: AsyncEngine) -> None:
+    """R75: `LlmRunner.run` binds this turn's id around each call the model proposes, so a tool
+    whose own model call needs the turn (label_motifs) reads it. Outside the call, none is bound."""
+    from solus_api.agent.runtime import LlmRunner
+    from solus_api.agent.tools import InProcessTool, ToolDescriptor
+    from solus_api.agent.turn_context import current_turn_id
+    from solus_api.connectors.secrets import InMemorySecretStore
+    from solus_api.orchestration.providers import ToolUse, Usage
+    from test_sol_reasoner import _funded_user
+
+    seen: list[uuid.UUID | None] = []
+
+    async def probe(args: dict[str, Any]) -> dict[str, Any]:
+        seen.append(current_turn_id())
+        return {}
+
+    class _ProposesTheProbe:
+        """Round 1 proposes the probe; round 2 answers."""
+
+        def __init__(self) -> None:
+            self.rounds = 0
+
+        async def stream(self, model_name: str, query: str, **kw: Any) -> Any:
+            self.rounds += kw.get("conversation") is not None
+            if kw.get("conversation") is not None and self.rounds == 1:
+                yield ToolUse(id="tu_probe", name="probe_turn", args={})
+            else:
+                yield "done"
+            yield Usage(tokens_in=5, tokens_out=2)
+
+    descriptor = ToolDescriptor(
+        name="probe_turn",
+        description="Probe which turn a call runs in.",
+        params={"type": "object", "properties": {}, "additionalProperties": False},
+        returns={"type": "object"},
+    )
+    registry = ToolRegistry()
+    registry.register(InProcessTool(descriptor, probe))
+    maker = _factory(engine)
+    ctx = AgentRunContext(
+        prompt="which turn is this?",
+        tools=tuple(registry.list()),
+        dispatch=build_dispatch(registry, None),
+        systems=FakeSolSystems(),
+        project_id=uuid.uuid4(),
+        user_id=await _funded_user(maker),
+        sessionmaker=maker,
+        secret_store=InMemorySecretStore(),
+    )
+    model = _ProposesTheProbe()
+    adapters = {name: model for name in ("anthropic", "openai", "google")}
+
+    [event async for event in LlmRunner(adapters=adapters).run(ctx)]
+
+    assert seen == [ctx.turn_id] and current_turn_id() is None
+
+
+async def test_a_model_proposed_call_runs_with_the_turns_perception(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-321 P5 (R125): beside the turn's id, `LlmRunner.run` binds the turn's perception
+    around each call the model proposes. It carries the turn's OWN budget, so a tool's model call
+    counts against `max_model_calls`, and for a question that is neither about connectivity nor a
+    count it refuses no render. It carries the person's `Code style` preference too (P6, R134),
+    and the turn's expertise sets the register line its system prompt carries (P6). Outside the
+    call nothing is bound."""
+    from solus_api.agent import runtime
+    from solus_api.agent.expertise import Expertise
+    from solus_api.agent.runtime import LlmRunner
+    from solus_api.agent.tools import InProcessTool, ToolDescriptor
+    from solus_api.agent.turn_budget import TurnBudget
+    from solus_api.agent.turn_context import PerceptionTurn, current_perception
+    from solus_api.connectors.secrets import InMemorySecretStore
+    from solus_api.orchestration.providers import ToolUse, Usage
+    from test_sol_reasoner import _funded_user
+
+    budgets: list[TurnBudget] = []
+
+    class _Recorded(TurnBudget):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            budgets.append(self)
+
+    monkeypatch.setattr(runtime, "TurnBudget", _Recorded)
+    seen: list[tuple[PerceptionTurn | None, int]] = []
+
+    async def probe(args: dict[str, Any]) -> dict[str, Any]:
+        turn = current_perception()
+        seen.append((turn, turn.budget.model_calls if turn is not None else -1))
+        return {}
+
+    class _ProposesTheProbe:
+        def __init__(self) -> None:
+            self.rounds = 0
+            self.systems: list[str] = []
+
+        async def stream(self, model_name: str, query: str, **kw: Any) -> Any:
+            self.rounds += kw.get("conversation") is not None
+            if kw.get("conversation") is not None:
+                self.systems.append(kw["conversation"].system)
+            if kw.get("conversation") is not None and self.rounds == 1:
+                yield ToolUse(id="tu_probe", name="probe_perception", args={})
+            else:
+                yield "done"
+            yield Usage(tokens_in=5, tokens_out=2)
+
+    descriptor = ToolDescriptor(
+        name="probe_perception",
+        description="Probe the perception a call runs with.",
+        params={"type": "object", "properties": {}, "additionalProperties": False},
+        returns={"type": "object"},
+    )
+    registry = ToolRegistry()
+    registry.register(InProcessTool(descriptor, probe))
+    maker = _factory(engine)
+    ctx = AgentRunContext(
+        prompt="what does the bracket look like?",
+        tools=tuple(registry.list()),
+        dispatch=build_dispatch(registry, None),
+        systems=FakeSolSystems(),
+        project_id=uuid.uuid4(),
+        user_id=await _funded_user(maker),
+        sessionmaker=maker,
+        secret_store=InMemorySecretStore(),
+        engineering_preferences={"Code style": "two-space indent", "Mechanical": "metric"},
+        expertise=Expertise(electronics="novice"),
+    )
+    model = _ProposesTheProbe()
+    adapters = {name: model for name in ("anthropic", "openai", "google")}
+
+    [event async for event in LlmRunner(adapters=adapters).run(ctx)]
+
+    (budget,) = budgets
+    ((turn, calls_then),) = seen
+    assert turn is not None and turn.budget is budget and turn.renders_refused is None
+    assert turn.code_style == "two-space indent"
+    line = "By domain: explain fundamentals and define terms in electronics (novice)."
+    assert model.systems and all(line in system for system in model.systems)
+    assert calls_then == 1  # round 1's own call, noted before the probe ran
+    assert current_perception() is None
 
 
 # ------------------------------- P6 research wiring (security review MEDIUM)
@@ -569,6 +757,24 @@ async def test_isaac_registry_exposes_only_owned_graph_schema(engine: AsyncEngin
         assert requires_complete_preview(f"isaac.{name}")
 
 
+async def test_a_tool_that_returns_an_image_is_never_model_visible(engine: AsyncEngine) -> None:
+    """SOLUSDEV-321 P5 (D2, R125): a `returns_image` export is reached only through `render_view`,
+    which consumes and checks its one artifact. The model never calls it for a bare reference."""
+    from dataclasses import replace
+
+    flagged = replace(_machine_spec("export_sheet"), returns_image=True)
+    bridge, scope = _bridge_with(flagged, _machine_spec("list_files"))
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        scope[2],
+        bridge=bridge,
+        user_id=scope[0],
+        team_id=scope[1],
+    )
+    names = _names(registry)
+    assert "code.list_files" in names and "code.export_sheet" not in names
+
+
 async def test_link_environment_appears_only_with_the_machine_read_on_the_bridge(
     app: FastAPI, engine: AsyncEngine
 ) -> None:
@@ -620,3 +826,238 @@ async def test_a_gated_tool_can_never_become_the_environments_read(
         artifact_store=app.state.artifact_store,
     )
     assert "link_environment" not in _names(registry)
+
+
+async def test_the_live_ros_reads_register_wrapped_only_while_unconfirmed(
+    engine: AsyncEngine,
+) -> None:
+    """SOLUSDEV-321 P6 (R131): one call in `_register_bridge_tools` wraps the two live ROS reads,
+    so their answers also raise the edges they name; a gated tool of the same name, or any other
+    bridge tool, registers exactly as before."""
+    from solus_api.agent.tools.ros_live import LiveGraphTool
+    from solus_api.bridge.tool import BridgeTool
+
+    def registered(*specs: Any) -> dict[str, Any]:
+        bridge, scope = _bridge_with(*specs)
+        registry = build_sol_registry(
+            async_sessionmaker(engine, expire_on_commit=False),
+            scope[2],
+            bridge=bridge,
+            user_id=scope[0],
+            team_id=scope[1],
+        )
+        return {tool.descriptor.name: tool for tool in registry.tools()}
+
+    live = registered(
+        _machine_spec("ros2_nodes"), _machine_spec("ros2_topics"), _machine_spec("list_files")
+    )
+    assert type(live["code.ros2_nodes"]) is LiveGraphTool
+    assert type(live["code.ros2_topics"]) is LiveGraphTool
+    assert type(live["code.list_files"]) is BridgeTool
+    gated = registered(_machine_spec("ros2_nodes", gated=True))
+    assert type(gated["code.ros2_nodes"]) is BridgeTool
+
+
+async def test_the_firmware_recipe_registers_only_beside_the_owned_write(
+    engine: AsyncEngine,
+) -> None:
+    """SOLUSDEV-321 P6 (R134): `firmware_recipe` reads the current file through the owned
+    `machine.write_file`, so it is absent without that tool on the person's bridge, and without
+    the person, their team and the secret store its call is metered through."""
+    from dataclasses import replace
+
+    from solus_api.connectors.secrets import InMemorySecretStore
+
+    def names(*specs: Any, secret_store: Any = None) -> set[str]:
+        bridge, scope = _bridge_with(*specs)
+        registry = build_sol_registry(
+            async_sessionmaker(engine, expire_on_commit=False),
+            scope[2],
+            bridge=bridge,
+            user_id=scope[0],
+            team_id=scope[1],
+            secret_store=secret_store,
+        )
+        return _names(registry)
+
+    store = InMemorySecretStore()
+    write = _machine_spec("write_file", gated=True)
+    machine_write = write.descriptor.model_copy(update={"name": "machine.write_file"})
+    machine = replace(write, server="machine", remote_name="write_file", descriptor=machine_write)
+    assert "firmware_recipe" in names(machine, secret_store=store)
+    assert "firmware_recipe" not in names(machine)
+    assert "firmware_recipe" not in names(_machine_spec("list_files"), secret_store=store)
+
+
+# ------------------------------------------------------------ the scope planner (P1-T1)
+
+
+async def test_runner_plans_scope_once_and_feeds_context_first_tier_and_research(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-321 P1-T1: the runner plans ONE scope per turn, before any prompt, and the
+    context packs that scope's graph — the planner's pull is the turn's only graph pull. The
+    manifest's anchors are the scope's anchors. P1-T2: the first tier reads that same scope
+    before anything is packed, and a question it does not answer goes on to the model. (P1-T5
+    adds research gating.)"""
+    from dataclasses import replace
+
+    from solus_api.agent import runtime, turn_scope
+    from solus_api.agent.context import build_context
+    from solus_api.agent.deterministic import answer_first_tier
+    from solus_api.agent.deterministic_facts import GraphFactSources
+    from solus_api.agent.interfaces import ContextBudget, GraphContext, GraphScope
+    from test_sol_reasoner import _ctx, _run, _ScriptedModel
+
+    order: list[str] = []
+    asked: list[tuple[str, Any]] = []
+
+    async def consulted(message: str, scope: Any, facts: Any, **kwargs: Any) -> Any:
+        order.append("first tier")
+        asked.append((message, scope))
+        return await answer_first_tier(message, scope, facts, **kwargs)
+
+    monkeypatch.setattr(runtime, "answer_first_tier", consulted)
+
+    pulls: list[GraphScope] = []
+
+    class _CountingSystems(FakeSolSystems):
+        async def get_graph_context(
+            self, project_id: uuid.UUID, scope: GraphScope, budget: ContextBudget | None = None
+        ) -> GraphContext:
+            pulls.append(scope)
+            return await super().get_graph_context(project_id, scope, budget)
+
+    plans: list[Any] = []
+    plan = turn_scope.plan_scope
+
+    async def planned(*args: Any, **kwargs: Any) -> Any:
+        scope = await plan(*args, **kwargs)
+        plans.append(scope)
+        return scope
+
+    monkeypatch.setattr(turn_scope, "plan_scope", planned)
+    packs: list[tuple[dict[str, Any], Any]] = []
+
+    async def packed(*args: Any, **kwargs: Any) -> Any:
+        order.append("pack")
+        context = await build_context(*args, **kwargs)
+        packs.append((kwargs, context))
+        return context
+
+    monkeypatch.setattr(runtime, "build_context", packed)
+    anchor = uuid.uuid4()
+    ctx = await _ctx(engine, "why does it overheat?", mentions=(anchor,))
+    assert ctx.sessionmaker is not None and ctx.user_id is not None
+    facts = GraphFactSources(ctx.sessionmaker, ctx.project_id, ctx.user_id)
+
+    events = await _run(_ScriptedModel(), replace(ctx, systems=_CountingSystems(), facts=facts))
+
+    (scope,) = plans
+    # The first tier read the planned scope before any packing, and declined — "why does it
+    # overheat?" is no lookup — so the model answered.
+    assert asked == [("why does it overheat?", scope)] and order == ["first tier", "pack"]
+    assert AgentEventType.ANSWER_SOURCE not in _types(events)
+    assert events[-1].type is AgentEventType.MESSAGE
+    assert len(pulls) == 1  # the planner's pull; build_context makes none of its own
+    ((kwargs, context),) = packs
+    assert kwargs["graph"] is scope.graph
+    (section,) = context.layers.graph.sections
+    assert scope.graph.entities
+    assert all(str(entity.id) in section.text for entity in scope.graph.entities)
+    manifest = next(e for e in events if e.type is AgentEventType.CONTEXT_USED)
+    assert manifest.data["anchors"] == [
+        {"id": str(a.id), "reason": a.reason} for a in scope.anchors
+    ]
+    assert manifest.data["anchors"] == [{"id": str(anchor), "reason": "mentioned"}]
+
+
+async def test_a_hard_tie_goes_to_the_requesters_model_once(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-321 P1-T1 R6: on a HARD turn, two entities tied for one name are put to the
+    requester's model ONCE — purpose `planner`, metered with the turn's id, the candidates fenced
+    as data — and the offered id it names is the one anchored."""
+    from dataclasses import replace
+
+    from solus_api.agent import runtime
+    from solus_api.agent.reason import UUID_RE
+    from solus_api.agent.runtime import LlmRunner
+    from solus_api.agent.sol_anchors import ResolvedAnchors
+    from solus_api.models import CreditLedger
+    from solus_api.orchestration import gateway
+    from solus_api.orchestration.enums import Complexity, RouteType
+    from solus_api.orchestration.providers import Usage
+    from sqlalchemy import select
+    from test_sol_reasoner import _ctx
+
+    maker = _factory(engine)
+    async with maker() as db:
+        project_id, _ = await _seed_entity(db)
+        twins = [
+            GraphEntity(
+                project_id=project_id, kind="component", domain=Domain.ELECTRICAL, name="servo 3"
+            )
+            for _ in range(2)
+        ]
+        db.add_all(twins)
+        await db.commit()
+        twin_ids = {str(twin.id) for twin in twins}
+
+    class _Picker:
+        """The planner's call (no tool conversation) gets back the first id it offered."""
+
+        def __init__(self) -> None:
+            self.planner: list[tuple[str, int]] = []
+
+        async def stream(
+            self,
+            model_name: str,
+            query: str,
+            *,
+            max_tokens: int,
+            conversation: Any = None,
+            **_: Any,
+        ) -> Any:
+            if conversation is None:
+                self.planner.append((query, max_tokens))
+                yield UUID_RE.findall(query.split("kind=planner_candidates", 1)[1])[0]
+            else:
+                yield "ok"
+            yield Usage(tokens_in=5, tokens_out=2)
+
+    async def about_a_finding(*_: Any, **__: Any) -> ResolvedAnchors:
+        return ResolvedAnchors(finding_subjects=(uuid.uuid4(),))  # a finding's turn runs HARD
+
+    calls: list[dict[str, Any]] = []
+    complete = gateway.complete
+
+    async def recorded(query: str, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return await complete(query, **kwargs)
+
+    monkeypatch.setattr(gateway, "complete", recorded)  # the module object runtime calls through
+    monkeypatch.setattr(runtime, "resolve_anchor_inputs", about_a_finding)
+    model = _Picker()
+    ctx = replace(await _ctx(engine, "why is servo 3 hot?"), project_id=project_id)
+
+    runner = LlmRunner(adapters={"anthropic": model, "openai": model, "google": model})
+    events = [event async for event in runner.run(ctx)]
+
+    ((asked, max_tokens),) = model.planner  # one tie-break call per turn
+    (call,) = calls
+    assert (call["complexity"], call["type"], call["purpose"]) == (
+        Complexity.TRIVIAL,
+        RouteType.GENERAL,
+        "planner",
+    )
+    assert (call["user_id"], call["turn_id"]) == (ctx.user_id, ctx.turn_id)
+    assert call["max_tokens"] == max_tokens == 64  # what the adapter saw, too
+    picked = UUID_RE.findall(asked.split("kind=planner_candidates", 1)[1])[0]
+    assert picked in twin_ids
+    manifest = next(e for e in events if e.type is AgentEventType.CONTEXT_USED)
+    assert [a["id"] for a in manifest.data["anchors"] if a["reason"] == "name_match"] == [picked]
+    async with maker() as db:
+        rows = await db.scalars(select(CreditLedger).where(CreditLedger.user_id == ctx.user_id))
+        planner = [row.attrs for row in rows.all() if row.attrs.get("purpose") == "planner"]
+    assert [attrs["turn_id"] for attrs in planner] == [str(ctx.turn_id)]

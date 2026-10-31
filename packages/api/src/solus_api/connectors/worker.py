@@ -56,9 +56,14 @@ from solus_api.connectors.runtime import (
 )
 from solus_api.connectors.secrets import SecretStore, build_secret_store
 from solus_api.core.db import build_engine, build_sessionmaker
+from solus_api.graph.graph_changed_fanout import (
+    FANOUT_JOB_IDS,
+    GraphChangedFanout,
+    graph_changed_callbacks,
+)
 from solus_api.graph.live import LiveHub
 from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
-from solus_api.services.budgets import budget_job_id, make_budget_trigger, recompute_budgets
+from solus_api.services.budgets import recompute_budgets
 from solus_api.services.connections import account_ref_for, onshape_application_for
 from solus_api.storage import ArtifactStore
 from solus_api.storage.cad_store import build_cad_store
@@ -1039,13 +1044,19 @@ async def scheduled_change_detection(ctx: dict[str, Any]) -> int:
         await _enqueue_sweep_hit(ctx, source_id)
 
     settings: Settings = ctx["settings"]
-    return await run_change_detection(
+    detected = await run_change_detection(
         sessionmaker=ctx["sessionmaker"],
         registry=ctx["registry"],
         secret_store=ctx["secret_store"],
         enqueue=_enqueue,
         probe_timeout_seconds=settings.bridge_tool_timeout_seconds,
     )
+    # SOLUSDEV-321 P6: members' expertise, once a day (the sweep at EXPERTISE_HOUR_UTC), AFTER
+    # detection (P6 fix 1, m5); bounded inside this job's timeout, and it never raises.
+    from solus_api.agent import expertise
+
+    await expertise.recompute_due_expertise(ctx["sessionmaker"], now=utcnow())
+    return detected
 
 
 async def _record_recovery_attempt(
@@ -1214,15 +1225,26 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     ctx["graph_hub"] = hub
     sessionmaker = build_sessionmaker(engine, settings=settings, hub=hub)
 
-    # SOLUSDEV-320 resolution 18: a worker commit's `graph.changed` re-queues the budgets
-    # (by name through arq's own connection), or runs them inline without Redis.
+    # SOLUSDEV-167. The worker runs the UNATTENDED syncs — the ones that can
+    # actually run away — so it must share the API's cache and single-flight
+    # store, not silently degrade to an uncoalesced one. `ctx["redis"]` is arq's
+    # own ArqRedis, a redis.asyncio.Redis subclass, so no second connection.
+    ctx["integration_store"] = RedisCacheStore(redis) if redis is not None else InMemoryCacheStore()
+
+    # SOLUSDEV-320 resolution 18 / SOLUSDEV-321 P0-T5: a worker commit's `graph.changed` runs
+    # the one registration list (graph/graph_changed_fanout.py) — the budgets re-queue (by
+    # name through arq's own connection, or inline without Redis) and the project-card drop.
     queue: Any = redis  # arq's ArqRedis; narrowed here so the closure never sees None
 
     async def enqueue_budgets(job_name: str, project_id: str) -> None:
-        await queue.enqueue_job(job_name, project_id, _job_id=budget_job_id(project_id))
+        await queue.enqueue_job(job_name, project_id, _job_id=FANOUT_JOB_IDS[job_name](project_id))
 
-    hub.on_graph_changed = make_budget_trigger(
-        sessionmaker=sessionmaker, enqueue=enqueue_budgets if queue is not None else None
+    hub.on_graph_changed = GraphChangedFanout(
+        graph_changed_callbacks(
+            sessionmaker=sessionmaker,
+            enqueue=enqueue_budgets if queue is not None else None,
+            store=ctx["integration_store"],
+        )
     )
     ctx["settings"] = settings
     ctx["engine"] = engine
@@ -1232,12 +1254,7 @@ async def _on_startup(ctx: dict[str, Any]) -> None:
     # SOLUSDEV-167: the worker runs the UNATTENDED syncs — the ones that can
     # actually run away — so it must share the API's quota ledger rather than
     # silently degrade to an unmetered registry.
-    # SOLUSDEV-167. The worker runs the UNATTENDED syncs — the ones that can
-    # actually run away — so it must share the API's cache and single-flight
-    # store, not silently degrade to an uncoalesced one. `ctx["redis"]` is arq's
-    # own ArqRedis, a redis.asyncio.Redis subclass, so no second connection.
-    ctx["integration_store"] = RedisCacheStore(redis) if redis is not None else InMemoryCacheStore()
-    # SOLUSDEV-241: and the read cache over it, handed to the scoped connectors
+    # SOLUSDEV-241: the read cache over the integration store, handed to the scoped connectors
     # so the sweep's probes REFRESH the signals a human's sync then reads.
     # ADR-038 §1: the same durable CAD store as the API, so a sweep's exports are reused.
     ctx["cad_store"] = build_cad_store(settings)
@@ -1269,7 +1286,11 @@ def build_worker_settings(settings: Settings) -> type:
     from arq.connections import RedisSettings
 
     from solus_api.billing.reconciliation import reconcile_credit_debits
+    from solus_api.checkers.checker_trigger import run_matrix_checkers
     from solus_api.extensions.review import extension_review
+    from solus_api.simulation.mesh_job import run_mesh_sim
+    from solus_api.simulation.providers.mujoco_job import run_mujoco_sim
+    from solus_api.simulation.providers.ngspice_provider import run_ngspice_sim
     from solus_api.sourcing.worker import sourcing_request
 
     redis_url = settings.redis_url or "redis://localhost:6379"
@@ -1295,8 +1316,13 @@ def build_worker_settings(settings: Settings) -> type:
             extension_review,
             # SOLUSDEV-246 (STORE ST5): one sourcing request → candidates, metered.
             func(sourcing_request, timeout=_SOURCING_JOB_SECONDS, max_tries=1),
-            # SOLUSDEV-320 P5-T6: enqueued by name from the hub's `graph.changed` trigger.
-            func(recompute_budgets, timeout=120, max_tries=1),
+            # SOLUSDEV-320 P5-T6 / SOLUSDEV-321 P3-T3: enqueued by name from the hub's
+            # `graph.changed` triggers under stable ids, so neither keeps a result (see above).
+            func(recompute_budgets, timeout=120, max_tries=1, keep_result=0),
+            func(run_matrix_checkers, timeout=300, max_tries=1, keep_result=0),
+            func(run_ngspice_sim, timeout=120, max_tries=1, keep_result=0),
+            func(run_mujoco_sim, timeout=300, max_tries=1, keep_result=0),
+            func(run_mesh_sim, timeout=120, max_tries=1, keep_result=0),
         ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —

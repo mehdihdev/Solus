@@ -1,8 +1,10 @@
 """The one `graph_edge` writer (SOLUSDEV-320, docs/api/relations.md §2).
 
 Every non-connector edge is written through `write_edge`; `connectors/runtime.py` is the
-only other constructor (`tests/test_edge_writer_ratchet.py`). Flushes, never commits, locks
-nothing: callers hold `lock_project` where they do today.
+only other constructor (`tests/test_edge_writer_ratchet.py`). `annotate_edge` sets the one
+key a checker run caches on an existing edge (`checker_results`), or raises it to 1.0 on
+evidence from outside the graph (`confirmed_by`), re-reading the row under a row lock first.
+Flushes, never commits, takes no other lock: callers hold `lock_project` where they do today.
 """
 
 from __future__ import annotations
@@ -209,11 +211,23 @@ async def write_edge(
 
 
 async def _live_edge(
-    session: AsyncSession, project_id: UUID, edge_id: UUID, *, candidate: bool = False
+    session: AsyncSession,
+    project_id: UUID,
+    edge_id: UUID,
+    *,
+    candidate: bool = False,
+    fresh: bool = False,
 ) -> GraphEdge:
     """A live edge of this project; relations.md §5: foreign, deleted or (when the caller
-    needs one) non-candidate edges are all 404, so a route can pass its path id straight in."""
-    edge = await session.get(GraphEdge, edge_id)
+    needs one) non-candidate edges are all 404, so a route can pass its path id straight in.
+    `fresh` re-reads the row under a row lock, whatever copy the session already holds, and never
+    waits for one: `SKIP LOCKED` reads a row another transaction holds as absent (R68)."""
+    edge = await session.get(
+        GraphEdge,
+        edge_id,
+        populate_existing=fresh,
+        with_for_update={"skip_locked": True} if fresh else None,
+    )
     if (
         edge is None
         or edge.project_id != project_id
@@ -268,6 +282,48 @@ async def supersede_edge(
     retire_edge(edge)
     edge.attrs = {**edge.attrs, "superseded_by": str(replacement.id)}
     await session.flush()
+
+
+async def annotate_edge(
+    session: AsyncSession,
+    project_id: UUID,
+    edge_id: UUID,
+    *,
+    checker_results: list[dict[str, Any]] | None = None,
+    confirmed_by: EdgeEvidence | None = None,
+) -> GraphEdge | None:
+    """Cache a matrix run's results on a live edge of this project: `attrs.checker_results` is
+    reassigned to the items, each validated as a `CheckerResult`, and nothing else on the row
+    changes. `confirmed_by` (R131) is evidence from outside the graph that the edge holds (a live
+    `ros2` listing): it raises the edge to 1.0 and merges into its evidence; origin stays.
+    Callers hold `lock_project`; under it the row is re-read fresh, under a row lock, so
+    attrs another writer committed since the caller read the edge (a sync's nets, an acceptance's
+    `commanded` fact) are kept, never written back from the caller's stale copy.
+
+    It never WAITS for that lock (R68): a sync locks edge rows before it takes the project lock,
+    so a caller holding the project lock that waited could deadlock with it. A row another
+    transaction holds is not written, and None says so; the caller judges it again later.
+    Foreign, deleted and unknown edges are 404, so a run never revives a tombstone."""
+    from solus_api.checkers.checker_results import CheckerResult  # checkers import this module
+
+    updates: dict[str, Any] = {}
+    if checker_results is not None:
+        updates["checker_results"] = [
+            CheckerResult.model_validate(item).model_dump(mode="json") for item in checker_results
+        ]
+    try:
+        edge = await _live_edge(session, project_id, edge_id, fresh=True)
+    except APIError:  # SKIP LOCKED reads a row another transaction holds as absent: is it live?
+        held = await session.get(GraphEdge, edge_id, populate_existing=True)
+        if held is None or held.project_id != project_id or held.deleted_at is not None:
+            raise
+        return None
+    if confirmed_by is not None:
+        updates["evidence"] = _merge_evidence(edge.attrs.get("evidence", []), [confirmed_by])
+        edge.confidence = 1.0
+    edge.attrs = {**edge.attrs, **updates}
+    await session.flush()
+    return edge
 
 
 async def candidates(

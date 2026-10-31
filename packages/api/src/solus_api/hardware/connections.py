@@ -317,6 +317,9 @@ class HardwareConnections:
                 open_conn=open_robot,
                 window_seconds=attempt.window,
                 device={"device_ref": config.identity.device_ref if config.identity else None},
+                # SOLUSDEV-321 P2-T3: the robot's session runs its window evaluator as this member
+                robot_entity_id=attempt.robot,
+                owner_user_id=attempt.account,
             )
             session_id = record.id
             if await self._finish(attempt, "connected", session_id=session_id, stamp=stamp):

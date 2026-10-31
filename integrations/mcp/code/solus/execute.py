@@ -347,8 +347,21 @@ def _program_changed(root: Path, plan: Plan, executable: str) -> bool:
     return os.path.realpath(executable) != plan.program_realpath or scope != plan.program_scope
 
 
-def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | str:
-    """Resolve argv[0], wrap in the sandbox, or say why nothing may run."""
+def _workdir(root: Path, plan: Plan, cwd: Path | None) -> Path | None:
+    """Where the command runs: `cwd` when the caller names one, else the plan's cwd inside the
+    linked folder (None once it is no longer there)."""
+    if cwd is not None:
+        return cwd
+    return root if plan.cwd == "." else resolve_inside(plan.cwd, root)
+
+
+def prepare(
+    root: Path, plan: Plan, which: Which = pinned_which, *, cwd: Path | None = None
+) -> Prepared | str:
+    """Resolve argv[0], wrap in the sandbox, or say why nothing may run. Every judgement is
+    made on `root`, the linked folder: resolution, the program and scope re-check, the child
+    environment and the sandbox's writable workspace. `cwd` (SOLUSDEV-321 P6, R137) moves only
+    where the command runs; without it, the plan's cwd inside the folder."""
     if not plan.ok:
         return plan.reason or "refused"
     if plan.sandbox is None:
@@ -358,14 +371,14 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
         return f"executable not found: {plan.argv[0][:64]}"
     if _program_changed(root, plan, executable):
         return PROGRAM_CHANGED
-    cwd = root if plan.cwd == "." else resolve_inside(plan.cwd, root)
-    if cwd is None:
+    workdir = _workdir(root, plan, cwd)
+    if workdir is None:
         return "cwd is no longer inside the linked folder"
     env = child_env(root, plan)
     program = [executable, *plan.argv[1:]]
     if not plan.sandbox.startswith(sandbox.KIND_LINUX):
         try:
-            return Prepared(sandbox.wrap(plan.sandbox, program, workspace=root), cwd, env, env)
+            return Prepared(sandbox.wrap(plan.sandbox, program, workspace=root), workdir, env, env)
         except ValueError as exc:
             return str(exc)
     try:
@@ -377,14 +390,19 @@ def prepare(root: Path, plan: Plan, which: Which = pinned_which) -> Prepared | s
     except ValueError as exc:
         os.close(descriptor)
         return str(exc)
-    return Prepared(wrapped, cwd, sandbox.helper_env(env), env, (descriptor,))
+    return Prepared(wrapped, workdir, sandbox.helper_env(env), env, (descriptor,))
 
 
 def run_sandboxed(
-    root: Path, plan: Plan, *, runner: Runner = default_runner, which: Which = pinned_which
+    root: Path,
+    plan: Plan,
+    *,
+    runner: Runner = default_runner,
+    which: Which = pinned_which,
+    cwd: Path | None = None,
 ) -> Ran | str:
-    """Run the prepared plan; detect git metadata changes around it."""
-    prepared = prepare(root, plan, which)
+    """Run the prepared plan (`cwd` as in `prepare`); detect git metadata changes around it."""
+    prepared = prepare(root, plan, which, cwd=cwd)
     if isinstance(prepared, str):
         return prepared
     before = sandbox.git_metadata_digest(root)
@@ -403,11 +421,16 @@ def run_sandboxed(
 
 
 def execute_plan(
-    root: Path, plan: Plan, *, runner: Runner = default_runner, which: Which = pinned_which
+    root: Path,
+    plan: Plan,
+    *,
+    runner: Runner = default_runner,
+    which: Which = pinned_which,
+    cwd: Path | None = None,
 ) -> dict[str, Any]:
     """Run EXACTLY `plan.argv` (argv[0] resolved as documented) inside the
-    sandbox and answer the §4 result shape. Never raises."""
-    ran = run_sandboxed(root, plan, runner=runner, which=which)
+    sandbox and answer the §4 result shape (`cwd` as in `prepare`). Never raises."""
+    ran = run_sandboxed(root, plan, runner=runner, which=which, cwd=cwd)
     if isinstance(ran, str):
         return refusal(ran)
     outcome = ran.outcome

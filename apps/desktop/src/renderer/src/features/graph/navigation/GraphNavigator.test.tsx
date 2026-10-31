@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Entity, Relation } from '../../../lib/api/resources'
+import { useFocusStore } from '../../workspace/focusStore'
 import { GraphNavigator, type GraphNavigatorProps } from './GraphNavigator'
 import { layoutLevel } from './layout'
 
@@ -49,6 +50,11 @@ const rectangle = (x: number, y: number, width: number, height: number): DOMRect
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  // Unmount BEFORE the reset: the navigator subscribes to the focus store's highlight, and this
+  // hook runs ahead of testing-library's own cleanup, so a reset under a mounted navigator would
+  // be a state update outside act().
+  cleanup()
+  useFocusStore.getState().reset()
 })
 
 describe('GraphNavigator', () => {
@@ -309,6 +315,22 @@ describe('GraphNavigator render cost', () => {
         .map(([entity]) => entity.id)
         .sort()
     ).toEqual(['a', 'b'])
+  })
+
+  // SOLUSDEV-321 P1-T6: the navigator reads the focus store's highlight and hands each card a
+  // boolean, so a glow starting or ending re-renders only the cards it touches.
+  it('glows the cards SOL highlighted and re-renders only those', () => {
+    probe.mockClear()
+    render(<Harness />)
+    expect(probe).toHaveBeenCalledTimes(3)
+    act(() => useFocusStore.setState({ highlightedIds: ['b'] }))
+    expect(screen.getByTestId('graph-node-b')).toHaveClass('graph-node-highlighted')
+    expect(screen.getByTestId('graph-node-a')).not.toHaveClass('graph-node-highlighted')
+    expect(probe).toHaveBeenCalledTimes(4)
+    expect(probe.mock.calls[3][0].id).toBe('b')
+    act(() => useFocusStore.getState().clearHighlight())
+    expect(screen.getByTestId('graph-node-b')).not.toHaveClass('graph-node-highlighted')
+    expect(probe).toHaveBeenCalledTimes(5)
   })
 })
 

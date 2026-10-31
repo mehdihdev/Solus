@@ -69,3 +69,15 @@ def test_part_class_helper() -> None:
 
 def test_default_voltage_tolerance_is_positive() -> None:
     assert av.DEFAULT_VOLTAGE_TOLERANCE_PCT > 0
+
+
+def test_the_rules_traverse_the_contracts_relations() -> None:
+    """SOLUSDEV-321 P3-T2: the rules read `wires`, `reads` and `powers` (the contracts'
+    vocabulary); the pre-vocabulary `drives` (op-amp → load) and `reads_from` are retired here."""
+    assert (av.WIRES, av.READS, av.POWERS, av.CONNECTED_TO) == (
+        "wires",
+        "reads",
+        "powers",
+        "connected_to",
+    )
+    assert not hasattr(av, "DRIVES") and not hasattr(av, "READS_FROM")

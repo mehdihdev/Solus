@@ -114,3 +114,14 @@ tools:
     requires_confirmation: true
     timeout_seconds: 15
     reason: sends bounded text or Enter to an interactive process SOL started on this machine
+  # SOLUSDEV-321 P6: flagged for ratification (two unconfirmed reads that run ONE fixed `ros2 … list
+  # --no-daemon` argv in the OS sandbox under a captured SYSTEM profile; the fork refuses a
+  # workspace overlay; the cloud only ever raises inferred edges it already holds).
+  - name: ros2_nodes
+    requires_confirmation: false
+    timeout_seconds: 30
+    reason: read-only list of the live ROS 2 nodes through the fixed argv `ros2 node list --no-daemon --spin-time 2`, inside the OS sandbox, with ros2 resolved only through a captured profile the fork judges SYSTEM scope (a profile that reaches the linked folder is refused, so code.exec keeps its card; no daemon starts and nothing outlives the call); its names are grammar-checked and bounded, and the cloud only raises existing inferred publishes/subscribes edges with them, never creating one; widens this allowlist, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)
+  - name: ros2_topics
+    requires_confirmation: false
+    timeout_seconds: 30
+    reason: read-only list of the live ROS 2 topics and their types through the fixed argv `ros2 topic list --no-daemon -t`, inside the OS sandbox, with ros2 resolved only through a captured profile the fork judges SYSTEM scope (a profile that reaches the linked folder is refused, so code.exec keeps its card; no daemon starts and nothing outlives the call); its names are grammar-checked and bounded, and the cloud only raises existing inferred publishes/subscribes edges with them, never creating one; widens this allowlist, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)

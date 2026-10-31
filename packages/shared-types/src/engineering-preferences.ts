@@ -37,6 +37,18 @@ export const PREFERENCE_SECTIONS = [
 ] as const;
 export type PreferenceSection = (typeof PREFERENCE_SECTIONS)[number];
 
+/** SOLUSDEV-321 P6: the domains SOL sets its register by, and the levels a
+ *  person may state for each. Mirrors `agent/expertise.py` (`Expertise`). */
+export const EXPERTISE_DOMAINS = [
+  "control",
+  "electronics",
+  "mechanical",
+  "software",
+] as const;
+export type ExpertiseDomain = (typeof EXPERTISE_DOMAINS)[number];
+export const EXPERTISE_LEVELS = ["novice", "working", "expert"] as const;
+export type ExpertiseLevel = (typeof EXPERTISE_LEVELS)[number];
+
 /** The whole of `~/.solus/preferences.json`. */
 export interface EngineeringPreferences {
   readonly schema_version: number;
@@ -53,6 +65,10 @@ export interface EngineeringPreferences {
    *  (`PUT /members/me/preferences`). Absent = nothing shared. `freeText` is
    *  never shareable, so it has no flag. */
   readonly shared?: Partial<Record<PreferenceSection, boolean>>;
+  /** SOLUSDEV-321 P6: the person's own level per domain. Each stated domain
+   *  wins over the level Solus inferred; absent = nothing stated. Sent with the
+   *  turn, never stored by the server. */
+  readonly expertise?: Partial<Record<ExpertiseDomain, ExpertiseLevel>>;
 }
 
 const FIELDS = [
@@ -60,6 +76,7 @@ const FIELDS = [
   "updatedAt",
   "freeText",
   "shared",
+  "expertise",
   ...PREFERENCE_SECTIONS,
 ] as const;
 export const ENGINEERING_PREFERENCES_FIELDS: CompleteKeysOf<
@@ -86,13 +103,15 @@ export function emptyEngineeringPreferences(): EngineeringPreferences {
   };
 }
 
-/** True when no field carries anything but whitespace — nothing to send. */
+/** True when no field carries anything but whitespace and no level is
+ *  stated — nothing to send. */
 export function isEmptyPreferences(
   preferences: EngineeringPreferences,
 ): boolean {
   return (
     preferences.freeText.trim() === "" &&
-    PREFERENCE_SECTIONS.every((key) => preferences[key].trim() === "")
+    PREFERENCE_SECTIONS.every((key) => preferences[key].trim() === "") &&
+    Object.keys(preferences.expertise ?? {}).length === 0
   );
 }
 
@@ -162,6 +181,30 @@ function parseShared(
   return shared;
 }
 
+const DOMAIN_KEYS: readonly string[] = EXPERTISE_DOMAINS;
+const LEVELS: readonly string[] = EXPERTISE_LEVELS;
+
+/** `expertise` normalised: known domains only (anything else rejects →
+ *  undefined), values that are no level dropped, since the API refuses a turn
+ *  carrying one. Null when the field is absent. */
+function parseExpertise(
+  value: unknown,
+): Partial<Record<ExpertiseDomain, ExpertiseLevel>> | null | undefined {
+  if (value === undefined) return null;
+  if (
+    !isPlainObject(value) ||
+    !Object.getOwnPropertyNames(value).every((key) => DOMAIN_KEYS.includes(key))
+  )
+    return undefined;
+  const expertise: Partial<Record<ExpertiseDomain, ExpertiseLevel>> = {};
+  for (const domain of EXPERTISE_DOMAINS) {
+    const level = value[domain];
+    if (typeof level === "string" && LEVELS.includes(level))
+      expertise[domain] = level as ExpertiseLevel;
+  }
+  return expertise;
+}
+
 /** The flagged, non-empty sections — the only text that ever leaves the
  *  machine for the project's `members/<uid>` mirror. */
 export function sharedSubset(
@@ -190,10 +233,13 @@ function parseBody(
   }
   const shared = parseShared(value.shared);
   if (shared === undefined) return null;
+  const expertise = parseExpertise(value.expertise);
+  if (expertise === undefined) return null;
   return {
     freeText: cleanText(freeText, PREFERENCES_FREE_TEXT_CAP),
     ...(sections as Record<PreferenceSection, string>),
     ...(shared !== null ? { shared } : {}),
+    ...(expertise !== null ? { expertise } : {}),
   };
 }
 

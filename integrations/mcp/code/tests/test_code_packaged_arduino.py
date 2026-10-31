@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from code_paths import FORK_DIR, LAUNCH  # isort: skip
+from code_paths import FORK_DIR, LAUNCH, overlay_module  # isort: skip
+
+#: The launcher lists the whole roster (SOLUSDEV-321 P6 fixed a stale count of 15 here).
+ROSTER = overlay_module("roster").TOOL_ROSTER
 
 
 @pytest.mark.skipif(
@@ -22,7 +25,7 @@ async def test_packaged_arduino_transport(tmp_path: Path) -> None:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
-                assert len(listed.tools) == 15
+                assert {tool.name for tool in listed.tools} == ROSTER
                 for args in ({"unknown": True}, {"dry_run": "true"}):
                     result = await session.call_tool("arduino_prepare", args)
                     assert result.isError

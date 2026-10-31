@@ -100,8 +100,25 @@ async def load_knowledge_notes(
     (and, when the connected tool's version is known, one whose range covers
     it); empty beats invented."""
     notes: dict[str, KnowledgeNote] = {}
-    for tool_name, (family, control_id) in TOOL_CONTROLS.items():
-        version = (versions or {}).get(family)
+    for family in dict.fromkeys(family for family, _ in TOOL_CONTROLS.values()):
+        found, _ = await family_notes(session, family, version=(versions or {}).get(family))
+        notes |= found
+    return notes
+
+
+async def family_notes(
+    session: AsyncSession, family: ToolFamily, *, version: str | None = None
+) -> tuple[dict[str, KnowledgeNote], frozenset[str]]:
+    """The notes of `family`'s mapped tools alone (for `version` when given), and the tools
+    whose read failed: a note nobody could read is not a control nobody documented.
+
+    ponytail: one query per mapped control; a `control_id IN (…)` filter on `query_entries`
+    (toolkb/storage.py) makes it one per family if the per-turn reads ever matter."""
+    notes: dict[str, KnowledgeNote] = {}
+    failed: set[str] = set()
+    for tool_name, (mapped, control_id) in TOOL_CONTROLS.items():
+        if mapped is not family:
+            continue
         try:
             entries, _ = await query_entries(
                 session,
@@ -112,16 +129,19 @@ async def load_knowledge_notes(
             )
         except Exception:  # noqa: BLE001 — a note is an optional aid, never a failure
             logger.warning("tool knowledge lookup failed for %s", tool_name)
+            failed.add(tool_name)
             continue
         entry = next((e for e in entries if _trusted(e)), None)
-        if entry is None:
-            continue
-        text = f"{entry.label}: {entry.description}"
-        if entry.shortcut:
-            text += f" Default shortcut: {entry.shortcut}."
-        text = text[:NOTE_CAP]
-        notes[tool_name] = KnowledgeNote(control_id=control_id, text=text)
-    return notes
+        if entry is not None:
+            notes[tool_name] = _note(control_id, entry)
+    return notes, frozenset(failed)
+
+
+def _note(control_id: str, entry: Any) -> KnowledgeNote:
+    text = f"{entry.label}: {entry.description}"
+    if entry.shortcut:
+        text += f" Default shortcut: {entry.shortcut}."
+    return KnowledgeNote(control_id=control_id, text=text[:NOTE_CAP])
 
 
 def with_knowledge_notes(

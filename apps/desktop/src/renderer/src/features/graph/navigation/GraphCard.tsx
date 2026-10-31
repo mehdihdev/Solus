@@ -6,6 +6,7 @@ import { markAwaited, markSafely } from '../../../lib/perf/marks'
 import { integrationLogo } from '../../onboarding/integrationLogos'
 import type { FindingBadge } from '../useFindings'
 import { boundedPoint, CARD_HEIGHT, CARD_WIDTH } from './layout'
+import './GraphCard.css'
 
 /** Pixels a pointer must travel before a press on the card body becomes a drag. */
 const DRAG_THRESHOLD = 4
@@ -112,6 +113,8 @@ interface GraphCardProps {
   point: Point
   offset: Point
   focused: boolean
+  /** SOL looked at this entity this turn (SOLUSDEV-321 P1-T6): the card glows for a few seconds. */
+  highlighted?: boolean
   childCount: number
   onRevealChild?: (id: string) => void
   childPreviews?: readonly { entity: Entity; childCount: number }[]
@@ -130,7 +133,8 @@ interface GraphCardProps {
  *  node's own content, and a mono footer with the real descendant count. Positions
  *  stay world coordinates; only the presentation follows the design template. */
 export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.JSX.Element {
-  const { entity, point, offset, focused, childCount, onBack, onContextMenu, renderContent } = props
+  const { entity, point, offset, focused, highlighted, childCount, onBack } = props
+  const { onContextMenu, renderContent } = props
   const onPreview = (next: Point): void => props.onPreview(entity.id, next)
   const onMove = (next: Point): void => props.onMove(entity.id, next)
   const onSelect = (): void => {
@@ -154,7 +158,7 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
 
   return (
     <article
-      className={`graph-node${focused ? ' graph-node-focused' : ''}${body.dragging ? ' graph-node-dragging' : ''}`}
+      className={`graph-node${focused ? ' graph-node-focused' : ''}${highlighted ? ' graph-node-highlighted' : ''}${body.dragging ? ' graph-node-dragging' : ''}`}
       data-testid={`graph-node-${entity.id}`}
       data-node-id={entity.id}
       data-domain={entity.domain}

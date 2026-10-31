@@ -26,7 +26,7 @@ pointing at another project's entity resolves to nothing rather than dragging th
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -35,6 +35,7 @@ from sqlalchemy.orm import defer
 
 from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
 from solus_api.graph.edges import is_candidate
+from solus_api.graph.kinds import MACHINE
 from solus_api.graph.read_scope import current_scope
 from solus_api.models import Domain, GraphEdge, GraphEntity
 
@@ -279,13 +280,31 @@ async def load_neighborhood(
     )
 
 
+#: A machine's attrs only its owner reads (M38): its command history. The owner-gated readers go
+#: through `agent/project_card.owned_commands`; every model-facing read drops them.
+OWNER_ONLY_MACHINE_ATTRS: Final = frozenset({"recent_commands"})
+
+
+def model_facing_attrs(kind: str, attrs: dict[str, Any]) -> dict[str, Any]:
+    """`attrs` as a model may read them: a machine's without its owner-only keys."""
+    if kind != MACHINE:
+        return attrs
+    return {key: value for key, value in attrs.items() if key not in OWNER_ONLY_MACHINE_ATTRS}
+
+
+def _model_facing(entity: EntityRead) -> EntityRead:
+    if entity.kind != MACHINE:
+        return entity
+    return entity.model_copy(update={"attrs": model_facing_attrs(entity.kind, entity.attrs)})
+
+
 def to_graph_context(neighborhood: Neighborhood) -> GraphContext:
     """Adapt to the W0-07 shape a real `SolSystems.get_graph_context` returns. Model-consumable:
     `EntityRead` drops the embedding, since a 1536-float vector is noise in a reasoning context."""
     # Candidates (inferred, below CANDIDATE_THRESHOLD) are proposals, not facts: SOL,
     # the checker tool and impact never see them. The canvas (GET /relations) does.
     return GraphContext(
-        entities=[EntityRead.model_validate(e) for e in neighborhood.entities],
+        entities=[_model_facing(EntityRead.model_validate(e)) for e in neighborhood.entities],
         edges=[EdgeRead.model_validate(e) for e in neighborhood.edges if not is_candidate(e)],
         truncated=neighborhood.truncated,
     )

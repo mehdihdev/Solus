@@ -11,6 +11,7 @@ from solus_api.checkers.core import DEFAULT_CHECKERS, run_all
 from solus_api.checkers.environment import (
     PinConflictChecker,
     normalize_package_name,
+    pin_conflicts,
     propose_environments,
 )
 from solus_api.checkers.interface import Severity
@@ -34,8 +35,9 @@ def _ctx(*entities: EntityRead) -> GraphContext:
 EMPTY = FingerprintOutput(canonical_parts=[], unmatched=[], ambiguous=[])
 
 
-def test_registered_in_the_default_roster() -> None:
-    assert any(isinstance(c, PinConflictChecker) for c in DEFAULT_CHECKERS)
+def test_the_pin_rule_leaves_the_default_roster_for_the_matrix() -> None:
+    # SOLUSDEV-321 P3-T2 (R38/R51): `package_version_conflict` raises it; one conflict, once.
+    assert not any(isinstance(c, PinConflictChecker) for c in DEFAULT_CHECKERS)
 
 
 def test_normalises_names_per_pep_503() -> None:
@@ -85,9 +87,38 @@ def test_malformed_specifiers_skip_rather_than_guess() -> None:
     assert PinConflictChecker().check(_ctx(bare, bare), EMPTY) == []
 
 
-def test_run_all_includes_the_environment_rule() -> None:
+def test_pin_conflicts_is_the_one_reading_of_a_conflict() -> None:
+    """SOLUSDEV-321 P3-T2: `pin_conflicts` finds each conflicting package once; the checker the
+    code-environment proposal reads words it as a Warning, and the matrix's
+    `package_version_conflict` reads the same list."""
+    sim = _req("torch", "==2.1.0", "sim/requirements.txt")
+    policy = _req("Torch", "==2.3.0", "requirements.txt")
+    ranged = _req("numpy", ">=2", "pyproject.toml")
+    pinned = _req("numpy", "==1.26.4", "requirements.txt")
+    ctx = _ctx(sim, policy, ranged, pinned)
+
+    found = pin_conflicts(ctx)
+
+    assert [(c.package, c.severity) for c in found] == [
+        ("numpy", Severity.WARNING),
+        ("torch", Severity.CRITICAL),
+    ]
+    torch = found[1]
+    assert {r.entity_id for r in torch.requirements} == {sim.id, policy.id}
+    assert torch.pins == [
+        {"source_file": "requirements.txt", "specifier": "==2.3.0"},
+        {"source_file": "sim/requirements.txt", "specifier": "==2.1.0"},
+    ]
+    warnings = PinConflictChecker().check(ctx, EMPTY)
+    assert [w.evidence["package"] for w in warnings] == ["numpy", "torch"]
+    assert warnings[1].message == torch.message
+    assert warnings[1].evidence == {"package": "torch", "pins": torch.pins}
+
+
+def test_run_all_leaves_the_pin_conflict_to_the_matrix() -> None:
     ctx = _ctx(_req("torch", "==2.1.0", "a.txt"), _req("torch", "==2.3.0", "b.txt"))
-    assert [w.checker_id for w in run_all(ctx, EMPTY)] == ["python_pin_conflict"]
+    assert run_all(ctx, EMPTY) == []
+    assert [w.checker_id for w in PinConflictChecker().check(ctx, EMPTY)] == ["python_pin_conflict"]
 
 
 def test_proposal_splits_by_source_file_only_when_pins_conflict() -> None:

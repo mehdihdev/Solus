@@ -4,8 +4,14 @@
 // so the fetch-counting tests below are the load-bearing ones: selecting a part must cost ONE
 // request no matter how many widgets are mounted, and returning to a part already visited must
 // cost zero.
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { useFocusStore, widgetFocus } from './focusStore'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  HIGHLIGHT_TTL_MS,
+  selectEntityName,
+  selectHighlightedIds,
+  useFocusStore,
+  widgetFocus
+} from './focusStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as resources from '../../lib/api/resources'
 
@@ -302,5 +308,104 @@ describe('clearFocus', () => {
     expect(Object.keys(state.cache)).toHaveLength(1)
     await useFocusStore.getState().focus('e-root')
     expect(resources.getGraphNeighborhood).toHaveBeenCalledTimes(1)
+  })
+})
+
+// SOLUSDEV-321 P1-T6: where SOL looked glows for a few seconds. ONE timer clears it — a later
+// call must reset that timer, never stack a second one.
+describe('highlight', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+  const ids = (): readonly string[] => useFocusStore.getState().highlightedIds
+
+  it('starts with nothing glowing and a six-second default window', () => {
+    expect(ids()).toEqual([])
+    expect(HIGHLIGHT_TTL_MS).toBe(6000)
+    expect(selectHighlightedIds(useFocusStore.getState())).toEqual([])
+  })
+
+  it('highlight expires', () => {
+    useFocusStore.getState().highlight(['e-root', 'e-nb'], HIGHLIGHT_TTL_MS)
+    expect(ids()).toEqual(['e-root', 'e-nb'])
+    vi.advanceTimersByTime(HIGHLIGHT_TTL_MS - 1)
+    expect(ids()).toEqual(['e-root', 'e-nb'])
+    vi.advanceTimersByTime(1)
+    expect(ids()).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a second call replaces the ids and resets the one timer', () => {
+    useFocusStore.getState().highlight(['a'], 1000)
+    vi.advanceTimersByTime(900)
+    useFocusStore.getState().highlight(['b'], 1000)
+    expect(vi.getTimerCount()).toBe(1)
+    // 1,800 ms after the first call: its own timer would have cleared the glow at 1,000.
+    vi.advanceTimersByTime(900)
+    expect(ids()).toEqual(['b'])
+    vi.advanceTimersByTime(100)
+    expect(ids()).toEqual([])
+  })
+
+  it('no ids clears a glow that is up and arms no timer', () => {
+    useFocusStore.getState().highlight(['a'], 1000)
+    useFocusStore.getState().highlight([], 1000)
+    expect(ids()).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('clearHighlight clears now and cancels the pending timer', () => {
+    useFocusStore.getState().highlight(['a'], 1000)
+    useFocusStore.getState().clearHighlight()
+    expect(ids()).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not notify subscribers when there is nothing to clear', () => {
+    const listener = vi.fn()
+    const unsubscribe = useFocusStore.subscribe(listener)
+    useFocusStore.getState().clearHighlight()
+    useFocusStore.getState().highlight([], 1000)
+    unsubscribe()
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('reset and clearProject forget a glow and its timer — ids belong to one project', () => {
+    for (const forget of [
+      () => useFocusStore.getState().reset(),
+      () => useFocusStore.getState().clearProject()
+    ]) {
+      useFocusStore.getState().highlight(['a'], 1000)
+      forget()
+      expect(ids()).toEqual([])
+      expect(vi.getTimerCount()).toBe(0)
+    }
+  })
+
+  it('is a harmless no-op where no graph is mounted — the SOL window has none', () => {
+    expect(() => {
+      useFocusStore.getState().highlight(['not-in-any-graph'], 1000)
+      vi.advanceTimersByTime(1000)
+    }).not.toThrow()
+    expect(ids()).toEqual([])
+  })
+})
+
+// The SOL page names an anchor from the neighbourhoods already fetched — a free read, never a
+// request, and never another project's cache.
+describe('selectEntityName', () => {
+  it('reads a name out of any neighbourhood fetched for the current project', async () => {
+    await useFocusStore.getState().focus('e-root')
+    const state = useFocusStore.getState()
+    expect(selectEntityName(state, 'e-nb')).toBe('U4')
+    expect(selectEntityName(state, 'e-unknown')).toBeNull()
+    expect(resources.getGraphNeighborhood).toHaveBeenCalledTimes(1)
+  })
+
+  it('never reads another project’s cache, nor any cache with no project open', async () => {
+    await useFocusStore.getState().focus('e-root')
+    useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } })
+    expect(selectEntityName(useFocusStore.getState(), 'e-nb')).toBeNull()
+    useWorkspaceStore.setState({ project: null })
+    expect(selectEntityName(useFocusStore.getState(), 'e-nb')).toBeNull()
   })
 })

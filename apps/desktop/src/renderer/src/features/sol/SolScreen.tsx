@@ -10,10 +10,11 @@ import { Mono } from '../../components/ui/Mono'
 import { getDesktopSolBridge } from '../../lib/desktopBridge'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSolusActions } from '../graph/solusActions'
-import { useSolusConfig } from '../graph/useSolusConfig'
+import { useSolusConfig, type SolusState } from '../graph/useSolusConfig'
 import { useFocusStore } from '../workspace/focusStore'
-import type { MainScreen } from '../workspace/shellStore'
+import { useShellStore, type MainScreen } from '../workspace/shellStore'
 import { ChatsSidebar, UNTITLED } from './ChatsSidebar'
+import type { CitationTarget } from './domainIds'
 import { chatKey, selectPins, usePinnedContextStore } from './pinnedContextStore'
 import { SolChat } from './SolChat'
 import { SolRightPanel } from './SolRightPanel'
@@ -65,10 +66,7 @@ export function SolScreen({
           pinnedMentionIds={pins.map((pin) => pin.id)}
           onUpload={projectId ? upload : undefined}
           onAddNodeFromGraph={() => onNavigate('workspace')}
-          onFocusEntity={(entityId) => {
-            void useFocusStore.getState().focus(entityId)
-            onNavigate('workspace')
-          }}
+          onFocusEntity={(target) => openCitation(target, solus.sections, onNavigate)}
         />
       </div>
       {projectId && (
@@ -84,6 +82,37 @@ export function SolScreen({
       )}
     </div>
   )
+}
+
+/** A verified citation chip's surface (SOLUSDEV-321 P7): a finding opens the Live Bench's Findings
+ *  pane ON that finding (the shell carries it; the Bench takes it on mount); an entity focuses its
+ *  node in the Workspace, and a `.solus` entry its own graph node, whose sidebar shows the entry. An
+ *  entry this project's `.solus` does not hold opens the Workspace, where `.solus` lives, focusing
+ *  nothing. */
+function openCitation(
+  target: CitationTarget,
+  sections: SolusState['sections'],
+  onNavigate: (screen: MainScreen) => void
+): void {
+  if (target.kind === 'finding') {
+    useShellStore.getState().requestBenchFinding(target.id)
+    onNavigate('bench')
+    return
+  }
+  const entityId = target.kind === 'entity' ? target.id : solusEntityId(sections, target)
+  if (entityId) void useFocusStore.getState().focus(entityId)
+  onNavigate('workspace')
+}
+
+/** The graph identity of the `.solus` entry a citation names, or null when it holds none. */
+function solusEntityId(
+  sections: SolusState['sections'],
+  { section, id }: { section: string; id: string }
+): string | null {
+  const entry = Object.values(sections)
+    .flat()
+    .find((candidate) => candidate.section === section && candidate.id === id)
+  return entry?.entity_id ?? null
 }
 
 function SolHeader({ title, pinned }: { title: string; pinned: number }): React.JSX.Element {

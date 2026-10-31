@@ -31,6 +31,26 @@ describe('evidence markers', () => {
       )[0].x
     ).toBe(120)
   })
+  it('keeps the finding id the server attached to a marker, and refuses a malformed one', () => {
+    const id = '0b5f8a3e-8c1d-4c6e-9a1f-2d3e4f5a6b7c'
+    const other = '1c6f9b4f-9d2e-4d7f-8b2a-3e4f5a6b7c8d'
+    expect(decodeAnomalies([{ ...event, finding_id: id }])[0].finding_id).toBe(id)
+    expect(decodeAnomalies([event, { ...event, finding_id: null }])[1]).not.toHaveProperty(
+      'finding_id'
+    )
+    for (const bad of ['', 'not-a-uuid', `${id}0`, 7, {}])
+      expect(() => decodeAnomalies([{ ...event, finding_id: bad }])).toThrow()
+    // Two findings marking one instant stay two markers, each opening its own finding.
+    const events = decodeAnomalies([
+      { ...event, finding_id: id },
+      { ...event, finding_id: other },
+      { ...event, finding_id: id }
+    ])
+    expect(anomalyMarkers(events, 'd', 'angle', points)).toEqual([
+      { kind: 'threshold_breach', at, x: 120, finding_id: id },
+      { kind: 'threshold_breach', at, x: 120, finding_id: other }
+    ])
+  })
   it('rejects malformed, oversized and non-finite responses', () => {
     for (const value of [
       {},

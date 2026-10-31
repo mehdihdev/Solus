@@ -13,7 +13,9 @@ from typing import Any, cast
 from solus.development_registration import register_development_tools
 from solus.netlist_export import register_export_tools
 from solus.netlist_reads import register_netlist_reads
+from solus.pdf_export import register_pdf_export
 from solus.roster import FULL_ROSTER
+from solus.spice_export import register_spice_export
 from solus.trimming import SupportsToolDecorator, TrimmingRegistrar
 from solus.write.set_symbol_property import register_write_tools
 
@@ -37,6 +39,8 @@ def register_allowlisted_tools(mcp: SupportsToolDecorator) -> TrimmingRegistrar:
     register_netlist_reads(registrar)
     register_bom_tools(shim)
     register_export_tools(registrar)
+    register_spice_export(registrar)
+    register_pdf_export(registrar)
     register_write_tools(registrar)
     register_development_tools(registrar)
 

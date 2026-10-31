@@ -188,7 +188,7 @@ this USB port; keep it plugged in here”.
 **Ask SOL about this node** (the panel's accent footer action) pins the selected real entity to
 the project's active chat (`solus_sol_pinned_v1`, client-side) and opens the SOL page with the
 composer seeded `About <name>: `; the SOL window keeps its own subject hand-off. Selection alone
-makes no model call. The eventual send carries the pinned node in `mentions`, uses the current
+makes no model call. The eventual send carries the pinned node in `pins`, uses the current
 project, Guide/Expert and action modes, budget/confirmation gates. Changing selection does not
 retarget an already submitted turn; account/project switches reject stale results.
 Existing Import files/Add note actions keep their section/artifact handlers and limits. Broader

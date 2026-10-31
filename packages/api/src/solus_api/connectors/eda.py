@@ -104,6 +104,9 @@ class Component:
     schematic_symbol_name: str | None = None
     datasheet_ref: str | None = None
     properties: dict[str, Any] = field(default_factory=dict)
+    #: Where a board places the part, `{x, y, rot}` in the board's units (`rot` None when the
+    #: file states none); None for a part no board places (SOLUSDEV-321 P3-T4, R59).
+    position: dict[str, float | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,11 +135,13 @@ class Netlist:
 
 
 def component_entity(component: Component) -> EntityOut:
-    """A `component` node keyed by its reference designator (its stable per-source id)."""
+    """A `component` node keyed by its reference designator (its stable per-source id). A placed
+    part also states `position`; an unplaced one carries no such key."""
     properties: dict[str, Any] = {
         "footprint": component.footprint,
         "value": component.value,
         **component.properties,
+        **({"position": dict(component.position)} if component.position is not None else {}),
     }
     # Identity signals are the fingerprint's channel, kept out of properties.
     modality_hints = {

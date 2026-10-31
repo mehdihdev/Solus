@@ -94,6 +94,46 @@ async def test_robot_session_opens_from_the_config(
     assert opened["config"]["identity"]["binding"] == "5B42134331"
     assert opened["config"]["protocol"]["driver_id"] == "feetech-sts"
     assert opened["project_id"] == uuid.UUID(project_id)
+    assert record["robot_entity_id"] == robot_id  # SOLUSDEV-321 P2-T3: the session knows it
+
+
+async def test_the_robot_session_hands_its_evaluator_the_robot_and_its_owner(
+    client: AsyncClient, alice_headers: dict[str, str], robot_local: _RobotLocal, app: FastAPI
+) -> None:
+    """SOLUSDEV-321 P2-T3: the route passes the robot it resolved and the member who started the
+    session; the session's window evaluator is handed both (the owner's identity is the one a
+    background read or narration of this session runs under)."""
+    import asyncio
+
+    from solus_api.livebench.sessions import SessionManager, SessionView
+
+    views: list[SessionView] = []
+
+    class _Recorder:
+        def start(self, view: SessionView) -> asyncio.Task[None]:
+            views.append(view)
+            return asyncio.create_task(asyncio.sleep(3600))
+
+    app.state.bench_sessions = SessionManager(
+        app.state.telemetry_plumbing, evaluator_factory=lambda view: _Recorder()
+    )
+    project_id, robot_id = await _robot_project(client, alice_headers)
+    await _configure(client, alice_headers, project_id, robot_id)
+    user = await me(client, alice_headers)
+
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions",
+        headers=alice_headers,
+        json=_robot_session_body(robot_id),
+    )
+
+    assert resp.status_code == 201, resp.text
+    (view,) = views
+    assert view.project_id == uuid.UUID(project_id)
+    assert view.session_id == uuid.UUID(resp.json()["data"]["id"])
+    assert view.robot_entity_id == uuid.UUID(robot_id)
+    assert view.owner_user_id == uuid.UUID(user["id"])
+    await app.state.bench_sessions.aclose_all()
 
 
 async def test_robot_session_needs_identity_and_protocol(

@@ -20,9 +20,11 @@ from solus_api.graph.packet import TelemetryPacket
 from solus_api.graph.resolver import DictEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.livebench.sessions import (
+    DEFAULT_CHANNELS_KEPT,
     SessionManager,
     SessionNotFoundError,
     SessionStillStartingError,
+    SessionView,
     TooManySessionsError,
 )
 
@@ -35,6 +37,10 @@ def _packet(device: str, sec: float, **values: float) -> TelemetryPacket:
 
 class FakeConn:
     """A tappable LiveConnection double the manager can drive end to end."""
+
+    #: What a real connection reports about its devices. A test sets it where it matters;
+    #: the manager reads it with `getattr`, so an unset one is simply absent.
+    device_facts: dict[str, Any]
 
     def __init__(self) -> None:
         self.tap: Any = None
@@ -493,3 +499,133 @@ async def test_conflicting_session_channel_roles_remain_unknown() -> None:
         await conn.drive(_packet("device", 0, health=1))
     assert manager.channel_roles(project, "device") == {}
     await manager.aclose_all()
+
+
+# ── SOLUSDEV-321 P2-T3: a robot session runs its window evaluator ──────────────
+
+
+class _Evaluator:
+    """A window-evaluator double: keeps the view it was started on; its ticker sleeps until
+    cancelled — or, `stubborn`, swallows the cancel and waits for `release`."""
+
+    def __init__(self, *, stubborn: bool = False) -> None:
+        self.views: list[SessionView] = []
+        self.task: asyncio.Task[None] | None = None
+        self.stubborn = stubborn
+        self.release = asyncio.Event()
+
+    def start(self, view: SessionView) -> asyncio.Task[None]:
+        self.views.append(view)
+        self.task = asyncio.create_task(self._ticks())
+        return self.task
+
+    async def _ticks(self) -> None:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            if not self.stubborn:
+                raise
+            await self.release.wait()
+
+
+async def _robot_session(
+    manager: SessionManager, project: uuid.UUID, conn: FakeConn, **kwargs: Any
+) -> Any:
+    return await _start(manager, project, conn, mode="real", provider="robot", **kwargs)
+
+
+async def test_a_robot_session_starts_its_evaluator_and_stop_cancels_it() -> None:
+    project, robot, owner = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    evaluator = _Evaluator()
+    manager, _ = _manager(project, evaluator_factory=lambda view: evaluator)
+    record = await _robot_session(
+        manager, project, FakeConn(), robot_entity_id=robot, owner_user_id=owner
+    )
+
+    (view,) = evaluator.views
+    assert (view.project_id, view.session_id, view.robot_entity_id, view.owner_user_id) == (
+        project,
+        record.id,
+        robot,
+        owner,
+    )
+    assert record.robot_entity_id == robot
+    task = evaluator.task
+    assert task is not None and not task.done()
+
+    stopped = await manager.stop(project, record.id)
+    assert task.cancelled()  # cancelled, and awaited before the stop returned
+    assert stopped.robot_entity_id == robot
+
+
+async def test_a_session_without_a_robot_runs_no_evaluator() -> None:
+    project = uuid.uuid4()
+    evaluator = _Evaluator()
+    manager, _ = _manager(project, evaluator_factory=lambda view: evaluator)
+    record = await _start(manager, project, FakeConn())
+    assert evaluator.views == []
+    assert record.robot_entity_id is None
+    await manager.aclose_all()
+
+
+async def test_the_view_holds_each_resolved_part_with_the_event_time_each_channel_began() -> None:
+    project, servo, other = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    evaluator = _Evaluator()
+    manager, _ = _manager(
+        project,
+        resolved={"arm/3": servo, "arm/4": other},
+        evaluator_factory=lambda view: evaluator,
+    )
+    conn = FakeConn()
+    await _robot_session(manager, project, conn, robot_entity_id=uuid.uuid4())
+    await conn.drive(
+        _packet("arm/3", 1.0, a=1.0, b=2.0),
+        _packet("arm/3", 2.0, a=1.0, c=3.0),
+        _packet("arm/4", 3.0, d=4.0),
+        _packet("stray", 4.0, e=5.0),  # unresolved: not a part
+    )
+
+    (view,) = evaluator.views
+    second = timedelta(seconds=1)
+    assert view.parts == {
+        servo: {"a": T0 + second, "b": T0 + second, "c": T0 + 2 * second},
+        other: {"d": T0 + 3 * second},
+    }
+    await manager.aclose_all()
+
+
+async def test_the_resolved_parts_and_their_channels_are_bounded() -> None:
+    project = uuid.uuid4()
+    entities = {f"arm/{i}": uuid.uuid4() for i in range(4)}
+    evaluator = _Evaluator()
+    manager, _ = _manager(
+        project, resolved=entities, device_ids_kept=2, evaluator_factory=lambda view: evaluator
+    )
+    conn = FakeConn()
+    await _robot_session(manager, project, conn, robot_entity_id=uuid.uuid4())
+    wide = {f"s{j}": 1.0 for j in range(DEFAULT_CHANNELS_KEPT + 8)}
+    await conn.drive(*(_packet(f"arm/{i}", float(i), **wide) for i in range(4)))
+
+    (view,) = evaluator.views
+    assert list(view.parts) == [entities["arm/0"], entities["arm/1"]]
+    assert all(len(channels) == DEFAULT_CHANNELS_KEPT for channels in view.parts.values())
+    await manager.aclose_all()
+
+
+async def test_stop_waits_for_the_evaluator_only_within_its_bound(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("solus_api.livebench.sessions.EVALUATOR_STOP_SECONDS", 0.05)
+    project = uuid.uuid4()
+    evaluator = _Evaluator(stubborn=True)
+    manager, _ = _manager(project, evaluator_factory=lambda view: evaluator)
+    record = await _robot_session(manager, project, FakeConn(), robot_entity_id=uuid.uuid4())
+    await asyncio.sleep(0)  # the ticker is running when the stop comes
+
+    stopped = await asyncio.wait_for(manager.stop(project, record.id), 5)
+
+    assert stopped.status == "ended"
+    assert "did not stop" in caplog.text and str(record.id) in caplog.text
+    evaluator.release.set()
+    assert evaluator.task is not None
+    await evaluator.task

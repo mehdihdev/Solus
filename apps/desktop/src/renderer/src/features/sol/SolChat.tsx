@@ -5,23 +5,29 @@
 // - citations render from the message event's STRUCTURED array in a dedicated
 //   region: plain text spans, never linkified, each display-capped (~64 chars),
 //   never parsed out of prose;
-// - the tool trace shows tool name + ok/error only — raw args never reach this
-//   component (solStream drops them at the parse boundary);
+// - the tool trace shows tool name + ok/error and each step's args as TEXT — only the
+//   server-redacted copy, cut to display size at the parse boundary (solStream);
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Switch } from '../../components/ui/Switch'
 import { Icons } from '../../components/ui/icons.constants'
-import { citationDomain, citationEntityId, DomainDot } from './domainDot'
-import { mergeMentions } from './mentionToken'
+import { DomainDot } from './domainDot'
+import { citationDomain, citationTarget, type CitationTarget } from './domainIds'
+import { ReasoningBlock } from './ReasoningBlock'
+import { pageAnchors } from './pageAnchors'
 import { takeDraft } from './pinnedContextStore'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
 import { AutoRunsView } from './AutoRunRow'
+import { ResearchPills } from './ResearchPills'
+import { AnswerSourceBadge } from './AnswerSourceBadge'
+import { BudgetNotice } from './BudgetNotice'
+import { TraceArgs } from './TraceArgs'
 import { CommandOutput } from './CommandOutput'
 import { ProcessStrip } from './ProcessStrip'
 import { COMPOSER_ATTR, CommandApprovalContext, useCommandShortcut } from './commandHotkey'
@@ -72,6 +78,7 @@ function TraceView({ trace }: { trace: readonly TraceEntry[] }): React.JSX.Eleme
           {/* Same arrow format the backend persists (`tool → outcome`), so live
               and reloaded turns read as one language (SOLUSDEV-233). */}
           {t.tool} → {t.ok === null ? 'running…' : t.ok ? 'ok' : (t.errorCode ?? 'error')}
+          <TraceArgs args={t.args} />
         </div>
       ))}
     </details>
@@ -117,7 +124,8 @@ const CHIP: React.CSSProperties = {
 }
 
 /** Provenance chips (design template): the raw `[connector:ref]` token, a domain dot when
- *  the connector maps to one, and — for `[entity:id]` on the page — a jump to the node. */
+ *  the connector maps to one, and — on the page, for `[entity:id]`, `[finding:id]` and
+ *  `[solus:section:id]` (SOLUSDEV-321 P7) — a jump to the surface it names. */
 function CitationsView({
   citations,
   page,
@@ -125,7 +133,7 @@ function CitationsView({
 }: {
   citations: readonly string[]
   page: boolean
-  onFocusEntity?: (entityId: string) => void
+  onFocusEntity?: (target: CitationTarget) => void
 }): React.JSX.Element | null {
   if (citations.length === 0) return null
   return (
@@ -136,20 +144,20 @@ function CitationsView({
       {!page && <Mono size={9}>CITATIONS</Mono>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
         {citations.slice(0, MAX_CITATIONS).map((token, i) => {
-          const entityId = onFocusEntity ? citationEntityId(token) : null
+          const target = onFocusEntity ? citationTarget(token) : null
           const body = (
             <>
               <DomainDot d={citationDomain(token)} size={5} />
               {capCitation(token)}
             </>
           )
-          return entityId ? (
+          return target ? (
             <button
               key={`${token}-${i}`}
               type="button"
               className="interactive"
               style={{ ...CHIP, cursor: 'pointer' }}
-              onClick={() => onFocusEntity?.(entityId)}
+              onClick={() => onFocusEntity?.(target)}
             >
               {body}
             </button>
@@ -238,7 +246,7 @@ const MessageRow = memo(function MessageRow({
   onFile: SolChat['fileArtifact']
   settled: boolean
   page: boolean
-  onFocusEntity?: (entityId: string) => void
+  onFocusEntity?: (target: CitationTarget) => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
   if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} page={page} />
@@ -264,18 +272,20 @@ const MessageRow = memo(function MessageRow({
       ) : item.pending ? (
         <div style={MUTED}>thinking…</div>
       ) : null}
+      <BudgetNotice budget={item.budgetReached} />
       {item.error && <div style={{ ...MUTED, color: 'var(--err)' }}>{item.error}</div>}
+      <AnswerSourceBadge answer={item.answerSource} />
+      <ResearchPills research={item.researchSources} projectId={projectId} />
       {/* CTR-03: a destructive action is parked, not executed, until this user
           approves the concrete diff shown here (CLAUDE.md §7). */}
       {/* One card per parked action. A turn can park several since SOLUSDEV-168,
           and each is approved on its own — approving a batch would suspend the
           staleness re-check that makes "what you saw is what runs" true. */}
       {confirmations.map((confirmation) => (
-        <ParkedConfirmation
-          key={confirmation.confirmationId}
-          pending={confirmation}
-          onDecide={onDecide}
-        />
+        <Fragment key={confirmation.confirmationId}>
+          <ReasoningBlock reasoning={item.reasoning} confirmationId={confirmation.confirmationId} />
+          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
+        </Fragment>
       ))}
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
           kept with its exit status after the card is gone. */}
@@ -343,7 +353,7 @@ function MessageList({
   projectId: string
   page: boolean
   onDecide: SolChat['decide']
-  onFocusEntity?: (entityId: string) => void
+  onFocusEntity?: (target: CitationTarget) => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -714,7 +724,6 @@ function Composer({
   forceConfirmation,
   onForceConfirmationChange,
   onSend,
-  pinnedMentionIds,
   onUpload,
   onAddNodeFromGraph
 }: ComposerProps): React.JSX.Element {
@@ -729,11 +738,7 @@ function Composer({
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(
-      text,
-      mergeMentions(mention.mentionIds, pinnedMentionIds ?? []),
-      classify.override.thinkHarder
-    )
+    onSend(text, mention.mentionIds, classify.override.thinkHarder)
     setInput('')
     mention.reset()
     classify.resetOverride() // also drops "Think harder" — it is per message
@@ -805,18 +810,20 @@ function Composer({
 
 export interface SolChatProps {
   projectId: string | null
-  /** 'panel' fills the SOL window; 'page' is the SolScreen column. */
+  /** 'panel' fills the SOL window; 'page' is the SolScreen column — and the only layout that
+   *  also sends the workspace focus and the pinned nodes (SOLUSDEV-321 P0-T3): the window is
+   *  its own renderer with neither. */
   layout?: 'panel' | 'page'
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
    *  context panel from the same one). Omitted, the surface owns its own. */
   chat?: SolChat
-  /** Page: the chat's pinned nodes, merged into every send and counted in the header. */
+  /** Page: the chat's pinned nodes, sent as `pins` with every send and counted in the header. */
   pinnedMentionIds?: readonly string[]
   /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
-  /** Page: an `[entity:id]` citation chip focuses that node in the Workspace. */
-  onFocusEntity?: (entityId: string) => void
+  /** Page: a verified citation chip opens the surface it names (`citationTarget`, P7). */
+  onFocusEntity?: (target: CitationTarget) => void
 }
 
 export function SolChat({
@@ -855,8 +862,9 @@ export function SolChat({
     thinkHarder: boolean
   ): void => {
     const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
+    const anchors = layout === 'page' ? pageAnchors(pinnedMentionIds ?? []) : {}
     void chat
-      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation })
+      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
       .then((ok) => {
         if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
       })
@@ -903,7 +911,6 @@ export function SolChat({
           forceConfirmation={forceConfirmation}
           onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
           onSend={sendWithRegion}
-          pinnedMentionIds={pinnedMentionIds}
           onUpload={onUpload}
           onAddNodeFromGraph={onAddNodeFromGraph}
         />
@@ -953,7 +960,6 @@ interface ComposerProps {
   forceConfirmation: boolean
   onForceConfirmationChange: (checked: boolean) => void
   onSend: ComposerSend
-  pinnedMentionIds?: readonly string[]
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
 }

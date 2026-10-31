@@ -18,6 +18,7 @@ from solus_api.connectors import worker
 from solus_api.core.config import Settings
 from solus_api.graph import kinds
 from solus_api.graph.edges import write_edge
+from solus_api.graph.graph_changed_fanout import GraphChangedFanout
 from solus_api.graph.live import LiveHub, graph_changed_frame
 from solus_api.models import Domain, GraphEntity, SolusEntry, SolusEntryKind, SolusSection
 from solus_api.routers import sources as sources_module
@@ -388,9 +389,13 @@ async def test_worker_startup_wires_the_trigger_to_the_hub(
     class _Redis:
         def __init__(self) -> None:
             self.jobs: list[tuple[str, str, str]] = []
+            self.deleted: list[str] = []
 
         async def enqueue_job(self, name: str, *args: str, _job_id: str) -> None:
             self.jobs.append((name, args[0], _job_id))
+
+        async def delete(self, key: str) -> None:
+            self.deleted.append(key)
 
     async def fake_start(self: LiveHub) -> None:
         return None
@@ -408,12 +413,14 @@ async def test_worker_startup_wires_the_trigger_to_the_hub(
 
     await worker._on_startup(ctx)
 
+    # SOLUSDEV-321 P0-T5: the hub holds the fan-out of the one registration list.
     trigger = ctx["graph_hub"].on_graph_changed
-    assert isinstance(trigger, BudgetTrigger)
+    assert isinstance(trigger, GraphChangedFanout)
     project_id = uuid.uuid4()
     await trigger(project_id)
     await asyncio.sleep(0.05)
     assert redis.jobs == [("recompute_budgets", str(project_id), budget_job_id(str(project_id)))]
+    assert redis.deleted == [f"solus:project_card:{project_id}"]  # through the worker's store
     await worker._on_shutdown(ctx)
     names = {getattr(f, "name", getattr(f, "__name__", "")) for f in _worker_functions(settings)}
     assert "recompute_budgets" in names

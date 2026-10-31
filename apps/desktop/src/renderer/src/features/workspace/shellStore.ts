@@ -48,19 +48,25 @@ export interface ShellState {
   /** SOLUSDEV-318: the Home pane the next Home mount opens on (a Settings
    *  "Open team page" / "Manage connected accounts" link). Home clears it. */
   homeView: HomePaneView | null
+  /** SOLUSDEV-321 P7: the finding a SOL citation pill asked the Live Bench to open — read by the
+   *  Bench's Findings pane on its next mount, which clears it. */
+  benchFinding: string | null
 
   setToast: (toast: ShellToast) => void
   clearToast: () => void
   setLastMain: (screen: MainScreen) => void
   requestHomeView: (view: HomePaneView) => void
   clearHomeView: () => void
+  requestBenchFinding: (findingId: string) => void
+  clearBenchFinding: () => void
   reset: () => void
 }
 
 const INITIAL = {
   toast: null as ShellToast | null,
   lastMain: 'home' as MainScreen,
-  homeView: null as HomePaneView | null
+  homeView: null as HomePaneView | null,
+  benchFinding: null as string | null
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -71,5 +77,7 @@ export const useShellStore = create<ShellState>((set) => ({
   setLastMain: (screen) => set({ lastMain: screen }),
   requestHomeView: (homeView) => set({ homeView }),
   clearHomeView: () => set({ homeView: null }),
+  requestBenchFinding: (benchFinding) => set({ benchFinding }),
+  clearBenchFinding: () => set({ benchFinding: null }),
   reset: () => set({ ...INITIAL })
 }))

@@ -32,6 +32,7 @@ import re
 from typing import TYPE_CHECKING
 
 from solus_api.checkers.core import DEFAULT_CHECKERS
+from solus_api.checkers.environment import PinConflictChecker
 from solus_api.checkers.interface import Checker, Warning, run_checkers
 from solus_api.contracts.impact import LOCATOR_RE, Consequence, ConsequenceEvidence
 from solus_api.fingerprint.contract import FingerprintOutput
@@ -228,7 +229,10 @@ def checker_provider(
     stays in this assembly layer, never in a checker); each warning becomes one
     contract-valid `Consequence` attached to every implicated entity.
     """
-    rules: tuple[Checker, ...] = tuple(checkers) if checkers is not None else DEFAULT_CHECKERS
+    # M105: pin conflicts left DEFAULT_CHECKERS (the matrix raises them), but impact still reports.
+    rules: tuple[Checker, ...] = (
+        tuple(checkers) if checkers is not None else (*DEFAULT_CHECKERS, PinConflictChecker())
+    )
 
     async def provide(
         neighborhood: Neighborhood, focus_id: UUID
@@ -310,6 +314,7 @@ def build_narrate_fn(
                 redis=redis,
                 enqueue=enqueue,
                 max_tokens=max_tokens,
+                purpose="narration",
             )
         except Exception:  # noqa: BLE001 — narration is best-effort; impact must never fail on it
             logger.warning("impact narration unavailable — using template rationale", exc_info=True)

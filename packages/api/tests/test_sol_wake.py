@@ -128,6 +128,8 @@ async def test_a_wake_persists_the_waiting_tool_turn_and_runs_one_turn(
     )
     # The tail rides fenced history (the newest TOOL turn), never the instruction.
     assert TAIL not in ctx.prompt and "Press Enter" not in ctx.prompt
+    # The prompt is Solus-authored and embeds the program: it never researches the web.
+    assert ctx.research_allowed is False
     assert any(
         role == "tool" and "waiting for input" in text and "Press Enter" in text
         for role, text in ((t.role, t.content) for t in ctx.history)

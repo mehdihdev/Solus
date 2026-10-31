@@ -185,6 +185,27 @@ def test_extraction_is_scoped_to_the_documented_positions() -> None:
     assert _net_map(netlist) == {"REAL": {("U1", "1")}}
 
 
+# ------------------------------------------------------------- positions (P3-T4)
+
+
+def test_footprint_positions_parsed() -> None:
+    """R59: a component's position is its footprint's OWN `(at x y [rot])` in the board's units,
+    never a pad's or a field's (those sit a level deeper). `rot` is null when the file omits it,
+    and a footprint that states no readable placement has no position."""
+    by_ref = _components()
+    assert by_ref["U1"].position == {"x": 100.0, "y": 50.0, "rot": None}
+    assert by_ref["C1"].position == {"x": 100.0, "y": 60.0, "rot": None}
+    rotated = _components(KICAD_PCB.replace("(at 110 50)", "(at 110 50 90)", 1))
+    assert rotated["R1"].position == {"x": 110.0, "y": 50.0, "rot": 90.0}
+    text = """(kicad_pcb (version 20241229) (net 1 "N")
+      (footprint "Lib:A" (layer "F.Cu") (property "Reference" "U1" (at 1 2 0))
+        (pad "1" smd rect (at 3 4) (net 1 "N")))
+      (footprint "Lib:B" (at 5 nan) (property "Reference" "U2"))
+      (footprint "Lib:C" (at -1.5 2.25 -90) (property "Reference" "U3")))"""
+    placed = {c.designator: c.position for c in parse_kicad_pcb(text).components}
+    assert placed == {"U1": None, "U2": None, "U3": {"x": -1.5, "y": 2.25, "rot": -90.0}}
+
+
 # ------------------------------------------------------------- refusals
 
 

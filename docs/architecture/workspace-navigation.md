@@ -176,8 +176,8 @@ be assigned/reassigned explicitly through the versioned ownership API.
 Selection makes no model call. Explicit Ask SOL pins the real selected node to the project's active
 chat (`features/sol/pinnedContextStore.ts`, localStorage, cleared when the account ends) and opens
 the SOL page with a seeded draft; the SOL window keeps `openSolSubject`. Submission carries the
-UUID in existing `MessageCreate.mentions` (pinned nodes merged with typed `@`-mentions, capped at
-8), uses the current project conversation and consumes Guide/Expert mode,
+UUID in `MessageCreate.pins` (the chat's pinned nodes, capped at 8; typed `@`-mentions stay in
+`mentions`), uses the current project conversation and consumes Guide/Expert mode,
 action mode, budget admission and confirmation infrastructure. Bind each submitted turn to its
 submitted entity, even if selection changes; stale account/project results are discarded. Do
 not create a fresh chat for every click or invent a parallel agent service.

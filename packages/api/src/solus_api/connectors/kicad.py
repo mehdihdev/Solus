@@ -28,6 +28,8 @@ components-only graph (§5.2). The change-detection hash covers both texts.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import ClassVar, Final
 
 from solus_api.connectors.contracts import (
@@ -59,7 +61,13 @@ class KicadConnector(EdaExportConnector):
 
     provider: ClassVar[str] = "kicad"
     capabilities: ClassVar[frozenset[Capability]] = frozenset(
-        {Capability.CHANGE_SIGNAL, Capability.NETLIST, Capability.STRUCTURE}
+        {Capability.CHANGE_SIGNAL, Capability.NETLIST, Capability.RENDER, Capability.STRUCTURE}
+    )
+    #: RENDER (SOLUSDEV-321 P5, R104): the companion tools that export a view as PDF, by view. Each
+    #: is flagged `returns_image` in the fork's allowlist; SOL's renderer consumes its one uploaded
+    #: artifact and rasterises the first page (`agent/vision/renderers.py`).
+    render_tools: ClassVar[Mapping[str, str]] = MappingProxyType(
+        {"sheet": "kicad.export_schematic_pdf", "board": "kicad.export_board_pdf"}
     )
     #: The two design inputs. `export` rides the family's acquisition chain;
     #: `board` is inline only (§5.2a). `project_path` (live acquisition of the

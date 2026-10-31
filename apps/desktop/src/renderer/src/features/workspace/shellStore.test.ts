@@ -44,6 +44,22 @@ describe('homeView (SOLUSDEV-318: Settings deep links into Home)', () => {
   })
 })
 
+describe('benchFinding (SOLUSDEV-321 P7: a finding pill opens the Bench on that finding)', () => {
+  it('holds the requested finding until the Bench takes it', () => {
+    expect(useShellStore.getState().benchFinding).toBeNull()
+    useShellStore.getState().requestBenchFinding('f1')
+    expect(useShellStore.getState().benchFinding).toBe('f1')
+    useShellStore.getState().clearBenchFinding()
+    expect(useShellStore.getState().benchFinding).toBeNull()
+  })
+
+  it('is cleared by reset', () => {
+    useShellStore.getState().requestBenchFinding('f1')
+    useShellStore.getState().reset()
+    expect(useShellStore.getState().benchFinding).toBeNull()
+  })
+})
+
 describe('routeKey', () => {
   it('keys main screens by name, alerts by id and extension pages by slug', () => {
     expect(routeKey({ name: 'bench' })).toBe('bench')

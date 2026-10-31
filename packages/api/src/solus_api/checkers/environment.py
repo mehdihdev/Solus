@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 from uuid import UUID
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
@@ -28,7 +28,13 @@ from solus_api.agent.interfaces import GraphContext
 from solus_api.checkers.interface import Checker, Severity, Warning
 from solus_api.fingerprint.contract import FingerprintOutput
 
+if TYPE_CHECKING:
+    from solus_api.checkers.fact_store import FactStore
+
 REQUIREMENT_KIND: Final = "python_requirement"
+SPLIT_ADVICE: Final = (
+    "split the environments: one virtual environment per requirement file that pins this package"
+)
 _NORMALIZE: Final = re.compile(r"[-_.]+")
 _PIN: Final = re.compile(r"^==\s*([0-9][^,;\s]*)$")
 
@@ -99,53 +105,83 @@ def _conflict(a: Requirement, b: Requirement) -> Severity | None:
     return None if spec.contains(pin, prereleases=True) else Severity.WARNING
 
 
+class PinConflict(NamedTuple):
+    """One package the dependency files pin differently: the worst disagreement between two of
+    them, and every file's requirement for it."""
+
+    package: str
+    severity: Severity
+    requirements: tuple[Requirement, ...]
+
+    @property
+    def pins(self) -> list[dict[str, str]]:
+        """`[{source_file, specifier}]` of every requirement, sorted."""
+        return sorted(
+            ({"source_file": r.source_file, "specifier": r.specifier} for r in self.requirements),
+            key=lambda p: (p["source_file"], p["specifier"]),
+        )
+
+    @property
+    def message(self) -> str:
+        files = ", ".join(sorted({r.source_file for r in self.requirements}))
+        return (
+            f"'{self.package}' is pinned differently across {files} — one environment "
+            "cannot satisfy both."
+        )
+
+
+def pin_conflicts(graph: GraphContext) -> list[PinConflict]:
+    """Every package the graph's requirement nodes pin differently across files, by name. Pure;
+    `PinConflictChecker` words each as a Warning, and the matrix's `package_version_conflict`
+    (`checkers/cells/software_software.py`) reads the same list."""
+    by_name: dict[str, list[Requirement]] = defaultdict(list)
+    for req in requirements_of(graph):
+        by_name[req.name].append(req)
+    found: list[PinConflict] = []
+    for name, reqs in sorted(by_name.items()):
+        worst = _worst_conflict(reqs)
+        if worst is not None:
+            found.append(PinConflict(name, worst, tuple(reqs)))
+    return found
+
+
+def _worst_conflict(reqs: list[Requirement]) -> Severity | None:
+    """The worst disagreement between two files' requirements; None when every pair agrees."""
+    worst: Severity | None = None
+    for i, a in enumerate(reqs):
+        for b in reqs[i + 1 :]:
+            if a.source_file == b.source_file:
+                continue
+            severity = _conflict(a, b)
+            if severity is not None and (worst is None or severity is Severity.CRITICAL):
+                worst = severity
+    return worst
+
+
 class PinConflictChecker(Checker):
-    """The same package pinned differently across the folder's dependency files."""
+    """The same package pinned differently across the folder's dependency files, worded for the
+    code-environment proposal (`propose_environments`, `docs/api/code-environment.md`). It is not
+    in `DEFAULT_CHECKERS`: the matrix's `package_version_conflict` raises the conflict from the
+    same `pin_conflicts`, so one conflict is raised once."""
 
     checker_id = "python_pin_conflict"
     domains = ("code",)
 
-    def check(self, graph: GraphContext, parts: FingerprintOutput) -> list[Warning]:
-        by_name: dict[str, list[Requirement]] = defaultdict(list)
-        for req in requirements_of(graph):
-            by_name[req.name].append(req)
-        warnings: list[Warning] = []
-        for name, reqs in sorted(by_name.items()):
-            if len(reqs) < 2:
-                continue
-            worst: Severity | None = None
-            for i, a in enumerate(reqs):
-                for b in reqs[i + 1 :]:
-                    if a.source_file == b.source_file:
-                        continue
-                    severity = _conflict(a, b)
-                    if severity is not None and (worst is None or severity is Severity.CRITICAL):
-                        worst = severity
-            if worst is None:
-                continue
-            pins = sorted(
-                ({"source_file": r.source_file, "specifier": r.specifier} for r in reqs),
-                key=lambda p: (p["source_file"], p["specifier"]),
+    def check(
+        self, graph: GraphContext, parts: FingerprintOutput, facts: FactStore | None = None
+    ) -> list[Warning]:
+        return [
+            Warning(
+                checker_id=self.checker_id,
+                severity=conflict.severity,
+                domains=self.domains,
+                message=conflict.message,
+                evidence={"package": conflict.package, "pins": conflict.pins},
+                entity_ids=tuple(r.entity_id for r in conflict.requirements),
+                suggested_area=SPLIT_ADVICE,
             )
-            files = ", ".join(sorted({r.source_file for r in reqs}))
-            warnings.append(
-                Warning(
-                    checker_id=self.checker_id,
-                    severity=worst,
-                    domains=self.domains,
-                    message=(
-                        f"'{name}' is pinned differently across {files} — one environment "
-                        "cannot satisfy both."
-                    ),
-                    evidence={"package": name, "pins": pins},
-                    entity_ids=tuple(r.entity_id for r in reqs),
-                    suggested_area=(
-                        "split the environments: one virtual environment per requirement file "
-                        "that pins this package"
-                    ),
-                )
-            )
-        return warnings
+            for conflict in pin_conflicts(graph)
+        ]
 
 
 def _env_name(source_file: str) -> str:

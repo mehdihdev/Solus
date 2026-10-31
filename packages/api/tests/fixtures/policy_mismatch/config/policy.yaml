@@ -1,0 +1,6 @@
+# Fixture (SOLUSDEV-321 P6): a composed policy config. Its action space is 6 wide; the checkpoint
+# path is recorded, never opened.
+policy:
+  obs_dim: 24
+  action_dim: 6
+  checkpoint: checkpoints/arm_policy.pt

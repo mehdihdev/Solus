@@ -3,7 +3,8 @@
 // Workspace, where a node's panel offers Ask SOL.
 import { Mono } from '../../components/ui/Mono'
 import { MAX_MENTIONS } from './mentionToken'
-import { DomainDot, domainIdOf } from './domainDot'
+import { DomainDot } from './domainDot'
+import { domainIdOf } from './domainIds'
 import type { PinnedNode } from './pinnedContextStore'
 
 export function PinnedNodesSection({

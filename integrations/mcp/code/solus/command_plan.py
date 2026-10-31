@@ -11,6 +11,7 @@ on the proposed name, the resolved program and its realpath.
 """
 
 import os
+import re
 import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -294,8 +295,31 @@ SEARCH_PATH_VARIABLES: frozenset[str] = frozenset(
         "PERL5LIB",
         "RUBYLIB",
         "CLASSPATH",
+        # SOLUSDEV-321 P6 (R136): where a Python program (`ros2` is one) loads from — the user
+        # site, the prefix, the platform lib dir and the executable it reports — so a profile
+        # pointing any of them into the workspace makes the program project code.
+        "PYTHONUSERBASE",
+        "PYTHONHOME",
+        "PYTHONPLATLIBDIR",
+        "PYTHONEXECUTABLE",
+        # R137: the bytecode cache Python loads in place of a module's source, and the executable
+        # a macOS launcher reports (the pyvenv.cfg beside it picks the prefix and site-packages).
+        "PYTHONPYCACHEPREFIX",
+        "__PYVENV_LAUNCHER__",
+        # R137: configuration `ros2` loads through its DDS layer (a Cyclone file can name plugin
+        # libraries) and through libcrypto (providers and engines are libraries).
+        "FASTRTPS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_ENVIRONMENT_FILE",
+        "CYCLONEDDS_URI",
+        "OPENSSL_CONF",
+        "OPENSSL_MODULES",
+        "OPENSSL_ENGINES",
     }
 )
+#: An absolute path anywhere in a variable's value: a list entry, an option's value
+#: (`-javaagent:/x`, `--config=/x`) or a URI's path (`file:///x`).
+ABSOLUTE_PATH = re.compile(r"/[^\s:;,=\"'<>]*")
 
 
 def planned_program(root: Path, argv0: str, which: Which) -> str | None:
@@ -321,16 +345,18 @@ def _runs_project_code(path: str, args: Sequence[str]) -> bool:
 
 
 def _profile_reaches_workspace(root: Path, profile: profiles.Profile | None) -> bool:
-    """A search-path variable of the applied profile has an entry in the workspace. An
-    empty or relative entry means the working directory, which is in the workspace."""
+    """A variable of the applied profile names a path in the workspace. Any absolute path in
+    any variable's value counts (R137: no list of loader variables is ever complete, and a
+    colcon package hook can export any variable); for a search-path variable an empty or
+    relative entry counts too, since it means the working directory, which is the workspace."""
     if profile is None:
         return False
     for name, value in profile.variables:
-        if name not in SEARCH_PATH_VARIABLES:
-            continue
-        for entry in value.split(os.pathsep):
-            if not os.path.isabs(entry) or _within(root, entry):
-                return True
+        if any(_within(root, path) for path in ABSOLUTE_PATH.findall(value)):
+            return True
+        entries = value.split(os.pathsep)
+        if name in SEARCH_PATH_VARIABLES and not all(map(os.path.isabs, entries)):
+            return True
     return False
 
 

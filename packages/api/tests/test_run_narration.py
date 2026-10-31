@@ -4,6 +4,7 @@ import copy
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,7 +13,7 @@ from solus_api.models import SolMode
 from solus_api.orchestration.enums import Complexity, RouteType
 
 
-def report():
+def report() -> dict[str, Any]:
     return {
         "findings": [
             {
@@ -28,15 +29,15 @@ def report():
 
 
 async def invoke(
-    result,
-    monkeypatch,
-    text='["Possible stall; the cause remains uncertain."]',
-    mode=SolMode.GUIDE,
-    error=None,
-):
+    result: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    text: str = '["Possible stall; the cause remains uncertain."]',
+    mode: SolMode = SolMode.GUIDE,
+    error: Exception | None = None,
+) -> tuple[dict[str, Any], AsyncMock, dict[str, Any]]:
     gateway = AsyncMock(return_value=SimpleNamespace(text=text), side_effect=error)
     monkeypatch.setattr(narration, "complete", gateway)
-    dependencies = dict(
+    dependencies: dict[str, Any] = dict(
         secret_store=object(),
         user_id=uuid.uuid4(),
         session=object(),
@@ -49,7 +50,9 @@ async def invoke(
 
 
 @pytest.mark.asyncio
-async def test_one_metered_cheap_batch_preserves_evidence_and_separates_data(monkeypatch):
+async def test_one_metered_cheap_batch_preserves_evidence_and_separates_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     result = report()
     before = copy.deepcopy(result)
     answer, gateway, deps = await invoke(result, monkeypatch)
@@ -70,7 +73,7 @@ async def test_one_metered_cheap_batch_preserves_evidence_and_separates_data(mon
 
 
 @pytest.mark.asyncio
-async def test_expert_and_empty_have_honest_modes(monkeypatch):
+async def test_expert_and_empty_have_honest_modes(monkeypatch: pytest.MonkeyPatch) -> None:
     _, gateway, _ = await invoke(report(), monkeypatch, mode=SolMode.EXPERT)
     assert "Expert" in gateway.call_args.kwargs["conversation"].system
     answer, gateway, _ = await invoke({"findings": [], "insufficient": []}, monkeypatch)
@@ -94,7 +97,9 @@ async def test_expert_and_empty_have_honest_modes(monkeypatch):
         "x" * 40000,
     ],
 )
-async def test_hostile_or_malformed_output_falls_back(monkeypatch, text):
+async def test_hostile_or_malformed_output_falls_back(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
     result = report()
     answer, _, _ = await invoke(result, monkeypatch, text=text)
     assert answer["mode"] == "deterministic"
@@ -102,7 +107,9 @@ async def test_hostile_or_malformed_output_falls_back(monkeypatch, text):
 
 
 @pytest.mark.asyncio
-async def test_budget_or_provider_failure_does_not_retry_or_expose_exception(monkeypatch):
+async def test_budget_or_provider_failure_does_not_retry_or_expose_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     answer, gateway, _ = await invoke(
         report(), monkeypatch, error=RuntimeError("private credential")
     )
@@ -112,7 +119,7 @@ async def test_budget_or_provider_failure_does_not_retry_or_expose_exception(mon
 
 
 @pytest.mark.asyncio
-async def test_oversized_batch_is_not_sent(monkeypatch):
+async def test_oversized_batch_is_not_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     result = report()
     result["findings"] *= 33
     answer, gateway, _ = await invoke(result, monkeypatch)
@@ -121,12 +128,14 @@ async def test_oversized_batch_is_not_sent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_route_binds_user_setting_and_preserves_origin_before_accounting(monkeypatch):
-    from solus_api.livebench.runs import router
+async def test_route_binds_user_setting_and_preserves_origin_before_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.livebench.runs import analysis, router, store
 
     result = report()
     user_id = uuid.uuid4()
-    session = object()
+    session: Any = object()
     state = SimpleNamespace(
         secret_store=object(),
         redis=object(),
@@ -136,13 +145,16 @@ async def test_route_binds_user_setting_and_preserves_origin_before_accounting(m
     )
     entity = object()
     monkeypatch.setattr(router, "require_role", lambda *args: None)
-    monkeypatch.setattr(router.store, "record", AsyncMock(return_value=entity))
-    monkeypatch.setattr(router.store, "load", AsyncMock(return_value=object()))
-    monkeypatch.setattr(router.analysis, "findings", lambda _: result)
+    monkeypatch.setattr(store, "record", AsyncMock(return_value=entity))
+    monkeypatch.setattr(store, "load", AsyncMock(return_value=object()))
+    monkeypatch.setattr(analysis, "findings", lambda _: result)
     origin = SimpleNamespace(origin="synthetic")
-    monkeypatch.setattr(router.store, "summary", lambda _: origin)
+    monkeypatch.setattr(store, "summary", lambda _: origin)
+    # SOLUSDEV-321 P6 fix 1 (R141): the route reads the asker's levels, none stored here
+    levels = AsyncMock(return_value=None)
+    monkeypatch.setattr(router, "turn_expertise", levels)
 
-    async def gateway(*args, **kwargs):
+    async def gateway(*args: Any, **kwargs: Any) -> SimpleNamespace:
         assert kwargs["user_id"] == user_id
         assert kwargs["session"] is session
         assert kwargs["redis"] is state.redis
@@ -150,27 +162,29 @@ async def test_route_binds_user_setting_and_preserves_origin_before_accounting(m
         assert "Expert" in kwargs["conversation"].system
         # Accounting may expire ORM state after provider completion. The route
         # must have copied provenance before entering that boundary.
-        monkeypatch.setattr(router.store, "summary", lambda _: pytest.fail("late ORM access"))
+        monkeypatch.setattr(store, "summary", lambda _: pytest.fail("late ORM access"))
         return SimpleNamespace(text='["Possible stall; the cause remains uncertain."]')
 
     monkeypatch.setattr(narration, "complete", gateway)
-    ctx = SimpleNamespace(
+    ctx: Any = SimpleNamespace(
         project=SimpleNamespace(id=uuid.uuid4()),
         user=SimpleNamespace(id=user_id, sol_mode=SolMode.EXPERT),
     )
-    response = await router.narrate_run(
-        ctx, session, SimpleNamespace(app=SimpleNamespace(state=state)), uuid.uuid4()
-    )
+    request: Any = SimpleNamespace(app=SimpleNamespace(state=state))
+    response = await router.narrate_run(ctx, session, request, uuid.uuid4())
     assert response["data"]["evidence_origin"] == "synthetic"
     assert response["data"]["mode"] == "model"
+    levels.assert_awaited_once_with(session, ctx.project.id, user_id, None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["user_id", "session"])
-async def test_identity_is_required_even_for_internal_callers(monkeypatch, missing):
+async def test_identity_is_required_even_for_internal_callers(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
     gateway = AsyncMock()
     monkeypatch.setattr(narration, "complete", gateway)
-    dependencies = dict(
+    dependencies: dict[str, Any] = dict(
         secret_store=object(),
         user_id=uuid.uuid4(),
         session=object(),

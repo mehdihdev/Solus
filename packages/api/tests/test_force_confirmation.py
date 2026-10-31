@@ -1,5 +1,9 @@
 """A review-only Build request cannot authorize a routine file write."""
 
+from collections.abc import AsyncIterator
+from pathlib import Path
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 from solus_api.agent.execution_policy import register_owned_routine
@@ -16,19 +20,25 @@ from test_sol import _create_conversation, _project
 
 
 @pytest.mark.parametrize("invalid", ["true", "false", 1, 0, None])
-def test_force_confirmation_requires_a_real_boolean(invalid):
+def test_force_confirmation_requires_a_real_boolean(invalid: Any) -> None:
     with pytest.raises(ValidationError):
         MessageCreate(content="Review this edit", force_confirmation=invalid)
 
 
-def test_force_confirmation_defaults_off():
+def test_force_confirmation_defaults_off() -> None:
     assert MessageCreate(content="Normal Build request").force_confirmation is False
 
 
 @pytest.mark.parametrize("decision", ["approve", "reject"])
 async def test_review_only_build_parks_owned_machine_write_until_explicit_decision(
-    app, client, alice_headers, bob_headers, db, tmp_path, decision
-):
+    app: Any,
+    client: Any,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: Any,
+    tmp_path: Path,
+    decision: str,
+) -> None:
     _, project = await _project(client, alice_headers)
     conversation = await _create_conversation(client, alice_headers, project["id"])
     target = tmp_path / "control.py"
@@ -43,7 +53,7 @@ async def test_review_only_build_parks_owned_machine_write_until_explicit_decisi
     app.dependency_overrides[get_sol_registry] = lambda: registry
 
     class Runner:
-        async def run(self, ctx):
+        async def run(self, ctx: Any) -> AsyncIterator[AgentEvent]:
             # Even a model that insists on writing cannot override the HTTP policy.
             call = ToolCall(
                 tool="machine.write_file",
@@ -62,6 +72,13 @@ async def test_review_only_build_parks_owned_machine_write_until_explicit_decisi
     assert response.status_code == 200, response.text
     assert "event: tool_confirmation" in response.text
     assert target.read_text() == before
+    # M184: the saved transcript tells the next turn the call is parked, not unauthorized.
+    turns = await client.get(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{conversation['id']}/turns",
+        headers=alice_headers,
+    )
+    contents = [str(turn["content"]) for turn in turns.json()["data"]]
+    assert "machine.write_file → parked, awaiting your approval" in contents, contents
     assert native.calls and all(call.get("dry_run") is True for call in native.calls)
     confirmation = await db.scalar(select(ToolConfirmation))
     assert confirmation is not None

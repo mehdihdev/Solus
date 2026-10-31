@@ -1,4 +1,5 @@
-"""Graph-evidenced static CAD import through SOL's existing approval gate."""
+"""Graph-evidenced static CAD import through SOL's existing approval gate. Its card also shows
+what the simulation ladder proposes first for the parts it touches (SOLUSDEV-321 P4-T5, R99)."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -7,7 +8,9 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.confirmations import _MAX_PREVIEW_ROWS
 from solus_api.agent.tools.shapes import ToolDescriptor
+from solus_api.agent.tools.simulate import precheck_rows
 from solus_api.agent.tools.tool import InProcessTool
 from solus_api.livebench.scene.cad_import import (
     IMPORT_KIND,
@@ -39,9 +42,10 @@ class SceneOperations:
 
     async def preview(self, args: dict[str, Any]) -> list[dict[str, Any]]:
         body = CadImport.model_validate(args)
-        robot = await self.service.entity(body.robot_id, "physical_robot")
-        root, leaves = await selection(self.service, body.source_entity_id, body.expected_revision)
-        return [
+        service = self.service
+        robot = await service.entity(body.robot_id, "physical_robot")
+        root, leaves = await selection(service, body.source_entity_id, body.expected_revision)
+        rows = [
             {"label": "Robot", "before": None, "after": robot.name},
             {"label": "CAD source", "before": None, "after": root.name},
             {"label": "Source revision", "before": None, "after": body.expected_revision},
@@ -51,6 +55,14 @@ class SceneOperations:
                 "after": f"{len(leaves)} measured CAD occurrences. {STATIC_REASON}",
             },
         ]
+        # R99: what the ladder proposes first for what the import touches, under the person's
+        # own view as the import's reads are.
+        touched = [robot.id, root.id, *(leaf.id for leaf, _ in leaves)]
+        room = _MAX_PREVIEW_ROWS - len(rows)
+        advice = await precheck_rows(
+            service.session, service.project_id, service.user_id, touched, room=room
+        )
+        return [*rows, *advice]
 
     async def execute(self, args: dict[str, Any]) -> dict[str, Any]:
         body = CadImport.model_validate(args)

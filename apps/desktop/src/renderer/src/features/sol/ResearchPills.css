@@ -1,0 +1,91 @@
+/* SOLUSDEV-321 P1-T5: the web sources of a turn's research. Tokens only. */
+.research-pills {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 6px 0;
+}
+
+.research-pills__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mut);
+  font-size: 11px;
+}
+
+.research-pills__list {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.research-pill {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  background: var(--sur2);
+  font-size: 11.5px;
+}
+
+.research-pill__label {
+  color: var(--tx);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.research-pill__url {
+  flex: 1 1 12rem;
+  min-width: 0;
+  color: var(--mut);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.research-pill__tag {
+  padding: 0 6px;
+  border: 1px solid var(--bd);
+  border-radius: 999px;
+  color: var(--mut);
+  font-size: 10px;
+}
+
+.research-pill__action {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--mut);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline dotted;
+}
+
+.research-pill__action:hover:not(:disabled) {
+  color: var(--tx);
+}
+
+.research-pill__action:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.research-pill__action:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+.research-pill__error {
+  flex-basis: 100%;
+  color: var(--err);
+  font-size: 11px;
+}

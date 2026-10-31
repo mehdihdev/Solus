@@ -164,6 +164,18 @@ export interface StreamSolMessageInput {
    */
   mentions?: readonly string[]
   /**
+   * SOLUSDEV-321 P0-T3: where the person is looking — the workspace focus and the trail they
+   * came through (oldest first, the focus itself excluded). Sent by the SOL page only, and
+   * only when there is a focus; the server drops a stale id in it instead of refusing the turn.
+   */
+  focus?: { readonly entityId: string; readonly path: readonly string[] }
+  /** The chat's pinned nodes, kept apart from the typed `@` mentions. Omitted when empty. */
+  pins?: readonly string[]
+  /** The finding this turn was asked from (the server 404s one the project cannot see). */
+  findingId?: string
+  /** The bench robot this turn was asked from (same). */
+  robotId?: string
+  /**
    * SOLUSDEV-244: the user's engineering conventions from their own
    * `~/.solus/preferences.json`. Sent with the turn (the server keeps no copy)
    * and fenced into the system prompt above the shipped references. Omitted
@@ -180,6 +192,17 @@ export interface StreamSolMessageInput {
   baseUrl?: string
 }
 
+/** SOLUSDEV-321 P0-T3: the anchors a turn carries beside its text, each sent only when it has
+ *  something to say — so the default body stays the minimal one. */
+function anchorFields(input: StreamSolMessageInput): Record<string, unknown> {
+  return {
+    ...(input.focus ? { focus: { entity_id: input.focus.entityId, path: input.focus.path } } : {}),
+    ...(input.pins?.length ? { pins: input.pins } : {}),
+    ...(input.findingId ? { finding_id: input.findingId } : {}),
+    ...(input.robotId ? { robot_id: input.robotId } : {})
+  }
+}
+
 /** The JSON body of a turn. `mentions` is always present, so the server sees
  *  one body shape whether or not the user picked anything. A resume turn omits
  *  `content` when it is empty. */
@@ -191,6 +214,7 @@ function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
     ...(resume ? { resume_confirmation_id: resume } : {}),
     action_mode: input.actionMode,
     mentions: input.mentions ?? [],
+    ...anchorFields(input),
     ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
     ...(input.thinkHarder ? { think_harder: true } : {}),
     ...(input.preferences ? { preferences: input.preferences } : {}),

@@ -161,6 +161,16 @@ class RedisCacheStore:
         )
 
 
+async def within_bound[T](call: Awaitable[T]) -> T:
+    """`call`, bounded by the graph fan-out's store timeout (`CALLBACK_TIMEOUT_SECONDS`): a
+    stalled store raises `TimeoutError` rather than stall the turn or tick that awaits it (M13).
+    The envelope, project-card and research caches all bound their store calls with it."""
+    # local: the fan-out imports the caches that import this module
+    from solus_api.graph.graph_changed_fanout import CALLBACK_TIMEOUT_SECONDS
+
+    return await asyncio.wait_for(call, CALLBACK_TIMEOUT_SECONDS)
+
+
 async def single_flight(
     store: CacheStore,
     key: str,

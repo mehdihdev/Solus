@@ -261,6 +261,14 @@ def _job(row: Job, kind: _Kind, at: str) -> _Derived:
         )
 
 
+def _is_hint(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """A finding change a teammate's pane refetches for: its status, severity or count, or its
+    first explanation (SOLUSDEV-321 P2-T6, Q4c: narration filling in an empty one)."""
+    if not before.get("explanation") and after.get("explanation"):
+        return True
+    return any(before.get(k) != after.get(k) for k in ("status", "severity", "count"))
+
+
 def _finding(row: GraphEntity, kind: _Kind, at: str) -> _Derived:
     # Every GraphEntity flush lands here (syncs write thousands): the kind guard is first.
     if row.kind != FINDING or kind == "deleted":
@@ -278,8 +286,8 @@ def _finding(row: GraphEntity, kind: _Kind, at: str) -> _Derived:
     if not history.has_changes() or not history.deleted:
         return
     before = history.deleted[0] or {}
-    if all(before.get(k) == row.attrs.get(k) for k in ("status", "severity", "count")):
-        return  # explanation/detail fills and the like are not hints
+    if not _is_hint(before, row.attrs):
+        return  # detail fills, a rewritten explanation and the like are not hints
     if status == "resolved" and before.get("status") != "resolved":
         frame: BaseModel = FindingResolved.model_validate(hint)
     else:

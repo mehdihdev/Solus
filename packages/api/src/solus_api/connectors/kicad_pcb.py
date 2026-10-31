@@ -24,12 +24,19 @@ on that net; code 0 / an empty name mean unconnected. Board-only footprints
 without a reference (or with the `REF**` placeholder) are skipped and counted.
 
 Pruning keeps only the documented positions (§7 scoped traversal): depth-1 `net`
-and `footprint`; inside a footprint `layer`/`property`/`fp_text`/`pad`; inside a
-pad only `net`. Copper, zones, graphics and 3D models are never materialized.
+and `footprint`; inside a footprint `layer`/`property`/`fp_text`/`pad` and its own
+`at`; inside a pad only `net`. Copper, zones, graphics and 3D models are never
+materialized.
+
+Placement (SOLUSDEV-321 P3-T4, R59): the footprint's OWN `(at x y [rot])` →
+`Component.position {x, y, rot}` in the board's millimetres, `rot` None when the
+file omits it. A pad's or a field's `(at …)` sits one level deeper and stays
+pruned; a footprint with no readable `at` has no position.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any, Final
 
 from solus_api.connectors.eda import Component, Net, Netlist, Node
@@ -42,7 +49,7 @@ from solus_api.connectors.kicad_netlist import is_unset, pop_mpn
 from solus_api.connectors.kicad_sexpr import Sexp, child, children, string_at
 
 _TOP_LEVEL: Final = frozenset({"net", "footprint"})
-_FOOTPRINT_LEVEL: Final = frozenset({"layer", "property", "fp_text", "pad"})
+_FOOTPRINT_LEVEL: Final = frozenset({"layer", "property", "fp_text", "pad", "at"})
 _PAD_LEVEL: Final = frozenset({"net"})
 
 _REFERENCE: Final = "Reference"
@@ -174,7 +181,27 @@ def _component(
         schematic_symbol_name=None,  # a board has no libsource (§5.2a)
         datasheet_ref=_clean(props.get(_DATASHEET)),
         properties=properties,
+        position=_position(footprint),
     )
+
+
+def _position(footprint: Sexp) -> dict[str, float | None] | None:
+    """The footprint's own `(at x y [rot])` as `{x, y, rot}`; None when it states no readable
+    `x` and `y`. `rot` is None when the file omits it or it does not read as a number."""
+    at = child(footprint, "at")
+    x, y = _finite(string_at(at, 1)), _finite(string_at(at, 2))
+    if x is None or y is None:
+        return None
+    return {"x": x, "y": y, "rot": _finite(string_at(at, 3))}
+
+
+def _finite(text: str | None) -> float | None:
+    """A board coordinate as a finite float; None for an absent or non-numeric atom."""
+    try:
+        value = float(text) if text is not None else math.nan
+    except ValueError:
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _collect_pads(

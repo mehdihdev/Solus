@@ -14,11 +14,13 @@ import pytest
 from conftest import create_project, create_team, me  # type: ignore[attr-defined]
 from fastapi import FastAPI
 from httpx import AsyncClient
+from pydantic import ValidationError
 from solus_api.agent.interfaces import TelemetryWindow
 from solus_api.connectors.live import BatchCallback, LiveStatus
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.graph.codec import to_wire
 from solus_api.graph.packet import TelemetryPacket
+from solus_api.livebench.bench_router import BenchSessionIn, ReplayRealConfig
 from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -188,6 +190,24 @@ async def test_events_round_trip(client: AsyncClient, alice_headers: dict[str, s
     assert len(events) == 1
     assert events[0]["kind"] == "threshold_breach"
     assert events[0]["signal"] == "temp"
+
+
+def test_the_event_ring_carries_a_finding_id_only_where_the_server_attached_one() -> None:
+    """SOLUSDEV-321 P2-T3: a finding marker's id rides the ring's own record, attached by the
+    server (`append(..., finding_id=…)`) — the wire model has no such field to forge it with."""
+    from solus_api.livebench.bench_router import BenchEventRing, ObserverEventIn
+
+    ring, project, finding = BenchEventRing(), uuid.uuid4(), uuid.uuid4()
+    event = ObserverEventIn(
+        kind="threshold_breach", device_id="arm/3", signal="servo3.current", at=T0
+    )
+    ring.append(project, event)
+    ring.append(project, event, finding_id=finding)
+
+    plain, marked = ring.recent(project, 10)
+    assert "finding_id" not in plain
+    assert marked == {**plain, "finding_id": str(finding)}
+    assert ring.recent(uuid.uuid4(), 10) == []
 
 
 async def test_requires_authentication(client: AsyncClient, alice_headers: dict[str, str]) -> None:
@@ -634,6 +654,59 @@ async def test_mcap_requires_configured_root_and_refuses_escapes(
     assert ok.status_code == 201, ok.text
     (opened,) = fake_local.opened
     assert str(opened["path"]).endswith("run.mcap")
+
+
+async def test_mcap_refuses_a_path_it_cannot_use_with_422_not_500(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    fake_local: FakeLocal,
+    app: FastAPI,
+    tmp_path: Any,
+) -> None:
+    """SOLUSDEV-321 P2-T4: the confinement the MCAP provider shares with the replay provider
+    answers an embedded NUL, a symlink loop and a name too long to stat with the 422 every other
+    bad path gets (each was an unhandled error)."""
+    project_id = await _member_project(client, alice_headers)
+    url = f"/api/v1/projects/{project_id}/bench/sessions"
+    app.state.settings.bench_data_root = str(tmp_path)
+    (tmp_path / "loop.mcap").symlink_to(tmp_path / "loop.mcap")
+
+    for path in ("a\x00b.mcap", "x" * 300 + ".mcap", "loop.mcap"):
+        body = {"mode": "sim", "config": {"provider": "mcap-replay", "mcap_path": path}}
+        resp = await client.post(url, json=body, headers=alice_headers)
+        assert resp.status_code == 422, path[:20]
+    assert fake_local.opened == []
+
+
+def test_replay_provider_is_a_real_mode_provider_with_a_strict_body() -> None:
+    """SOLUSDEV-321 P2-T4: `replay` joins the discriminated union; unknown fields, the wrong
+    mode, a bad driver id, an empty or control-character path and a missing robot are refused."""
+    config: dict[str, Any] = {
+        "provider": "replay",
+        "recording": "serial_fake_arm_stall.json",
+        "driver_id": "lb06",
+        "robot_entity_id": str(uuid.uuid4()),
+    }
+
+    parsed = BenchSessionIn.model_validate({"mode": "real", "config": config})
+
+    assert isinstance(parsed.config, ReplayRealConfig)
+    assert (parsed.config.realtime, parsed.config.window_seconds) == (True, 1.0)  # the pane's pace
+    bad_bodies: list[dict[str, Any]] = [
+        {"mode": "sim", "config": config},
+        {"mode": "real", "config": {**config, "extra": 1}},
+        {"mode": "real", "config": {**config, "driver_id": "Not A Driver"}},
+        {"mode": "real", "config": {**config, "recording": ""}},
+        {"mode": "real", "config": {**config, "recording": "a\x00b.json"}},
+        {"mode": "real", "config": {**config, "recording": "a\nb.json"}},
+        {"mode": "real", "config": {**config, "recording": "x" * 4097}},
+        {"mode": "real", "config": {**config, "robot_entity_id": "not-a-uuid"}},
+        {"mode": "real", "config": {**config, "window_seconds": 0}},
+        {"mode": "real", "config": {k: v for k, v in config.items() if k != "robot_entity_id"}},
+    ]
+    for body in bad_bodies:
+        with pytest.raises(ValidationError):
+            BenchSessionIn.model_validate(body)
 
 
 async def test_device_recent_serves_unresolved_devices_batched(

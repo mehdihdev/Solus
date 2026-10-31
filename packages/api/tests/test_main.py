@@ -35,6 +35,9 @@ async def test_lifespan_closes_resources_even_when_a_phase_fails(
     async def sessions_close() -> None:
         events.append("sessions")
 
+    async def narrator_close() -> None:
+        events.append("narrator")
+
     async def hub_close() -> None:
         events.append("hub")
 
@@ -44,12 +47,58 @@ async def test_lifespan_closes_resources_even_when_a_phase_fails(
     app.state.graph_hub = SimpleNamespace(start=noop, stop=hub_close)
     app.state.hardware_connections = SimpleNamespace(startup=start, aclose=coordinator_close)
     app.state.bench_sessions = SimpleNamespace(aclose_all=sessions_close)
+    app.state.narrator = SimpleNamespace(aclose=narrator_close)
     app.state.device_watch = None
     with pytest.raises(RuntimeError, match=failure):
         async with app.router.lifespan_context(app):
             if failure == "body":
                 raise RuntimeError("body")
-    assert events[-3:] == ["coordinator", "sessions", "hub"]
+    # SOLUSDEV-321 P2-T6: the narrator's timers are cancelled once no session can hand it ids.
+    assert events[-4:] == ["coordinator", "sessions", "narrator", "hub"]
+
+
+async def test_one_envelope_cache_feeds_the_evaluator_and_is_dropped_by_the_fanout(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-321 P2-T3: the app builds ONE `EnvelopeCache`. A robot session's window evaluator
+    reads through it, and the graph-changed fan-out the lifespan installs drops that very
+    instance — its log-once state is per instance."""
+    import uuid
+    from types import SimpleNamespace
+
+    from solus_api import main
+    from solus_api.livebench.findings.window_evaluator import WindowEvaluator
+    from solus_api.livebench.sessions import SessionView
+
+    async def noop(*args: object) -> None:
+        pass
+
+    monkeypatch.setattr(main, "configure_logging", lambda: None)
+    monkeypatch.setattr(main, "report_provider_refs", noop)
+    monkeypatch.setattr(main, "create_all_tables", noop)
+    app.state.graph_hub = SimpleNamespace(start=noop, stop=noop, on_graph_changed=None)
+    app.state.hardware_connections = SimpleNamespace(startup=noop, aclose=noop)
+    app.state.device_watch = None
+    cache, dropped = app.state.envelope_cache, list[uuid.UUID]()
+
+    async def invalidate(project_id: uuid.UUID) -> None:
+        dropped.append(project_id)
+
+    monkeypatch.setattr(cache, "invalidate", invalidate)
+    view = SessionView(
+        project_id=uuid.uuid4(),
+        session_id=uuid.uuid4(),
+        robot_entity_id=uuid.uuid4(),
+        owner_user_id=None,
+        parts={},
+    )
+
+    evaluator = app.state.bench_sessions._evaluator_factory(view)
+    async with app.router.lifespan_context(app):
+        await app.state.graph_hub.on_graph_changed(view.project_id)
+
+    assert isinstance(evaluator, WindowEvaluator) and evaluator._cache is cache
+    assert dropped == [view.project_id]
 
 
 def test_create_app_mounts_v1_routes(app: FastAPI) -> None:

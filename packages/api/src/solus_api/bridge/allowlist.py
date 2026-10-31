@@ -98,6 +98,11 @@ class AllowedTool(BaseModel):
     #: can never opt a tool into being called with an argument it does not
     #: advertise.
     supports_dry_run: bool = False
+    #: SOLUSDEV-321 P5 (R102, R125): the tool answers with an image, or a PDF to rasterise,
+    #: uploaded as this call's one artifact. Solus-authored here, never advertised by the
+    #: companion. Such a tool is never offered to the model: `render_view` calls it and consumes
+    #: its artifact through `bridge.service.consume_tool_image`, which checks the bytes.
+    returns_image: bool = False
 
     @model_validator(mode="after")
     def _destructive_needs_reason(self) -> Self:
@@ -196,6 +201,9 @@ class BridgeToolSpec:
     server: str
     remote_name: str
     descriptor: ToolDescriptor
+    #: From the allowlist entry (`AllowedTool.returns_image`): only such a tool's artifact is ever
+    #: consumed as an image, and the runtime never offers it to the model.
+    returns_image: bool = False
 
 
 def _skip_advertised(server: str, name: str, reason: str) -> None:
@@ -259,7 +267,10 @@ def validate_inventory(hello: HelloData, allowlist: BridgeAllowlist) -> tuple[Br
             )
             specs.append(
                 BridgeToolSpec(
-                    server=advertised.server, remote_name=tool.name, descriptor=descriptor
+                    server=advertised.server,
+                    remote_name=tool.name,
+                    descriptor=descriptor,
+                    returns_image=allowed.returns_image,
                 )
             )
     return tuple(specs)

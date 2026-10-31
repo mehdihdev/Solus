@@ -1,26 +1,34 @@
 """Member-only recording routes. Capture never starts a device or commands motion."""
 
 import asyncio
+import logging
 import uuid
+from functools import partial
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from pydantic import Field, ValidationError
 from sqlalchemy import select, tuple_
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.agent.expertise import turn_expertise
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role, require_verified
+from solus_api.graph import kinds
+from solus_api.graph.read_scope import current_scope
 from solus_api.livebench.runs import analysis, narration, store
 from solus_api.livebench.runs.capture import Capture, RunCaptureManager
 from solus_api.livebench.runs.models import (
     MAX_BYTES,
+    RunManifest,
     RunSummary,
     StrictModel,
     encode_manifest,
     parse_manifest,
 )
 from solus_api.livebench.runs.snapshot import portable_manifest, snapshot, validate_references
+from solus_api.livebench.scene.part_bindings import bound_scenes, scene_joint_for_part
 from solus_api.livebench.sessions import SessionNotFoundError
 from solus_api.models import GraphEntity, Role, utcnow
 from solus_api.services.artifacts import fetch_artifact_bytes, get_artifact_metadata
@@ -30,6 +38,7 @@ router = APIRouter(
     prefix="/api/v1/projects/{project_id}/bench/runs", dependencies=[Depends(require_verified)]
 )
 Name = Annotated[str, Field(min_length=1, max_length=120)]
+logger = logging.getLogger("solus.livebench.runs.router")
 
 
 class StartIn(StrictModel):
@@ -48,6 +57,9 @@ class ImportIn(StrictModel):
 class CompareIn(StrictModel):
     baseline_id: uuid.UUID
     candidate_id: uuid.UUID
+    #: A trajectory simulation of the routine (R117): the twin's run built from it, on the
+    #: candidate's parts, stands in for the baseline run.
+    sim_result_id: uuid.UUID | None = None
 
 
 def manager(request: Request) -> RunCaptureManager:
@@ -219,11 +231,55 @@ async def compare_runs(
                 request.app.state.settings.artifact_ttl_seconds,
             )
         )
+    baseline, candidate = manifests
+    twin = (
+        None
+        if body.sim_result_id is None
+        else await _twin_source(session, ctx.project.id, body.sim_result_id, candidate)
+    )
     try:
-        result = await asyncio.to_thread(analysis.compare, *manifests)
+        result = await asyncio.to_thread(_compared, baseline, candidate, twin)
     except ValueError:
         raise APIError(422, "robot_mismatch", "Compare runs of the same robot") from None
     return envelope(result)
+
+
+#: What a comparison's twin is built from (R117): the simulation's id and attrs, and the scenes
+#: binding the candidate's parts to joints.
+type TwinSource = tuple[uuid.UUID, dict[str, Any], list[tuple[uuid.UUID, dict[str, Any]]]]
+
+
+async def _twin_source(
+    session: AsyncSession, project_id: uuid.UUID, sim_result_id: uuid.UUID, real: RunManifest
+) -> TwinSource:
+    """The project's live `sim_result` a comparison's twin is built from, under the person's read
+    scope (this read is the kind check: another project's id, or an entity of another kind, is
+    not found), and the scenes that bind the real run's parts to its joints."""
+    attrs = await session.scalar(
+        select(GraphEntity.attrs).where(
+            GraphEntity.id == sim_result_id,
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == kinds.SIM_RESULT,
+            GraphEntity.deleted_at.is_(None),
+            current_scope(project_id).entity_predicate(),
+        )
+    )
+    if attrs is None:
+        raise APIError(404, "not_found", "Simulation result not found")
+    scenes = await bound_scenes(session, project_id, [part.entity_id for part in real.parts])
+    return sim_result_id, attrs, scenes
+
+
+def _compared(
+    baseline: RunManifest, candidate: RunManifest, twin: TwinSource | None
+) -> dict[str, Any]:
+    """`compare`, with the twin's run built from the simulation, on the candidate's parts, in the
+    baseline's place when the comparison names one (R117)."""
+    if twin is not None:
+        sim_result_id, attrs, scenes = twin
+        joint_of = partial(scene_joint_for_part, scenes)
+        baseline = analysis.twin_run(attrs, candidate, joint_of, sim_result_id=sim_result_id)
+    return analysis.compare(baseline, candidate)
 
 
 @router.get("/{run_id}")
@@ -279,6 +335,44 @@ async def stop_run(
     return envelope(info.model_dump(mode="json"))
 
 
+@router.post("/{run_id}/baseline")
+async def mark_baseline(ctx: ProjectCtx, session: SessionDep, run_id: uuid.UUID) -> dict[str, Any]:
+    """Make the run the baseline its robot's learned envelope bounds are read from. One per
+    robot: the robot's previous baseline is unmarked in the same commit. A run still running is
+    refused, since its next checkpoint rewrites the whole record and the mark with it."""
+    require_role(ctx, Role.MEMBER)
+    await lock_project(session, ctx.project.id)
+    entity = await store.record(session, ctx.project.id, run_id)
+    info = store.summary(entity)
+    if info.status == "running":
+        raise APIError(409, "run_active", "Stop the run before marking it as the baseline")
+    previous = list(
+        await session.scalars(
+            select(GraphEntity).where(
+                GraphEntity.project_id == ctx.project.id,
+                GraphEntity.kind == store.RUN_KIND,
+                GraphEntity.origin == "system",
+                GraphEntity.deleted_at.is_(None),
+                GraphEntity.id != run_id,
+                GraphEntity.attrs["baseline"].astext == "true",
+                GraphEntity.attrs["summary"]["robot_id"].astext == str(info.robot_id),
+            )
+        )
+    )
+    for row in previous:
+        row.attrs = {key: value for key, value in row.attrs.items() if key != "baseline"}
+    entity.attrs = {**entity.attrs, "baseline": True}
+    await session.commit()
+    logger.info(
+        "run marked baseline project=%s run=%s robot=%s unmarked=%s",
+        ctx.project.id,
+        run_id,
+        info.robot_id,
+        [str(row.id) for row in previous],
+    )
+    return envelope(store.summary(entity).model_dump(mode="json"))  # read again: now the baseline
+
+
 @router.get("/{run_id}/findings")
 async def get_findings(
     ctx: ProjectCtx, session: SessionDep, request: Request, run_id: uuid.UUID
@@ -321,6 +415,9 @@ async def narrate_run(
         redis=getattr(request.app.state, "redis", None),
         enqueue=getattr(request.app.state, "enqueue", None),
         mode=ctx.user.sol_mode,
+        # SOLUSDEV-321 P6 fix 1 (R141): the asker's levels, read as the SOL route reads them;
+        # this request states none of its own, so None (neutral) when nothing is stored
+        expertise=await turn_expertise(session, ctx.project.id, ctx.user.id, None),
     )
     response["evidence_origin"] = evidence_origin
     return envelope(response)

@@ -1,0 +1,4 @@
+# Fixture (SOLUSDEV-321 P6): a plain repository's config — no ROS package, no policy.
+service:
+  name: plain
+  retries: 3

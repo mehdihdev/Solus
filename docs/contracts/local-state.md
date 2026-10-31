@@ -135,6 +135,12 @@ rules, and any format change amends ADR-034 and ADR-035 together.
   fields `codeStyle`, `mechanical`, `electrical`, `documentation`, `unitsStandards` (required,
   strings, ≤ `PREFERENCES_FIELD_CAP` = 800 chars each). Empty strings are the empty document.
 - `updatedAt` (optional, RFC 3339 UTC, informational).
+- `expertise` (optional, SOLUSDEV-321 P6): the person's own level per domain, an object whose keys
+  are `control`, `electronics`, `mechanical` and `software` and whose values are `novice`,
+  `working` or `expert`, for example `{"control": "novice"}`. Each stated domain wins over the
+  level Solus inferred for the turn's register; absent means nothing is stated. An unknown domain
+  rejects the document; a value that is no level is dropped on read, since the API refuses a turn
+  that carries one. A stated level alone is something to send (`isEmptyPreferences`).
 - Unknown fields reject (strict TS parse). Byte cap **64 KiB** (`PREFERENCES_MAX_BYTES`); a larger
   file is treated as corrupt. **Corrupt → empty document**; **newer `schema_version` → read-only**
   (ground rule 6). Over-cap strings are truncated on read, never rejected — the user's text is

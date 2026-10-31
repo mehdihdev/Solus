@@ -2,9 +2,19 @@
 // the context_used frame: document citations as a file list, graph citations as entity
 // chips. Labels only — section text never reaches the client. (The standing instruction
 // moved to CustomInstructionCard with the design-template right column.)
+//
+// SOLUSDEV-321 P1-T6 adds "Why SOL looked here": the entities the turn was pointed at and why,
+// the ids that never reached the scope and why not, and what each layer cost — all in the
+// server's words and order. A frame that never said where SOL looked claims nothing.
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
-import type { ContextUsedInfo } from './solStream'
+import { selectEntityName, useFocusStore } from '../workspace/focusStore'
+import type {
+  ContextAnchor,
+  ContextLayerInfo,
+  ContextUsedInfo,
+  DroppedContextAnchor
+} from './solStream'
 import { citationLabel } from './citationLabel'
 
 function ContextFilesCard({ labels }: { labels: readonly string[] }): React.JSX.Element {
@@ -102,6 +112,103 @@ function ScreenLine({ tokens }: { tokens: number }): React.JSX.Element {
   )
 }
 
+/** How many dropped anchors the card lists before it counts the rest. */
+const MAX_DROPPED_SHOWN = 5
+
+const LIST: React.CSSProperties = {
+  listStyle: 'none',
+  margin: '6px 0 0',
+  padding: 0,
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10.5,
+  lineHeight: 1.6,
+  overflowWrap: 'anywhere'
+}
+const NOTE: React.CSSProperties = { fontSize: 11, color: 'var(--mut)', marginTop: 6 }
+
+const shortId = (id: string): string => id.slice(0, 8)
+
+/** One anchor: the entity's name when a neighbourhood already fetched for this project has it,
+ *  else the first eight characters of its id. */
+function AnchorRow({ anchor }: { anchor: ContextAnchor }): React.JSX.Element {
+  const name = useFocusStore((state) => selectEntityName(state, anchor.id))
+  return <li>{`${name ?? shortId(anchor.id)} — ${anchor.reason}`}</li>
+}
+
+function AnchorList({ anchors }: { anchors: readonly ContextAnchor[] }): React.JSX.Element {
+  if (anchors.length === 0) return <div style={NOTE}>No anchors — SOL searched the index.</div>
+  return (
+    <ul aria-label="Anchors" style={{ ...LIST, color: 'var(--tx)' }}>
+      {anchors.map((anchor, i) => (
+        <AnchorRow key={`${anchor.id}-${i}`} anchor={anchor} />
+      ))}
+    </ul>
+  )
+}
+
+/** A dropped anchor is never named: it may be one the caller cannot see, so the id head is all
+ *  that is shown, with the reason it was an anchor and the cause that lost it. */
+function droppedLine(anchor: DroppedContextAnchor): string {
+  const cause = anchor.cause ? `: ${anchor.cause}` : ''
+  return `${shortId(anchor.id)} — dropped (${anchor.reason})${cause}`
+}
+
+function DroppedAnchors({
+  dropped
+}: {
+  dropped: readonly DroppedContextAnchor[]
+}): React.JSX.Element | null {
+  if (dropped.length === 0) return null
+  const unlisted = dropped.length - MAX_DROPPED_SHOWN
+  return (
+    <>
+      <ul aria-label="Dropped anchors" style={{ ...LIST, color: 'var(--mut)' }}>
+        {dropped.slice(0, MAX_DROPPED_SHOWN).map((anchor, i) => (
+          <li key={`${anchor.id}-${i}`}>{droppedLine(anchor)}</li>
+        ))}
+      </ul>
+      {unlisted > 0 && <div style={NOTE}>{`+${unlisted} more dropped`}</div>}
+    </>
+  )
+}
+
+/** A layer that cost nothing says why in the server's words, never in ours. */
+function layerLine({ layer, tokens, emptyReason }: ContextLayerInfo): string {
+  return tokens === 0 && emptyReason ? `${layer}: 0 — ${emptyReason}` : `${layer}: ${tokens}`
+}
+
+function LayerTokens({
+  layers
+}: {
+  layers: readonly ContextLayerInfo[]
+}): React.JSX.Element | null {
+  if (layers.length === 0) return null
+  return (
+    <>
+      <div style={{ ...NOTE, marginTop: 10 }}>Tokens per layer</div>
+      <ul aria-label="Tokens per layer" style={{ ...LIST, color: 'var(--mut)' }}>
+        {layers.map((layer, i) => (
+          <li key={`${layer.layer}-${i}`}>{layerLine(layer)}</li>
+        ))}
+      </ul>
+    </>
+  )
+}
+
+function WhyCard({ context }: { context: ContextUsedInfo }): React.JSX.Element | null {
+  const { anchors, anchorsDropped, layers } = context
+  // A frame written before the anchors existed never said where SOL looked: claim nothing.
+  if (anchors === undefined && layers === undefined) return null
+  return (
+    <Card pad={12} className="sol-panel-in" style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 600 }}>Why SOL looked here</div>
+      {anchors && <AnchorList anchors={anchors} />}
+      <DroppedAnchors dropped={anchorsDropped ?? []} />
+      <LayerTokens layers={layers ?? []} />
+    </Card>
+  )
+}
+
 function ManifestCards({ context }: { context: ContextUsedInfo | null }): React.JSX.Element {
   if (!context) {
     return (
@@ -129,6 +236,7 @@ function ManifestCards({ context }: { context: ContextUsedInfo | null }): React.
       <ContextFilesCard labels={documents.map((s) => citationLabel(s.citation ?? ''))} />
       <GraphChipsCard labels={graphLabels} footnote={manifestFootnote(context)} />
       {screen && <ScreenLine tokens={screen.tokens} />}
+      <WhyCard context={context} />
     </>
   )
 }

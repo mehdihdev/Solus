@@ -33,12 +33,16 @@ from solus_api.agent.conversation import (
     serialize_conversation,
     serialize_turn,
 )
+from solus_api.agent.deterministic_facts import GraphFactSources
 from solus_api.agent.execution_policy import BuildExecutionPolicy
+from solus_api.agent.expertise import turn_expertise
 from solus_api.agent.history_evidence import enrich_history
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
 from solus_api.agent.onshape_turn_sync import OnshapeTurnSync, create_turn_sync
 from solus_api.agent.preferences import EngineeringPreferences
-from solus_api.agent.reason import MAX_ANCHORS
+from solus_api.agent.project_card import card_inputs
+from solus_api.agent.reason import MAX_ANCHORS, FocusIn
+from solus_api.agent.research import strip_web_command
 from solus_api.agent.runtime import (
     AgentRunContext,
     TurnView,
@@ -51,7 +55,12 @@ from solus_api.agent.screen import (
     ScreenshotSource,
     decode_screenshot,
 )
-from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse
+from solus_api.agent.sol_anchors import (
+    prior_tool_entity_ids,
+    require_turn_targets,
+    visible_entity_ids,
+)
+from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse, persisted_answer
 from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
@@ -114,6 +123,7 @@ from solus_api.routers.sol_wake import (
 from solus_api.schemas import StrictModel
 from solus_api.services.events import emit_event
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
+from solus_api.services.outcomes import record_outcome
 
 logger = logging.getLogger("solus.sol")
 
@@ -270,15 +280,27 @@ class MessageCreate(StrictModel):
     #: would need widening for each.
     #:
     #: Bounded by the anchor cap ITSELF, not a copy of its value — two
-    #: constants would drift. The cap is also re-applied in `plan_query` rather
+    #: constants would drift. The cap is also re-applied in `turn_scope.plan_scope` rather
     #: than trusted from here: it is what bounds the neighbourhood query's DB
     #: work, so it must hold for every caller, not just this route.
     #:
-    #: Not checked for existence. `load_neighborhood` is project-scoped, so an id
-    #: from another team yields nothing — answering differently for "exists
-    #: elsewhere" than for "does not exist" would be a cross-tenant existence
-    #: oracle (the posture `agent/tools/get_entity.py` documents).
+    #: Checked for visibility at admission (`_validate_mentions`): an id the person's
+    #: current view of THIS project cannot see — another team's, deleted, or hidden by a
+    #: source view — is a 409 `stale_mentions`, the same answer as for an id that never
+    #: existed, so the refusal is no cross-tenant existence oracle (the posture
+    #: `agent/tools/get_entity.py` documents). `load_neighborhood` is project-scoped too.
     mentions: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_ANCHORS)
+    #: SOLUSDEV-321 P0-T3: the chat's pinned nodes. A selection like `mentions` — same cap,
+    #: same 409 — but kept apart from them, so the context manifest can say which it was.
+    pins: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_ANCHORS)
+    #: The workspace focus the SOL page sends with every turn. Sent without the person
+    #: choosing it, so unlike a selection a stale id in it is dropped with its reason
+    #: (`turn_scope.plan_scope`) — never a 4xx that costs them their question.
+    focus: FocusIn | None = None
+    #: The finding / bench robot the person asked from. Each must be one of THIS project's
+    #: own live ones, else 404 `not_found` (`require_turn_targets`).
+    finding_id: uuid.UUID | None = None
+    robot_id: uuid.UUID | None = None
     #: SOLUSDEV-244 / HOME H3: the person's engineering conventions, read by the
     #: desktop from their own `~/.solus/preferences.json` and attached per turn.
     #: The server keeps no copy (ADR-034 amendment 2026-09-06); the schema
@@ -583,6 +605,10 @@ async def _persist_turn(
                     "conversation_id": str(conversation_id),
                     "tool_calls": len(tool_turns),
                     "aborted": aborted,
+                    # SOLUSDEV-321: who answered (the first tier) and the budget the turn
+                    # reached — fixed names and counts, null when the turn had neither.
+                    "answer_source": (assistant_attrs or {}).get("answer_source"),
+                    "budget_reached": (assistant_attrs or {}).get("budget_reached"),
                 },
             )
         await session.commit()
@@ -681,12 +707,18 @@ async def _run_and_persist(
     tool_calls = 0
     aborted: str | None = None
     abort_error: BaseException | None = None
+    #: SOLUSDEV-321: what the streamed frames say about the turn — a first-tier answer's envelope
+    #: (P1-T2), a budget the turn reached (P1-T3) — stored on the assistant turn.
+    answered: dict[str, Any] = {}
+    #: M184: each parked card's tool, kept as the card is popped (the drained list names none).
+    parked_tools: set[str] = set()
     limits = turn_limits(ctx.action_mode)
     stream = runner.run(ctx)
     try:
         try:
             async with asyncio.timeout(limits.timeout_seconds):
                 async for event in _bounded_events(stream, limits.timeout_seconds):
+                    answered = {**answered, **persisted_answer(event)}
                     if event.type is AgentEventType.TOOL_CALL:
                         tool_calls += 1
                         # Loop guard enforced HERE, independent of the runner: a runaway
@@ -704,6 +736,7 @@ async def _run_and_persist(
                     # SOLUS-ONS-A5: a call the gate parked streams straight after
                     # its result, so the client can show the concrete action and
                     # offer approve/reject inline.
+                    parked_tools.update(p.tool for p in parked if p.confirmation_id is not None)
                     while parked:
                         request = parked.pop(0)
                         yield format_sse(
@@ -734,8 +767,11 @@ async def _run_and_persist(
             tool_turns=tool_turns,
             final_text=final_text,
             aborted=aborted,
-            parked_tools=frozenset(p.tool for p in parked if p.confirmation_id is not None),
-            assistant_attrs=assistant_attrs,
+            # the popped cards, and any an abort left unstreamed
+            parked_tools=frozenset(
+                parked_tools.union(p.tool for p in parked if p.confirmation_id is not None)
+            ),
+            assistant_attrs={**(assistant_attrs or {}), **answered},
         )
         if aborted is not None:
             yield format_sse(_abort_event(aborted, abort_error))
@@ -749,27 +785,16 @@ async def _run_and_persist(
 async def _validate_mentions(
     session: SessionDep, project_id: uuid.UUID, mentions: list[uuid.UUID]
 ) -> None:
-    from solus_api.graph.read_scope import current_scope
-    from solus_api.models import GraphEntity
-
-    if mentions:
-        visible_mentions = set(
-            (
-                await session.scalars(
-                    select(GraphEntity.id).where(
-                        GraphEntity.id.in_(mentions),
-                        GraphEntity.deleted_at.is_(None),
-                        current_scope(project_id).entity_predicate(),
-                    )
-                )
-            ).all()
+    """The person's selections (`mentions` and `pins` alike) must all be visible in their
+    current view of this project, else 409 — the same answer whether an id is another
+    team's, deleted, hidden by a source view, or never existed."""
+    wanted = set(mentions)
+    if wanted - await visible_entity_ids(session, project_id, wanted):
+        raise APIError(
+            409,
+            "stale_mentions",
+            "The selected source view changed. Refresh and select these mentions again.",
         )
-        if visible_mentions != set(mentions):
-            raise APIError(
-                409,
-                "stale_mentions",
-                "The selected source view changed. Refresh and select these mentions again.",
-            )
 
 
 async def _record_build_outcome(
@@ -832,6 +857,15 @@ async def _record_build_outcome(
                     "authorization_origin": "build_policy",
                     "ok": result.ok,
                 },
+            )
+            # SOLUSDEV-321 P8: an auto-run is a decision too — one `accepted_auto` outcome row.
+            await record_outcome(
+                recording,
+                ctx,
+                tool=call.tool,
+                args=call.args,
+                decision="accepted_auto",
+                bridge=request.app.state.bridge_sessions,
             )
             await recording.commit()
     except Exception:
@@ -981,7 +1015,13 @@ async def post_message(
     # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
     screenshot = body.screenshot.decode() if body.screenshot is not None else None
 
-    await _validate_mentions(session, ctx.project.id, body.mentions)
+    # Both before any spend. Pins are selections like mentions (409); the finding and the
+    # robot must be this project's own (404). The focus is checked later, by the runtime,
+    # and a stale id in it is dropped there rather than refused here.
+    await _validate_mentions(session, ctx.project.id, [*body.mentions, *body.pins])
+    await require_turn_targets(
+        session, ctx.project.id, finding_id=body.finding_id, robot_id=body.robot_id
+    )
 
     # BUDGET GATE (SOLUS-RUN-01). `track_cost` needs NO wiring here — the gateway
     # fires it per model call from inside CompletionStream._finalize, which is the
@@ -997,8 +1037,9 @@ async def post_message(
     # BEFORE the first model round reaches the gateway's cap, so turn admission
     # is frequency-gated here too. This records the turn as one admission (the
     # gateway still records each model round — deliberate, both consume real
-    # capacity); with no Redis deployed the cap fails open by policy and that
-    # remains the flagged pre-GA infra blocker.
+    # capacity). The cap fails CLOSED: with Redis unset, erroring or slower
+    # than gates.REDIS_TIMEOUT_SECONDS it runs on gates.py's per-process local
+    # window, so the limit holds per API process instead of fleet-wide.
     try:
         await check_frequency_cap(
             ctx.user.id,
@@ -1085,6 +1126,17 @@ async def post_message(
             request, background_tasks, settings, ctx, sessionmaker, call, result, turn_sync
         )
 
+    # SOLUSDEV-321 P0-T5: layer 2's per-request reads. The machine is the caller's OWN live
+    # companion session (server-derived scope), never an id the client sent.
+    card = await card_inputs(
+        session,
+        project_id=ctx.project.id,
+        user_id=ctx.user.id,
+        live=bridge.get(ctx.user.id, ctx.team.id, ctx.project.id),
+        cache=request.app.state.project_card_cache,
+        sessions=getattr(request.app.state, "bench_sessions", None),
+        connectors=request.app.state.connector_registry,
+    )
     run_ctx = AgentRunContext(
         prompt=content,
         # Descriptors + a gated, MODE-WRAPPED dispatcher, never the registry
@@ -1114,13 +1166,49 @@ async def post_message(
             if body.preferences is not None and not body.preferences.is_empty()
             else None
         ),
+        # SOLUSDEV-321 P6: the register's levels, the person's stated ones winning per domain.
+        expertise=await turn_expertise(
+            session,
+            ctx.project.id,
+            ctx.user.id,
+            body.preferences.expertise if body.preferences is not None else None,
+        ),
         action_mode=body.action_mode,
         think_harder=body.think_harder,
         # Entities the user pointed at with `@`. They lead the neighbourhood's
         # anchors, so SOL grounds on the node meant rather than the one
         # similarity search happened to rank first.
         mentions=tuple(body.mentions),
+        # SOLUSDEV-321 P0-T3: the rest of the anchors, each kept apart so the planner can
+        # say why it looked where it did. The history ids come from the arguments Solus
+        # recorded for this conversation's earlier tool calls.
+        focus=body.focus,
+        pins=tuple(body.pins),
+        finding_id=body.finding_id,
+        robot_id=body.robot_id,
+        history_entity_ids=prior_tool_entity_ids(prior),
         history=history,
+        # SOLUSDEV-321 P0-T4: the turn fences with this conversation's own token, so
+        # its prompt prefix is byte-stable across turns (provider prompt caches hit).
+        conversation_id=conversation_id,
+        project_card=card,
+        # SOLUSDEV-321 P1-T2: the facts the first tier answers lookups from, bound to this
+        # project and caller — never a client-sent id.
+        facts=GraphFactSources(
+            sessionmaker,
+            ctx.project.id,
+            ctx.user.id,
+            telemetry=getattr(request.app.state, "telemetry_plumbing", None),
+            sessions=getattr(request.app.state, "bench_sessions", None),
+        ),
+        # SOLUSDEV-321 P1-T5: the composer's `/web <q>` becomes the turn's one web query, taken
+        # from the person's own message here (the prompt and the stored turn keep the full text);
+        # the shared 7-day cache answers a repeat ask with no web call.
+        research_query=strip_web_command(content),
+        research_cache=getattr(request.app.state, "research_cache", None),
+        # A wake or resume prompt is Solus-authored and embeds the ticket's program: it can say
+        # "search", and it is not the person asking for the web.
+        research_allowed=ticket is None and wake is None,
         # Model-call identity (ADR-018). Without these the gateway silently
         # skips every rate limit and every debit, so LlmRunner refuses outright.
         user_id=ctx.user.id,
@@ -1128,10 +1216,12 @@ async def post_message(
         # body streams, which is why _persist_turn and park each open their own.
         sessionmaker=sessionmaker,
         secret_store=secret_store,
-        # SEC-H2: the gateway's frequency cap and cost hook need these. Absent
-        # from app.state today (Redis/ARQ not yet deployed for this app), the
-        # cap FAILS OPEN inside the gateway — flagged in the completion report
-        # as a pre-GA infrastructure blocker, not silently accepted.
+        # SEC-H2: the gateway's frequency cap and cost hook need these. `redis`
+        # is on app.state whenever SOLUS_REDIS_URL is set (main.py); without it,
+        # or when it errors or is slower than gates.REDIS_TIMEOUT_SECONDS, the
+        # cap fails CLOSED on gates.py's per-process local window. `enqueue` is
+        # still unassigned, so a dead-lettered debit waits for the worker's
+        # per-minute reconciliation sweep instead of an immediate one.
         redis=getattr(request.app.state, "redis", None),
         enqueue=getattr(request.app.state, "enqueue", None),
         # Attribution only: the debit stays on `user_id` (ADR-018/024). The slug

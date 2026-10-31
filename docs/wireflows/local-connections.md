@@ -64,6 +64,79 @@ to honest copy with disabled controls, never fabricated availability:
 3. The empty state stays honest and becomes actionable: "no telemetry yet — connect a device"
    opens the Connect a device dialog in place.
 
+## Findings pane (SOLUSDEV-321)
+
+Live Bench › right column, directly under LIVE REASONING (widget-canvas.md, 2026-09-15: "Findings
+follow under LIVE REASONING"). `features/bench/findings/FindingsPane.tsx`, mounted once by
+`BenchScreen` inside `DeviceBenchView`. It shows the durable findings the robot session's window
+evaluator raises (docs/api/findings.md §5); LIVE REASONING above it keeps the raw observer events.
+
+**Layout.**
+
+- A `FINDINGS · <n> OPEN` heading; in Guide mode, one sentence on what a finding is.
+- One group per connected robot: each bench session that has not ended and names a
+  `robot_entity_id` (a robot, or a part bound on its own), headed by the session's label and its
+  open count. Sim and serial sessions observe no root and get no group. With no connected robot
+  and no opened finding the pane is absent.
+- Data: `GET /findings?status=open&robot=<id>` per robot. The pane mounts the Bench's one project
+  stream; its `finding.*` and `graph.changed` frames bump the findings live key and the reads run
+  again. Nothing polls. A failed stream shows its status line ("Live updates unavailable…").
+
+**Grouping.** Within a robot: critical, then warning, then info. Each block is headed
+`<SEVERITY> · <count> · last seen <relative>` (the newest `last_seen`). Info findings, checker
+infos among them, start collapsed in a disclosure, so however many there are they never push an
+observer finding off the pane.
+
+**A finding card.** The headline, then `<severity> · ×<count> · last seen`. Guide mode shows the
+explanation under the headline; Expert keeps it inside the card. Clicking the headline opens:
+
+- the explanation (Expert);
+- `detail` as its lines (`suggested headline: …`, `not grounded: …`);
+- the evidence: the top-level keys of `evidence`, which are the latest raise's values (never the
+  `items` history);
+- the likely causes, in the narration's `causes_ranked` order, each with what speaks for and
+  against it;
+- the code site (`path:line`) and the folded rules (`Also seen: …`).
+
+Every string is server text and renders as text. Nothing is interpreted as markup.
+
+**The six actions.** Each action uses exactly one route. A status line under the card reports the
+outcome, or the API's error verbatim.
+
+1. **Explain more**: opens the SOL window and sends a Guide turn with `finding_id` and
+   Solus-authored text. The headline is never typed into the message; SOL reads the finding through
+   the anchor.
+2. **Propose a fix**: the same turn in Build (`action_mode: do`), keeping the chat's own
+   confirm-every-change choice.
+3. **Open the tool**: offered only when `evidence.code_site` names the code entity and that
+   entity's source. `POST /local-folder/{source_id}/open {entity_id, tool: system}`; a
+   `launched: false` shows the tool's reason.
+4. **File**: one `.solus` errors entry,
+   `POST /solus/errors/entries {kind: text, text: "<headline>\nfinding: <id>"}`.
+5. **Dismiss**: `POST /findings/{id}/dismiss` (24 h). It writes nothing else, and the card leaves
+   the open list.
+6. **Resolve with note**: a required note (≤ 4000 characters) and, when the finding has a code
+   site, an opt-in "Fixed in `<path>:<line>`" box that sends the code entity as `fix_ref`.
+   `POST /findings/{id}/resolve`; the route files the one errors entry and the desktop files none.
+
+**Markers.** A signal chart draws dashed markers from `GET /bench/events`. A marker the window
+evaluator placed carries its finding's id (attached server-side only; a malformed id makes the
+response invalid). That marker is a button over its line, "Open finding: `<kind>` at `<time>`".
+Clicking it reads `GET /findings/{id}` and shows that finding expanded at the top of the pane
+("Opened finding", with Close), whatever its status, read again when the findings live key moves.
+Two findings marking one instant stay two markers. A marker without an id stays a line.
+
+**Empty and could-not-check states.**
+
+- A connected robot with no open finding: `✓ Nothing out of range` (the copy LIVE REASONING
+  uses) and "No open findings for `<robot>`".
+- A failed read: "Findings are unavailable for `<robot>`; what it shows is unknown". Never the
+  all-clear.
+- **Could not check** (per robot, a disclosure): opened, it reads the robot's
+  `attrs.missing_signals` (`GET /entities/{robot}` → `properties.missing_signals`) and lists each
+  `<part>: <need>`. It is read on request only, never on render. An absent attr reads "Not
+  assessed yet"; an empty one, "Every signal and fact the rules need was there".
+
 ## Flow 4 — bridge-hosted tools (Fusion, and every tool after it)
 
 1. A local tool's Home row merges the static `GET /api/v1/integrations/local-tools` catalog with

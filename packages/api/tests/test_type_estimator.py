@@ -1,18 +1,22 @@
 """MO-04 type estimator: labeled fixture, precedence, chain, determinism, tunability."""
 
 import time
+from functools import partial
 
 import pytest
 from fixtures.type_labels import LABELED_TYPES
 from pydantic import ValidationError
+from solus_api.graph import kinds
 from solus_api.orchestration.config import TypeEstimatorConfig, load_orchestration_config
-from solus_api.orchestration.enums import InteractionContext, RouteType
+from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
 from solus_api.orchestration.type_estimator import (
     CONTEXT_TYPE_DEFAULTS,
     AttachmentHint,
     derive_type,
     estimate_tokens,
     estimate_type,
+    round_one_complexity,
+    route_type_for_kinds,
 )
 
 _SHIPPED = load_orchestration_config().type_estimator
@@ -73,7 +77,9 @@ def test_empty_query_without_attachments_is_general() -> None:
 def test_estimate_tokens_is_the_documented_chars_heuristic() -> None:
     config = TypeEstimatorConfig(chars_per_token=4)
     assert estimate_tokens("abcdefgh", config=config) == 2
-    assert estimate_tokens("", config=config) == 0
+    # SOLUSDEV-321: the one estimator floors at 1 (context packing relied on that), so
+    # an empty string is one token, not zero.
+    assert estimate_tokens("", config=config) == 1
 
 
 def test_thresholds_are_tunable_without_code_change() -> None:
@@ -126,3 +132,27 @@ def test_min_hits_knobs_gate_the_signals() -> None:
     config = TypeEstimatorConfig(code_patterns=[r"\bfoo\b", r"\bbar\b"], code_min_hits=2)
     assert estimate_type("foo only", config=config) is RouteType.GENERAL
     assert estimate_type("foo and bar", config=config) is RouteType.CODE
+
+
+def test_code_kinds_route_code() -> None:
+    """SOLUSDEV-321 P0-T7: a scope holding a code file, module or Arduino sketch routes CODE
+    whatever the message says, and so does a message the estimator reads as code. Anything
+    else is None: VISUAL_LOG and LONG_CONTEXT stay with the estimator and the attachments, and
+    a repository on its own is not a code scope."""
+    route = partial(route_type_for_kinds, config=_SHIPPED)
+    for kind in (kinds.CODE_FILE, kinds.CODE_MODULE, kinds.ARDUINO_SKETCH):
+        assert route(iter([kinds.COMPONENT, kind]), "what is I2C") is RouteType.CODE
+    assert route((), "fix the traceback in motor.py") is RouteType.CODE
+    assert route([kinds.CODE_REPO, kinds.COMPONENT], "what is I2C") is None
+    assert route((), "what is I2C") is None
+    # The estimator's precedence stands: logs beat a code hit, so this message alone is not code.
+    assert route((), "why does init_pwm() crash — see these telemetry logs") is None
+
+
+def test_round_one_complexity_routes_a_finding_hard() -> None:
+    """SOLUSDEV-321 P0-T7: a turn about a finding runs round 1 HARD whatever tier was explicit
+    before it ("think harder"'s, or none); without one, the explicit tier, or None, stands."""
+    for explicit in (None, Complexity.STANDARD):
+        assert round_one_complexity(explicit, about_finding=True) is Complexity.HARD
+    assert round_one_complexity(Complexity.STANDARD, about_finding=False) is Complexity.STANDARD
+    assert round_one_complexity(None, about_finding=False) is None

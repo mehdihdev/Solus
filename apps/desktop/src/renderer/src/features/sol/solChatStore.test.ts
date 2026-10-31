@@ -6,6 +6,7 @@ import * as solApi from './solApi'
 import * as resources from '../../lib/api/resources'
 import type { SolStreamEvent } from './solStream'
 import { useAuthStore } from '../../store/authStore'
+import { useFocusStore } from '../workspace/focusStore'
 import { useShellStore } from '../workspace/shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useSolSessionStore } from './solSessionStore'
@@ -69,6 +70,38 @@ describe('engineering preferences ride along (SOLUSDEV-244)', () => {
         preferences: expect.objectContaining({ electrical: 'XT30 for power.' })
       })
     )
+  })
+})
+
+describe('anchors ride along (SOLUSDEV-321 P0-T3)', () => {
+  it('threads the focus, pins, finding and robot of a send into the turn, and only those set', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    // Canonical UUIDs: the server parses every anchor id as one.
+    const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    streamSolMessage.mockImplementation(async ({ onEvent }) => onEvent(messageEvent('ok')))
+    await act(async () => {
+      await sendMessage('p1', 'why?', 'guide', [], false, undefined, {
+        focus: { entityId: id(1), path: [id(2)] },
+        pins: [id(3)],
+        findingId: id(4),
+        robotId: id(5)
+      })
+    })
+    expect(streamSolMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        focus: { entityId: id(1), path: [id(2)] },
+        pins: [id(3)],
+        findingId: id(4),
+        robotId: id(5)
+      })
+    )
+    await act(async () => {
+      await sendMessage('p1', 'and again?', 'guide')
+    })
+    const bare = streamSolMessage.mock.calls[1][0]
+    for (const key of ['focus', 'pins', 'findingId', 'robotId']) {
+      expect(bare).not.toHaveProperty(key)
+    }
   })
 })
 
@@ -638,6 +671,116 @@ function tokenFailureAndCancellationTests(nextFrame: () => Promise<void>): void 
     expect(session.items.some((m) => m.content.includes('stale'))).toBe(false)
   })
 }
+
+describe('research sources on a turn (SOLUSDEV-321 P1-T5)', () => {
+  const research = {
+    callId: 'c1',
+    question: 'OV9281 supply',
+    cached: false,
+    searches: 1,
+    pages: 2,
+    sources: [{ url: 'https://docs.example.com/ov9281', title: 'OV9281 datasheet', fetched: true }]
+  }
+
+  it('attaches the frame to the assistant item of the turn that streamed it', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'research_sources', research })
+      onEvent(messageEvent('AVDD is 2.8 V.'))
+    })
+    await act(async () => {
+      await sendMessage('p1', 'look up the OV9281', 'guide')
+    })
+    const [user, assistant] = selectSession(useSolChatStore.getState(), 'p1').items
+    expect(user.researchSources).toBeUndefined()
+    expect(assistant.researchSources).toEqual(research)
+    expect(assistant).toMatchObject({ content: 'AVDD is 2.8 V.', pending: false })
+  })
+
+  it('a reloaded turn shows the same sources, read from its stored attrs', async () => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    vi.mocked(solApi.listSolTurns).mockResolvedValue([
+      {
+        id: 't2',
+        conversation_id: 'c1',
+        role: 'assistant',
+        content: 'AVDD is 2.8 V.',
+        attrs: {
+          research_sources: {
+            call_id: 'c1',
+            question: 'OV9281 supply',
+            cached: false,
+            searches: 1,
+            pages: 2,
+            sources: research.sources
+          }
+        },
+        created_at: ''
+      },
+      {
+        id: 't1',
+        conversation_id: 'c1',
+        role: 'user',
+        content: 'look up the OV9281',
+        attrs: {},
+        created_at: ''
+      }
+    ])
+    await act(async () => {
+      await syncSession('p1')
+    })
+    const [user, assistant] = selectSession(useSolChatStore.getState(), 'p1').items
+    expect(user.researchSources).toBeUndefined()
+    expect(assistant.researchSources).toEqual(research)
+  })
+})
+
+describe('context manifest on a turn (SOLUSDEV-321 P1-T6)', () => {
+  const FOCUSED = '0f9c2f2a-1111-4222-8333-444455556666'
+  const NAMED = '0f9c2f2a-1111-4222-8333-444455557777'
+  const anchors = [
+    { id: FOCUSED, reason: 'focused' },
+    { id: NAMED, reason: 'name_match' }
+  ]
+  // The anchors are all these tests read; the whole manifest's shape is pinned in contextUsed.test.ts.
+  const manifest: SolStreamEvent = {
+    type: 'context_used',
+    sections: [],
+    truncated: false,
+    dropped: 0,
+    anchors
+  }
+  beforeEach(() => {
+    useSolSessionStore.getState().setConversation('p1', 'c1')
+    useFocusStore.getState().reset()
+    // p1 is the project open on screen — the one whose graph can glow.
+    useWorkspaceStore.setState({ project: { id: 'p1', name: 'Strider' } })
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent(manifest)
+      onEvent(messageEvent('The IMU is at 0x4A.'))
+    })
+  })
+  afterEach(() => useFocusStore.getState().reset())
+
+  it('context_used anchors glow', async () => {
+    await act(async () => {
+      await sendMessage('p1', 'where is the IMU', 'guide')
+    })
+    // The wiring, not just the definition: the turn's anchors are what the graph glows…
+    expect(useFocusStore.getState().highlightedIds).toEqual([FOCUSED, NAMED])
+    // …and the manifest reached the session (its whole shape is pinned in contextUsed.test.ts).
+    expect(selectSession(useSolChatStore.getState(), 'p1').contextUsed?.anchors).toEqual(anchors)
+  })
+
+  it('a turn streamed for a project that is not open glows nothing, yet keeps its own manifest', async () => {
+    useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } })
+    await act(async () => {
+      await sendMessage('p1', 'where is the IMU', 'guide')
+    })
+    expect(useFocusStore.getState().highlightedIds).toEqual([])
+    expect(selectSession(useSolChatStore.getState(), 'p1').contextUsed?.anchors).toEqual(anchors)
+  })
+})
 
 it('forwards forced confirmation without granting ordinary Build autoapproval', async () => {
   useSolSessionStore.getState().setConversation('p1', 'c1')

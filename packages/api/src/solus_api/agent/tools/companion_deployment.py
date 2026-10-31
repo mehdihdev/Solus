@@ -1,9 +1,14 @@
-"""Provisioned companion deployment uses the existing central confirmation gate."""
+"""Provisioned companion deployment uses the existing central confirmation gate. Its card also
+shows what the simulation ladder proposes first for the target it deploys to (SOLUSDEV-321 P4-T5,
+R116): no one read gives the robot whose host topology holds a target, so the pre-check is about
+the target itself."""
 
 from typing import Any
 from uuid import UUID
 
+from solus_api.agent.confirmations import _MAX_PREVIEW_ROWS
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
+from solus_api.agent.tools.simulate import precheck_rows
 from solus_api.agent.tools.tool import InProcessTool, ToolException
 from solus_api.core.errors import APIError
 from solus_api.hardware.companion_deployment import CompanionDeploymentService
@@ -30,7 +35,16 @@ def make_companion_deployment_tool(service: CompanionDeploymentService) -> InPro
             ) from None
 
     async def preview(args: dict[str, Any]) -> list[dict[str, Any]]:
-        return await service.preview(UUID(args["plan_id"]))
+        rows = await service.preview(UUID(args["plan_id"]))
+        plan = await service.plan(UUID(args["plan_id"]))
+        advice = await precheck_rows(
+            service.session,
+            service.project_id,
+            service.user_id,
+            [UUID(plan.attrs["target_id"])],
+            room=_MAX_PREVIEW_ROWS - len(rows),
+        )
+        return [*rows, *advice]
 
     return CompanionDeploymentTool(
         ToolDescriptor(

@@ -170,7 +170,46 @@ function RunComparisonPanel({
           {item.device_id} · {item.signal}: {item.reason}
         </p>
       ))}
+      <FindingChanges result={result} />
     </section>
+  )
+}
+
+const CHANGE_LABEL = { new: 'New', cleared: 'Cleared', persisting: 'Persisting' } as const
+const EXPECTED_FROM = {
+  baseline_run: 'the baseline run',
+  definition: 'the part definitions',
+  sim: 'the simulation'
+} as const
+
+function counts(delta: NonNullable<RunComparison['finding_deltas']>[number]): string {
+  if (delta.baseline && delta.candidate)
+    return `×${delta.baseline.count} → ×${delta.candidate.count}`
+  return delta.candidate ? `×${delta.candidate.count}` : `×${delta.baseline?.count ?? 0} before`
+}
+
+/** How the runs' findings changed, matched by rule and subjects (SOLUSDEV-321 P2-T7). The rule
+ *  ids are server text: rendered as text nodes only. */
+function FindingChanges({ result }: { result: RunComparison }): React.JSX.Element | null {
+  const deltas = result.finding_deltas
+  if (!deltas) return null
+  return (
+    <>
+      <p>
+        Findings are compared against {EXPECTED_FROM[result.expected_source ?? 'baseline_run']}.
+      </p>
+      {deltas.length ? (
+        <ul aria-label="Finding changes">
+          {deltas.map((delta) => (
+            <li key={`${delta.change}:${delta.rule_id}:${delta.subjects.join(',')}`}>
+              {CHANGE_LABEL[delta.change]}: {delta.rule_id} ({delta.severity}) {counts(delta)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p>No finding changed between the two runs.</p>
+      )}
+    </>
   )
 }
 

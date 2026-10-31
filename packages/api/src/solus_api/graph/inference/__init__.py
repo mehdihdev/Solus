@@ -51,6 +51,10 @@ CODE_KINDS: Final = frozenset(
         kinds.PACKAGE_REQUIREMENT,
     }
 )
+#: A STRUCTURE source that landed any of these, or any CODE_KINDS, runs `ros_edges` (SOLUSDEV-321
+#: P6): a re-sync that removed a source's last ROS package lands no ROS kind, and the pass is what
+#: retires the inferred edges of the nodes it tombstoned.
+ROS_KINDS: Final = frozenset({kinds.ROS_NODE, kinds.ROS_TOPIC})
 
 Module = Callable[[], Awaitable[InferenceReport]]
 
@@ -114,6 +118,10 @@ async def infer_after_sync(
 
         plan.append(("manifest_edges", lambda: manifest_edges.infer(session, project_id)))
         plan.append(("firmware_edges", lambda: firmware_edges.infer(session, project_id)))
+    if has(Capability.STRUCTURE) and landed & (CODE_KINDS | ROS_KINDS):
+        from solus_api.graph.inference import ros_edges
+
+        plan.append(("ros_edges", lambda: ros_edges.infer(session, project_id)))
     if has(Capability.GEOMETRY):
         from solus_api.graph.inference import mates
 

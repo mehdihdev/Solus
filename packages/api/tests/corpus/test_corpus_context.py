@@ -41,6 +41,8 @@ async def _built(
         scope=GraphScope(anchor_entity_ids=[uuid.uuid4()], degree=1),
         budget=budget,
         mode=mode,
+        # SOLUSDEV-321 P0-T6: only a practice question consults the corpus.
+        practice_question=True,
     )
 
 

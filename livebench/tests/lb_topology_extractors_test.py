@@ -1,7 +1,9 @@
 """Pure adapters normalize supplied parser observations, never acquire or accept hardware."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from livebench.hardware.repo_config import RepoConfigMatch, RepoPartDecl
@@ -111,9 +113,11 @@ def test_adapters_cannot_acquire_paths_or_execute_commands(monkeypatch: pytest.M
 
 
 def test_malformed_supplied_records_and_nonfinite_constants_are_invalid() -> None:
-    assert firmware_topology([object()], **CONTEXT).status == "invalid"
-    assert repo_config_topology([object()], **CONTEXT).status == "invalid"
-    malformed = RepoConfigMatch("id", "parser", "label", "config.json", parts=[object()])
+    assert firmware_topology([cast(FirmwareFinding, object())], **CONTEXT).status == "invalid"
+    assert repo_config_topology([cast(RepoConfigMatch, object())], **CONTEXT).status == "invalid"
+    malformed = RepoConfigMatch(
+        "id", "parser", "label", "config.json", parts=[cast(RepoPartDecl, object())]
+    )
     assert repo_config_topology([malformed], **CONTEXT).status == "invalid"
     nonfinite = FirmwareFinding("MOTOR_KV", "motor_constant", "a.ino", 1, "cpp", value=float("nan"))
     assert firmware_topology([nonfinite], **CONTEXT).status == "invalid"
@@ -127,10 +131,8 @@ def test_config_metadata_is_bounded_before_json(
         raise RuntimeError("oversized config reached serializer")
 
     monkeypatch.setattr("livebench.hardware.topology_extractors.json.dumps", forbidden)
-    assert (
-        repo_config_topology([replace(_config(), **{field: "x" * 10000})], **CONTEXT).status
-        == "invalid"
-    )
+    changes: dict[str, Any] = {field: "x" * 10000}
+    assert repo_config_topology([replace(_config(), **changes)], **CONTEXT).status == "invalid"
 
 
 @pytest.mark.parametrize("field", ["name", "file", "language", "pin_ref"])
@@ -142,9 +144,29 @@ def test_firmware_metadata_is_bounded_before_json(
 
     monkeypatch.setattr("livebench.hardware.topology_extractors.json.dumps", forbidden)
     finding = FirmwareFinding("pin", "pin_constant", "a.ino", 1, "cpp", pin=3)
-    assert (
-        firmware_topology([replace(finding, **{field: "x" * 10000})], **CONTEXT).status == "invalid"
+    changes: dict[str, Any] = {field: "x" * 10000}
+    assert firmware_topology([replace(finding, **changes)], **CONTEXT).status == "invalid"
+
+
+def test_a_goal_call_row_carries_its_address_call_and_literal() -> None:
+    """SOLUSDEV-321 P3-T2: the review row of a goal call names the bus address, and its first
+    provenance carries the call, the `path:line` and the literal the commanded fact is read from."""
+    goal = FirmwareFinding(
+        "setGoalPositionDeg", "goal_call", "goal.ino", 13, "cpp", pin=3, value=200.0, pin_ref="3"
     )
+    (row,) = firmware_topology([goal], **CONTEXT).rows
+    assert (row.address, row.protocol, row.bus, row.part_candidate) == ("3", None, None, None)
+    (provenance,) = row.provenance
+    assert (provenance.source_ref, provenance.entity_ref, provenance.pin_ref) == (
+        "goal.ino:13",
+        "setGoalPositionDeg",
+        "3",
+    )
+    assert json.loads(provenance.detail or "{}") == {
+        "kind": "goal_call",
+        "language": "cpp",
+        "value": 200.0,
+    }
 
 
 def test_adapters_refuse_nonconcrete_sequences_without_touching_them() -> None:
@@ -152,5 +174,5 @@ def test_adapters_refuse_nonconcrete_sequences_without_touching_them() -> None:
         def __len__(self) -> int:
             raise RuntimeError("unbounded input was inspected")
 
-    assert firmware_topology(UntrustedSequence(), **CONTEXT).status == "invalid"
-    assert repo_config_topology(UntrustedSequence(), **CONTEXT).status == "invalid"
+    assert firmware_topology(cast(Any, UntrustedSequence()), **CONTEXT).status == "invalid"
+    assert repo_config_topology(cast(Any, UntrustedSequence()), **CONTEXT).status == "invalid"

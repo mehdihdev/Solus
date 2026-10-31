@@ -4,7 +4,7 @@ import json
 import re
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -13,6 +13,18 @@ from solus_api.agent.tools.tool import Tool, ToolException
 from solus_api.bridge.tool import _diff_rows
 
 _FINGERPRINT = re.compile(r"(?:[0-9a-f]{16}:){3}[0-9a-f]{16}")
+#: A write card's ceiling (SOLUSDEV-321 P6): the bridge keeps at most CARD_ROWS preview rows of at
+#: most ROW_CHARS characters (`bridge/tool.py:_diff_rows`), and the companion's preview is the file
+#: and fingerprint rows, then one row per ROW_CHARS-character chunk of the longer side.
+CARD_ROWS: Final = 40
+ROW_CHARS: Final = 400
+_PAST_CEILING: Final = "exceed preview limits"
+_MASK: Final = "[REDACTED]"
+
+
+def card_rows(old: str, new: str) -> int:
+    """The rows a complete write card of `old` → `new` takes."""
+    return 2 + max(1, -(-max(len(old), len(new)) // ROW_CHARS))
 
 
 class WriteArgs(BaseModel):
@@ -111,6 +123,34 @@ class MachineWriteTool:
         ):
             raise _refuse("The complete file preview does not match the requested text.")
         return rows, fingerprint
+
+    async def current_text(self, path: str) -> str | None:
+        """The file's current text, the read half of a read-modify-write (SOLUSDEV-321 P6): a dry
+        run of the raw write with empty content, whose preview's `before` chunks are the file.
+        Nothing is written, and no ticket is issued. None when the file does not exist yet.
+        Refused past a card's ceiling, when the preview is incomplete, or when sensitive-data
+        filtering masked part of the file (writing back would write the mask)."""
+        parsed = _parse({"path": path, "content": ""})
+        try:
+            plan = await self._raw.invoke({**parsed, "dry_run": True})
+        except ToolException as exc:
+            if _PAST_CEILING in exc.message:
+                raise _refuse(
+                    f"The file is longer than a write card shows ({CARD_ROWS} rows of "
+                    f"{ROW_CHARS} characters)."
+                ) from None
+            raise _refuse("The current file could not be read through its write preview.") from None
+        complete = isinstance(plan, dict) and plan.get("ok") is True and plan.get("dry_run") is True
+        rows = _diff_rows(plan.get("preview")) if complete else []
+        befores = [row["before"] for row in rows if row["label"].startswith("Content ")]
+        if not befores:
+            raise _refuse()
+        if all(before is None for before in befores):
+            return None
+        text = "".join(before or "" for before in befores)
+        if _MASK in text:
+            raise _refuse("Part of the current file is masked by sensitive-data filtering.")
+        return text
 
     async def preview(self, args: dict[str, Any]) -> list[dict[str, Any]]:
         self._clear()

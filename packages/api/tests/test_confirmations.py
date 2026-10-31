@@ -26,6 +26,7 @@ from conftest import create_project, create_team
 from httpx import AsyncClient
 from solus_api.agent.confirmations import (
     CONFIRMATION_TTL,
+    PRECHECK_LABEL,
     decide_confirmation,
     request_confirmation,
 )
@@ -1009,6 +1010,70 @@ async def test_an_unchanged_action_still_applies(
 
     assert result.ok is True
     assert executed == [{"name": "width"}]
+
+
+#: The card's effect, and the simulation pre-check's advisory line beside it (R99).
+_EFFECT = {"label": "width", "before": "100 mm", "after": "120 mm"}
+_ADVICE = {"label": PRECHECK_LABEL, "before": None, "after": "Bracket: simulate it first"}
+
+
+@pytest.mark.parametrize(
+    ("approved", "applies"),
+    [
+        pytest.param([_EFFECT], True, id="the pre-check failed at approval"),
+        pytest.param([_EFFECT, {**_ADVICE, "after": "settled"}], True, id="worded anew"),
+        pytest.param([{**_EFFECT, "after": "999 mm"}, _ADVICE], False, id="the effect moved"),
+    ],
+)
+async def test_only_the_effect_rows_can_make_a_card_stale(
+    maker: async_sessionmaker[AsyncSession],
+    approved: list[dict[str, Any]],
+    applies: bool,
+) -> None:
+    """R118: the pre-check's rows are advice rebuilt from state the action does not change, so
+    a pre-check that fails or words its line anew at approval never refuses the card as stale;
+    the effect rows beside it still do (R1)."""
+    executed: list[dict[str, Any]] = []
+    rows: dict[str, list[dict[str, Any]]] = {"now": [_EFFECT, _ADVICE]}
+
+    class _Advised(InProcessTool):
+        async def preview(self, args: dict[str, Any]) -> list[dict[str, Any]]:
+            return rows["now"]
+
+    async def run(args: dict[str, Any]) -> dict[str, Any]:
+        executed.append(args)
+        return {}
+
+    registry = ToolRegistry()
+    registry.register(_Advised(DANGEROUS, run))
+    project_id, team_id, user_id = await _scope(maker)
+    async with maker() as db:
+        parked = await request_confirmation(
+            db,
+            registry,
+            ToolCall(tool="onshape.set_variable", args={"name": "width"}),
+            project_id=project_id,
+            team_id=team_id,
+            user_id=user_id,
+        )
+        await db.commit()
+    assert parked is not None and parked.confirmation_id is not None
+    assert parked.preview == [_EFFECT, _ADVICE]
+
+    rows["now"] = approved
+    async with maker() as db:
+        result = await decide_confirmation(
+            db,
+            registry,
+            parked.confirmation_id,
+            approve=True,
+            project_id=project_id,
+            user_id=user_id,
+        )
+        await db.commit()
+
+    assert result.ok is applies
+    assert executed == ([{"name": "width"}] if applies else [])
 
 
 async def test_the_approval_is_durable_before_the_tool_runs(

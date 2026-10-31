@@ -29,13 +29,21 @@ def _entity(name: str, domain: str, attrs: dict[str, Any]) -> EntityRead:
     return EntityRead(id=uuid4(), kind="component", domain=domain, name=name, attrs=attrs)
 
 
-def _edge(src: EntityRead, dst: EntityRead, relation_type: str) -> EdgeRead:
+def _edge(
+    src: EntityRead,
+    dst: EntityRead,
+    relation_type: str,
+    *,
+    confidence: float = 1.0,
+    attrs: dict[str, Any] | None = None,
+) -> EdgeRead:
     return EdgeRead(
         src_id=src.id,
         dst_id=dst.id,
         relation_type=relation_type,
         domain_pair=f"{src.domain}<->{dst.domain}",
-        confidence=1.0,
+        confidence=confidence,
+        attrs=attrs or {},
     )
 
 
@@ -49,7 +57,7 @@ def _graph(entities: list[EntityRead], edges: list[EdgeRead]) -> GraphContext:
 def _op_amp_pair(op_amp_attrs: dict[str, Any], load_attrs: dict[str, Any]) -> GraphContext:
     op_amp = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, **op_amp_attrs})
     load = _entity("motor_driver", "electrical", {av.PART_CLASS: av.LOAD, **load_attrs})
-    return _graph([op_amp, load], [_edge(op_amp, load, av.DRIVES)])
+    return _graph([op_amp, load], [_edge(op_amp, load, av.WIRES)])
 
 
 def test_op_amp_compatible_yields_no_warning() -> None:
@@ -110,10 +118,34 @@ def test_op_amp_missing_attrs_are_skipped_not_guessed() -> None:
     assert OpAmpMismatchChecker().check(graph, _parts()) == []
 
 
-def test_op_amp_without_drives_edge_is_ignored() -> None:
+def test_op_amp_without_a_wire_is_ignored() -> None:
     op_amp = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1.0})
     load = _entity("load", "electrical", {av.REQUIRED_GBW_HZ: 9_999_999.0})
-    graph = _graph([op_amp, load], [])  # no drives edge → not related
+    graph = _graph([op_amp, load], [])  # no wires edge → not related
+    assert OpAmpMismatchChecker().check(graph, _parts()) == []
+
+
+def test_op_amp_role_comes_from_part_class_not_the_wire_direction() -> None:
+    # `wires` is unordered (the netlist writes one edge per pair): the op-amp end drives.
+    op_amp = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1.0})
+    load = _entity("drv", "electrical", {av.REQUIRED_GBW_HZ: 1_000_000.0})
+    (warning,) = OpAmpMismatchChecker().check(
+        _graph([op_amp, load], [_edge(load, op_amp, av.WIRES)]), _parts()
+    )
+    assert warning.entity_ids == (op_amp.id, load.id)
+
+
+def test_a_wire_with_no_op_amp_end_or_two_is_skipped() -> None:
+    first = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1.0})
+    second = _entity(
+        "U2", "electrical", {av.PART_CLASS: av.OP_AMP, av.REQUIRED_GBW_HZ: 1_000_000.0}
+    )
+    plain = _entity("R1", "electrical", {av.REQUIRED_GBW_HZ: 1_000_000.0})
+    unclassed = _entity("X1", "electrical", {av.GBW_HZ: 1.0})
+    graph = _graph(
+        [first, second, plain, unclassed],
+        [_edge(first, second, av.WIRES), _edge(unclassed, plain, av.WIRES)],
+    )
     assert OpAmpMismatchChecker().check(graph, _parts()) == []
 
 
@@ -139,7 +171,7 @@ def test_untrusted_entity_name_is_carried_inertly_not_executed() -> None:
     graph = _op_amp_pair({av.GBW_HZ: 1.0}, {av.REQUIRED_GBW_HZ: 1_000_000.0})
     op_amp, load = graph.entities
     load = load.model_copy(update={"name": payload})
-    graph = _graph([op_amp, load], [_edge(op_amp, load, av.DRIVES)])
+    graph = _graph([op_amp, load], [_edge(op_amp, load, av.WIRES)])
 
     warnings = OpAmpMismatchChecker().check(graph, _parts())
 
@@ -149,11 +181,29 @@ def test_untrusted_entity_name_is_carried_inertly_not_executed() -> None:
     assert w.evidence["load"] == payload  # inert, structured — never interpreted here
 
 
-def test_op_amp_duplicate_drives_edge_yields_one_warning() -> None:
+def test_op_amp_duplicate_wires_yield_one_warning() -> None:
     op_amp = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1.0})
     load = _entity("drv", "electrical", {av.REQUIRED_GBW_HZ: 1_000_000.0})
-    graph = _graph([op_amp, load], [_edge(op_amp, load, av.DRIVES), _edge(op_amp, load, av.DRIVES)])
+    wires = [_edge(op_amp, load, av.WIRES), _edge(op_amp, load, av.WIRES)]
+    graph = _graph([op_amp, load], [*wires, _edge(load, op_amp, av.WIRES)])
     assert len(OpAmpMismatchChecker().check(graph, _parts())) == 1
+
+
+def test_a_wire_that_shares_only_rails_and_ground_pairs_nothing() -> None:
+    """M3: every part on a board meets every other on its rails and ground, so each op-amp is
+    judged only against the loads on its own signal nets; a wire with no nets is still judged."""
+    slow = _entity("U1", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1e6})
+    fast = _entity("U2", "electrical", {av.PART_CLASS: av.OP_AMP, av.GBW_HZ: 1e8})
+    easy = _entity("R1", "electrical", {av.REQUIRED_GBW_HZ: 5e5})
+    hard = _entity("R2", "electrical", {av.REQUIRED_GBW_HZ: 5e7})
+    wires = [
+        _edge(slow, easy, av.WIRES, attrs={"nets": ["/OUT_A", "GND"]}),
+        _edge(fast, hard, av.WIRES, attrs={"nets": ["/OUT_B", "GND"]}),
+        _edge(slow, hard, av.WIRES, attrs={"nets": ["GND"]}),
+        _edge(fast, easy, av.WIRES, attrs={"nets": ["GND", "+5V"]}),
+    ]
+
+    assert OpAmpMismatchChecker().check(_graph([slow, fast, easy, hard], wires), _parts()) == []
 
 
 # ---------------------------------------------------------------- sensor frequency conflict
@@ -162,7 +212,7 @@ def test_op_amp_duplicate_drives_edge_yields_one_warning() -> None:
 def _sensor_pair(sensor_attrs: dict[str, Any], code_attrs: dict[str, Any]) -> GraphContext:
     sensor = _entity("imu", "electrical", {av.PART_CLASS: av.SENSOR, **sensor_attrs})
     code = _entity("control_loop.cpp", "code", code_attrs)
-    return _graph([sensor, code], [_edge(code, sensor, av.READS_FROM)])
+    return _graph([sensor, code], [_edge(code, sensor, av.READS)])
 
 
 def test_sensor_frequency_compatible_yields_no_warning() -> None:
@@ -210,6 +260,18 @@ def test_sensor_bus_saturation_is_critical() -> None:
 def test_sensor_missing_rates_are_skipped() -> None:
     graph = _sensor_pair({av.SAMPLE_RATE_HZ: 200.0}, {})  # no loop_rate, no min/bus → SKIP
     assert SensorFrequencyConflictChecker().check(graph, _parts()) == []
+
+
+def test_sensor_rule_reads_only_confirmed_reads_edges() -> None:
+    # An inferred `reads` is written at 0.55: a candidate, not a fact, until a person confirms it.
+    sensor = _entity("imu", "electrical", {av.MIN_SAMPLE_RATE_HZ: 100.0})
+    code = _entity("loop.cpp", "code", {av.LOOP_RATE_HZ: 40.0})
+    rule = SensorFrequencyConflictChecker()
+    candidate = _graph([sensor, code], [_edge(code, sensor, av.READS, confidence=0.55)])
+    assert rule.check(candidate, _parts()) == []
+    confirmed = _graph([sensor, code], [_edge(code, sensor, av.READS, confidence=0.8)])
+    assert [w.evidence["conflict"] for w in rule.check(confirmed, _parts())] == ["undersampling"]
+    assert rule.needs.relations == (av.READS,)
 
 
 # ------------------------------------------------------------------- power compatibility
@@ -341,7 +403,7 @@ def test_run_all_sorts_most_severe_first() -> None:
     load = _entity("mcu", "electrical", {av.VOLTAGE_REQUIRED_V: 12.0, av.CURRENT_DRAW_A: 0.1})
     graph = _graph(
         [op_amp, driven, supply, load],
-        [_edge(op_amp, driven, av.DRIVES), _edge(supply, load, av.POWERS)],
+        [_edge(op_amp, driven, av.WIRES), _edge(supply, load, av.POWERS)],
     )
     warnings = run_all(graph, _parts())
     assert len(warnings) >= 2

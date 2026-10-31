@@ -65,6 +65,7 @@ describe('streamSolMessage', () => {
   messageRequestRoutingTests(WIRE)
   messageRequestScreenshotTests(WIRE)
   messageRequestContextTests(WIRE)
+  messageRequestAnchorTests(WIRE)
   messageRequestAuthorizationTests(WIRE)
 })
 
@@ -290,6 +291,58 @@ function messageRequestContextTests(WIRE: string): void {
     })
     const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
     expect(JSON.parse(init.body as string).mentions).toEqual(['e-1', 'e-2'])
+  })
+}
+
+function messageRequestAnchorTests(WIRE: string): void {
+  it('body carries focus and pins only when set', async () => {
+    // Canonical UUIDs: the server parses every anchor id as one.
+    const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    // SOLUSDEV-321 P0-T3: where the person is looking, the chat's pinned nodes, a finding
+    // and a bench robot are anchors of their own — never folded into `mentions`. Each key is
+    // sent only when it has something to say, so the default body stays the minimal one.
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'why is this hot?',
+      actionMode: 'guide' as const,
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({
+      ...base,
+      focus: { entityId: id(1), path: [id(2)] },
+      pins: [id(3), id(4)],
+      findingId: id(5),
+      robotId: id(6)
+    })
+    await streamSolMessage({ ...base, focus: { entityId: id(7), path: [] } })
+    await streamSolMessage({ ...base, pins: [] })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) =>
+        JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as Record<
+          string,
+          unknown
+        >
+    )
+    expect(bodies[0]).toMatchObject({
+      focus: { entity_id: id(1), path: [id(2)] },
+      pins: [id(3), id(4)],
+      finding_id: id(5),
+      robot_id: id(6),
+      mentions: []
+    })
+    // A focus with no trail is still a focus; an empty pin list is nothing to say.
+    expect(bodies[1].focus).toEqual({ entity_id: id(7), path: [] })
+    for (const body of bodies.slice(2)) {
+      for (const key of ['focus', 'pins', 'finding_id', 'robot_id']) {
+        expect(body).not.toHaveProperty(key)
+      }
+    }
   })
 }
 
