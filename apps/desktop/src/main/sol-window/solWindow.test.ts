@@ -3,12 +3,12 @@
 // structural fakes; the real BrowserWindow shell is on the COWORK QA checklist.
 // SOLUSDEV-319: the Ember Pill — summoned at the cursor, hide-on-blur unless
 // busy, double-tap toggle, renderer-driven upward growth.
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { SOL_WINDOW_CHANNELS } from './solWindow.constants'
+import { SOL_PILL_EXIT_MS, SOL_PILL_RESUME_MS, SOL_WINDOW_CHANNELS } from './solWindow.constants'
 import {
   createSolWindowManager,
   registerSolIpcHandlers,
@@ -113,11 +113,20 @@ function harness(cursor = { x: 100, y: 100 }): {
 }
 
 describe('manager', () => {
+  beforeEach(() => void vi.useFakeTimers())
+  afterEach(() => void vi.useRealTimers())
   registerWindowLifecycleAndGeometryTests()
   registerPillSummonTests()
   registerWindowStateBroadcastsTests()
   registerWindowRegionReadinessTests()
+  registerPillMotionTests()
+  registerPillDragTests()
 })
+
+/** Let the exit animation's bounded wait run out. */
+const exitAnimation = (): void => void vi.advanceTimersByTime(SOL_PILL_EXIT_MS)
+const pillEvents = (w: Fake): unknown[] =>
+  w.sent.filter((m) => m.channel === SOL_WINDOW_CHANNELS.pill).map((m) => m.payload)
 
 const STATE: SolState = {
   actionMode: 'guide',
@@ -280,6 +289,9 @@ describe('window hardening (SOLX-02 Phase-4 security, kept)', () => {
       alwaysOnTop: true,
       skipTaskbar: true,
       hasShadow: false,
+      // A drag handle must never double-click-zoom the pill to full screen.
+      maximizable: false,
+      fullscreenable: false,
       width: SOL_PILL_WIDTH
     })
   })
@@ -309,29 +321,34 @@ function registerWindowLifecycleAndGeometryTests(): void {
 function registerPillSummonTests(): void {
   const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
 
-  it('blur hides an idle pill, keeps a busy one, and the window survives hiding', () => {
+  it('blur hides an idle pill (after its exit animation), keeps a busy one, and the window survives', () => {
     const h = harness()
     const m = createSolWindowManager(h.deps)
     m.open()
     const w = h.windows[0]
     m.setBusy(true)
     w.emit('blur')
+    exitAnimation()
     expect(w.visible).toBe(true)
     m.setBusy(false)
     w.emit('blur')
+    expect(w.visible).toBe(true) // still animating out
+    exitAnimation()
     expect(w.visible).toBe(false)
     expect(m.isOpen()).toBe(true)
     expect(m.isVisible()).toBe(false)
   })
 
-  it('toggle hides a shown pill and re-summons a hidden one at the new cursor', () => {
+  it('toggle hides a shown pill; a re-summon after the resume window goes to the new cursor', () => {
     const h = harness({ x: 600, y: 300 })
     const m = createSolWindowManager(h.deps)
     m.toggle() // nothing open: opens
     const w = h.windows[0]
     expect(w.visible).toBe(true)
     m.toggle()
+    exitAnimation()
     expect(w.visible).toBe(false)
+    vi.advanceTimersByTime(SOL_PILL_RESUME_MS + 1)
     h.moveCursor({ x: 900, y: 500 })
     m.toggle()
     expect(h.windows).toHaveLength(1)
@@ -340,29 +357,72 @@ function registerPillSummonTests(): void {
     expect(w.focus).toHaveBeenCalled()
   })
 
+  it('a re-summon within 5 s resumes in place: same bounds, resume: true', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.resize(300)
+    const before = w.bounds
+    m.hide()
+    exitAnimation()
+    vi.advanceTimersByTime(SOL_PILL_RESUME_MS - SOL_PILL_EXIT_MS)
+    h.moveCursor({ x: 1500, y: 900 })
+    m.open()
+    expect(w.visible).toBe(true)
+    expect(w.bounds).toEqual(before)
+    expect(pillEvents(w).at(-1)).toEqual({ kind: 'summoned', resume: true })
+  })
+
+  it('after 5 s an idle pill is summoned fresh: collapsed at the cursor, resume: false', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.resize(300)
+    m.hide()
+    exitAnimation()
+    vi.advanceTimersByTime(SOL_PILL_RESUME_MS + 1)
+    h.moveCursor({ x: 700, y: 900 })
+    m.open()
+    expect(w.bounds).toEqual(placePill({ x: 700, y: 900 }, WA_A, pill))
+    expect(pillEvents(w).at(-1)).toEqual({ kind: 'summoned', resume: false })
+  })
+
+  it('after 5 s a busy pill keeps its height at the new cursor (the renderer keeps its chat)', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.resize(300) // no window: ignored, no throw
+    m.open()
+    m.resize(300)
+    m.setBusy(true)
+    m.hide()
+    exitAnimation()
+    vi.advanceTimersByTime(SOL_PILL_RESUME_MS + 1)
+    h.moveCursor({ x: 700, y: 900 })
+    m.open()
+    const home2 = placePill({ x: 700, y: 900 }, WA_A, pill)
+    expect(h.windows[0].bounds).toEqual(growPill({ x: 700, y: 900 }, home2, 300, WA_A))
+  })
+
   it('open on a hidden pill shows it again (tray, page button, gesture)', () => {
     const h = harness()
     const m = createSolWindowManager(h.deps)
     m.open()
     m.hide()
+    exitAnimation()
     expect(h.windows[0].visible).toBe(false)
     m.open()
     expect(h.windows[0].visible).toBe(true)
   })
 
-  it('resize grows upward from the summon placement and keeps that height on re-summon', () => {
+  it('resize grows upward from the summon placement', () => {
     const h = harness({ x: 600, y: 300 })
     const m = createSolWindowManager(h.deps)
-    m.resize(300) // no window: ignored, no throw
     m.open()
     const home = placePill({ x: 600, y: 300 }, WA_A, pill)
     m.resize(300)
     expect(h.windows[0].bounds).toEqual(growPill({ x: 600, y: 300 }, home, 300, WA_A))
-    m.hide()
-    h.moveCursor({ x: 700, y: 900 })
-    m.open()
-    const home2 = placePill({ x: 700, y: 900 }, WA_A, pill)
-    expect(h.windows[0].bounds).toEqual(growPill({ x: 700, y: 900 }, home2, 300, WA_A))
   })
 
   it('a closed window forgets busy, so the next pill hides on blur', () => {
@@ -373,7 +433,102 @@ function registerPillSummonTests(): void {
     h.windows[0].close()
     m.open()
     h.windows[1].emit('blur')
+    exitAnimation()
     expect(h.windows[1].visible).toBe(false)
+  })
+}
+
+function registerPillMotionTests(): void {
+  it('tells the renderer it is leaving, then hides once the bounded wait ends', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.hide()
+    expect(pillEvents(w)).toEqual([{ kind: 'leaving' }])
+    vi.advanceTimersByTime(SOL_PILL_EXIT_MS - 1)
+    expect(w.visible).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(w.visible).toBe(false)
+    m.hide() // already hidden: nothing more
+    expect(pillEvents(w)).toEqual([{ kind: 'leaving' }])
+  })
+
+  it('a hide repeated mid-animation does not restart it', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.hide()
+    vi.advanceTimersByTime(SOL_PILL_EXIT_MS - 10)
+    h.windows[0].emit('blur')
+    vi.advanceTimersByTime(10)
+    expect(h.windows[0].visible).toBe(false)
+    expect(pillEvents(h.windows[0])).toEqual([{ kind: 'leaving' }])
+  })
+
+  it('a summon while leaving cancels the hide and resumes', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.toggle()
+    m.toggle() // double-tapped back before the exit finished
+    exitAnimation()
+    expect(w.visible).toBe(true)
+    expect(pillEvents(w)).toEqual([{ kind: 'leaving' }, { kind: 'summoned', resume: true }])
+  })
+
+  it('a window closed mid-animation is never touched again', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.hide()
+    h.windows[0].close()
+    expect(() => exitAnimation()).not.toThrow()
+    expect(m.isOpen()).toBe(false)
+  })
+
+  it('a created window gets no summon event (its renderer mounts fresh)', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    expect(pillEvents(h.windows[0])).toEqual([])
+  })
+}
+
+function registerPillDragTests(): void {
+  const pill = { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
+  it('a dragged pill keeps its place as it grows and shrinks (bottom edge fixed)', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.resize(200)
+    w.bounds = { x: 1000, y: 600, width: SOL_PILL_WIDTH, height: 200 }
+    w.emit('moved')
+    m.resize(400)
+    expect(w.bounds).toEqual({ x: 1000, y: 400, width: SOL_PILL_WIDTH, height: 400 })
+    m.resize(150)
+    expect(w.bounds).toEqual({ x: 1000, y: 650, width: SOL_PILL_WIDTH, height: 150 })
+  })
+
+  it('a resume keeps the dragged place; a fresh summon goes back to the cursor', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    const dragged = { x: 1000, y: 600, width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
+    w.bounds = dragged
+    w.emit('moved')
+    m.hide()
+    exitAnimation()
+    m.open()
+    expect(w.bounds).toEqual(dragged)
+    m.hide()
+    exitAnimation()
+    vi.advanceTimersByTime(SOL_PILL_RESUME_MS + 1)
+    m.open()
+    expect(w.bounds).toEqual(placePill({ x: 600, y: 300 }, WA_A, pill))
   })
 }
 

@@ -6,6 +6,7 @@ import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 import {
   createSolBridge,
   isDriveStatus,
+  isSolPillEvent,
   isSolState,
   type SolBridge,
   type SolBridgeIpc
@@ -126,6 +127,37 @@ describe('pushes', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('pill motion cues (SOLUSDEV-319)', () => {
+  it('delivers summoned / leaving, drops anything else, and unsubscribes', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const f = fakeIpc()
+      const b = createSolBridge(f.ipc)
+      const seen: unknown[] = []
+      const off = b.onPill?.((e) => seen.push(e))
+      const c = SOL_WINDOW_CHANNELS.pill
+      f.emit(c, { kind: 'summoned', resume: true })
+      f.emit(c, { kind: 'leaving' })
+      f.emit(c, { kind: 'summoned', resume: 'yes' })
+      f.emit(c, { kind: 'explode' })
+      f.emit(c, null)
+      expect(seen).toEqual([{ kind: 'summoned', resume: true }, { kind: 'leaving' }])
+      expect(spy).toHaveBeenCalledTimes(3)
+      off?.()
+      expect(f.count(c)).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('isSolPillEvent accepts exactly the two cues', () => {
+    expect(isSolPillEvent({ kind: 'summoned', resume: false })).toBe(true)
+    expect(isSolPillEvent({ kind: 'leaving' })).toBe(true)
+    expect(isSolPillEvent({ kind: 'summoned' })).toBe(false)
+    expect(isSolPillEvent('leaving')).toBe(false)
   })
 })
 

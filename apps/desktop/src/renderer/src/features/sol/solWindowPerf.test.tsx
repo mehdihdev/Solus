@@ -49,6 +49,8 @@ describe('idle SOL window: zero scripted animation', () => {
   it('the SOL window modules register no requestAnimationFrame or timers (source ratchet)', () => {
     const sources = [
       'SolWindow.tsx',
+      'PillPanel.tsx',
+      'pillMeasure.ts',
       'solWindowStore.ts',
       'solSessionStore.ts',
       'ModeBadge.tsx',
@@ -93,5 +95,27 @@ describe('reduced motion (a11y)', () => {
     const guard = reduced.find((block) => block.includes('.sol-pulse'))
     expect(guard).toBeDefined()
     expect(guard).toMatch(/\.sol-pulse\s*\{[^}]*animation:\s*none/)
+  })
+
+  it('main.css shortens the pill motion and stops the orb glow under reduced motion (SOLUSDEV-319)', () => {
+    const css = readFileSync(join(here, '..', '..', 'assets', 'main.css'), 'utf8')
+    const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/g) ?? []
+    const guard = reduced.find((block) => block.includes('--sol-pill-in-ms'))
+    expect(guard).toBeDefined()
+    expect(guard).toMatch(/--sol-pill-resize-ms:\s*0ms/)
+    expect(guard).toMatch(/\.sol-pill-orb::after[\s\S]*animation:\s*none/)
+  })
+
+  it('the pill motion is transform/opacity keyframes only, never scripted', () => {
+    const css = readFileSync(join(here, '..', '..', 'assets', 'main.css'), 'utf8')
+    for (const name of ['sol-pill-in', 'sol-pill-out', 'sol-pill-arrive', 'sol-orb-breathe']) {
+      const block = css.match(new RegExp(`@keyframes ${name}\\s*\\{[\\s\\S]*?\\n\\}`))?.[0]
+      expect(block, name).toBeDefined()
+      const props = [...(block ?? '').matchAll(/([a-z-]+):/g)].map((m) => m[1])
+      expect(
+        props.every((p) => p === 'opacity' || p === 'transform'),
+        name
+      ).toBe(true)
+    }
   })
 })

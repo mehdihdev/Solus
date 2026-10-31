@@ -5,8 +5,11 @@ import { describe, it, expect } from 'vitest'
 import {
   growPill,
   placePill,
+  dragHome,
+  pillMaxHeight,
   SOL_PILL_CURSOR_OFFSET,
   SOL_PILL_MAX_HEIGHT,
+  SOL_PILL_MAX_SCREEN_FRACTION,
   SOL_PILL_MIN_HEIGHT,
   SOL_PILL_WIDTH
 } from './pillGeometry'
@@ -67,16 +70,49 @@ describe('growPill', () => {
     expect(growPill({ x: 350, y: 300 }, midHome, 400, narrow).x).toBe(midHome.x)
   })
 
-  it('clamps the height to the bounds and never rises past the work-area top', () => {
+  it('clamps the height to the bounds; with no room above it slides down rather than clip', () => {
     expect(growPill(anchor, home, 10, WA).height).toBe(SOL_PILL_MIN_HEIGHT)
     const low = { x: 600, y: 900 }
     expect(growPill(low, placePill(low, WA, SIZE), 5000, WA).height).toBe(SOL_PILL_MAX_HEIGHT)
     const r = growPill(anchor, home, 600, WA)
     expect(r.y).toBe(0)
-    expect(r.height).toBe(bottom)
+    expect(r.height).toBe(600)
+  })
+
+  it('never takes more than 60% of a short work area', () => {
+    const short = { x: 0, y: 25, width: 1440, height: 800 }
+    expect(SOL_PILL_MAX_SCREEN_FRACTION).toBe(0.6)
+    expect(pillMaxHeight(short)).toBe(480)
+    expect(pillMaxHeight(WA)).toBe(SOL_PILL_MAX_HEIGHT)
+    const at = { x: 600, y: 700 }
+    const r = growPill(at, placePill(at, short, SIZE), 5000, short)
+    expect(r.height).toBe(480)
+    expect(r.y).toBeGreaterThanOrEqual(short.y)
+  })
+
+  it('a null anchor (the user dragged the pill) never shifts aside', () => {
+    const r = growPill(null, home, 400, WA)
+    expect(r.x).toBe(home.x)
+    expect(r.y + r.height).toBe(bottom)
   })
 
   it('treats a non-finite height as the minimum', () => {
     expect(growPill(anchor, home, Number.NaN, WA).height).toBe(SOL_PILL_MIN_HEIGHT)
+  })
+})
+
+describe('dragHome', () => {
+  it('keeps a dragged rect where the user left it', () => {
+    const b = { x: 300, y: 200, width: SOL_PILL_WIDTH, height: 240 }
+    expect(dragHome(b, WA)).toEqual(b)
+  })
+
+  it('clamps a rect dragged partly off the work area back inside it', () => {
+    const off = dragHome({ x: -80, y: 1000, width: SOL_PILL_WIDTH, height: 200 }, WA)
+    expect(off.x).toBe(0)
+    expect(off.y + off.height).toBe(1040)
+    const right = dragHome({ x: 1800, y: -150, width: SOL_PILL_WIDTH, height: 200 }, WA)
+    expect(right.x).toBe(1920 - SOL_PILL_WIDTH)
+    expect(right.y + right.height).toBe(SOL_PILL_MIN_HEIGHT)
   })
 })

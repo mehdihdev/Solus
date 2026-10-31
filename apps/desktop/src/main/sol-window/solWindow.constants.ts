@@ -30,8 +30,19 @@ export const SOL_WINDOW_CHANNELS = {
   setDriving: 'sol:set-driving',
   /** main → the app's renderers: the DriveStatus on every change. */
   driveStatus: 'sol:drive-status',
+  /** SOLUSDEV-319 main → the SOL window only: the pill's motion cues —
+   *  `summoned` (with `resume`: same chat kept) after a show, `leaving` just
+   *  before main hides it (the renderer plays its exit animation). */
+  pill: 'sol:pill',
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */
   region: 'sol:region'
 } as const
+
+/** SOLUSDEV-319: a re-summon within this long of a hide resumes the same
+ *  conversation in the same place; after it, a fresh pill at the cursor. */
+export const SOL_PILL_RESUME_MS = 5000
+/** SOLUSDEV-319: how long main waits for the renderer's exit animation before
+ *  hiding the window (bounded, so a dead renderer cannot keep it up). */
+export const SOL_PILL_EXIT_MS = 140

@@ -25,6 +25,7 @@ import { isDriveTool } from './driveProgress'
 import { ProcessStrip } from './ProcessStrip'
 import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { Composer, type ComposerSend } from './Composer'
+import { PillPanel } from './PillPanel'
 import { SolMarkdown } from './Markdown'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { PendingConfirmation } from '../../lib/api/solStream'
@@ -409,6 +410,7 @@ function MessageList({
     <div
       ref={listRef}
       onScroll={handleScroll}
+      className="sol-thread"
       style={{
         flex: 1,
         minHeight: 0,
@@ -522,11 +524,11 @@ function Surface(p: SurfaceParts): React.JSX.Element {
     return (
       <div className="sol-pill-stack" onKeyDownCapture={p.shortcut.onKeyDownCapture}>
         {panelOpen && (
-          <section className="sol-pill-panel" aria-label="SOL conversation">
+          <PillPanel>
             {p.pillTop}
             {p.hasThread && p.thread}
             {p.regionCard}
-          </section>
+          </PillPanel>
         )}
         {p.strip}
         {p.composer}

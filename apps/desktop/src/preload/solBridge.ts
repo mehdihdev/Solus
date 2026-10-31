@@ -5,7 +5,7 @@ import type { ToolWindowRef } from '@solus/shared-types'
 // preload/index.ts binds the real one. Channel names come from
 // SOL_WINDOW_CHANNELS only (the ratchet in main/sol-window/solWindow.test.ts).
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
-import type { SolRegionPayload, SolState } from '../main/sol-window/solWindow'
+import type { SolPillEvent, SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 import type { SolActionMode } from '../main/solSettings'
 import { DRIVE_AGENT_STATES, DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
 
@@ -45,6 +45,8 @@ export interface SolBridge {
   onDriveStatus(handler: (status: DriveStatus) => void): () => void
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
+  /** SOLUSDEV-319: the pill's motion cues (summoned / leaving) — SOL window only. */
+  onPill?(handler: (event: SolPillEvent) => void): () => void
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -100,6 +102,11 @@ export function isSolRegion(raw: unknown): raw is SolRegionPayload {
   )
 }
 
+export function isSolPillEvent(raw: unknown): raw is SolPillEvent {
+  if (!isRecord(raw)) return false
+  return raw.kind === 'leaving' || (raw.kind === 'summoned' && typeof raw.resume === 'boolean')
+}
+
 function isGuideTarget(raw: unknown): raw is ToolWindowRef {
   if (
     !isRecord(raw) ||
@@ -151,7 +158,8 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     openDriveApproval: () => ipc.invoke(c.openDriveApproval).then(() => undefined),
     onDriveStatus: (handler) => subscribe(c.driveStatus, isDriveStatus, handler),
     onState: (handler) => subscribe(c.state, isSolState, handler),
-    onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
+    onRegion: (handler) => subscribe(c.region, isSolRegion, handler),
+    onPill: (handler) => subscribe(c.pill, isSolPillEvent, handler)
   }
 }
 

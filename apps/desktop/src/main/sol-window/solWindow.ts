@@ -11,19 +11,13 @@ import { externalOpenHandler } from '../externalUrl'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { attachOrbOverlayWire, type WireIpc } from './orbOverlayWire'
-import { SOL_WINDOW_CHANNELS } from './solWindow.constants'
+import { SOL_PILL_EXIT_MS, SOL_PILL_RESUME_MS, SOL_WINDOW_CHANNELS } from './solWindow.constants'
 import type { SolActionMode, SolSettings } from '../solSettings'
 import type { CaptureCapability } from '../capture/screenCapture'
 import type { CapabilityState } from '../platform/capabilities'
 import type { ActiveWindowInfo } from '../capture/activeWindow'
-import {
-  growPill,
-  placePill,
-  SOL_PILL_INITIAL_HEIGHT,
-  SOL_PILL_WIDTH,
-  type Point,
-  type Rect
-} from './pillGeometry'
+import { SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH, type Point, type Rect } from './pillGeometry'
+import { createPillPlacement } from './pillPlacement'
 
 export type { Point, Rect } from './pillGeometry'
 
@@ -43,6 +37,10 @@ export const SOL_WINDOW_OPTIONS = {
   frame: false,
   transparent: true,
   resizable: false,
+  // SOLUSDEV-319: the pill is draggable by its chrome (-webkit-app-region);
+  // a double-click there must never zoom it.
+  maximizable: false,
+  fullscreenable: false,
   alwaysOnTop: true,
   skipTaskbar: true,
   hasShadow: false,
@@ -61,7 +59,7 @@ export interface DisplaySlice {
 /** Structural slice of BrowserWindow — just what the manager needs. */
 export interface SolWindowHandle {
   isDestroyed(): boolean
-  on(event: 'blur' | 'closed', listener: () => void): void
+  on(event: 'blur' | 'closed' | 'moved', listener: () => void): void
   focus(): void
   show(): void
   hide(): void
@@ -114,6 +112,9 @@ export interface SolRegionPayload {
   capturedAt: number
 }
 
+/** SOLUSDEV-319: the pill's motion cues (SOL_WINDOW_CHANNELS.pill), SOL window only. */
+export type SolPillEvent = { kind: 'summoned'; resume: boolean } | { kind: 'leaving' }
+
 export interface SolWindowManagerDeps {
   createWindow(bounds: Rect): SolWindowHandle
   screen: {
@@ -124,6 +125,8 @@ export interface SolWindowManagerDeps {
    *  window is always included by the manager; extension windows never are —
    *  they host third-party bundles (security review M2). */
   allWindows(): ReadonlyArray<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>
+  /** The clock for the resume window (tests use fake timers). */
+  now?(): number
 }
 
 export interface SolWindowManager {
@@ -132,7 +135,8 @@ export interface SolWindowManager {
   open(opts?: { near?: Point }): void
   /** Double-tap Ctrl: hide a shown pill, else open. */
   toggle(): void
-  /** Esc / blur: hide; the window and its renderer state live on. */
+  /** Esc / blur: the renderer animates out, then the window hides; the window
+   *  and its renderer state live on. A summon within SOL_PILL_RESUME_MS resumes. */
   hide(): void
   /** The renderer's measured content height; main grows the pill upward. */
   resize(height: number): void
@@ -155,34 +159,6 @@ export interface SolWindowManager {
   isSender(sender: unknown): boolean
 }
 
-/** SOLUSDEV-319: where the pointer was at summon, the pill's collapsed
- *  placement there, and the last height the renderer asked for. */
-function createPillPlacement(screen: SolWindowManagerDeps['screen']): {
-  summon(near: Point, fresh?: boolean): Rect
-  grow(height: number): Rect | null
-} {
-  let anchor: Point = { x: 0, y: 0 }
-  let home: Rect | null = null
-  let height: number = SOL_PILL_INITIAL_HEIGHT
-  const workAreaAt = (p: Point): Rect => screen.getDisplayNearestPoint(p).workArea
-  return {
-    /** Re-anchor at `near`: the collapsed placement, grown to the current
-     *  height — or collapsed, for a `fresh` window. */
-    summon(near, fresh = false) {
-      if (fresh) height = SOL_PILL_INITIAL_HEIGHT
-      const wa = workAreaAt(near)
-      anchor = near
-      home = placePill(near, wa, { width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT })
-      return height === SOL_PILL_INITIAL_HEIGHT ? home : growPill(near, home, height, wa)
-    },
-    grow(next) {
-      if (home === null) return null
-      height = next
-      return growPill(anchor, home, next, workAreaAt(anchor))
-    }
-  }
-}
-
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
   let current: SolWindowHandle | null = null
   // A fresh window has no renderer yet; a region pushed before its first
@@ -191,21 +167,52 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   let pending: SolRegionPayload | null = null
   const placement = createPillPlacement(deps.screen)
   let busy = false
+  const now = deps.now ?? Date.now
+  // SOLUSDEV-319: the exit animation's bounded wait, and when the pill last hid.
+  let leaving: ReturnType<typeof setTimeout> | null = null
+  let hiddenAt: number | null = null
   const alive = (): boolean => current !== null && !current.isDestroyed()
+  const cue = (event: SolPillEvent): void => {
+    if (alive()) current?.webContents.send(SOL_WINDOW_CHANNELS.pill, event)
+  }
+  const stopLeaving = (): void => {
+    if (leaving !== null) clearTimeout(leaving)
+    leaving = null
+  }
+
+  /** Cue the renderer's exit animation; hide when the bounded wait ends — a
+   *  dead or slow renderer cannot keep the pill up. */
+  const hide = (): void => {
+    if (!alive() || !current?.isVisible() || leaving !== null) return
+    cue({ kind: 'leaving' })
+    leaving = setTimeout(() => {
+      leaving = null
+      if (!alive() || !current?.isVisible()) return
+      current.hide()
+      hiddenAt = now()
+    }, SOL_PILL_EXIT_MS)
+  }
 
   const create = (near: Point): void => {
     const win = deps.createWindow(placement.summon(near, true))
     current = win
     ready = false
     pending = null
+    hiddenAt = null
     win.on('blur', () => {
-      if (!busy && !win.isDestroyed()) win.hide()
+      if (!busy && current === win) hide()
+    })
+    // A drag (the renderer's -webkit-app-region handle) re-homes the pill.
+    win.on('moved', () => {
+      if (!win.isDestroyed() && win.isVisible()) placement.moved(win.getBounds())
     })
     win.on('closed', () => {
-      if (current === win) current = null
+      if (current !== win) return
+      current = null
       pending = null // ephemeral by construction: a region never outlives its window
       ready = false
       busy = false
+      stopLeaving()
     })
   }
 
@@ -217,12 +224,24 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     }
   }
 
+  /** Within the resume window the pill comes back as it was, where it was;
+   *  after it, a fresh pill at the cursor (collapsed unless SOL is busy, in
+   *  which case the renderer keeps its chat and so its height). */
+  const resummon = (win: SolWindowHandle, near: Point): void => {
+    const resume = hiddenAt !== null && now() - hiddenAt <= SOL_PILL_RESUME_MS
+    if (!resume) win.setBounds(placement.summon(near, !busy))
+    win.show()
+    cue({ kind: 'summoned', resume })
+  }
+
   const open = (opts?: { near?: Point }): void => {
     const near = opts?.near ?? deps.screen.getCursorScreenPoint()
     if (!alive() || current === null) return create(near)
-    if (!current.isVisible()) {
-      current.setBounds(placement.summon(near))
-      current.show()
+    if (leaving !== null) {
+      stopLeaving()
+      cue({ kind: 'summoned', resume: true })
+    } else if (!current.isVisible()) {
+      resummon(current, near)
     }
     current.focus()
   }
@@ -230,12 +249,12 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   return {
     open,
     toggle() {
-      if (alive() && current?.isVisible()) current.hide()
+      if (alive() && current?.isVisible() && leaving === null) hide()
       else open()
     },
-    hide: () => void (alive() && current?.hide()),
+    hide,
     resize(next) {
-      const bounds = alive() ? placement.grow(next) : null
+      const bounds = alive() && current ? placement.grow(next, current.getBounds()) : null
       if (bounds !== null) current?.setBounds(bounds)
     },
     setBusy: (flag) => void (busy = flag),

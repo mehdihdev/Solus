@@ -2,7 +2,11 @@
 // in-memory SolBridge whose pushes the test drives by hand.
 import { vi } from 'vitest'
 import type { SolBridge } from '../../lib/desktopBridge'
-import type { SolRegionPayload, SolState } from '../../../../main/sol-window/solWindow'
+import type {
+  SolPillEvent,
+  SolRegionPayload,
+  SolState
+} from '../../../../main/sol-window/solWindow'
 
 export const SOL_STATE: SolState = {
   actionMode: 'guide',
@@ -33,11 +37,14 @@ export interface FakeSolBridge extends SolBridge {
   openDriveApproval: () => Promise<void>
   pushState: (s: SolState) => void
   pushRegion: (r: SolRegionPayload) => void
+  /** SOLUSDEV-319: drive main's pill motion cues (summoned / leaving). */
+  pushPill: (e: SolPillEvent) => void
 }
 
 export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge {
   let stateHandler: ((s: SolState) => void) | null = null
   let regionHandler: ((r: SolRegionPayload) => void) | null = null
+  let pillHandler: ((e: SolPillEvent) => void) | null = null
   return {
     getState: vi.fn(async () => state),
     setMode: vi.fn(async () => state),
@@ -66,7 +73,14 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
         regionHandler = null
       }
     }),
+    onPill: vi.fn((handler: (e: SolPillEvent) => void) => {
+      pillHandler = handler
+      return () => {
+        pillHandler = null
+      }
+    }),
     pushState: (s) => stateHandler?.(s),
+    pushPill: (e) => pillHandler?.(e),
     pushRegion: (r) => regionHandler?.(r)
   }
 }

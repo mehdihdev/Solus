@@ -177,7 +177,7 @@ describe('SolWindow pill sizing and busy signal', () => {
         constructor(cb: ResizeObserverCallback) {
           observed = cb
         }
-        observe(): void {}
+        observe = vi.fn()
         disconnect = disconnect
       }
     )
@@ -288,38 +288,38 @@ it('opens Guide tasks on demand from the footer, only in Guide mode', async () =
   expect(screen.queryByRole('button', { name: 'Guide tasks' })).not.toBeInTheDocument()
 })
 
-describe('SolWindow summon starts a fresh chat (A1)', () => {
-  let visibility: DocumentVisibilityState = 'visible'
-  beforeEach(() => {
-    visibility = 'visible'
-    Object.defineProperty(document, 'visibilityState', {
-      configurable: true,
-      get: () => visibility
-    })
-  })
-  const summonAgain = (): void => {
-    visibility = 'hidden'
-    act(() => void document.dispatchEvent(new Event('visibilitychange')))
-    visibility = 'visible'
-    act(() => void document.dispatchEvent(new Event('visibilitychange')))
+describe('SolWindow summon: resume within 5 s, else a fresh chat (A1)', () => {
+  const summon = (resume: boolean): void => {
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    act(() => bridge.pushPill({ kind: 'summoned', resume }))
   }
   const active = (): string | null =>
     useSolSessionStore.getState().conversationByProject['p1'] ?? null
 
-  it('opening the pill forgets the last conversation; so does every re-summon', async () => {
+  it('opening the pill forgets the last conversation; so does a fresh re-summon', async () => {
     useSolSessionStore.setState({ conversationByProject: { p1: 'old-chat' } })
     await mount()
     expect(active()).toBeNull()
     act(() => useSolSessionStore.getState().setConversation('p1', 'second-chat'))
-    summonAgain()
+    summon(false)
     expect(active()).toBeNull()
   })
 
-  it('a busy SOL keeps its conversation across a re-summon', async () => {
+  it('a re-summon within the resume window keeps the conversation and the draft', async () => {
+    await mount()
+    act(() => useSolSessionStore.getState().setConversation('p1', 'same-chat'))
+    const input = screen.getByPlaceholderText(PLACEHOLDER)
+    fireEvent.change(input, { target: { value: 'half-typed' } })
+    summon(true)
+    expect(active()).toBe('same-chat')
+    expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('half-typed')
+  })
+
+  it('a busy SOL keeps its conversation across a fresh re-summon', async () => {
     useSolSessionStore.setState({ conversationByProject: { p1: 'live-chat' }, streaming: true })
     await mount()
     expect(active()).toBe('live-chat')
-    summonAgain()
+    summon(false)
     expect(active()).toBe('live-chat')
   })
 
@@ -330,11 +330,44 @@ describe('SolWindow summon starts a fresh chat (A1)', () => {
     expect(active()).toBe('plan-chat')
   })
 
-  it('re-summon closes Guide tasks again', async () => {
+  it('a fresh re-summon closes Guide tasks again; a resume leaves them open', async () => {
     await mount()
     fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
-    summonAgain()
+    summon(true)
+    expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
+    summon(false)
     expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  })
+})
+
+describe('SolWindow motion (SOLUSDEV-319)', () => {
+  it('plays its exit on "leaving" and its entrance again on "summoned"', async () => {
+    await mount()
+    const pill = document.querySelector('.sol-pill') as HTMLElement
+    expect(pill.dataset.phase).toBe('in')
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    expect(pill.dataset.phase).toBe('leaving')
+    act(() => bridge.pushPill({ kind: 'summoned', resume: true }))
+    expect(pill.dataset.phase).toBe('in')
+  })
+
+  it('caps its own height at min(620, 60% of the screen)', async () => {
+    const avail = vi.spyOn(window.screen, 'availHeight', 'get').mockReturnValue(800)
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      expect(pill.style.getPropertyValue('--sol-pill-max-h')).toBe('480px')
+    } finally {
+      avail.mockRestore()
+    }
+  })
+
+  it('unsubscribes from the motion cues on unmount', async () => {
+    const { unmount } = render(<SolWindow />)
+    await act(async () => undefined)
+    unmount()
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    expect(document.querySelector('.sol-pill')).toBeNull()
   })
 })
 

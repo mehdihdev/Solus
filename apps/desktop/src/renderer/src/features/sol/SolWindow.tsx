@@ -11,6 +11,9 @@
 //
 // Perf budget (solWindowPerf.test): no timers or animation frames here — the
 // streaming indicator is ONE CSS class (`sol-pulse`); sizing is a ResizeObserver.
+// Motion (summon in, exit out, the panel's height, rows arriving) is CSS only,
+// keyed off `data-phase` and main's `sol:pill` cues; main owns the 5 s resume
+// rule and waits a bounded time for the exit before hiding the window.
 import { useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
@@ -23,6 +26,8 @@ import { GuideTasks } from '../guide/GuideTasks'
 import { selectSession, startNewChat, useSolChatStore } from './solChatStore'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { connectSolBridge, useSolWindowStore } from './solWindowStore'
+import { measurePill } from './pillMeasure'
+import { pillHeightCap } from './solPill.constants'
 
 const REFUSED_LINE = 'SOL didn’t look — turn on SOL sees your screen in Settings to let it.'
 
@@ -130,41 +135,69 @@ const busyNow = (projectId: string): boolean =>
   useSolWindowStore.getState().planRunning ||
   latestParked(useSolChatStore.getState(), projectId)
 
-/** A1: every summon — the window created, or shown again after a hide — opens
- *  on a NEW chat, unless SOL is busy (then the user comes back to it). The old
- *  conversation stays in the SOL page's history; the pointer is shared with the
- *  page by design, so the page follows. */
-function useFreshOnSummon(projectId: string | null, onSummon: () => void): void {
-  const latest = useRef(onSummon)
+/** Start over unless SOL is busy or there is nothing to forget. */
+function startFresh(projectId: string): void {
+  if (busyNow(projectId)) return
+  if (selectConversationId(useSolSessionStore.getState(), projectId) === null) return
+  startNewChat(projectId)
+}
+
+type PillPhase = 'in' | 'leaving'
+
+/** A1 + SOLUSDEV-319: the window created (mount) opens on a NEW chat, and so
+ *  does a re-summon main marks `resume: false` (hidden more than 5 s) — unless
+ *  SOL is busy, then the user comes back to it. A `resume: true` summon keeps
+ *  everything (messages, draft, scroll). The old conversation stays in the SOL
+ *  page's history; the pointer is shared with the page by design. Returns the
+ *  motion phase main last cued. */
+function useSummons(projectId: string | null, onFresh: () => void): PillPhase {
+  const [phase, setPhase] = useState<PillPhase>('in')
+  const latest = useRef(onFresh)
   useEffect(() => {
-    latest.current = onSummon
+    latest.current = onFresh
   })
   useEffect(() => {
     if (!projectId) return
-    const summoned = (): void => {
-      if (document.visibilityState !== 'visible') return
-      latest.current()
-      if (busyNow(projectId)) return
-      if (selectConversationId(useSolSessionStore.getState(), projectId) === null) return
-      startNewChat(projectId)
-    }
-    summoned()
-    document.addEventListener('visibilitychange', summoned)
-    return () => document.removeEventListener('visibilitychange', summoned)
+    latest.current()
+    startFresh(projectId)
   }, [projectId])
+  useEffect(() => {
+    const off = getDesktopSolBridge()?.onPill?.((event) => {
+      if (event.kind === 'leaving') return setPhase('leaving')
+      setPhase('in')
+      if (event.resume) return
+      latest.current()
+      if (projectId) startFresh(projectId)
+    })
+    return off
+  }, [projectId])
+  return phase
 }
 
-/** Main sizes the window from this; the bottom edge stays put (grows upward). */
-function useReportHeight(ref: React.RefObject<HTMLDivElement | null>): void {
+/** Main sizes the window from this; the bottom edge stays put (grows upward).
+ *  The panel's room is whatever the cap leaves after the bar and footer, so
+ *  the thread scrolls inside rather than push the composer off the window. */
+function useReportHeight(ref: React.RefObject<HTMLDivElement | null>, cap: number): void {
   useEffect(() => {
     const el = ref.current
     if (!el || typeof ResizeObserver === 'undefined') return
+    let sent = -1
+    let room = -1
     const observer = new ResizeObserver(() => {
-      void getDesktopSolBridge()?.resize(Math.ceil(el.getBoundingClientRect().height))
+      const { report, chrome } = measurePill(el)
+      // Only on change: writing it re-lays-out the observed subtree.
+      const nextRoom = Math.max(0, Math.floor(cap - chrome))
+      if (nextRoom !== room) {
+        room = nextRoom
+        el.style.setProperty('--sol-pill-panel-room', `${nextRoom}px`)
+      }
+      if (report === sent) return
+      sent = report
+      void getDesktopSolBridge()?.resize(report)
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [ref])
+  }, [ref, cap])
 }
 
 function usePillChrome(projectId: string | null): void {
@@ -208,16 +241,22 @@ export function SolWindow(): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const projectId = project?.id ?? null
   const [guideOpen, setGuideOpen] = useState(false)
-  useFreshOnSummon(projectId, () => setGuideOpen(false))
+  const phase = useSummons(projectId, () => setGuideOpen(false))
+  const [cap] = useState(() => pillHeightCap(window.screen.availHeight))
   // The first getState() is what tells main this renderer is up (markReady)
   // and flushes a region captured before the window finished loading.
   useEffect(() => connectSolBridge(), [])
   useWorkspaceFollow()
   usePillChrome(projectId)
-  useReportHeight(ref)
+  useReportHeight(ref, cap)
   const lines = statusLines(state)
   return (
-    <div className="sol-pill" ref={ref}>
+    <div
+      className="sol-pill"
+      ref={ref}
+      data-phase={phase}
+      style={{ '--sol-pill-max-h': `${cap}px` } as React.CSSProperties}
+    >
       <Body
         projectId={projectId}
         guide={{ open: guideOpen, onToggle: () => setGuideOpen((open) => !open) }}
