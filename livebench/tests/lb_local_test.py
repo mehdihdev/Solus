@@ -325,7 +325,8 @@ async def test_teleop_start_returns_a_handle_with_wire_pairs_and_stops() -> None
     leader, follower = _arms()
     reasons: list[str] = []
     handle = await teleop_start(leader, follower, on_stopped=reasons.append)
-    assert handle.running and handle.rate_hz == 30.0
+    started = handle.running
+    assert started and handle.rate_hz == 30.0
     assert [p["address"] for p in handle.pairs] == [1, 6]
     await handle.stop("user")
     assert not handle.running and reasons == ["user"]

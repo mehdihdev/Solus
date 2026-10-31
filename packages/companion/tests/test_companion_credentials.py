@@ -244,7 +244,9 @@ class AckRecordingSupervisor:
     def status_snapshot(self) -> list[dict[str, Any]]:
         return []
 
-    async def call_tool(self, server: str, tool: str, args: dict[str, Any]) -> Any:
+    async def call_tool(
+        self, server: str, tool: str, args: dict[str, Any], *, progress_callback: Any = None
+    ) -> Any:
         raise AssertionError("no tool calls in this test")
 
     def note_license_ack(

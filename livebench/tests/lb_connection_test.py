@@ -69,6 +69,7 @@ class _Source:
 
 class _Driver:
     driver_id: ClassVar[str] = "demo-bus"
+    requires_packages: ClassVar[tuple[str, ...]] = ()
     display_name: ClassVar[str] = "Demo"
     transports: ClassVar[frozenset[TransportKind]] = frozenset({TransportKind.USB_SERIAL})
     params_model: ClassVar[type[BaseModel]] = _Params
