@@ -350,3 +350,23 @@ it('opens runs independently of the streaming signal canvas', async () => {
   expect(screen.queryByRole('tab')).not.toBeInTheDocument()
   expect(await screen.findByRole('heading', { name: /Runs/ })).toBeInTheDocument()
 })
+
+it.each([
+  ['solus_config', 'project', '.solus'],
+  ['solus:live_bench', 'workspace', 'Live Bench']
+])('treats a %s focus (%s level) as the whole project', async (type, domain, name) => {
+  seedProject()
+  const root: Entity = { id: 'root', type, domain, name, source_key: null } as unknown as Entity
+  useFocusStore.setState({
+    focusedEntityId: 'root',
+    status: 'ready',
+    cache: { 'p1:root@1': { entities: [root], edges: [], truncated: false } }
+  })
+  routeApi({ sessions: [SESSION] })
+  render(<BenchScreen />)
+  expect(await screen.findByText('demo/rod')).toBeInTheDocument()
+  await waitFor(() =>
+    expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/device-recent?device_id=demo%2Frod&limit=512')
+  )
+  expect(requestMock).not.toHaveBeenCalledWith(expect.stringContaining('focus_entity_id=root'))
+})

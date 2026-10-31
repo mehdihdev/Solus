@@ -41,6 +41,14 @@ function NoProject(): React.JSX.Element {
   )
 }
 
+/** Project- and workspace-level nodes (the .solus root the workspace opens on,
+ *  its sections, the Live Bench node itself) map to no hardware: focusing one
+ *  means the whole project, not "no devices". */
+const WHOLE_PROJECT_DOMAINS: ReadonlySet<string> = new Set(['project', 'workspace'])
+function benchFocusId(focus: Focus | null): string | undefined {
+  return focus && !WHOLE_PROJECT_DOMAINS.has(focus.domain) ? focus.entity.entityId : undefined
+}
+
 export function BenchScreen({
   onNavigate,
   onAddHardware
@@ -60,7 +68,7 @@ export function BenchScreen({
   const projectId = project?.id ?? null
   const sessions = useActiveBenchSessions(projectId, true)
   const externalDevices = useExternalBenchDevices(projectId, true)
-  const focusEntityId = focus?.entity.entityId
+  const focusEntityId = benchFocusId(focus)
   const realtime = useBenchRealtime(projectId, sessions, focusEntityId)
   const onFocusChange = useCallback((next: Focus | null): void => {
     if (next) void useFocusStore.getState().focus(next.entity.entityId)
