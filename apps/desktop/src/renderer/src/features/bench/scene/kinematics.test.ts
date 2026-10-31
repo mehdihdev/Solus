@@ -98,6 +98,22 @@ describe('client kinematics', () => {
       )
     ).toBeNull()
   })
+  it('scales a percent signal into degrees', () => {
+    const gripper = {
+      joint: 'hinge',
+      part_entity_id: 'part',
+      device_id: 'device',
+      signal: 'gripper.position',
+      unit: '%' as const,
+      scale: 0.45,
+      offset: 0
+    }
+    const at = (value: number, unit: string): number | null =>
+      jointValue(gripper, { value, unit, timestamp: new Date(1000).toISOString() }, true, 2000)
+    expect(at(100, '%')).toBeCloseTo(Math.PI / 4)
+    expect(at(0, '%')).toBe(0)
+    expect(at(100, 'deg')).toBeNull()
+  })
   it('supports prismatic displacement and clamps to declared limits', () => {
     const sliding = {
       ...model,

@@ -28,7 +28,8 @@ export interface JointBinding {
   part_entity_id: string
   device_id: string
   signal: string
-  unit: 'deg' | 'rad' | 'm'
+  /** The signal's unit; `%` (a calibrated range such as a gripper's) scales into degrees. */
+  unit: 'deg' | 'rad' | 'm' | '%'
   scale: number
   offset: number
 }

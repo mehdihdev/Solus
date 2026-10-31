@@ -115,7 +115,14 @@ export function jointValue(
   if (!Number.isFinite(age) || age < -1000 || age > 10000) return null
   const value = point.value * binding.scale + binding.offset
   if (!Number.isFinite(value)) return null
-  return binding.unit === 'deg' ? (value * Math.PI) / 180 : value
+  return value * TO_SCENE_UNIT[binding.unit]
+}
+/** Scaled binding values become the scene's rad (or m); `%` is scaled into degrees. */
+const TO_SCENE_UNIT: Record<JointBinding['unit'], number> = {
+  deg: Math.PI / 180,
+  '%': Math.PI / 180,
+  rad: 1,
+  m: 1
 }
 export function disposeModel(scene: BuiltModel): void {
   scene.root.traverse((object) => {

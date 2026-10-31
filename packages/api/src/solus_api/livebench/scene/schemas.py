@@ -33,7 +33,8 @@ class Binding(BaseModel):
     part_entity_id: uuid.UUID
     device_id: str = Field(min_length=1, max_length=256)
     signal: str = Field(min_length=1, max_length=128)
-    unit: Literal["rad", "deg", "m"]
+    #: The signal's unit. `%` (a calibrated range such as a gripper's) scales into degrees.
+    unit: Literal["rad", "deg", "m", "%"]
     scale: float = Field(allow_inf_nan=False, ge=-1e6, le=1e6)
     offset: float = Field(allow_inf_nan=False, ge=-1e6, le=1e6)
 

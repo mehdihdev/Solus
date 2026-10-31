@@ -122,10 +122,19 @@ async def test_mapping_is_confirmed_config_scoped_and_becomes_stale(client, alic
                 json={"expected_version": model["version"], "bindings": [bad]},
             )
         ).status_code == 422
+    # A calibrated-range signal (a gripper's %) drives a revolute joint through scale and offset.
+    percent = {**binding, "unit": "%", "scale": 0.45}
+    by_percent = await client.put(
+        url,
+        headers=alice_headers,
+        json={"expected_version": model["version"], "bindings": [percent]},
+    )
+    assert by_percent.status_code == 200, by_percent.text
+    assert by_percent.json()["data"]["bindings"] == [percent]
     mapped = await client.put(
         url,
         headers=alice_headers,
-        json={"expected_version": model["version"], "bindings": [binding]},
+        json={"expected_version": by_percent.json()["data"]["version"], "bindings": [binding]},
     )
     assert mapped.status_code == 200, mapped.text
     assert mapped.json()["data"]["bindings"] == [binding]

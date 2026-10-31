@@ -171,7 +171,7 @@ export function MappingReview({
                   change(joint.name, { unit: event.target.value as JointBinding['unit'] })
                 }
               >
-                {(joint.type === 'prismatic' ? ['m'] : ['deg', 'rad']).map((unit) => (
+                {(joint.type === 'prismatic' ? ['m'] : ['deg', 'rad', '%']).map((unit) => (
                   <option key={unit}>{unit}</option>
                 ))}
               </select>

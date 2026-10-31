@@ -57,6 +57,7 @@ simulation template. No physics server or runtime motion is started.
 
 All routes `/api/v1/projects/{project_id}/bench/scene`, centralized ProjectCtx and verified
 member. Foreign/deleted robots, model nodes, sources and artifacts return404.
+
 - GET /models → envelope {models:[...],digest}, maximum32 models per project.
 - GET /models/digest → envelope {digest} (SOLUSDEV-319): sha256 of the canonical JSON of
   exactly the models GET /models would return, so a poller fetches the listing (megabytes of
@@ -69,7 +70,9 @@ member. Foreign/deleted robots, model nodes, sources and artifacts return404.
   preserving identity and display pose, clearing mappings if joint structure or source changes;
   concurrent version mismatch409. Updates use explicitly reimported revision, no guessed remote path.
 - PUT /models/{id}/mapping → {expected_version,bindings:[{joint,part_entity_id,
-  device_id,signal,unit:rad|deg|m,scale:finite,offset:finite}]} →200 model.
+  device_id,signal,unit:rad|deg|m|%,scale:finite,offset:finite}]} →200 model.
+  `unit` is the signal's; `%` (a calibrated range such as a gripper's, SOLUSDEV-319) is
+  accepted on revolute joints only and scale/offset map it to degrees.
   Explicit user confirmation. Verify accepted part belongs to the selected robot and device
   mapping still matches current CONFIG; no matching based on similar names. Bounded128 unique
   joints; reject fixed joints, duplicate part/signal bindings and incompatible unit/dimension.
@@ -87,6 +90,7 @@ Model parsing runs off request event loop. Emit scoped identifier-only mutation 
 refresh after commit. Read never creates graph records. No change to packages/contracts.
 
 ### Explicit STL artifact association
+
 Import/reimport optionally includes `meshes:[{reference:string(1..512),artifact_id:UUID}]`
 (maximum64, unique exact reference). URDF references match `mesh.filename` exactly; MJCF
 geometry names resolve only through that XML's asset mesh declarations and their `file`.
