@@ -7,6 +7,13 @@ gateway/matrix) a `models.yaml` change, never a change to `route()` logic.
 """
 
 import enum
+from typing import Literal
+
+#: Why a model call ran (SOLUSDEV-321). Every `complete()` / `stream()` caller
+#: names one; it rides the `model call start` log line and the credit-ledger
+#: attrs so spend is countable per purpose. `web` tags Brave searches, which are
+#: debited like tool calls rather than routed to a model.
+Purpose = Literal["answer", "narration", "planner", "vision", "motif", "extract", "web"]
 
 
 class Complexity(enum.StrEnum):

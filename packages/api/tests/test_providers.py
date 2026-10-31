@@ -128,13 +128,15 @@ class _FakeAnthropicRecorder:
         self.stream_kwargs: dict[str, object] = {}
 
 
-def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder) -> type:
+def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder, usage: object | None = None) -> type:
     class FakeUsage:
         input_tokens = 7
         output_tokens = 9
 
+    final_usage = FakeUsage() if usage is None else usage
+
     class FakeFinalMessage:
-        usage = FakeUsage()
+        usage = final_usage
         # Real messages always carry content blocks; the adapter now scans them
         # for tool_use (SOLUS-RUN-01). Empty = a text-only reply.
         content: list[object] = []
@@ -235,11 +237,108 @@ async def test_a_conversation_sends_system_and_tools(monkeypatch: pytest.MonkeyP
     async for _ in adapter.stream("some-model", "ignored", max_tokens=8, conversation=conversation):
         pass
 
-    assert recorder.stream_kwargs["system"] == "You are SOL."
+    # SOLUSDEV-321 P0-T4: a block list, so the system prompt can carry a cache breakpoint.
+    assert recorder.stream_kwargs["system"] == [
+        {"type": "text", "text": "You are SOL.", "cache_control": {"type": "ephemeral"}}
+    ]
     assert recorder.stream_kwargs["messages"] == [{"role": "user", "content": "what changed?"}]
     tools = recorder.stream_kwargs["tools"]
     assert isinstance(tools, list)
     assert tools[0]["name"] == "get_entity"
+    assert "tool_choice" not in recorder.stream_kwargs  # "auto" is the provider's default
+
+
+async def test_anthropic_marks_cache_breakpoints_and_reports_cache_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-321 P0-T4: `cache_control` rides the system block and the LAST content
+    block of each flagged turn (a bare-string turn becomes one text block for it) —
+    three breakpoints, under Anthropic's four. The synthesis round's `tool_choice`
+    reaches the wire, and cache reads come back as `tokens_cached_in` inside a
+    `tokens_in` that counts the whole prompt: Anthropic's `input_tokens` leaves cache
+    reads and cache writes out."""
+    from solus_api.orchestration.providers import ToolConversation, ToolSpec, ToolUse
+
+    recorder = _FakeAnthropicRecorder()
+    usage = SimpleNamespace(
+        input_tokens=7, output_tokens=9, cache_read_input_tokens=100, cache_creation_input_tokens=20
+    )
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder, usage))
+    adapter = await _keyed_anthropic_adapter()
+    conversation = ToolConversation(
+        system="You are SOL.",
+        messages=(
+            Turn(role="user", text="the stable prefix", cache_breakpoint=True),
+            Turn(role="user", text="the history"),
+            Turn(role="assistant", tool_uses=(ToolUse(id="tu_1", name="get_entity"),)),
+            Turn(
+                role="user",
+                tool_results=(
+                    ToolOutcome(id="tu_1", content="{}"),
+                    ToolOutcome(id="tu_2", content="{}"),
+                ),
+                cache_breakpoint=True,
+            ),
+        ),
+        tools=(ToolSpec(name="get_entity", description="d", input_schema={"type": "object"}),),
+        tool_choice="none",
+    )
+
+    events = [
+        event
+        async for event in adapter.stream(
+            "some-model", "q", max_tokens=8, conversation=conversation
+        )
+    ]
+
+    ephemeral = {"type": "ephemeral"}
+    sent = recorder.stream_kwargs
+    assert sent["system"] == [{"type": "text", "text": "You are SOL.", "cache_control": ephemeral}]
+    messages = sent["messages"]
+    assert isinstance(messages, list)
+    prefix, history, _, results = messages
+    assert prefix["content"] == [
+        {"type": "text", "text": "the stable prefix", "cache_control": ephemeral}
+    ]
+    assert history["content"] == "the history"  # an unflagged turn is unchanged
+    assert [block.get("cache_control") for block in results["content"]] == [None, ephemeral]
+    assert str(sent).count("cache_control") == 3
+    assert sent["tool_choice"] == {"type": "none"}
+    assert events[-1] == Usage(tokens_in=127, tokens_out=9, tokens_cached_in=100)
+    # A flagged turn carrying a screenshot marks its text — the last block.
+    [shot] = anthropic_messages(
+        [Turn(role="user", text="look", images=(_image(),), cache_breakpoint=True)]
+    )
+    content = shot["content"]
+    assert isinstance(content, list)
+    assert [block.get("cache_control") for block in content] == [None, ephemeral]
+
+
+def test_openai_maps_tool_choice_none_and_leaves_caching_to_the_provider() -> None:
+    """OpenAI caches long prefixes by itself: a breakpoint flag changes nothing on its
+    wire, while the synthesis round's `tool_choice` does reach it."""
+    from solus_api.orchestration.providers import ToolConversation, ToolSpec, openai_request
+
+    conversation = ToolConversation(
+        system="s",
+        messages=(Turn(role="user", text="q", cache_breakpoint=True),),
+        tools=(ToolSpec(name="t", description="d", input_schema={"type": "object"}),),
+        tool_choice="none",
+    )
+    synthesis, usual = (
+        openai_request(
+            "m",
+            "q",
+            max_tokens=8,
+            images=None,
+            conversation=conversation.model_copy(update={"tool_choice": choice}),
+            reasoning_effort=None,
+        )
+        for choice in ("none", "auto")
+    )
+    assert synthesis["tool_choice"] == "none"
+    assert synthesis["input"] == [{"role": "user", "content": "q"}]
+    assert "tool_choice" not in usual
 
 
 def test_transient_error_is_a_provider_error() -> None:

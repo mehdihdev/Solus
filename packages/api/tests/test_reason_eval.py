@@ -1,8 +1,9 @@
 # SOLUSDEV-130 (SOL-02) — the retrieval-quality eval. Scores the tuned pull
-# plan (plan_query: k=5, degree=2, telemetry-when-runtime-shaped) against a
-# naive baseline (k=1, degree=0, no telemetry) on the labeled cross-domain
-# cases, as recall@k over expected citations. Deterministic corpus, exact
-# pinned scores — the recorded numbers the ticket requires.
+# plan (since SOLUSDEV-321 P1-T1 `plan_scope`: k=5 — build_context's default —
+# one graph pull at degree 1 on a standard turn, telemetry-when-runtime-shaped)
+# against a naive baseline (k=1, degree=0, no telemetry) on the labeled
+# cross-domain cases, as recall@k over expected citations. Deterministic corpus,
+# exact pinned scores — the recorded numbers the ticket requires.
 #
 # SCOPE NOTE: until SYS-04/ERR-02 land, this measures the reasoning layer's
 # planning + packing against a controlled corpus (EvalSystems), not real
@@ -11,10 +12,19 @@ from __future__ import annotations
 
 import uuid
 
+from fixtures.scope_doubles import no_hits
 from fixtures.sol_eval_cases import CASES, EvalSystems
 from solus_api.agent.context import Context, build_context
 from solus_api.agent.interfaces import ContextBudget, GraphScope
-from solus_api.agent.reason import plan_query
+from solus_api.agent.turn_scope import ScopeInputs, plan_scope
+from solus_api.orchestration.config import load_orchestration_config
+from solus_api.orchestration.enums import Complexity
+
+# SOLUSDEV-321: the budget follows the routing tier; the eval runs at standard, and the
+# naive baseline gets the same total so the comparison stays about the plan, not the room.
+# The labeled corpus names no graph entity, so the planner's index resolves nothing.
+_CONFIG = load_orchestration_config()
+_BUDGET = _CONFIG.context_budget
 
 
 async def _baseline_context(query: str) -> Context:
@@ -25,21 +35,28 @@ async def _baseline_context(query: str) -> Context:
         project_id=uuid.uuid4(),
         scope=GraphScope(anchor_entity_ids=[], degree=0),
         window=None,
-        budget=ContextBudget(max_tokens=4000),
+        budget=ContextBudget(max_tokens=_BUDGET.standard),
         k=1,
     )
 
 
 async def _tuned_context(query: str) -> Context:
-    plan = plan_query(query)
+    systems, project_id = EvalSystems(), uuid.uuid4()
+    scope = await plan_scope(
+        ScopeInputs(message=query, tier=Complexity.STANDARD),
+        search=no_hits,
+        load=lambda graph_scope, budget: systems.get_graph_context(project_id, graph_scope, budget),
+        disambiguate=None,
+        config=_CONFIG,
+    )
     return await build_context(
-        EvalSystems(),
+        systems,
         query,
-        project_id=uuid.uuid4(),
-        scope=plan.scope,
-        window=plan.window,
-        budget=plan.budget,
-        k=plan.k,
+        project_id=project_id,
+        scope=scope.scope,
+        graph=scope.graph,
+        window=scope.window,
+        budget=scope.budget,
     )
 
 

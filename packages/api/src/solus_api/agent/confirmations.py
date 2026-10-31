@@ -264,6 +264,24 @@ HIDDEN_COMMAND_MESSAGE: Final = (
     "approval card. Nothing was parked or run; pass secrets through the environment or a "
     "file the command reads instead."
 )
+#: The gate's two non-quota stale refusals, each its own text so an outcome can say which
+#: (SOLUSDEV-321 M190: `services/outcomes.stale_reason`).
+DIVERGED_MESSAGE: Final = (
+    "What this action would do has changed since it was shown to you. "
+    "Nothing was applied — ask again to see the current change."
+)
+NO_PREVIEW_MESSAGE: Final = (
+    "What this action would do could not be shown again, so it cannot be approved. "
+    "Nothing was applied — ask again to see the current change."
+)
+
+
+def _stale_message(quota_failures: list[str], missing_preview: bool) -> str:
+    """Why a stale card is refused: the quota reason first, then a missing preview, else a
+    diverged one."""
+    if quota_failures:
+        return quota_failures[0]
+    return NO_PREVIEW_MESSAGE if missing_preview else DIVERGED_MESSAGE
 
 
 def _hides_command(tool_name: object, rows: Any, allowed_paths: frozenset[str]) -> bool:
@@ -626,10 +644,7 @@ async def decide_confirmation(
         logger.info("refused stale confirmation %s for %s", row.id, row.tool)
         return _refusal(
             call_id,
-            quota_failures[0]
-            if quota_failures
-            else "What this action would do has changed since it was shown to you. "
-            "Nothing was applied — ask again to see the current change.",
+            _stale_message(quota_failures, missing_preview),
             ToolErrorCode.UNAVAILABLE if quota_failures else ToolErrorCode.UNAUTHORIZED,
         )
 
@@ -730,20 +745,28 @@ async def _feed_back_outcome(
             logger.warning("session rollback after feedback failure also failed")
 
 
+#: The label of the rows the simulation pre-check adds to a real-world action's card
+#: (`agent/tools/simulate.py:precheck_rows`, R99). No other preview composes it.
+PRECHECK_LABEL: Final = "Simulate first"
+
+
 def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
     """Whether the effect described on the card still describes what will happen.
 
     Compared on the rendered rows rather than on tool internals, so it works for
     every tool kind — which is what makes this a gate guarantee rather than an
     Onshape one. A tool with no describable effect yields argument rows, which
-    are derived from the stored args and therefore cannot drift.
+    are derived from the stored args and therefore cannot drift. The pre-check's
+    rows are advice, not effect, rebuilt from state the action does not change:
+    they are left out (R118), so a pre-check that fails or words its line anew at
+    approval never refuses the card; `_complete_preview` still bounds them.
     """
 
     def key(rows: Any) -> list[tuple[Any, Any, Any]]:
         return sorted(
             (row.get("label"), row.get("before"), row.get("after"))
             for row in (rows if isinstance(rows, list) else [])
-            if isinstance(row, dict)
+            if isinstance(row, dict) and row.get("label") != PRECHECK_LABEL
         )
 
     return key(shown) != key(current)
@@ -751,6 +774,7 @@ def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
 
 __all__ = [
     "CONFIRMATION_TTL",
+    "PRECHECK_LABEL",
     "ParkedCall",
     "command_outcome_text",
     "output_tail",

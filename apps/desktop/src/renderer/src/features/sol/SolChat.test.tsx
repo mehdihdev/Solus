@@ -1,16 +1,19 @@
 // SOLX-02: the chat surface. Pins the SOL-02 security obligations — citations
 // render from the STRUCTURED array in a dedicated region, never linkified,
-// display-capped; the tool trace shows names + ok/error, never raw args — and
-// the guide/do toggle posting action_mode.
+// display-capped; the tool trace shows names + ok/error and, since SOLUSDEV-321
+// P1-T6, only the server-REDACTED args as text — and the guide/do toggle posting
+// action_mode.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import * as solApi from './solApi'
 import * as resources from '../../lib/api/resources'
 import * as searchApi from '../../lib/api/search'
 import { clearSearchCache } from '../workspace/useProjectSearch'
+import { useFocusStore } from '../workspace/focusStore'
 import { useSolSessionStore } from './solSessionStore'
 import { resetSolChatSessions } from './solChatStore'
 import { SolChat } from './SolChat'
+import { createSolStreamParser } from './solStream'
 import userEvent from '@testing-library/user-event'
 import { regionToScreenshot, useSolWindowStore } from './solWindowStore'
 import { SOL_REGION } from './solWindow.fixtures'
@@ -72,6 +75,10 @@ beforeEach(() => {
 
 /** Token text lands on the next animation frame (S2-A batching) — wait for it. */
 const nextFrame = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()))
+
+/** One SSE frame as the server writes it — fed through the real parser where a test wants the whole path. */
+const sse = (event: string, data: unknown): string =>
+  `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 
 function sendMessage(text: string): void {
   fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
@@ -215,13 +222,28 @@ describe('SolChat streaming render (SOL-02 obligations)', () => {
     expect(within(region).queryByText(/example\.com/)).not.toBeInTheDocument()
   })
 
-  it('collapses the tool trace to names + outcomes, never raw args', async () => {
+  // SOLUSDEV-321 P1-T6: each step shows its args now, but only the server's REDACTED copy
+  // (agent/stream.py redact_value) cut to display size by the parser. The frames go through the
+  // real parser here, so a value the server masked stays masked all the way to the DOM.
+  it('collapses the tool trace to names + outcomes and shows only the REDACTED args', async () => {
     streamSolMessage.mockImplementation(async ({ onEvent }) => {
-      onEvent({ type: 'tool_call', callId: 'k1', tool: 'get_entity' })
-      onEvent({ type: 'tool_result', callId: 'k1', ok: true, errorCode: null })
-      onEvent({ type: 'tool_call', callId: 'k2', tool: 'run_checker' })
-      onEvent({ type: 'tool_result', callId: 'k2', ok: false, errorCode: 'not_found' })
-      onEvent({ type: 'message', role: 'assistant', content: 'Done.', citations: [] })
+      const args = {
+        entity_id: 'imu',
+        password: '[REDACTED]',
+        note: 'n'.repeat(100),
+        markup: '<b>x</b>'
+      }
+      const wire =
+        sse('tool_call', { call_id: 'k1', tool: 'get_entity', args }) +
+        sse('tool_result', { call_id: 'k1', ok: true }) +
+        sse('tool_call', { call_id: 'k2', tool: 'run_checker', args: {} }) +
+        sse('tool_result', {
+          call_id: 'k2',
+          ok: false,
+          error: { code: 'not_found', message: 'x' }
+        }) +
+        sse('message', { role: 'assistant', content: 'Done.', citations: [] })
+      for (const event of createSolStreamParser().push(wire)) onEvent(event)
     })
     render(<SolChat projectId="p1" />)
     sendMessage('check it')
@@ -229,8 +251,17 @@ describe('SolChat streaming render (SOL-02 obligations)', () => {
     const trace = screen.getByTestId('tool-trace')
     expect(within(trace).getByText('2 tool steps')).toBeInTheDocument()
     // Arrow format matches the backend's persisted tool turns (SOLUSDEV-233).
-    expect(within(trace).getByText(/get_entity → ok/)).toBeInTheDocument()
-    expect(within(trace).getByText(/run_checker → not_found/)).toBeInTheDocument()
+    const getEntity = within(trace).getByText(/get_entity → ok/)
+    const runChecker = within(trace).getByText(/run_checker → not_found/)
+    // The args sit under their own step, as text; a step with none shows none.
+    expect(within(getEntity).getByText('entity_id: imu')).toBeInTheDocument()
+    expect(within(getEntity).getByText('password: [REDACTED]')).toBeInTheDocument()
+    // A value is cut to 64 characters — ellipsis included — on its way from the wire to the DOM…
+    expect(within(getEntity).getByText(`note: ${'n'.repeat(63)}…`)).toBeInTheDocument()
+    // …and markup is text: the literal shows, and no element is made from it.
+    expect(within(getEntity).getByText('markup: <b>x</b>')).toBeInTheDocument()
+    expect(trace.querySelector('b')).toBeNull()
+    expect(within(runChecker).queryByTestId('tool-args')).toBeNull()
     expect(trace).not.toHaveAttribute('open')
   })
 
@@ -336,6 +367,27 @@ describe('SolChat composer', () => {
   composerActionModesTests()
   composerMentionSelectionTests()
   composerRoutingTests()
+})
+
+// SOLUSDEV-321 P0-T3: the workspace focus and the pinned nodes belong to the SOL PAGE. The
+// window panel shares this component but is its own renderer with no workspace focus — so
+// whatever those stores hold, the panel sends neither. The ids are UUIDs on purpose: the page
+// drops any that are not, which would make this pass without the layout gate doing its job.
+describe('SolChat window panel', () => {
+  it('never sends the page-only anchors', async () => {
+    streamSolMessage.mockResolvedValue(undefined)
+    useFocusStore.setState({ focusedEntityId: '00000000-0000-4000-8000-0000000000f1', path: [] })
+    try {
+      render(<SolChat projectId="p1" pinnedMentionIds={['00000000-0000-4000-8000-0000000000e1']} />)
+      sendMessage('what is this?')
+      await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(1))
+      const sent = streamSolMessage.mock.calls[0][0]
+      expect(sent).not.toHaveProperty('focus')
+      expect(sent).not.toHaveProperty('pins')
+    } finally {
+      useFocusStore.getState().reset()
+    }
+  })
 })
 
 // SOLUSDEV-252 S3, wireflow §C: the circled region is "the subject of the next
@@ -813,5 +865,78 @@ describe('SOL review preference', () => {
     await user.click(screen.getByRole('switch', { name: 'Confirm every change' }))
     act(() => resetSolChatSessions())
     expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
+  })
+})
+
+describe('SolChat research sources (SOLUSDEV-321 P1-T5)', () => {
+  it('shows the sources a turn researched as inert pills in the reply that used them', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({
+        type: 'research_sources',
+        research: {
+          callId: 'c1',
+          question: 'OV9281 supply',
+          cached: false,
+          searches: 1,
+          pages: 1,
+          sources: [
+            { url: 'https://docs.example.com/ov9281', title: 'OV9281 datasheet', fetched: true }
+          ]
+        }
+      })
+      onEvent({ type: 'message', role: 'assistant', content: 'AVDD is 2.8 V.', citations: [] })
+    })
+    render(<SolChat projectId="p1" />)
+    sendMessage('look up the OV9281 supply voltage')
+
+    const sources = await screen.findByLabelText('Web sources')
+    expect(within(sources).getByText('OV9281 datasheet')).toBeInTheDocument()
+    expect(within(sources).getByText('https://docs.example.com/ov9281')).toBeInTheDocument()
+    expect(within(sources).getByRole('button', { name: 'Open OV9281 datasheet' })).toBeEnabled()
+    expect(sources.querySelector('a, [href]')).toBeNull()
+    expect(await screen.findByText('AVDD is 2.8 V.')).toBeInTheDocument()
+  })
+
+  it('shows no sources row for a turn that researched nothing', async () => {
+    streamSolMessage.mockImplementation(async ({ onEvent }) => {
+      onEvent({ type: 'message', role: 'assistant', content: 'It is I2C.', citations: [] })
+    })
+    render(<SolChat projectId="p1" />)
+    sendMessage('what is I2C')
+    expect(await screen.findByText('It is I2C.')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Web sources')).toBeNull()
+  })
+})
+
+describe('SolChat visible reasoning (SOLUSDEV-321 P1-T6)', () => {
+  it('graph badge and budget notice', async () => {
+    streamSolMessage
+      .mockImplementationOnce(async ({ onEvent }) => {
+        onEvent({ type: 'answer_source', answer: { source: 'graph', sources: ['config'] } })
+        onEvent({ type: 'message', role: 'assistant', content: 'The IMU is 0x4A.', citations: [] })
+      })
+      .mockImplementationOnce(async ({ onEvent }) => {
+        onEvent({ type: 'budget_reached', budget: { limit: 'tool_calls', used: 24, cap: 24 } })
+        onEvent({
+          type: 'error',
+          code: 'loop_limit',
+          message: 'SOL stopped: too many tool calls in one turn.'
+        })
+      })
+    render(<SolChat projectId="p1" />)
+
+    sendMessage('what is the IMU address')
+    expect(await screen.findByText('answered from the graph')).toBeInTheDocument()
+    expect(screen.getByText('sources: config')).toBeInTheDocument()
+    expect(screen.queryByTestId('budget-notice')).toBeNull()
+    await waitFor(() => expect(useSolSessionStore.getState().streaming).toBe(false))
+
+    sendMessage('keep going')
+    const notice = await screen.findByText('SOL stopped: tool_calls budget reached (24/24)')
+    const error = screen.getByText('SOL stopped: too many tool calls in one turn.')
+    // The notice says WHICH ceiling and comes first; the router's error says the turn ended.
+    expect(notice.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // One badge, on the turn that earned it — not repeated on the one that hit the ceiling.
+    expect(screen.getAllByTestId('answer-source')).toHaveLength(1)
   })
 })

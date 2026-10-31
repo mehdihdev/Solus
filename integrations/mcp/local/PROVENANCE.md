@@ -59,6 +59,18 @@ network I/O and no installs.
   `open_in_tool`.
 - **Destructive tools:** `open_in_tool` (`requires_confirmation: true` — launches a desktop
   application on the customer machine). `scan_folder` and `folder_digest` are read-only.
+- **Flagged for ratification (2026-10-29, SOLUSDEV-321 P6):** `scan_folder` now also returns
+  `ros`, the bounded texts of the folder's ROS packages (`solus/ros.py`: only `package.xml`, the
+  launch files, `setup.py`/`setup.cfg` and the Python modules of each package's own module
+  directory, never a file on a hidden, test or credential-named path (R135, after two security
+  review findings); no-follow descriptor-confined reads, at most 32 files of 32 KiB per package
+  and 256 KiB in all, and, as the frame encodes it, within `ROS_FRAME_BUDGET_BYTES` (256 KiB):
+  the first package past it keeps its manifest and the leading files that fit, marked
+  `incomplete`, and the packages after it are dropped, so the rest of the scan never fails
+  because of `ros`; nothing parsed, imported or run), and `folder_digest`
+  folds their hashes in. Its allowlist reason is amended to say so. A widened read is a re-review
+  trigger: the sign-offs below need re-signing against a dated `SECURITY_REVIEW.md` checklist,
+  and no sign-off line is written here.
 
 ## Update / rebase policy
 

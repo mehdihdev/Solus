@@ -1,0 +1,28 @@
+/* SOLUSDEV-321 P1-T6: the entities SOL looked at this turn glow for a few seconds
+   (focusStore.highlightedIds, ended by its one timer). Tokens only. The ring and the glow are
+   static, so the cue never depends on motion; the settle-in pulse is skipped under
+   prefers-reduced-motion. */
+.graph-node-highlighted {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  box-shadow: 0 0 12px 2px var(--acc);
+  animation: graph-node-glow 1.2s ease-out 2;
+}
+/* A focused card already draws an inner ring with box-shadow; keep it under the glow. The extra
+   class beats navigation.css's .graph-node-focused:hover, which loads after this file. */
+.graph-node.graph-node-focused.graph-node-highlighted {
+  box-shadow:
+    inset 0 0 0 1px var(--acc),
+    0 0 12px 2px var(--acc);
+}
+@keyframes graph-node-glow {
+  from {
+    outline-offset: 10px;
+    outline-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-node-highlighted {
+    animation: none;
+  }
+}

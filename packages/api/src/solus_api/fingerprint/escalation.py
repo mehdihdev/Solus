@@ -132,6 +132,7 @@ def build_escalator(
                     redis=redis,
                     enqueue=enqueue,
                     max_tokens=_MAX_ANSWER_TOKENS,
+                    purpose="extract",
                 )
             except Exception:  # noqa: BLE001 — escalation is best-effort corroboration
                 # WARNING, not DEBUG: a provider outage silently degrading every

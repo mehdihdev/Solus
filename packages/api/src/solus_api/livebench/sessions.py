@@ -24,7 +24,7 @@ import importlib.util
 import logging
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import ModuleType
@@ -45,6 +45,10 @@ DEFAULT_MAX_ACTIVE_PER_PROJECT = 4
 DEFAULT_ENDED_KEPT = 32
 DEFAULT_DEVICE_IDS_KEPT = 64
 DEFAULT_WINDOW_SECONDS = 1.0
+#: SOLUSDEV-321 P2-T3: channels a robot session remembers per resolved part (the evaluator's
+#: reads), and how long a stop waits for the session's window evaluator once it is cancelled.
+DEFAULT_CHANNELS_KEPT = 32
+EVALUATOR_STOP_SECONDS = 5.0
 
 
 class TooManySessionsError(Exception):
@@ -80,6 +84,25 @@ def load_local() -> ModuleType | None:
 
 class SessionObserver(Protocol):
     def add(self, packet: TelemetryPacket) -> list[dict[str, Any]]: ...
+
+
+@dataclass(frozen=True)
+class SessionView:
+    """What a robot session's window evaluator reads (SOLUSDEV-321 P2-T3): the ids that bind the
+    session — server-side, never anything a packet claims — and, LIVE as its packets resolve,
+    each part with the event time of the first sample the session saw on each of its channels."""
+
+    project_id: UUID
+    session_id: UUID
+    robot_entity_id: UUID
+    owner_user_id: UUID | None
+    parts: Mapping[UUID, Mapping[str, datetime]]
+
+
+class SessionEvaluator(Protocol):
+    """What the manager starts on a robot session and cancels when the session ends."""
+
+    def start(self, view: SessionView) -> asyncio.Task[None]: ...
 
 
 class TappableConnection(Protocol):
@@ -143,6 +166,7 @@ class BenchSessionOut(BaseModel):
     device_ids: list[str]
     counts: dict[str, int]
     last_summary: dict[str, Any] | None
+    robot_entity_id: UUID | None = None
 
 
 @dataclass
@@ -160,6 +184,11 @@ class _Session:
     unresolved: int = 0
     device_ids: dict[str, None] = field(default_factory=dict)  # insertion-ordered set
     last_summary: TelemetryWindowSummary | None = None
+    robot_entity_id: UUID | None = None
+    owner_user_id: UUID | None = None
+    evaluator_task: asyncio.Task[None] | None = None
+    #: robot sessions only: resolved part → channel → the event time the session first saw it
+    parts: dict[UUID, dict[str, datetime]] = field(default_factory=dict)
 
     def out(self, *, device_ids_kept: int) -> BenchSessionOut:
         if self.ended_at is not None:
@@ -184,6 +213,23 @@ class _Session:
             device_ids=sorted(list(self.device_ids)[:device_ids_kept]),
             counts={"ingested": self.ingested, "unresolved": self.unresolved},
             last_summary=(self.last_summary.model_dump(mode="json") if self.last_summary else None),
+            robot_entity_id=self.robot_entity_id,
+        )
+
+
+async def _stop_evaluator(session: _Session) -> None:
+    """Cancel the session's window evaluator and give it `EVALUATOR_STOP_SECONDS` to finish."""
+    task = session.evaluator_task
+    if task is None:
+        return
+    task.cancel()
+    finished, _ = await asyncio.wait({task}, timeout=EVALUATOR_STOP_SECONDS)
+    if not finished:
+        logger.warning(
+            "window evaluator did not stop within %ss: project=%s session=%s",
+            EVALUATOR_STOP_SECONDS,
+            session.project_id,
+            session.id,
         )
 
 
@@ -199,9 +245,11 @@ class SessionManager:
         device_ids_kept: int = DEFAULT_DEVICE_IDS_KEPT,
         observer_factory: Callable[[], SessionObserver] | None = None,
         event_sink: Callable[[UUID, dict[str, Any]], None] | None = None,
+        evaluator_factory: Callable[[SessionView], SessionEvaluator] | None = None,
     ) -> None:
         self._plumbing = plumbing
         self._observer_factory = observer_factory
+        self._evaluator_factory = evaluator_factory
         self._event_sink = event_sink
         self._cap = max_active_per_project
         self._device_ids_kept = device_ids_kept
@@ -239,6 +287,8 @@ class SessionManager:
         open_conn: Callable[[], Awaitable[TappableConnection]],
         window_seconds: float = DEFAULT_WINDOW_SECONDS,
         device: dict[str, Any] | None = None,
+        robot_entity_id: UUID | None = None,
+        owner_user_id: UUID | None = None,
     ) -> BenchSessionOut:
         if self._closing:
             raise RuntimeError("Session manager is shutting down")
@@ -258,6 +308,8 @@ class SessionManager:
             label=label,
             created_at=utcnow(),
             device=device,
+            robot_entity_id=robot_entity_id,
+            owner_user_id=owner_user_id,
         )
         active[session.id] = session
         task = asyncio.current_task()
@@ -273,6 +325,7 @@ class SessionManager:
             if self._closing or session.ended_at is not None or task.cancelling():
                 raise asyncio.CancelledError
             conn.on_batch(handle, self._summary_sink(session))
+            session.evaluator_task = self._start_evaluator(session)
         except BaseException:
             active.pop(session.id, None)  # a failed start never holds a slot
             if conn is not None:
@@ -339,8 +392,35 @@ class SessionManager:
                 session.unresolved += 1
             else:
                 session.ingested += 1
+                if session.robot_entity_id is not None:
+                    self._note_part(session, result.entity_id, packet)
 
         return tap
+
+    def _note_part(self, session: _Session, part_id: UUID, packet: TelemetryPacket) -> None:
+        """Remember a resolved part's channels and the event time each began, bounded: at most
+        `device_ids_kept` parts of `DEFAULT_CHANNELS_KEPT` channels (P2-T3)."""
+        channels = session.parts.get(part_id)
+        if channels is None:
+            if len(session.parts) >= self._device_ids_kept:
+                return
+            channels = session.parts[part_id] = {}
+        for name in packet.values:
+            if name not in channels and len(channels) < DEFAULT_CHANNELS_KEPT:
+                channels[name] = packet.timestamp
+
+    def _start_evaluator(self, session: _Session) -> asyncio.Task[None] | None:
+        """The window evaluator of a robot session (P2-T3); none without a robot or a factory."""
+        if self._evaluator_factory is None or session.robot_entity_id is None:
+            return None
+        view = SessionView(
+            project_id=session.project_id,
+            session_id=session.id,
+            robot_entity_id=session.robot_entity_id,
+            owner_user_id=session.owner_user_id,
+            parts=session.parts,
+        )
+        return self._evaluator_factory(view).start(view)
 
     def _summary_sink(self, session: _Session) -> BatchCallback:
         async def sink(summary: TelemetryWindowSummary) -> None:
@@ -411,6 +491,7 @@ class SessionManager:
         session.ended_at = utcnow()
         self._active.get(session.project_id, {}).pop(session.id, None)
         self._ended.setdefault(session.project_id, deque(maxlen=self._ended_kept)).append(session)
+        await _stop_evaluator(session)  # cancelled before any await: judging stops with the stop
         for listener in self._end_listeners:
             try:
                 await listener(session.project_id, session.id)

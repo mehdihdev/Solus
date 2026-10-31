@@ -25,15 +25,20 @@ if TYPE_CHECKING:
     from solus_contracts.extension_manifest import ExtensionManifest
 
     from solus_api.agent.confirmations import ParkedCall
+    from solus_api.agent.deterministic import FactSources
     from solus_api.agent.drive.executor import Budget
     from solus_api.agent.execution_policy import BuildExecutionPolicy
+    from solus_api.agent.expertise import Expertise
+    from solus_api.agent.research import ResearchCache
     from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
+    from solus_api.agent.tools.simulate import SimEnqueue
     from solus_api.agent.tools.tool import Tool
     from solus_api.bridge.allowlist import BridgeToolSpec
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
+    from solus_api.graph.live import LiveHub
     from solus_api.services.code_environment_adapter import EnvironmentFetch
     from solus_api.storage import ArtifactStore
     from solus_api.widgets.capability import WidgetCapability
@@ -50,12 +55,17 @@ from dataclasses import dataclass, field
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from solus_api.agent import prompt, reason, screen
+from solus_api.agent import citations, prompt, reason, reasoning_frame, screen, turn_scope
 from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, model_result, stream_view
 from solus_api.agent.context import Context, build_context
+from solus_api.agent.deterministic import DeterministicAnswer, answer_first_tier, first_tier_events
 from solus_api.agent.errors_filing import file_tool_error
+from solus_api.agent.guide_toolkb_version import placed_tools
 from solus_api.agent.interfaces import GraphScope, SolSystems
 from solus_api.agent.modes import ActionMode
+from solus_api.agent.project_card import CardInputs, project_card_section
+from solus_api.agent.research import ResearchStep, model_visible, withhold_server_driven
+from solus_api.agent.sol_anchors import resolve_anchor_inputs
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import (
     ToolCall,
@@ -68,18 +78,23 @@ from solus_api.agent.tools import (
 )
 from solus_api.agent.tools.exec import run_tool
 from solus_api.agent.tools.flash_history import record_tool_history
-from solus_api.agent.turn_limits import GUIDE_LIMITS, turn_limits
+from solus_api.agent.turn_budget import BudgetHit, TurnBudget
+from solus_api.agent.turn_limits import GUIDE_MODEL_ROUNDS, GUIDE_TOOL_CALLS, turn_limits
 from solus_api.models import SolMode
 from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
 from solus_api.orchestration.providers import ToolConversation, ToolOutcome, Turn
 from solus_api.orchestration.router import derive_complexity
-from solus_api.orchestration.type_estimator import estimate_tokens
+from solus_api.orchestration.type_estimator import (
+    estimate_tokens,
+    round_one_complexity,
+    round_one_route_type,
+)
 
 # §7 loop/recursion guard: an upper bound on tool calls per turn so a runaway loop
 # can never fan out unboundedly. The scaffold proposes ≤1; the guard protects the seam
 # for the real runner that swaps in later.
-MAX_TOOL_CALLS = GUIDE_LIMITS.tool_calls
+MAX_TOOL_CALLS = GUIDE_TOOL_CALLS
 #: The companion's ungated inventory read, by its composed bridge name. Feeds
 #: `link_environment` the facts the model is not allowed to supply.
 _CODE_ENVIRONMENTS: Final = "code.probe_environment"
@@ -117,6 +132,9 @@ def build_sol_registry(
     companion_deployment_service: Any | None = None,
     scene_enqueue: Any | None = None,
     drive_budget: "Budget | None" = None,
+    graph_hub: "LiveHub | None" = None,
+    enqueue_sim: "SimEnqueue | None" = None,
+    artifact_max_bytes: int | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -172,7 +190,43 @@ def build_sol_registry(
             enqueue=enqueue,
             artifact_ttl_seconds=artifact_ttl_seconds,
             fetch_environments=fetch_environments,
+            graph_hub=graph_hub,
+            enqueue_sim=enqueue_sim,
         )
+    # SOLUSDEV-321 P5 (R104, D10): SOL looks at one labelled view, as the requesting person;
+    # absent without the person, their team and both stores (the guard is in the call).
+    from solus_api.agent.vision.render_view import register_render_view_tool
+
+    register_render_view_tool(
+        registry,
+        session_factory,
+        project_id,
+        user_id=user_id,
+        team_id=team_id,
+        secret_store=secret_store,
+        artifact_store=artifact_store,
+        artifact_ttl_seconds=artifact_ttl_seconds,
+        connectors=connectors,
+        bridge=bridge,
+        bridge_call_cap_bytes=bridge_call_cap_bytes,
+        artifact_max_bytes=artifact_max_bytes,
+        redis=redis,
+        enqueue=enqueue,
+    )
+    # SOLUSDEV-321 P6 (R134): firmware from the topology, written only through machine.write_file's
+    # card; absent without the person, their team, the secret store and that owned write.
+    from solus_api.agent.firmware_recipe import register_firmware_recipe
+
+    register_firmware_recipe(
+        registry,
+        session_factory,
+        project_id,
+        user_id=user_id,
+        team_id=team_id,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+    )
     if systems is not None:
         # SYS-03: the four builtin reads (query_graph / get_telemetry /
         # retrieve_errors / run_checkers) as thin closures over the real
@@ -182,7 +236,7 @@ def build_sol_registry(
         from solus_api.agent.tools.builtin import build_builtin_tools
         from solus_api.agent.tools.rail_current import build_rail_current_tool
 
-        for tool in build_builtin_tools(systems, project_id):
+        for tool in build_builtin_tools(systems, project_id, session_factory=session_factory):
             registry.register(tool)
         registry.register(build_rail_current_tool(systems, project_id))
     if connectors is not None:
@@ -277,9 +331,23 @@ def _register_user_tools(
     enqueue: Any | None = None,
     artifact_ttl_seconds: int | None = None,
     fetch_environments: "EnvironmentFetch | None" = None,
+    graph_hub: "LiveHub | None" = None,
+    enqueue_sim: "SimEnqueue | None" = None,
 ) -> None:
     """Tools that act AS the requesting user (their id is recorded on every row).
     Function-local imports throughout (house pattern)."""
+    # SOLUSDEV-321 P4-T4 (R90, R110): `get_sim_result`; with the app's hub, `simulate` and the gated
+    # `apply_sim_change`. No model call: rungs 1 and 3 are code, rungs 2 and 4 named gated tools.
+    from solus_api.agent.tools.simulate import register_simulation_tools
+
+    register_simulation_tools(
+        registry,
+        session_factory,
+        project_id,
+        user_id=user_id,
+        hub=graph_hub,
+        enqueue_sim=enqueue_sim,
+    )
     # SOLUSDEV-240: SOL may file a note into the project `.solus`.
     from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
 
@@ -292,6 +360,28 @@ def _register_user_tools(
     from solus_api.agent.tools.environment import build_resolve_environment_tool
 
     registry.register(build_resolve_environment_tool(session_factory, project_id))
+    # SOLUSDEV-321 P1-T4: the retrieval tools — ungated reads that let the model look things up
+    # itself. They read AS this user (`get_machine`'s owner rule), so they need one.
+    from solus_api.agent.tools.finding_tools import register_finding_tools
+    from solus_api.agent.tools.machine_tools import register_machine_tools
+    from solus_api.agent.tools.search_tools import register_search_tools
+
+    register_search_tools(registry, session_factory, project_id)
+    register_finding_tools(registry, session_factory, project_id)
+    register_machine_tools(registry, session_factory, project_id, user_id=user_id)
+    if secret_store is not None:
+        # SOLUSDEV-321 P3-T4 (R57): the one model path for netlist motifs, metered as this user.
+        from solus_api.agent.tools.label_motifs import register_label_motifs_tool
+
+        register_label_motifs_tool(
+            registry,
+            session_factory,
+            project_id,
+            user_id=user_id,
+            secret_store=secret_store,
+            redis=redis,
+            enqueue=enqueue,
+        )
     if artifact_store is not None:
         # SOLUSDEV-252 S5: SOL draws a diagram into a TTL artifact (ungated, like
         # add_solus_entry — see make_diagram.py). Needs the store the artifacts
@@ -329,22 +419,27 @@ def _register_user_tools(
             # redis and the enqueue seam because the extraction is a METERED
             # model call through the gateway.
             from solus_api.agent.tools.read_document import register_document_tools
+            from solus_api.agent.tools.rulebook_tools import register_rulebook_tool
 
-            register_document_tools(
-                registry,
-                session_factory=session_factory,
-                store=artifact_store,
-                project_id=project_id,
-                user_id=user_id,
-                secret_store=secret_store,
-                redis=redis,
-                enqueue=enqueue,
-                **(
-                    {"artifact_ttl_seconds": artifact_ttl_seconds}
-                    if artifact_ttl_seconds is not None
-                    else {}
-                ),
+            ttl = (
+                {"artifact_ttl_seconds": artifact_ttl_seconds}
+                if artifact_ttl_seconds is not None
+                else {}
             )
+            # SOLUSDEV-321 P3-T4 (R58): `extract_rulebook` reads a filed rulebook through the
+            # same extractor and returns candidate constraints; it files nothing.
+            for register in (register_document_tools, register_rulebook_tool):
+                register(
+                    registry,
+                    session_factory=session_factory,
+                    store=artifact_store,
+                    project_id=project_id,
+                    user_id=user_id,
+                    secret_store=secret_store,
+                    redis=redis,
+                    enqueue=enqueue,
+                    **ttl,
+                )
 
 
 def _register_bundle_tools(
@@ -482,7 +577,9 @@ def _internal_only(spec: "BridgeToolSpec") -> bool:
     # revision through read_code_file. Keep this native primitive available to
     # that wrapper's internal dispatch, never as a model-visible fallback.
     # The separate general machine.read_file remains confirmation-gated.
-    return spec.descriptor.name == "machine.read_code_file"
+    # SOLUSDEV-321 P5 (D2, R125): a `returns_image` export is reached only through
+    # `render_view`, which consumes and checks its one artifact; never the model.
+    return spec.descriptor.name == "machine.read_code_file" or spec.returns_image
 
 
 def _register_bridge_tools(
@@ -578,6 +675,7 @@ def _register_bridge_tools(
                     )
                 )
 
+    from solus_api.agent.tools.ros_live import live_graph_tool
     from solus_api.services.code_environment_adapter import with_environment_recording
 
     for owned_tool in _owned_isaac_tools(
@@ -589,6 +687,10 @@ def _register_bridge_tools(
     for tool in tools:
         registered = with_environment_recording(
             _owned_machine_tool(tool), environments, session_factory, project_id, user_id
+        )
+        # SOLUSDEV-321 P6 (R131): the live ROS reads also raise the standing edges they name.
+        registered = live_graph_tool(
+            registered, session_factory, project_id, user_id=user_id, team_id=team_id
         )
         # §10.1: marks the plan-snapshot `code.exec` only; every other tool is a no-op.
         register_owned_routine(registered, family="command")
@@ -736,13 +838,48 @@ class AgentRunContext:
     #: `agent/preferences.py`), already labelled. Reaches the prompt only through
     #: prompt.system_prompt's fenced data block, never as raw text.
     engineering_preferences: Mapping[str, str] | None = None
+    #: SOLUSDEV-321 P6: the levels the turn speaks to (`expertise.turn_expertise`, the person's
+    #: stated levels winning); the system prompt's one register line comes from them alone.
+    expertise: "Expertise | None" = None
     history: tuple[TurnView, ...] = ()
+    #: SOLUSDEV-321 P0-T4: the turn's fences use `prompt.conversation_nonce` of this,
+    #: so its prompt prefix is byte-stable across the conversation; None mints a fresh one.
+    conversation_id: uuid.UUID | None = None
+    #: SOLUSDEV-321 P0-T5: what the route read for layer 2 — the card cache and this request's
+    #: own inputs (agent/project_card.py). None leaves the layer honestly empty.
+    project_card: "CardInputs | None" = None
+    #: SOLUSDEV-321 P1-T2: the facts the first tier answers lookups from — the route's
+    #: `GraphFactSources`, bound to this project and user. None (tests, other runners) skips
+    #: the first tier: every turn goes to the model.
+    facts: "FactSources | None" = None
+    #: SOLUSDEV-321 P1-T5: the query the composer's `/web <q>` carried (see
+    #: `research.strip_web_command`; the route sets it from the person's own message), else None.
+    #: The prompt keeps the full text.
+    research_query: str | None = None
+    #: The shared 7-day research cache; None runs every research uncached.
+    research_cache: "ResearchCache | None" = None
+    #: False for a turn whose prompt Solus wrote (a wake or resume turn embeds a ticket's
+    #: program, which may say "search"): the web is for the person's own words only.
+    research_allowed: bool = True
     #: SOLUSDEV-168: graph entities the user pointed at explicitly (the
     #: composer's `@`). They become the neighbourhood's anchors, so SOL is
     #: grounded on the node the user meant rather than on whatever similarity
     #: search surfaced. Untrusted ids: `load_neighborhood` is project-scoped, so
     #: one from another team yields nothing rather than leaking.
     mentions: tuple[uuid.UUID, ...] = ()
+    #: SOLUSDEV-321 P0-T3: the other things the turn was pointed at, each an anchor with its
+    #: own reason (`turn_scope.plan_scope`). `focus` is the workspace focus the SOL page sent
+    #: with the turn (auto-sent: a stale id in it is dropped, not refused); `pins` the chat's
+    #: pinned nodes (a selection, like `mentions`); `finding_id` / `robot_id` the finding or
+    #: bench robot the person asked from. Untrusted ids: the route has refused the ones it
+    #: could not see, and `load_neighborhood` is project-scoped regardless.
+    focus: reason.FocusIn | None = None
+    pins: tuple[uuid.UUID, ...] = ()
+    finding_id: uuid.UUID | None = None
+    robot_id: uuid.UUID | None = None
+    #: Entities this conversation's recent tool calls named, newest first (at most eight).
+    #: Hints for the planner to weigh; they anchor nothing by themselves.
+    history_entity_ids: tuple[uuid.UUID, ...] = ()
     interaction_context: InteractionContext = InteractionContext.SOL_OPEN_QUESTION
     #: Model-call identity (ADR-018). A runner that makes a PAID call MUST refuse
     #: without these: `gateway.complete` defaults them to None and then silently
@@ -750,6 +887,9 @@ class AgentRunContext:
     #: be an unmetered, unlimited model path. Optional in the signature only so
     #: the model-free ScaffoldRunner and its tests construct unchanged.
     user_id: uuid.UUID | None = None
+    #: SOLUSDEV-321 P1-T1: this turn's id on the gateway calls it makes (`turn_id=`), so they
+    #: can be counted (P1-T3) and persisted (P8). Minted with the run context.
+    turn_id: uuid.UUID = field(default_factory=uuid.uuid4)
     #: A SESSIONMAKER, not a session: the request session is already closed by
     #: the time the SSE body streams (which is why `_persist_turn` and `park`
     #: each open their own), so a debit against it would silently fail.
@@ -1001,7 +1141,7 @@ class ScaffoldRunner:
 #: making another PAID model call, and cannot see a model that answers with zero
 #: tool calls forever. One guard per concern — the runner does not re-count tool
 #: calls, and the transport does not count rounds.
-MAX_MODEL_ROUNDS: Final = GUIDE_LIMITS.model_rounds
+MAX_MODEL_ROUNDS: Final = GUIDE_MODEL_ROUNDS
 #: A tool loop needs more headroom than the gateway's 4096 text default — and
 #: Responses-style providers count REASONING tokens against max_output_tokens
 #: (OpenAI recommends headroom), so 8192 could truncate a reasoned tool round.
@@ -1016,15 +1156,20 @@ _ROUND_LIMIT = (
 def _round_conversation(
     system: str, turns: tuple[Turn, ...], tools: tuple[Any, ...], synthesis: bool
 ) -> ToolConversation:
+    # SOLUSDEV-321 P0-T4: the round's final user turn (live message, then latest
+    # results) is a cache breakpoint the next round reads back. The last round keeps
+    # `system` and `tools` byte-identical — dropping the tools changed the request from
+    # its first byte — and withholds them through `tool_choice` instead.
+    *earlier, last = turns
+    messages = (*earlier, last.model_copy(update={"cache_breakpoint": True}))
     if synthesis:
-        system += (
-            "\nThis is the final response within this turn's budget. No tools are available. "
-            "Summarize observed results, unresolved gaps, and parked actions. "
-            "Distinguish completed actions from pending approvals; do not propose or replay "
-            "tool calls, infer success, or claim unobserved results."
+        return ToolConversation(
+            system=system,
+            messages=(*messages, prompt.synthesis_turn()),
+            tools=tools,
+            tool_choice="none",
         )
-        tools = ()
-    return ToolConversation(system=system, messages=turns, tools=tools)
+    return ToolConversation(system=system, messages=messages, tools=tools)
 
 
 def _limit_outcome(use: Any, tools: tuple[ToolDescriptor, ...]) -> ToolOutcome:
@@ -1040,16 +1185,46 @@ def _limit_outcome(use: Any, tools: tuple[ToolDescriptor, ...]) -> ToolOutcome:
     return prompt.contain_result(call, result)
 
 
-def _terminal_reply(completion: Any, synthesis: bool, context: Context) -> AgentEvent | None:
+def _terminal_reply(
+    completion: Any, synthesis: bool, context: Context, *, waiting: bool = False
+) -> AgentEvent | None:
     if synthesis and completion.tool_calls:
         return AgentEvent.message(
             "The final summary was not completed. I stopped without executing additional "
             "tools; earlier results and pending approvals remain unchanged."
         )
     if not completion.tool_calls:
-        prose, citations = reason.sanitize_reply(completion.text, context)
-        return AgentEvent.message(prose, citations=citations)
+        prose, cited = citations.reply_parts(completion.text, context, waiting=waiting)
+        return AgentEvent.message(prose, citations=cited)
     return None
+
+
+async def _close_unfinished(stream: gateway.CompletionStream) -> None:
+    """Close a model stream the round did not read to its end (the transport broke out)."""
+    if stream.completion is None:
+        await stream.aclose()
+
+
+async def _round_events(
+    stream: gateway.CompletionStream, hit: BudgetHit | None, ctx: AgentRunContext
+) -> AsyncIterator[AgentEvent]:
+    """One round's events: the `budget_reached` frame when a ceiling made this the closing round
+    (announced before the round is asked, and logged with ids and counts only), then its tokens
+    as they arrive. P1-T3. Its `<reasoning>` block arrives as one `reasoning` frame, never as
+    tokens (P7)."""
+    if hit is not None:
+        logger.info(
+            "turn budget reached limit=%s used=%d cap=%d turn_id=%s user_id=%s project_id=%s",
+            hit.limit,
+            hit.used,
+            hit.cap,
+            ctx.turn_id,
+            ctx.user_id,
+            ctx.project_id,
+        )
+        yield AgentEvent.budget_reached(hit.limit, hit.used, hit.cap)
+    async for event in reasoning_frame.reasoned_tokens(stream):
+        yield event
 
 
 def _preferences_tokens(preferences: "Mapping[str, str] | None", estimator: Any) -> int:
@@ -1066,6 +1241,20 @@ def _conversation_tokens(history: "tuple[TurnView, ...]", live: str, estimator: 
     """The surrounding turns plus the live message — the conversation layer's
     text lives in the runner's Turns, so the layer reports only this count."""
     return estimate_tokens("\n".join((*(turn.content for turn in history), live)), config=estimator)
+
+
+async def _opening_events(
+    answer: DeterministicAnswer | None, scope: "turn_scope.TurnScope", step: ResearchStep
+) -> AsyncIterator[AgentEvent]:
+    """The frames a turn streams before any prompt: the first tier's answer when it gave one
+    (P1-T2), else the turn's web research (P1-T5) — its frames, or none when the gate did not fire.
+    One generator so `run` keeps a single branch for both."""
+    if answer is not None:
+        for event in first_tier_events(answer, scope):
+            yield event
+        return
+    async for event in step.events():
+        yield event
 
 
 class LlmRunner:
@@ -1090,27 +1279,112 @@ class LlmRunner:
             # generic error event, and it is obvious in dev.
             raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
 
+        # SOLUSDEV-321 P0-T4: ONE fence token, the conversation's own, for every fenced
+        # surface, so system, tools and the prefix turn are byte-stable across turns.
+        nonce = (
+            prompt.conversation_nonce(ctx.conversation_id)
+            if ctx.conversation_id is not None
+            else prompt.new_nonce()
+        )
         system = prompt.system_prompt(
             ctx.sol_mode,
             ctx.custom_instruction,
             ctx.engineering_preferences,
             with_screenshot=ctx.screenshot is not None,
             action_mode=ctx.action_mode,
+            nonce=nonce,
+            expertise=ctx.expertise,
         )
-        tools = prompt.tool_specs(ctx.tools)
-        nonce = prompt.new_nonce()
+        # P1-T5: the model is offered every tool but the ones only the server drives (research).
+        # P7: a GUI tool's knowledge note is read for the release on the asker's own machine.
+        offered = await placed_tools(model_visible(ctx.tools), ctx.project_card, ctx.sessionmaker)
+        tools = prompt.tool_specs(offered, nonce=nonce)
         # SOL-02: plan what to pull (deterministic, no model call), assemble
         # the W0-07 context, and hand it to the model as fenced data blocks.
-        plan = reason.plan_query(ctx.prompt, mentions=ctx.mentions)
-        estimator = gateway.default_orchestration_config().type_estimator
+        orchestration = gateway.default_orchestration_config()
+        # P1-T3: what every round re-sends whatever the turns hold — the system prompt and the tool
+        # specs — measured once, from the very `system` and `tools` the rounds send. It sizes this
+        # turn's input cap (`turn_limits(…, fixed_tokens=)`) and is part of each round's measure.
+        fixed_tokens = estimate_tokens(
+            system, config=orchestration.type_estimator
+        ) + estimate_tokens(prompt.tools_text(tools), config=orchestration.type_estimator)
+        complexity = self._complexity_override(ctx)
+        resolved = await resolve_anchor_inputs(
+            ctx.sessionmaker, ctx.project_id, focus=ctx.focus, finding_id=ctx.finding_id
+        )
+        # SOLUSDEV-321 P0-T7: a turn that names a finding (its id, or the subjects that become
+        # its `finding_subject` anchors) runs HARD, explicitly, above "think harder" too.
+        complexity = round_one_complexity(
+            complexity, about_finding=ctx.finding_id is not None or bool(resolved.finding_subjects)
+        )
+        # The tier the gateway will route this turn at — a finding's or "think harder"'s
+        # explicit one, else the estimator's on the live message — so the context budget
+        # matches the model that reads it.
+        tier = complexity or estimate_complexity(ctx.prompt, config=orchestration.estimator)
+        # P1-T3: this turn's ceilings for that tier and what it has spent against them. Counting
+        # starts with the planner's tie-break below, so a first-tier answer (no model call at
+        # all) leaves every counter at zero.
+        turn_budget = TurnBudget(turn_limits(ctx.action_mode, tier, fixed_tokens=fixed_tokens))
+        # P1-T1: the scope planner, before any prompt — anchors with their reasons, the names
+        # the message resolves, ONE bounded graph pull, the turn's hints. build_context packs
+        # its graph and pulls none of its own.
+        scope = await turn_scope.plan_scope(
+            turn_scope.ScopeInputs(
+                message=ctx.prompt,
+                tier=tier,
+                mentions=ctx.mentions,
+                pins=ctx.pins,
+                focus=ctx.focus,
+                robot_id=ctx.robot_id,
+                finding_subjects=resolved.finding_subjects,
+                history_entity_ids=ctx.history_entity_ids,
+                not_visible=resolved.not_visible,
+            ),
+            search=turn_scope.index_search(ctx.sessionmaker, ctx.project_id),
+            load=lambda graph_scope, budget: ctx.systems.get_graph_context(
+                ctx.project_id, graph_scope, budget
+            ),
+            disambiguate=(
+                self._disambiguator(
+                    ctx, ctx.sessionmaker, ctx.secret_store, nonce, turn_budget.note_model_call
+                )
+                if tier is Complexity.HARD
+                else None
+            ),
+            config=orchestration,
+        )
+        # P1-T2: the first tier — a lookup the scope's facts answer is answered here, with no
+        # model call and no prompt; anything else goes on to the model with the same scope. A
+        # `/web <q>` turn skips it: the person asked for the web, not for the graph (P1-T5).
+        answer = (
+            await answer_first_tier(ctx.prompt, scope, ctx.facts, mode=ctx.sol_mode)
+            if ctx.facts and ctx.research_query is None
+            else None
+        )
+        # P1-T5: a turn the first tier declined may research the web, once, before anything is
+        # packed — the step runs the gate, the cache, one call through `ctx.dispatch`, and the
+        # ledger; its digest rides into the context below.
+        step = ResearchStep(
+            ctx,
+            missing=scope.missing,
+            budget=turn_budget,
+            limits=orchestration.limits,
+            credits_per_call=orchestration.cost.web_call_credits,
+        )
+        async for event in _opening_events(answer, scope, step):
+            yield event
+        if answer is not None:
+            return
+        estimator = orchestration.type_estimator
         context = await build_context(
             ctx.systems,
             ctx.prompt,
             project_id=ctx.project_id,
-            scope=plan.scope,
-            window=plan.window,
-            budget=plan.budget,
-            k=plan.k,
+            scope=scope.scope,
+            graph=scope.graph,
+            window=scope.window,
+            budget=scope.budget,
+            research=step.digest,
             # CORPUS C2 (ADR-036): mode only orders corpus ties — Guide reads
             # fundamentals first, Expert reference first. Never a filter.
             mode=ctx.sol_mode,
@@ -1122,56 +1396,86 @@ class LlmRunner:
             # instead of claiming "no preferences" while carrying them.
             sessionmaker=ctx.sessionmaker,
             preferences_tokens=_preferences_tokens(ctx.engineering_preferences, estimator),
+            practice_question=scope.practice_question,
         )
-        if ctx.screenshot is not None:
-            # S3: the VISUAL_LOG extractor pass — THE vision call of the turn.
-            # Degrades to an honest string on any failure; never fails the turn.
-            async with ctx.sessionmaker() as session:
-                screen_read = await screen.read_screen(
-                    ctx.screenshot,
-                    secret_store=ctx.secret_store,
-                    user_id=ctx.user_id,
-                    session=session,
-                    redis=ctx.redis,
-                    enqueue=ctx.enqueue,
-                    adapters=self._adapters,
-                    extension_id=ctx.extension_id,
-                )
-            # Into the screen LAYER rather than appended after the context: the
-            # read reached the model either way, but it was absent from the
-            # manifest and rendered out of precedence order.
-            context = context.with_screen(
-                screen.screen_section(nonce, ctx.screenshot, screen_read),
-                max(1, estimate_tokens(screen_read, config=estimator)),
+        # ponytail: an open non-info finding on a part in scope surfaces only in the findings
+        # read inside build_context, so it turns round 1 HARD on a context already packed at the
+        # planned tier; re-packing would cost a second build_context. The scope planner leaves
+        # that read where it is (P1-T1 R7); moving it before packing would lift this ceiling.
+        complexity = round_one_complexity(complexity, about_finding=context.finding_in_scope)
+        context = await self._with_screen_read(
+            ctx, context, nonce, estimator, turn_budget.note_model_call
+        )
+        context = (
+            context.with_conversation(
+                tokens=_conversation_tokens(ctx.history, ctx.prompt, estimator)
             )
-        context = context.with_conversation(
-            tokens=_conversation_tokens(ctx.history, ctx.prompt, estimator)
+            .with_anchors(scope.anchors, scope.dropped)
+            .with_card(
+                await project_card_section(ctx.sessionmaker, ctx.project_id, ctx.project_card)
+            )
         )
         sections = [
             {"kind": s.kind, "citation": s.citation, "tokens": s.tokens} for s in context.sections
         ]
+        manifest = context.manifest()
         # SOLUSDEV-233: declare the turn's context up front so clients can show
         # what SOL is grounded in. Manifest only — no section text.
         yield AgentEvent.context_used(
-            sections=sections, truncated=context.truncated, dropped=len(context.dropped)
+            sections=sections,
+            truncated=context.truncated,
+            dropped=len(context.dropped),
+            layers=manifest["layers"],
+            anchors=manifest["anchors"],
+            anchors_dropped=manifest["anchors_dropped"],
         )
         turns = self._opening_turns(ctx, nonce, context)
         completion = None
-        complexity = self._complexity_override(ctx)
-        route_type: RouteType | None = None
+        # P0-T7: round 1 asks for CODE only for a turn anchored on code (or worded as code) whose
+        # input leaves 20 % of that role's window spare — an explicit type refuses on overflow.
+        route_type: RouteType | None = round_one_route_type(
+            scope.type_hint,
+            query=prompt.flatten(turns),
+            tier=complexity or tier,
+            config=orchestration,
+        )
 
-        limits = turn_limits(ctx.action_mode)
-        tool_calls = 0
-        for round_index in range(limits.model_rounds):
-            synthesis = round_index == limits.model_rounds - 1 or tool_calls >= limits.tool_calls
+        limits = turn_budget.limits
+        # P1-T5: what the MODEL proposes runs through the gated dispatcher minus the tools only the
+        # server drives — a call it makes to one is an unknown tool, never a web query.
+        from solus_api.agent.preferences import code_style_of  # P6, R134
+        from solus_api.agent.turn_context import with_perception, with_turn  # R75/R83/R125
+
+        # P5 (R125): beside the turn's id, its perception — the budget a tool's model call counts
+        # against, and whether the scope planner turned renders off for this turn — and (P6) the
+        # person's code style, for a tool that writes code.
+        model_dispatch = with_perception(
+            with_turn(withhold_server_driven(ctx.dispatch), ctx.turn_id, ctx.project_id),
+            turn_budget,
+            connectivity=scope.exclude_renders,
+            counting=scope.counting,
+            code_style=code_style_of(ctx.engineering_preferences),
+        )
+        for _ in range(limits.model_rounds):
+            # P1-T3: this round and its model call counted (a call counts against its own cap),
+            # its whole request measured, then the first ceiling the turn has reached. A hit makes
+            # this the closing round (no tools) and is announced before it runs; the last round
+            # always hits `model_rounds`.
+            query = prompt.flatten(turns)
+            turn_budget.note_model_round()
+            turn_budget.note_model_call()
+            turn_budget.note_input_tokens(fixed_tokens + estimate_tokens(query, config=estimator))
+            hit = turn_budget.check()
+            synthesis = hit is not None
             completion = None
             async with ctx.sessionmaker() as session:
                 stream = gateway.stream(
-                    prompt.flatten(turns),
+                    query,
                     secret_store=ctx.secret_store,
-                    # The context derives the route TYPE; the tier comes from the
-                    # estimator on the person's live message (S1), never from the
-                    # context's HARD default — unless "think harder" made it explicit.
+                    # The context derives the route TYPE unless round 1 asked for CODE;
+                    # the tier comes from the estimator on the person's live message (S1),
+                    # never from the context's HARD default — unless "think harder" or a
+                    # finding made it explicit.
                     # From round 2 on, BOTH axes are pinned to round 1's choice: the
                     # growing conversation must not escalate the model mid-turn,
                     # because `provider_items` (encrypted reasoning) are bound to
@@ -1188,22 +1492,32 @@ class LlmRunner:
                     adapters=self._adapters,
                     max_tokens=SOL_MAX_TOKENS,
                     extension_id=ctx.extension_id,
+                    purpose="answer",
+                    turn_id=ctx.turn_id,
+                    project_id=ctx.project_id,
                 )
                 try:
-                    async for chunk in stream:
-                        yield AgentEvent.token(chunk)
+                    async for event in _round_events(stream, hit, ctx):
+                        yield event
                 finally:
                     # The transport breaks out of `async for event in runner.run()`
                     # when it trips its own guard, which throws GeneratorExit here.
                     # Without this the provider connection is abandoned open.
-                    if stream.completion is None:
-                        await stream.aclose()
+                    await _close_unfinished(stream)
                 completion = stream.completion
 
             if completion is None:
                 break
             complexity, route_type = completion.model.complexity, completion.model.route_type
-            terminal = _terminal_reply(completion, synthesis, context)
+            terminal = _terminal_reply(
+                completion,
+                synthesis,
+                context,
+                # P7 fix 1 (M4): a reply that was only a block closes on a card this turn parked.
+                waiting=citations.card_waiting(
+                    turns, offered, ctx.executed_build_calls, ctx.action_mode
+                ),
+            )
             if terminal is not None:
                 yield terminal
                 return
@@ -1220,7 +1534,8 @@ class LlmRunner:
                 ),
             )
             outcomes: list[ToolOutcome] = []
-            admitted = completion.tool_calls[: limits.tool_calls - tool_calls]
+            admitted = completion.tool_calls[: limits.tool_calls - turn_budget.tool_calls]
+            turn_budget.note_tool_calls(len(admitted))
             outcomes.extend(
                 _limit_outcome(use, ctx.tools) for use in completion.tool_calls[len(admitted) :]
             )
@@ -1228,16 +1543,18 @@ class LlmRunner:
                 # The provider's own tool_use id becomes the call id, so results
                 # correlate exactly with no mapping table anywhere.
                 # The model answers with the name it was OFFERED (provider
-                # charset); dispatch needs the real, dotted tool name back.
+                # charset); dispatch needs the real, dotted tool name back. Both the name and
+                # the descriptor are looked up among the tools it was offered: a call to one it
+                # was not (the server-driven `research`) is refused as unknown, and is filed
+                # and recorded as a call that never ran.
                 call = ToolCall(
-                    tool=prompt.resolve_tool_name(use.name, ctx.tools),
+                    tool=prompt.resolve_tool_name(use.name, offered),
                     args=use.args,
                     call_id=use.id,
                 )
-                tool_calls += 1
                 yield AgentEvent.tool_call(call)
-                result = await ctx.dispatch(call)  # gates, then invokes
-                descriptor = next((d for d in ctx.tools if d.name == call.tool), None)
+                result = await model_dispatch(call)  # gates, then invokes
+                descriptor = next((d for d in offered if d.name == call.tool), None)
                 # Mutation flags still protect Guide; actual Build dispatch
                 # is recorded separately. A parked/refused write must never
                 # be filed as though it ran. Manual failures remain in the
@@ -1314,8 +1631,48 @@ class LlmRunner:
             turns = (*turns, Turn(role="user", tool_results=tuple(outcomes)))
 
         final = (completion.text if completion else "") or _ROUND_LIMIT
-        prose, citations = reason.sanitize_reply(final, context)
-        yield AgentEvent.message(prose, citations=citations)
+        prose, cited = citations.reply_parts(final, context)
+        yield AgentEvent.message(prose, citations=cited)
+
+    async def _with_screen_read(
+        self,
+        ctx: AgentRunContext,
+        context: Context,
+        nonce: str,
+        estimator: Any,
+        note_call: Callable[[], None],
+    ) -> Context:
+        """S3: the VISUAL_LOG extractor pass — THE vision call of the turn — when the person
+        attached a screenshot. Degrades to an honest string on any failure; never fails the
+        turn. The read goes into the screen LAYER rather than after the context: it reached
+        the model either way, but it was absent from the manifest and out of precedence order.
+        `note_call` counts the call against the turn's budget (P1-T3) where the runner makes it; it
+        runs before any dispatch binds the turn, so it gets the turn's id and project (R148)."""
+        if (
+            ctx.screenshot is None
+            or ctx.sessionmaker is None
+            or ctx.secret_store is None
+            or ctx.user_id is None
+        ):
+            return context
+        note_call()
+        async with ctx.sessionmaker() as session:
+            screen_read = await screen.read_screen(
+                ctx.screenshot,
+                secret_store=ctx.secret_store,
+                user_id=ctx.user_id,
+                session=session,
+                redis=ctx.redis,
+                enqueue=ctx.enqueue,
+                adapters=self._adapters,
+                extension_id=ctx.extension_id,
+                turn_id=ctx.turn_id,
+                project_id=ctx.project_id,
+            )
+        return context.with_screen(
+            screen.screen_section(nonce, ctx.screenshot, screen_read),
+            estimate_tokens(screen_read, config=estimator),
+        )
 
     @staticmethod
     def _complexity_override(ctx: AgentRunContext) -> Complexity | None:
@@ -1333,14 +1690,53 @@ class LlmRunner:
         )
         return tier
 
+    def _disambiguator(
+        self,
+        ctx: AgentRunContext,
+        sessionmaker: "async_sessionmaker[AsyncSession]",
+        secret_store: "SecretStore",
+        nonce: str,
+        note_call: Callable[[], None],
+    ) -> "turn_scope.DisambiguateFn":
+        """P1-T1: the scope planner's one tie-break on a HARD turn — TRIVIAL, GENERAL, metered
+        to the requester. The prompt fences every string (turn_scope builds it) and the reply
+        counts only as one of the ids it offered. `note_call` counts the call against the
+        turn's budget (P1-T3)."""
+
+        async def choose(
+            message: str, candidates: "Sequence[turn_scope.Candidate]"
+        ) -> uuid.UUID | None:
+            async with sessionmaker() as session:
+                note_call()
+                completion = await gateway.complete(
+                    turn_scope.disambiguation_prompt(message, candidates, nonce=nonce),
+                    secret_store=secret_store,
+                    complexity=Complexity.TRIVIAL,
+                    type=RouteType.GENERAL,
+                    adapters=self._adapters,
+                    user_id=ctx.user_id,
+                    session=session,
+                    redis=ctx.redis,
+                    enqueue=ctx.enqueue,
+                    max_tokens=turn_scope.PLANNER_MAX_TOKENS,
+                    extension_id=ctx.extension_id,
+                    purpose="planner",
+                    turn_id=ctx.turn_id,
+                    project_id=ctx.project_id,
+                )
+            return turn_scope.offered_choice(completion.text, candidates)
+
+        return choose
+
     @staticmethod
     def _opening_turns(ctx: AgentRunContext, nonce: str, context: "Context") -> tuple[Turn, ...]:
-        """History, then the reasoning context, then the live message — every
-        ingested string fenced as DATA (context sections fence themselves via
-        Context.fenced). The S3 screen read is a section of the context's screen
-        LAYER (`with_screen`), so it renders in precedence order rather than
-        after it. The screenshot's pixels ride the same live turn as `images`."""
-        turns: list[Turn] = []
+        """The stable prefix, the history, then the live turn — every ingested
+        string fenced as DATA (context sections fence themselves). SOLUSDEV-321
+        P0-T4: the prefix turn (`Context.fenced_prefix`) is stable while the turn's
+        anchors are, so it is a cache breakpoint; everything else that varies with
+        the message follows the history (`Context.fenced_suffix`, then the message,
+        the screenshot's pixels riding along as `images`)."""
+        turns = [Turn(role="user", text=context.fenced_prefix(nonce), cache_breakpoint=True)]
         if ctx.history:
             turns.append(
                 Turn(
@@ -1360,7 +1756,7 @@ class LlmRunner:
         )
         images = (ctx.screenshot.image,) if ctx.screenshot is not None else ()
         turns.append(
-            Turn(role="user", text="\n".join((context.fenced(nonce), live)), images=images)
+            Turn(role="user", text="\n".join((context.fenced_suffix(nonce), live)), images=images)
         )
         return tuple(turns)
 

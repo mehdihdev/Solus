@@ -11,7 +11,9 @@ import { act, render, screen, fireEvent, waitFor, within } from '@testing-librar
 import { BenchScreen } from './BenchScreen'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useFocusStore } from '../workspace/focusStore'
+import { useShellStore } from '../workspace/shellStore'
 import { api } from '../../lib/api/client'
+import type { Finding } from '../../lib/api/findings'
 import type { BenchSession, Entity } from '../../lib/api/resources'
 import {
   getWidgetLayout,
@@ -109,8 +111,31 @@ function routeApi(options: { sessions?: BenchSession[] } = {}): void {
       } as never
     }
     if (path.includes('/bench/recent/')) return { entity_id: 'e1', signals: [] } as never
+    // SOLUSDEV-321 P7: one finding read by id (a citation pill's), never the open-findings list.
+    if (path.endsWith('/findings/f1')) return OPENED_FINDING as never
     return [] as never
   })
+}
+
+const OPENED_FINDING: Finding = {
+  id: 'f1',
+  rule_id: 'tracking_error_stall',
+  severity: 'critical',
+  source: 'observer',
+  status: 'open',
+  headline: 'servo 3 stalls against its command',
+  explanation: '',
+  detail: null,
+  subjects: ['e1'],
+  evidence: {},
+  count: 1,
+  first_seen: '2026-10-27T10:00:00+00:00',
+  last_seen: '2026-10-27T10:00:00+00:00',
+  matrix_cell: null,
+  domain: 'electrical',
+  dismissed_until: null,
+  created_at: '',
+  updated_at: ''
 }
 
 /** The canvas seam: a never-arranged project (server default), no installs, PUT echoes. */
@@ -369,4 +394,82 @@ it.each([
     expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/device-recent?device_id=demo%2Frod&limit=512')
   )
   expect(requestMock).not.toHaveBeenCalledWith(expect.stringContaining('focus_entity_id=root'))
+})
+
+it('mounts the Findings pane under LIVE REASONING and opens a marker’s finding there', async () => {
+  const findingId = '0b5f8a3e-8c1d-4c6e-9a1f-2d3e4f5a6b7c'
+  const at = new Date().toISOString()
+  seedProject()
+  routeApi({
+    sessions: [
+      { ...SESSION, mode: 'real', provider: 'robot', label: 'Fake arm', robot_entity_id: 'r1' }
+    ]
+  })
+  const routed = requestMock.getMockImplementation()
+  requestMock.mockImplementation(async (path: string, ...rest) => {
+    if (path.includes('/bench/events'))
+      return [
+        {
+          kind: 'threshold_breach',
+          device_id: 'demo/rod',
+          signal: 'qvel',
+          at,
+          value: null,
+          finding_id: findingId
+        }
+      ] as never
+    if (path === `/projects/p1/findings/${findingId}`)
+      return {
+        id: findingId,
+        rule_id: 'tracking_error_stall',
+        severity: 'critical',
+        source: 'observer',
+        status: 'open',
+        headline: 'demo rod stalls',
+        explanation: '',
+        detail: '',
+        subjects: [],
+        evidence: { current_a: 2.4 },
+        count: 1,
+        first_seen: at,
+        last_seen: at,
+        matrix_cell: null,
+        domain: 'electrical',
+        dismissed_until: null,
+        created_at: at,
+        updated_at: at
+      } as never
+    return routed?.(path, ...rest) as never
+  })
+  vi.mocked(api.requestPage).mockResolvedValue({ data: [], meta: { has_next: false } } as never)
+  render(<BenchScreen />)
+  const pane = await screen.findByRole('region', { name: 'Findings for Fake arm' })
+  // A robot session gets its own panel; the pane sits once, under the shared reasoning copy.
+  expect(screen.getByRole('region', { name: 'Live reasoning' })).toContainElement(pane)
+  expect(await within(pane).findByText('✓ Nothing out of range')).toBeInTheDocument()
+  expect(api.requestPage).toHaveBeenCalledWith(
+    '/projects/p1/findings?status=open&robot=r1&limit=500'
+  )
+  fireEvent.click(
+    await screen.findByRole('button', { name: `Open finding: threshold_breach at ${at}` })
+  )
+  const opened = await screen.findByRole('region', { name: 'Opened finding' })
+  expect(within(opened).getByRole('button', { name: 'demo rod stalls' })).toBeInTheDocument()
+  expect(requestMock).toHaveBeenCalledWith(`/projects/p1/findings/${findingId}`)
+})
+
+// SOLUSDEV-321 P7: a SOL `[finding:<id>]` pill asks the shell to open that finding, then navigates
+// here; the Bench takes the request on mount, so the pane opens on it — expanded, with no robot
+// connected — and the request is spent.
+it('opens the Findings pane on the finding a SOL citation pill requested, then clears it', async () => {
+  seedProject()
+  useShellStore.getState().reset()
+  useShellStore.getState().requestBenchFinding('f1')
+  render(<BenchScreen />)
+  const opened = await screen.findByRole('region', { name: 'Opened finding' })
+  expect(
+    await within(opened).findByRole('button', { name: 'servo 3 stalls against its command' })
+  ).toBeInTheDocument()
+  expect(requestMock).toHaveBeenCalledWith('/projects/p1/findings/f1')
+  expect(useShellStore.getState().benchFinding).toBeNull()
 })

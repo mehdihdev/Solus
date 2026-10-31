@@ -1,8 +1,12 @@
 // The Live Bench body: one panel per saved robot (with the teleoperation bar)
-// above the single legacy layout for every non-robot device.
+// above the single legacy layout for every non-robot device. The Findings pane
+// sits once, under whichever copy of LIVE REASONING is shown.
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import type { BenchSession } from '../../lib/api/resources'
+import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
+import { useShellStore } from '../workspace/shellStore'
 import { DeviceBenchView } from './DeviceBenchView'
+import { FindingsPane } from './findings/FindingsPane'
 import { RobotPanels } from './RobotPanels'
 import { TeleopBar } from './TeleopBar'
 import { groupRobotSessions } from './robotGrouping'
@@ -14,6 +18,27 @@ const ScenePanel = lazy(() =>
 
 const OTHERS_KEY = 'others'
 
+/** The finding a signal marker (or a SOL citation pill, SOLUSDEV-321 P7) opened, for this
+ *  workspace session only. The pill's request is read in the initializer and cleared in an
+ *  effect, so a StrictMode double render still sees it. */
+function useOpenedFinding(): {
+  openedId: string | null
+  open: (id: string) => void
+  close: () => void
+} {
+  const generation = useWorkspaceSessionGeneration()
+  const [opened, setOpened] = useState<{ generation: number; id: string } | null>(() => {
+    const id = useShellStore.getState().benchFinding
+    return id ? { generation, id } : null
+  })
+  useEffect(() => useShellStore.getState().clearBenchFinding(), [])
+  return {
+    openedId: opened?.generation === generation ? opened.id : null,
+    open: useCallback((id: string) => setOpened({ generation, id }), [generation]),
+    close: useCallback(() => setOpened(null), [])
+  }
+}
+
 function LegacyPanes({
   projectId,
   deviceIds,
@@ -21,7 +46,9 @@ function LegacyPanes({
   paused,
   focusEntityId,
   onStream,
-  onConfirmBoard
+  onConfirmBoard,
+  onOpenFinding,
+  children
 }: {
   projectId: string
   deviceIds: string[]
@@ -30,6 +57,8 @@ function LegacyPanes({
   focusEntityId?: string
   onStream: (key: string, live: boolean) => void
   onConfirmBoard?: () => void
+  onOpenFinding?: (findingId: string) => void
+  children?: React.ReactNode
 }): React.JSX.Element {
   const onStreamChange = useCallback((live: boolean) => onStream(OTHERS_KEY, live), [onStream])
   return (
@@ -60,7 +89,10 @@ function LegacyPanes({
         paused={paused}
         onStreamChange={onStreamChange}
         onConfirmBoard={onConfirmBoard}
-      />
+        onOpenFinding={onOpenFinding}
+      >
+        {children}
+      </DeviceBenchView>
     </div>
   )
 }
@@ -96,6 +128,15 @@ export function BenchPanels({
   const keys = [...robots.map((robot) => robot.sessionId), ...(showOthers ? [OTHERS_KEY] : [])]
   const anyLive = keys.some((key) => reports[key] === true)
   useEffect(() => onStreamChange(anyLive), [onStreamChange, anyLive, reports])
+  const finding = useOpenedFinding()
+  const findings = (
+    <FindingsPane
+      projectId={projectId}
+      sessions={sessions}
+      selectedFindingId={finding.openedId}
+      onCloseSelected={finding.close}
+    />
+  )
   return (
     <>
       <TeleopBar projectId={projectId} robots={robots} teleop={teleop} onChanged={refresh} />
@@ -107,6 +148,7 @@ export function BenchPanels({
         focusEntityId={focusEntityId}
         onStream={onStream}
         onConfirmBoard={onConfirmBoard}
+        onOpenFinding={finding.open}
       />
       {!showOthers && (
         <DeviceBenchView
@@ -115,8 +157,11 @@ export function BenchPanels({
           focusEntityId={focusEntityId}
           paused={paused}
           robotCount={robots.length}
+          onOpenFinding={finding.open}
           reasoningOnly
-        />
+        >
+          {findings}
+        </DeviceBenchView>
       )}
       {showOthers && (
         <LegacyPanes
@@ -127,7 +172,10 @@ export function BenchPanels({
           focusEntityId={focusEntityId}
           onStream={onStream}
           onConfirmBoard={onConfirmBoard}
-        />
+          onOpenFinding={finding.open}
+        >
+          {findings}
+        </LegacyPanes>
       )}
     </>
   )

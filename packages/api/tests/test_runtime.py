@@ -181,6 +181,47 @@ async def test_resync_updates_and_reconciles(
         assert sync.relations_deleted == 1
 
 
+async def test_resync_keeps_solus_owned_attrs_while_connector_keys_win(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """M118/M126/M148: Solus writers put `expected` (sim results), `motif_labels` (label_motifs)
+    and `sim_asked` on connector-owned rows. A re-sync that does not carry them keeps them; a
+    key the connector itself emits still wins, and an unchanged re-sync bumps no version."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+
+    def out(**props: object) -> EntityOut:
+        return EntityOut(
+            source_key="fw.ino", type="code_file", domain=Domain.CODE, name="fw", properties=props
+        )
+
+    connector = ScriptedConnector(
+        [
+            SyncResult(entities=[out(lang="cpp")]),
+            SyncResult(entities=[out(lang="c", sim_asked="connector")]),
+            SyncResult(entities=[out(lang="c", sim_asked="connector")]),
+        ]
+    )
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+    owned = {"expected": {"torque_nm": {"value": 1.0}}, "motif_labels": [{"kind": "divider"}]}
+    async with maker() as db:
+        row = await db.scalar(select(GraphEntity).where(GraphEntity.source_id == source.id))
+        assert row is not None
+        row.attrs = {**row.attrs, **owned, "sim_asked": "solus"}
+        await db.commit()
+
+    for _ in range(2):
+        await run_sync(
+            source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store
+        )
+
+    async with maker() as db:
+        row = await db.scalar(select(GraphEntity).where(GraphEntity.source_id == source.id))
+        assert row is not None
+        assert row.attrs == {"lang": "c", "sim_asked": "connector", **owned}
+        assert row.version == 2  # the third, unchanged sync wrote nothing
+
+
 async def test_sync_records_connector_failure(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:

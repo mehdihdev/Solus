@@ -41,6 +41,7 @@ from solus_api.hardware.config import TransportKind
 from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import hardware_entity, robot_root
+from solus_api.livebench.replay_provider import confined_file, replay_session
 from solus_api.livebench.sessions import (
     AmbiguousDeviceError,
     DeviceNotFoundError,
@@ -126,8 +127,16 @@ class BenchEventRing:
             lambda: deque(maxlen=capacity)
         )
 
-    def append(self, project_id: uuid.UUID, event: ObserverEventIn) -> None:
-        self._events[project_id].append(event.model_dump(mode="json"))
+    def append(
+        self, project_id: uuid.UUID, event: ObserverEventIn, *, finding_id: uuid.UUID | None = None
+    ) -> None:
+        """`finding_id` (SOLUSDEV-321 P2-T3) is attached here, to the ring's own record, by the
+        server that raised the finding: `ObserverEventIn` has no such field, so an ingested event
+        can never carry one, and `recent` hands out only the ids attached here."""
+        record = event.model_dump(mode="json")
+        if finding_id is not None:
+            record["finding_id"] = str(finding_id)
+        self._events[project_id].append(record)
 
     def recent(self, project_id: uuid.UUID, limit: int) -> list[dict[str, Any]]:
         ring = self._events.get(project_id)
@@ -327,6 +336,27 @@ class HardwareRealConfig(BaseModel):
     window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
 
 
+class ReplayRealConfig(BaseModel):
+    """DEV ONLY (docs/api/bench-runs.md): a recorded capture replayed as one of the project's
+    robots. `recording` is a file under `Settings.bench_replay_root`; `driver_id` decodes it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["replay"]
+    recording: str = Field(min_length=1, max_length=4096)
+    driver_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
+    robot_entity_id: uuid.UUID
+    realtime: bool = True
+    window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
+
+    @field_validator("recording")
+    @classmethod
+    def _printable(cls, value: str) -> str:
+        if not value.isprintable():
+            raise ValueError("recording may not contain control characters")
+        return value
+
+
 class BenchSessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -337,7 +367,8 @@ class BenchSessionIn(BaseModel):
         | McapSimConfig
         | SerialRealConfig
         | RobotRealConfig
-        | HardwareRealConfig,
+        | HardwareRealConfig
+        | ReplayRealConfig,
         Field(discriminator="provider"),
     ]
 
@@ -427,16 +458,7 @@ def _validated_mcap_path(settings: Any, raw: str) -> Path:
             "source_unavailable",
             "MCAP replay is not configured on this server (bench_data_root unset)",
         )
-    root_path = Path(root).resolve()
-    candidate = Path(raw)
-    resolved = (candidate if candidate.is_absolute() else root_path / candidate).resolve()
-    if not resolved.is_relative_to(root_path):
-        raise APIError(422, "validation_error", "mcap_path escapes the bench data root")
-    if resolved.suffix != ".mcap":
-        raise APIError(422, "validation_error", "mcap_path must name a .mcap file")
-    if not resolved.is_file():
-        raise APIError(422, "validation_error", "mcap_path does not exist")
-    return resolved
+    return confined_file(root, raw, field="mcap_path", root_name="bench data root", suffix=".mcap")
 
 
 def _session_opener(
@@ -503,8 +525,9 @@ async def _robot_opener(
     project_id: uuid.UUID,
     cfg: RobotRealConfig | HardwareRealConfig,
     account_id: uuid.UUID,
-) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any]]:
-    """(open_conn, label, device) for a robot session: the config document is the truth."""
+) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any], uuid.UUID]:
+    """(open_conn, label, device, robot id) for a robot session: the config document is the
+    truth, and the session's window evaluator judges the robot resolved here (P2-T3)."""
     robot = (
         await robot_root(session, project_id, cfg.robot_entity_id)
         if isinstance(cfg, RobotRealConfig)
@@ -559,7 +582,7 @@ async def _robot_opener(
         # The UI's per-robot panel key; a part-level (hardware) session names no robot.
         **({"robot_entity_id": str(robot.id)} if isinstance(cfg, RobotRealConfig) else {}),
     }
-    return open_robot, f"Robot {robot.name} ({identity.device_ref})", device
+    return open_robot, f"Robot {robot.name} ({identity.device_ref})", device, robot.id
 
 
 @router.post("/sessions", status_code=201)
@@ -572,8 +595,13 @@ async def start_session(
         raise APIError(503, "source_unavailable", _RUNNER_ABSENT)
     settings = request.app.state.settings
     device: dict[str, Any] | None
-    if isinstance(body.config, (RobotRealConfig, HardwareRealConfig)):
-        open_conn, label, device = await _robot_opener(
+    robot_entity_id: uuid.UUID | None = None
+    if isinstance(body.config, ReplayRealConfig):
+        open_conn, label, device, robot_entity_id = await replay_session(
+            local, session, ctx.project.id, body.config, settings
+        )
+    elif isinstance(body.config, (RobotRealConfig, HardwareRealConfig)):
+        open_conn, label, device, robot_entity_id = await _robot_opener(
             local, session, ctx.project.id, body.config, ctx.user.id
         )
     else:
@@ -588,6 +616,8 @@ async def start_session(
             open_conn=open_conn,
             window_seconds=body.config.window_seconds,
             device=device,
+            robot_entity_id=robot_entity_id,
+            owner_user_id=ctx.user.id,
         )
     except TooManySessionsError as exc:
         raise APIError(409, "too_many_sessions", str(exc)) from exc

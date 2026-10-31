@@ -1,32 +1,32 @@
 # SOLUSDEV-130 (SOL-02) — the reasoning layer's deterministic halves.
 #
-# `plan_query` decides WHAT TO PULL for a query — graph anchors, traversal
-# degree, whether a telemetry window is warranted, retrieval k, and the token
-# budget — deterministically, with no model call (the ADR-026 pattern:
+# The anchor vocabulary (SOLUSDEV-321 P0-T3): why an entity is one of a turn's
+# anchors (`AnchorReason`), the claims the turn's own pointing makes
+# (`anchor_claims`) and how they rank under `MAX_ANCHORS` (`rank_anchors`). The
+# scope planner (`agent/turn_scope.py`, P1-T1) adds the names it resolves and
+# decides WHAT TO PULL, with no model call of its own (the ADR-026 pattern:
 # classification that gates spend never spends). WHICH MODEL answers stays
-# with the gateway's `resolve_routing`, the single routing brain — this module
-# deliberately does not duplicate it.
+# with the gateway's `resolve_routing`, the single routing brain.
 #
 # `verified_citations` closes the loop on attribution: the model is asked to
 # cite `[connector:ref]` tokens, but only citations the assembled Context
 # actually contains survive into the Sources line — a hallucinated citation
 # is stripped, never rendered as provenance (§7: model output is untrusted).
-#
-# RAG knobs (k, degree, budget, telemetry heuristics) are tuned against the
-# eval set in tests/test_reason_eval.py; change them there first.
 
 from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Collection, Iterable, Iterator
+from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from solus_api.agent.context import Context
-from solus_api.agent.interfaces import ContextBudget, GraphScope, TelemetryWindow
-from solus_api.agent.layers import LayerBudget, LayeredContextBudget
+if TYPE_CHECKING:
+    # Annotations only: context.py imports this module's `Anchor` at runtime (the
+    # manifest carries the turn's anchors, SOLUSDEV-321 P0-T4).
+    from solus_api.agent.context import Context
+    from solus_api.orchestration.config import ScopeConfig
 
 #: Standard UUID literal. THE shared instance — runtime.py imports it too
 #: (review: a security-relevant parser must not drift between copies).
@@ -35,84 +35,129 @@ UUID_RE: Final = re.compile(
 )
 _UUID_RE: Final = UUID_RE  # local alias
 
-#: Words that mark a query as being about RUNTIME behaviour — those pulls get
-#: a telemetry window; purely structural questions do not pay for one.
-#: Tuned against the eval set (test_reason_eval.py).
-_RUNTIME_WORDS: Final = frozenset(
-    {
-        "runtime",
-        "telemetry",
-        "spike",
-        "spikes",
-        "glitch",
-        "crash",
-        "crashes",
-        "drops",
-        "dropping",
-        "intermittent",
-        "during",
-        "run",
-        "moving",
-        "moves",
-        "live",
-    }
-)
-
-_TELEMETRY_WINDOW_SECONDS: Final = 120.0
-_GRAPH_DEGREE: Final = 2  # the SYS-05 2-degree perf lever's ceiling
-_RETRIEVAL_K: Final = 5
-_CONTEXT_MAX_TOKENS: Final = 4000
-#: SEC-H3: an 8000-char message can carry hundreds of UUIDs; anchors and the
-#: entity count are capped so a hostile query bounds DB work, not just the
-#: rendered prompt (the SYS-05 sub-sampling lever, actually pulled).
+#: SEC-H3: an 8000-char message can carry hundreds of UUIDs; anchors are capped so
+#: a hostile query bounds DB work, not just the rendered prompt (the SYS-05
+#: sub-sampling lever, actually pulled).
 MAX_ANCHORS: Final = 8
-_MAX_ENTITIES: Final = 200
+#: The longest trail a focus may carry. Bounded where the request is parsed, like the anchor
+#: cap: the planner trusts nothing a client sends (SEC-H3).
+MAX_FOCUS_PATH: Final = 16
+
+#: Why an entity is an anchor. The first three are the person's own pointing, the next two are
+#: what the surface they asked from is about, and `ref_match` is an id found in their prose.
+#: `name_match` is a name the scope planner resolved in the message (P1-T1); when that name was
+#: an entity's exact external ref, the planner's anchor is a `ref_match` too.
+AnchorReason = Literal[
+    "focused",
+    "mentioned",
+    "pinned",
+    "finding_subject",
+    "bench_robot",
+    "name_match",
+    "ref_match",
+]
 
 
-class QueryPlan(BaseModel):
-    """What build_context should pull for one query — inspectable, like the
-    Context it produces."""
+class Anchor(BaseModel):
+    """One entity SOL was pointed at, and why."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    scope: GraphScope
-    window: TelemetryWindow | None
-    #: A LayeredContextBudget in practice (S5: per-layer caps ride along); typed
-    #: as the base so every SolSystems pull keeps its contract.
-    budget: ContextBudget
-    k: int
+    id: uuid.UUID
+    reason: AnchorReason
 
 
-def plan_query(query: str, *, mentions: Sequence[uuid.UUID] = ()) -> QueryPlan:
-    """Deterministic pull-plan for a query. No model call, no I/O.
+#: Why an anchor never reached the scope: the caller's view of the project cannot see it, or the
+#: cap (`MAX_ANCHORS`) took it from the weak end.
+DropCause = Literal["not_visible", "over_cap"]
 
-    `mentions` are entities the user pointed at explicitly (the composer's `@`).
-    They lead the anchor list because they are deliberate, where a UUID found in
-    the prose may just be quoted log output — so when `MAX_ANCHORS` bites, the
-    inferred ids are the ones dropped. The cap binds them too: the request
-    schema also limits the list, but a client is not trusted to respect it, and
-    this cap is what bounds the neighbourhood query's DB work (SEC-H3).
 
-    Mentioned ids are NOT checked for existence here. `load_neighborhood` is
-    project-scoped, so an id from another team simply yields nothing — the same
-    posture `get_entity` takes, and the reason there is no cross-tenant
-    existence oracle to probe.
-    """
-    found = (uuid.UUID(match) for match in _UUID_RE.findall(query))
-    anchors = list(dict.fromkeys([*mentions, *found]))[:MAX_ANCHORS]
-    words = frozenset(re.findall(r"[a-z]+", query.lower()))
-    runtime_shaped = bool(words & _RUNTIME_WORDS)
-    return QueryPlan(
-        scope=GraphScope(anchor_entity_ids=anchors, degree=_GRAPH_DEGREE),
-        window=(
-            TelemetryWindow(duration_seconds=_TELEMETRY_WINDOW_SECONDS) if runtime_shaped else None
-        ),
-        # S5: layer caps ride with the total; the total (_CONTEXT_MAX_TOKENS)
-        # still binds every packed section — layers.py has the per-layer defaults.
-        budget=LayeredContextBudget(
-            max_tokens=_CONTEXT_MAX_TOKENS, max_entities=_MAX_ENTITIES, layers=LayerBudget()
-        ),
-        k=_RETRIEVAL_K,
+class DroppedAnchor(Anchor):
+    """An anchor that never reached the scope: the reason it was one, and the cause it was lost."""
+
+    cause: DropCause
+
+
+class FocusIn(BaseModel):
+    """The workspace focus a page send carries: the entity the person is looking at and the
+    trail they came through (oldest first, the focus itself excluded). It rides every page
+    send, so ids in it that went stale are dropped rather than refused — see
+    `turn_scope.plan_scope`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    entity_id: uuid.UUID
+    path: list[uuid.UUID] = Field(default_factory=list, max_length=MAX_FOCUS_PATH)
+
+    def ids(self) -> tuple[uuid.UUID, ...]:
+        """Every id the focus carries: the focus, then its trail (oldest first)."""
+        return (self.entity_id, *self.path)
+
+
+def anchor_claims(
+    query: str,
+    mentions: Iterable[uuid.UUID],
+    pins: Iterable[uuid.UUID],
+    focus: FocusIn | None,
+    finding_subjects: Iterable[uuid.UUID],
+    bench_robot: uuid.UUID | None,
+) -> Iterator[Anchor]:
+    """Every claim the turn's own pointing makes on an entity, strongest first: the entity the
+    person is looking at, what they pointed at, what the surface they asked from is about — and
+    last the ids found in the prose, which may just be quoted log output. The focus trail is not
+    one of them: it ranks after the names the planner resolves (`trail_claims`, P1-T1). They are
+    EQUAL anchors: each seeds the neighbourhood the same way and differs only in its reason."""
+    if focus is not None:
+        yield Anchor(id=focus.entity_id, reason="focused")
+    yield from (Anchor(id=i, reason="mentioned") for i in mentions)
+    yield from (Anchor(id=i, reason="pinned") for i in pins)
+    yield from (Anchor(id=i, reason="finding_subject") for i in finding_subjects)
+    if bench_robot is not None:
+        yield Anchor(id=bench_robot, reason="bench_robot")
+    yield from (Anchor(id=uuid.UUID(m), reason="ref_match") for m in _UUID_RE.findall(query))
+
+
+def trail_claims(focus: FocusIn | None) -> Iterator[Anchor]:
+    """The focus trail, nearest the focused entity first (it arrives oldest first). The page
+    sends it with every turn on its own, so it ranks after everything the turn names (P1-T1):
+    a long trail never crowds out a mention or a resolved name."""
+    if focus is not None:
+        yield from (Anchor(id=i, reason="focused") for i in reversed(focus.path))
+
+
+def rank_anchors(
+    claims: Iterable[Anchor], not_visible: Collection[uuid.UUID]
+) -> tuple[tuple[Anchor, ...], tuple[DroppedAnchor, ...]]:
+    """(kept, dropped). An entity claimed twice is one anchor under its first claim; the ones
+    the caller could not see never take a slot; `MAX_ANCHORS` takes the rest from the weakest
+    end — a client is not trusted to respect the request schema's limits, and this cap is what
+    bounds the neighbourhood query's DB work (SEC-H3). The dropped keep blame order, each with
+    the cause that removed it."""
+    first: dict[uuid.UUID, Anchor] = {}
+    for claim in claims:
+        first.setdefault(claim.id, claim)
+    hidden = frozenset(not_visible)
+    kept = [a for a in first.values() if a.id not in hidden][:MAX_ANCHORS]
+    kept_ids = {a.id for a in kept}
+    dropped = tuple(
+        DroppedAnchor(
+            id=a.id, reason=a.reason, cause="not_visible" if a.id in hidden else "over_cap"
+        )
+        for a in first.values()
+        if a.id not in kept_ids
+    )
+    return tuple(kept), dropped
+
+
+def question_domains(query: str, *, scope: ScopeConfig) -> frozenset[str]:
+    """The `scope.domain_keywords` groups (models.yaml) whose words or phrases the message
+    uses — whole words, any case. `environment` gates the divergences table (P0-T6); the
+    planner reads the `runtime` group (P1-T1)."""
+    text = query.lower()  # the keywords are lowercased at load
+    return frozenset(
+        group
+        for group, words in scope.domain_keywords.items()
+        if any(re.search(rf"(?<!\w){re.escape(word)}(?!\w)", text) for word in words)
     )
 
 

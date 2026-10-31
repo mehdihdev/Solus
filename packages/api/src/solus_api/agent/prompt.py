@@ -12,12 +12,14 @@ MPN-shaped is rejected before any call. SOL cannot borrow that: free-form Englis
 IS the payload and IS the product. So the gate moves to two other places.
 
 1. **The container.** Untrusted content is JSON-encoded — `ensure_ascii=True`, so
-   the body is ONE line of pure ASCII — inside a per-turn nonce fence. Newlines,
-   control characters, RTL overrides and zero-width joiners all become `\\uXXXX`
-   escapes, so ingested content cannot begin a new line. `<` is additionally
-   re-escaped, so the literal characters of a fence token cannot appear in a
-   body at all — the per-turn nonce would already make forging one useless, but
-   removing the capability is stronger than relying on a secret.
+   the body is ONE line of pure ASCII — inside a nonce fence. Newlines, control
+   characters, RTL overrides and zero-width joiners all become `\\uXXXX` escapes,
+   so ingested content cannot begin a new line. `<` is additionally re-escaped, so
+   the literal characters of a fence token cannot appear in a body at all. That
+   is the defence, not the nonce: a conversation fences every turn with one token
+   derived from its id (`conversation_nonce`, SOLUSDEV-321 P0-T4 — a stable token
+   keeps the prompt prefix cacheable), so removing the capability matters more
+   than any secret.
 2. **The action alphabet.** The model's only channel to the world is a tool name
    from a tiny fixed set plus schema-validated args, and every destructive tool
    is structurally un-dispatchable inside a turn (`runtime.build_dispatch`).
@@ -31,18 +33,36 @@ injection corpus without a network.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
+from uuid import UUID
 
 from solus_api.agent.modes import ActionMode
+from solus_api.agent.stream import REASONING_ITEMS_CAP, REASONING_PROPOSING_CAP, REASONING_TEXT_CAP
 from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolResult
 from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.models import SOL_CUSTOM_INSTRUCTION_CAP, SolMode
 from solus_api.orchestration.providers import ToolOutcome, ToolSpec, Turn
 from solus_api.services.solus_graph import SECTION_LABELS
+
+if TYPE_CHECKING:
+    from solus_api.agent.expertise import Expertise
+
+#: SOLUSDEV-321 P7: Build's ONE sentence asking for the `<reasoning>` block before a proposal — the
+#: same in Guide and Expert, and a constant, so the system prompt stays byte-stable. The block is
+#: model output: agent/reasoning_frame.py parses it out of the text and drops anything else.
+REASONING_NOTE: Final = (
+    "Before you propose a change, write one <reasoning>"
+    '{"considered": ["..."], "ruled_out": [{"what": "...", "why": "..."}], "proposing": "..."}'
+    f"</reasoning> block holding only that JSON — at most {REASONING_ITEMS_CAP} entries in each "
+    f'list, each string at most {REASONING_TEXT_CAP} characters and "proposing" at most '
+    f"{REASONING_PROPOSING_CAP} — saying what you weighed, what you ruled out and why, and the "
+    "change you propose; Solus shows it to the person above the proposal and never as your reply."
+)
 
 #: Bounds on untrusted content reaching a prompt. Mirrors `agent/tools/untrusted.py`:
 #: unbounded ingested text is simultaneously an injection surface and a token bill.
@@ -156,9 +176,19 @@ _COMMAND_NOTE: Final = (
 
 
 def new_nonce() -> str:
-    """A fresh fence token for ONE turn. Unguessable, so ingested content cannot
-    name the delimiter that would close its own block."""
+    """A fresh, unguessable fence token, for a call outside a conversation (and the
+    runner's fallback when a turn carries no conversation id)."""
     return secrets.token_hex(NONCE_BYTES)
+
+
+def conversation_nonce(conversation_id: UUID) -> str:
+    """The fence token for every turn of ONE conversation (SOLUSDEV-321 P0-T4). The
+    same token on every turn keeps the prompt prefix byte-identical, so a provider
+    prompt cache can hit. Derived, not secret — no salt and no setting (§7 keeps
+    prompt material out of config and credential stores): containment never rested
+    on the token being unknown, because `_encode` re-escapes `<`, so no body can
+    carry the characters of a fence token at all (module docstring, point 1)."""
+    return hashlib.sha256(b"solus-fence:" + conversation_id.bytes).hexdigest()[:16]
 
 
 def close_token(nonce: str) -> str:
@@ -181,10 +211,10 @@ def _encode(payload: object, cap: int) -> str:
     """Untrusted content as one line of ASCII that cannot contain a fence token.
 
     JSON handles newlines and every non-ASCII trick, but it does NOT escape `<`,
-    so a payload could still carry the literal characters of a close token. The
-    nonce alone makes that useless — 64 bits, minted per turn — but relying on
-    the secret is weaker than removing the capability, so `<` is re-escaped to
-    its own JSON form. `\u003c` is a legal escape, still ASCII, still one line,
+    so a payload could still carry the literal characters of a close token — and
+    a conversation's token is derived from its id, not secret (SOLUSDEV-321
+    P0-T4). Removing the capability is the defence, so `<` is re-escaped to its
+    own JSON form. `\u003c` is a legal escape, still ASCII, still one line,
     and models decode it; `<<<` simply cannot appear.
     """
     encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=True, default=str)
@@ -323,9 +353,14 @@ def system_prompt(
     *,
     with_screenshot: bool = False,
     action_mode: ActionMode = ActionMode.GUIDE,
+    nonce: str | None = None,
+    expertise: Expertise | None = None,
 ) -> str:
     """The ONLY instruction text in the prompt. Solus-authored end to end — no
     ingested content ever reaches this position (ADR-016 for the mode note).
+    `nonce` is the turn's fence token (SOLUSDEV-321 P0-T4: one token for every
+    fenced surface of a conversation, so this prompt stays byte-stable across its
+    turns); a fresh one when called outside a turn.
 
     Two user-authored layers may follow the base, each under a Solus-authored
     framing note, as a nonce-fenced JSON-encoded data block, and each closed by
@@ -340,9 +375,18 @@ def system_prompt(
 
     `with_screenshot` (SOLUSDEV-252 S3) appends `SCREENSHOT_NOTE` — Solus-authored,
     so it may close the prompt after the fenced user layers.
+
+    `expertise` (SOLUSDEV-321 P6) adds one register line right after the mode note, built from
+    the validated levels alone (`expertise.register_line`); a domain at `working` adds nothing.
     """
+    # Function-local: expertise reads the graph's models, which this module never loads.
+    from solus_api.agent.expertise import register_line
+
     note = _GUIDE_NOTE if mode is SolMode.GUIDE else _EXPERT_NOTE
     parts = [f"{_SYSTEM}\n\n{_CITE_NOTE}\n\n{note}"]
+    register = register_line(expertise)
+    if register is not None:
+        parts.append(register)
     parts.append(
         "Current action mode: Build. Execute requested routine edits automatically through "
         "the tools; Solus validates their complete fresh previews. Only actual pending "
@@ -351,15 +395,16 @@ def system_prompt(
         else "Current action mode: Guide. Explain and use read-only tools; never execute changes."
     )
     if action_mode is ActionMode.DO:
-        parts.append(_COMMAND_NOTE)
+        parts.extend((REASONING_NOTE, _COMMAND_NOTE))
+    fence = nonce or new_nonce()
     if engineering_preferences:
         payload = bounded_payload(engineering_preferences, DATA_CAP)
-        block = data_block(new_nonce(), ENGINEERING_PREFERENCES_KIND, payload, cap=DATA_CAP)
+        block = data_block(fence, ENGINEERING_PREFERENCES_KIND, payload, cap=DATA_CAP)
         parts.append(f"{_ENGINEERING_PREF_NOTE}\n{block}\n{_ENGINEERING_PREF_TRAILER}")
     preference = (custom_instruction or "").strip()
     if preference:
         block = data_block(
-            new_nonce(), "user_preference", preference[:CUSTOM_INSTRUCTION_CAP], cap=DATA_CAP
+            fence, "user_preference", preference[:CUSTOM_INSTRUCTION_CAP], cap=DATA_CAP
         )
         parts.append(f"{_CUSTOM_PREF_NOTE}\n{block}\n{_CUSTOM_PREF_TRAILER}")
     if with_screenshot:
@@ -411,7 +456,9 @@ def resolve_tool_name(offered: str, descriptors: Sequence[ToolDescriptor]) -> st
     return offered
 
 
-def tool_specs(descriptors: Sequence[ToolDescriptor]) -> tuple[ToolSpec, ...]:
+def tool_specs(
+    descriptors: Sequence[ToolDescriptor], *, nonce: str | None = None
+) -> tuple[ToolSpec, ...]:
     """Descriptors → what the model is offered.
 
     `params` passes through verbatim: it is already JSON Schema, which is also
@@ -420,8 +467,10 @@ def tool_specs(descriptors: Sequence[ToolDescriptor]) -> tuple[ToolSpec, ...]:
     A description the fork advertised (`description_trusted=False`) is FENCED.
     It has to reach the model — the model needs it to pick the right tool — but
     it must not sit in the prompt as text that can pose as a Solus instruction.
+    `nonce` is the turn's fence token, so the tool array is byte-stable across a
+    conversation's turns (SOLUSDEV-321 P0-T4); a fresh one outside a turn.
     """
-    nonce = new_nonce()
+    nonce = nonce or new_nonce()
     offered = provider_tool_names(descriptors)
     specs: list[ToolSpec] = []
     for descriptor in descriptors:
@@ -450,19 +499,50 @@ def tool_specs(descriptors: Sequence[ToolDescriptor]) -> tuple[ToolSpec, ...]:
     return tuple(specs)
 
 
+#: The last round's closing instruction (SOLUSDEV-321 P0-T4): a Solus-authored user
+#: turn, not a system-prompt suffix, so the round's request keeps its cacheable
+#: prefix; `tool_choice="none"` withholds the tools (runtime._round_conversation).
+_SYNTHESIS_NOTE: Final = (
+    "This is the final response within this turn's budget. No tools are available. "
+    "Summarize observed results, unresolved gaps, and parked actions. "
+    "Distinguish completed actions from pending approvals; do not propose or replay "
+    "tool calls, infer success, or claim unobserved results."
+)
+
+
+def synthesis_turn() -> Turn:
+    """The final round's instruction, as a Solus-authored user turn. It fences
+    nothing, so it takes no nonce."""
+    return Turn(role="user", text=_SYNTHESIS_NOTE)
+
+
 def flatten(turns: Sequence[Turn]) -> str:
     """The flat string `gateway.stream(query=...)` uses for ROUTING and token
     estimation only — the conversation itself is the request.
 
     Routing needs a length and a rough shape, not the structure, so this is a
-    plain concatenation. It is never sent as the prompt.
+    plain concatenation. It is never sent as the prompt. It is also what a
+    round's input is MEASURED by (SOLUSDEV-321 P1-T3), so it carries every
+    turn's whole weight: its text, the arguments of the calls the model made in
+    it (a Build round that writes a file carries the whole file there), then the
+    results it carries.
     """
     parts: list[str] = []
     for turn in turns:
         if turn.text:
             parts.append(turn.text)
+        parts.extend(
+            json.dumps(use.args, separators=(",", ":"), default=str) for use in turn.tool_uses
+        )
         parts.extend(outcome.content for outcome in turn.tool_results)
     return "\n".join(parts)
+
+
+def tools_text(tools: Sequence[ToolSpec]) -> str:
+    """The tool array as the one flat string token estimation measures — compact JSON, about
+    what a provider is sent. With the system prompt it is the fixed part of every round's
+    request (SOLUSDEV-321 P1-T3). It is never sent as the prompt."""
+    return json.dumps([tool.model_dump() for tool in tools], separators=(",", ":"), default=str)
 
 
 def contain_result(call: ToolCall, result: ToolResult, *, cap: int | None = None) -> ToolOutcome:
@@ -512,10 +592,13 @@ __all__ = [
     "TOOL_RESULT_CAP",
     "close_token",
     "contain_result",
+    "conversation_nonce",
     "data_block",
     "extension_request",
     "flatten",
     "new_nonce",
+    "synthesis_turn",
     "system_prompt",
     "tool_specs",
+    "tools_text",
 ]

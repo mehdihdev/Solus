@@ -640,6 +640,8 @@ class CreditLedger(UuidPkMixin, Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        # SOLUSDEV-321 P8 (M9): one person's usage rows, newest first (`/usage/turns`).
+        Index("ix_credit_ledger_user_created", "user_id", "created_at"),
     )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -1001,6 +1003,47 @@ class ToolConfirmation(UuidPkMixin, TimestampMixin, Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class ProposalOutcome(UuidPkMixin, Base):
+    """One decision on a SOL proposal, as data (SOLUSDEV-321 P8; `services/outcomes.py` writes
+    it): identifiers and digests only — never the arguments, a preview or a credential."""
+
+    __tablename__ = "proposal_outcomes"
+    __table_args__ = (
+        Index("ix_proposal_outcomes_project_created", "project_id", "created_at"),
+        CheckConstraint(
+            "decision IN ('accepted', 'rejected', 'edited', 'accepted_auto', 'expired', 'stale')",
+            name="ck_proposal_outcomes_decision",
+        ),
+        CheckConstraint(
+            "stale_reason IS NULL OR stale_reason IN ('diverged', 'quota', 'no_preview')",
+            name="ck_proposal_outcomes_stale_reason",
+        ),
+    )
+    __mapper_args__ = {"eager_defaults": False}
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    #: The deciding user (R146): only they are shown the row's `machine_id` and turn.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    #: The decision's tool turn; None for a Build auto-run (its turn is written as the stream ends).
+    conversation_turn_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversation_turns.id", ondelete="SET NULL"), index=True, default=None
+    )
+    tool: Mapped[str] = mapped_column(String(64))
+    proposal_digest: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(16))
+    entity_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    #: Source id → that source's change token when the decision was made.
+    design_signals: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+    #: Why a `stale` card was refused (M190): `diverged`, `quota` or `no_preview`; else None.
+    stale_reason: Mapped[str | None] = mapped_column(String(16), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 # --------------------------------------------------------------------- artifacts

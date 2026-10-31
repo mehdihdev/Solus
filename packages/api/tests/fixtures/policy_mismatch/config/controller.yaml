@@ -1,0 +1,11 @@
+# Fixture (SOLUSDEV-321 P6): the controller the policy feeds takes one command per joint, 7 of them.
+controller:
+  rate_hz: 100
+  joints:
+    - shoulder_pan
+    - shoulder_lift
+    - upper_arm_roll
+    - elbow
+    - forearm_roll
+    - wrist_pitch
+    - wrist_roll

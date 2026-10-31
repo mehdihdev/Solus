@@ -23,6 +23,7 @@ from solus_contracts.relations import normalize_domain_pair
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.connectors.code_content import read_software
 from solus_api.connectors.contracts import (
     AuthKind,
     Connector,
@@ -81,6 +82,19 @@ MISSING_CREDENTIALS_MESSAGE = (
     "The stored credentials for this source could not be found — "
     "disconnect and reconnect it to store a new token."
 )
+
+#: Attrs Solus writes on a connector's own rows, which a re-sync must not wipe (M118/M126/M148):
+#: `expected` (`simulation/sim_facts.py` records a sim result's values), `motifs`
+#: (`checkers/netlist_motifs.py`, recomputed by the triggered matrix run), `motif_labels`
+#: (`agent/tools/label_motifs.py`) and `sim_asked` (`agent/tools/simulate.py`). A key the connector
+#: itself emits still wins.
+SOLUS_OWNED_ATTR_KEYS: Final = ("expected", "motifs", "motif_labels", "sim_asked")
+
+
+def _with_solus_owned(row: GraphEntity | None, props: dict[str, Any]) -> dict[str, Any]:
+    """`props` over the Solus-owned attrs `row` holds (none for a new row)."""
+    held = row.attrs if row is not None else {}
+    return {**{k: held[k] for k in SOLUS_OWNED_ATTR_KEYS if k in held}, **props}
 
 
 def connector_error_payload(exc: Exception) -> dict[str, str]:
@@ -177,7 +191,7 @@ async def apply_sync_result(
             continue
         seen.add(out.source_key)
         row = by_key.get(out.source_key)
-        props = dict(out.properties)
+        props = _with_solus_owned(row, dict(out.properties))
         hints = dict(out.modality_hints)  # W0-06 fingerprint channel → its own column
         if row is None:
             row = GraphEntity(
@@ -494,6 +508,8 @@ async def run_sync(
             secret_store=secret_store,
             secret_ref=secret_ref,
         )
+        # SOLUSDEV-321 P6: a code host's ROS packages, read at the synced commit (never fails).
+        result = await read_software(connector, credentials, config, result)
     except asyncio.CancelledError:
         await _record_cancelled_sync(sessionmaker, source_id, sync_id, job_id)
         raise
@@ -807,6 +823,11 @@ async def _commit_success(
             )
         except Exception:  # noqa: BLE001 — see above
             logger.exception("graph fan-out failed source=%s (sync stands)", source_id)
+    # SOLUSDEV-321 P6: a code source's creator's expertise follows it, after the commit and
+    # guarded inside (`recompute_after_sync` never raises), so the sync stands whatever it does.
+    from solus_api.agent.expertise import recompute_after_sync
+
+    await recompute_after_sync(sessionmaker, source_id)
 
 
 async def _record_cancelled_sync(

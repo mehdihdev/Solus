@@ -23,14 +23,14 @@ URDF = (
 )
 
 
-def test_urdf_normalizes_geometry_and_joint():
+def test_urdf_normalizes_geometry_and_joint() -> None:
     result = parse_model(URDF, "urdf")
     assert result["links"][0]["visuals"][0]["size"] == [1, 2, 3]
     assert result["joints"][0]["axis"] == [0, 1, 0]
     assert result["joints"][0]["lower"] == -1
 
 
-def test_jointless_mesh_is_honest_and_inert():
+def test_jointless_mesh_is_honest_and_inert() -> None:
     result = parse_model(
         (
             b'<robot name="r">'
@@ -49,7 +49,7 @@ def test_jointless_mesh_is_honest_and_inert():
     assert "private" not in str(result)
 
 
-def test_mjcf_nested_bodies():
+def test_mjcf_nested_bodies() -> None:
     result = parse_model(
         (
             b"<mujoco>"
@@ -100,12 +100,12 @@ def test_mjcf_nested_bodies():
         b"<robot>",
     ],
 )
-def test_rejects_unsafe_or_malformed(xml):
+def test_rejects_unsafe_or_malformed(xml: bytes) -> None:
     with pytest.raises(ValueError):
         parse_model(xml, "urdf")
 
 
-def test_size_and_depth_caps():
+def test_size_and_depth_caps() -> None:
     with pytest.raises(ValueError):
         parse_model(b" " * (1048576 + 1), "urdf")
     with pytest.raises(ValueError):
@@ -139,7 +139,7 @@ def test_size_and_depth_caps():
         ),
     ],
 )
-def test_rejects_unimplemented_mjcf_coordinates(xml):
+def test_rejects_unimplemented_mjcf_coordinates(xml: bytes) -> None:
     with pytest.raises(ValueError):
         parse_model(xml, "mjcf")
 
@@ -150,7 +150,7 @@ STL = (
 )
 
 
-def test_explicit_mesh_bytes_only_and_normalized_output():
+def test_explicit_mesh_bytes_only_and_normalized_output() -> None:
     xml = (
         b'<robot name="r">'
         b'<link name="x">'
@@ -174,7 +174,7 @@ def test_explicit_mesh_bytes_only_and_normalized_output():
     [b"garbage", STL.replace(b"vertex 1", b"vertex nan"), b" " * (8 * 1024 * 1024 + 1)],
     ids=["invalid", "nonfinite", "oversized"],
 )
-def test_mesh_rejects_malformed_or_excessive(content):
+def test_mesh_rejects_malformed_or_excessive(content: bytes) -> None:
     xml = (
         b'<robot name="r">'
         b'<link name="x">'
@@ -190,7 +190,7 @@ def test_mesh_rejects_malformed_or_excessive(content):
         parse_model(xml, "urdf", {"a.stl": content})
 
 
-def test_mesh_does_not_guess_basename():
+def test_mesh_does_not_guess_basename() -> None:
     xml = (
         b'<robot name="r">'
         b'<link name="x">'
@@ -206,7 +206,7 @@ def test_mesh_does_not_guess_basename():
         parse_model(xml, "urdf", {"a.stl": STL})
 
 
-def test_binary_stl_and_mjcf_asset_reference():
+def test_binary_stl_and_mjcf_asset_reference() -> None:
     import struct
 
     binary = b"\0" * 80 + struct.pack("<I12fH", 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0)
@@ -222,7 +222,7 @@ def test_binary_stl_and_mjcf_asset_reference():
     assert len(result["meshes"][visual["mesh_key"]]["vertices"]) == 9
 
 
-def test_repeated_mesh_instances_respect_triangle_cap(monkeypatch):
+def test_repeated_mesh_instances_respect_triangle_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     from solus_api.livebench.scene import meshes
 
     monkeypatch.setattr(meshes, "MAX_TRIANGLES", 1)
@@ -236,7 +236,7 @@ def test_repeated_mesh_instances_respect_triangle_cap(monkeypatch):
         parse_model(xml, "urdf", {"a.stl": STL})
 
 
-def test_mjcf_mixed_axis_rotations_are_normalized_to_urdf_convention():
+def test_mjcf_mixed_axis_rotations_are_normalized_to_urdf_convention() -> None:
     import math
 
     result = parse_model(

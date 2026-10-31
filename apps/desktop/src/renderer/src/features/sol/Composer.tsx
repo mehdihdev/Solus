@@ -5,7 +5,6 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Switch } from '../../components/ui/Switch'
 import { Icons } from '../../components/ui/icons.constants'
-import { mergeMentions } from './mentionToken'
 import { takeDraft } from './pinnedContextStore'
 import { ClassifyIndicator } from './ClassifyIndicator'
 import { COMPOSER_ATTR } from './commandHotkey'
@@ -336,7 +335,6 @@ export function Composer({
   pill = false,
   footerStart,
   footerEnd,
-  pinnedMentionIds,
   onUpload,
   onAddNodeFromGraph
 }: ComposerProps): React.JSX.Element {
@@ -351,11 +349,7 @@ export function Composer({
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(
-      text,
-      mergeMentions(mention.mentionIds, pinnedMentionIds ?? []),
-      classify.override.thinkHarder
-    )
+    onSend(text, mention.mentionIds, classify.override.thinkHarder)
     setInput('')
     mention.reset()
     classify.resetOverride() // also drops "Think harder" — it is per message
@@ -532,8 +526,6 @@ export interface ComposerProps {
   /** Pill footer, leading (SOL, sees-screen) and trailing (hide) slots. */
   footerStart?: React.ReactNode
   footerEnd?: React.ReactNode
-  /** Page: the chat's pinned nodes, merged into every send. */
-  pinnedMentionIds?: readonly string[]
   /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void

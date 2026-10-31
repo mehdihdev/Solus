@@ -1,22 +1,44 @@
 """SOLUSDEV-72: the local source catalog — honest availability probes, serial-keyed
 device identity (by-id paths), and lazy provider factories."""
 
+import asyncio
 import builtins
+import json
+import logging
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from livebench.hardware.channel import Frame
+from livebench.hardware.replay import QUIET_READ_SECONDS, ReplayChannel
 from livebench.local import (
     AmbiguousDeviceError,
     DeviceNotFoundError,
     available_simulators,
     list_devices,
     open_mujoco,
+    open_replay,
     resolve_serial_device,
 )
 from livebench.recognition.passive import identify_port
+from livebench.telemetry.stream_live import PacketStreamLiveConnection
+from solus_api.agent.interfaces import TelemetryWindow
+from solus_api.graph.codec import encode_json
+from solus_api.graph.packet import TelemetryPacket
+from solus_api.hardware.config import (
+    BusMapEntry,
+    FieldProvenance,
+    HardwareConfig,
+    PartConfig,
+    ProtocolBinding,
+    ProvenanceRecord,
+    TelemetryChannel,
+    TransportBinding,
+    TransportKind,
+)
 
 CH343 = identify_port(device="/dev/ttyACM0", vid=0x1A86, pid=0x55D3, serial="5B42135040")
 CH343_TWIN = identify_port(device="/dev/ttyACM1", vid=0x1A86, pid=0x55D3, serial="5B42135040")
@@ -353,3 +375,258 @@ def test_robot_release_turns_torque_off_through_the_actuator() -> None:
     assert follower.actuator.released is True
     with pytest.raises(NotActuatedError):
         robot_release(_Conn(None))
+
+
+# ── replay (SOLUSDEV-321 P2-T4): a recorded capture opened as a configured robot ────────────────
+
+REPLAY_BINDING = "REPLAY-0001"
+REPLAY_REF = f"usb:{REPLAY_BINDING}"
+REPLAY_EPOCH = datetime(2026, 10, 25, tzinfo=UTC)
+#: How long a test watches a pump poll a replay that has ended.
+POLL_WINDOW_SECONDS = 0.5
+ARM, PART_ONE, PART_TWO = uuid4(), uuid4(), uuid4()
+
+
+def _robot_document(binding: str = REPLAY_BINDING) -> dict[str, Any]:
+    """A two-part robot's HardwareConfig: address 1 streams `a.position`, address 2 `b.position`."""
+    return HardwareConfig(
+        robot_entity_id=ARM,
+        identity=TransportBinding(kind=TransportKind.USB_SERIAL, binding=binding),
+        protocol=ProtocolBinding(driver_id="lb06"),
+        bus_map=[
+            BusMapEntry(protocol="lb06", address="1", part_entity_id=PART_ONE),
+            BusMapEntry(protocol="lb06", address="2", part_entity_id=PART_TWO),
+        ],
+        parts={
+            str(PART_ONE): PartConfig(telemetry=[TelemetryChannel(name="a.position", unit="deg")]),
+            str(PART_TWO): PartConfig(telemetry=[TelemetryChannel(name="b.position", unit="deg")]),
+        },
+        provenance={
+            key: ProvenanceRecord(by=FieldProvenance.USER)
+            for key in ("identity", "protocol", "bus_map", "parts")
+        },
+    ).model_dump(mode="json")
+
+
+def _capture(directory: Path, *, binding: str = REPLAY_BINDING, lines: int = 3) -> Path:
+    """A capture of `lines` LB-06 lines, one every 50 ms, carrying both parts' positions."""
+    frames = []
+    for index in range(lines):
+        packet = TelemetryPacket(
+            device_id=f"usb:{binding}",
+            timestamp=REPLAY_EPOCH + timedelta(milliseconds=50 * index),
+            seq=index,
+            values={"a.position": float(index), "b.position": 10.0 + index},
+            units={"a.position": "deg", "b.position": "deg"},
+        )
+        frames.append({"t": index * 0.05, "hex": (encode_json(packet) + "\n").encode().hex()})
+    path = directory / "capture.json"
+    path.write_text(json.dumps({"transport": "usb_serial", "binding": binding, "frames": frames}))
+    return path
+
+
+def _replay_config(path: Path, *, realtime: bool = False) -> dict[str, Any]:
+    return {"document": _robot_document(), "recording": str(path), "realtime": realtime}
+
+
+async def _packets(connection: PacketStreamLiveConnection, count: int) -> list[TelemetryPacket]:
+    """The first `count` packets the connection pumps, then it is closed."""
+    packets: list[TelemetryPacket] = []
+    enough = asyncio.Event()
+
+    async def tap(packet: TelemetryPacket) -> None:
+        packets.append(packet)
+        if len(packets) >= count:
+            enough.set()
+
+    connection.tap = tap
+    handle = await connection.subscribe(TelemetryWindow(duration_seconds=1.0))
+    try:
+        await asyncio.wait_for(enough.wait(), timeout=10)
+    finally:
+        await connection.unsubscribe(handle)
+        await connection.aclose()
+    return packets
+
+
+async def test_open_replay_streams_the_capture_as_the_robots_parts(tmp_path: Path) -> None:
+    connection = await open_replay(_replay_config(_capture(tmp_path)), project_id=uuid4())
+
+    packets = await _packets(connection, 6)
+
+    assert [packet.device_id for packet in packets] == [f"{REPLAY_REF}/1", f"{REPLAY_REF}/2"] * 3
+    assert [dict(packet.values) for packet in packets[:2]] == [
+        {"a.position": 0.0},
+        {"b.position": 10.0},
+    ]
+    assert dict(packets[0].units) == {"a.position": "deg"}
+    assert [packet.timestamp for packet in packets[::2]] == [  # the line's own event time
+        REPLAY_EPOCH + timedelta(milliseconds=50 * index) for index in range(3)
+    ]
+
+
+async def test_open_replay_refuses_a_capture_of_another_device(tmp_path: Path) -> None:
+    other = _capture(tmp_path, binding="OTHER-0002")
+
+    with pytest.raises(ValueError, match="another device") as refused:
+        await open_replay(_replay_config(other), project_id=uuid4())
+
+    assert "OTHER-0002" not in str(refused.value) and REPLAY_BINDING not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{not json",
+        "[1, 2]",
+        '{"transport": "usb_serial"}',
+        '{"transport": "nowhere", "binding": "X", "frames": []}',
+        '{"transport": "usb_serial", "binding": "X", "frames": [{"t": 0, "hex": "zz"}]}',
+        '{"transport": "usb_serial", "binding": "X", "frames": ["secret-frame-text"]}',
+        "[" * 100_000,  # M75: nesting past the decoder's recursion limit is unreadable too
+    ],
+)
+async def test_open_replay_names_an_unreadable_capture_without_echoing_it(
+    tmp_path: Path, text: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "capture.json"
+    path.write_text(text)
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(ValueError, match="could not be read") as refused:
+        await open_replay(_replay_config(path), project_id=uuid4())
+
+    assert "secret-frame-text" not in str(refused.value) and "nowhere" not in str(refused.value)
+    logged = caplog.text  # the refusal logs the exception's type, never its message or the path
+    assert "secret-frame-text" not in logged and str(tmp_path) not in logged
+
+
+async def test_open_replay_refuses_a_path_that_moved_after_it_was_checked(tmp_path: Path) -> None:
+    """The API hands over a resolved path; a symlink there now is a swap, not the checked file."""
+    real = _capture(tmp_path)
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+
+    with pytest.raises(ValueError, match="moved"):
+        await open_replay(_replay_config(link), project_id=uuid4())
+
+
+async def test_open_replay_calls_a_symlink_loop_a_swap_and_logs_no_server_path(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A loop swapped in after the API's check: resolving it raises an error that names the
+    server's path. That error is the same answer as any swap, and neither it nor a log shows it."""
+    loop = tmp_path / "loop.json"
+    loop.symlink_to(loop)
+    caplog.set_level(logging.DEBUG)
+
+    with pytest.raises(ValueError, match="moved") as refused:
+        await open_replay(_replay_config(loop), project_id=uuid4())
+
+    assert str(tmp_path) not in str(refused.value) + caplog.text
+
+
+async def test_open_replay_reads_a_capture_only_up_to_the_cap_it_was_given(tmp_path: Path) -> None:
+    """The route stat'ed the file once; the runner's read is bounded by the same cap, so a file
+    grown after that check is refused, with the fixed message and no path."""
+    path = _capture(tmp_path)
+    size = path.stat().st_size
+
+    at_cap = await open_replay({**_replay_config(path), "max_bytes": size}, project_id=uuid4())
+    await at_cap.aclose()
+    with pytest.raises(ValueError, match="could not be read") as refused:
+        await open_replay({**_replay_config(path), "max_bytes": size - 1}, project_id=uuid4())
+
+    assert str(tmp_path) not in str(refused.value)
+
+
+async def test_open_replay_polls_an_ended_capture_like_a_quiet_link_not_a_busy_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-321 P2-T4 fix 1: a fast replay (`realtime` false) that had reached its end
+    answered silence at once, and the lb06 source polling it spun on a thread hop, about 6,000
+    reads a second and 0.8 of a core in the API process until the session was stopped. It now
+    waits a quiet read for each read, as a live link with nothing to say does."""
+    reads = 0
+    real_recv = ReplayChannel.recv
+
+    def counting(self: ReplayChannel, max_bytes: int = 4096) -> Frame | None:
+        nonlocal reads
+        reads += 1
+        return real_recv(self, max_bytes)
+
+    monkeypatch.setattr(ReplayChannel, "recv", counting)
+    connection = await open_replay(_replay_config(_capture(tmp_path)), project_id=uuid4())
+    seen: list[TelemetryPacket] = []
+    consumed = asyncio.Event()
+
+    async def tap(packet: TelemetryPacket) -> None:
+        seen.append(packet)
+        if len(seen) >= 6:  # three lines of two parts: the whole capture
+            consumed.set()
+
+    connection.tap = tap
+    handle = await connection.subscribe(TelemetryWindow(duration_seconds=1.0))
+    try:
+        await asyncio.wait_for(consumed.wait(), timeout=10)
+        await asyncio.sleep(0.1)  # into the idle poll
+        before = reads
+        await asyncio.sleep(POLL_WINDOW_SECONDS)
+        polled = reads - before
+    finally:
+        await connection.unsubscribe(handle)
+        await connection.aclose()
+
+    quiet_reads = POLL_WINDOW_SECONDS / QUIET_READ_SECONDS
+    assert polled <= quiet_reads + 3, (
+        f"{polled / POLL_WINDOW_SECONDS:.0f} reads a second against a quiet link's "
+        f"{1 / QUIET_READ_SECONDS:.0f}"
+    )
+
+
+async def test_open_replay_opens_on_a_scratch_registry_and_never_reconnects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livebench.hardware import connection as connection_module
+    from livebench.hardware.registries import default_registries
+
+    shared = default_registries().transports
+    kinds_before = shared.kinds()
+    seen: dict[str, Any] = {}
+    real = connection_module.open_robot_connection
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(connection_module, "open_robot_connection", spy)
+    connection = await open_replay(_replay_config(_capture(tmp_path)), project_id=uuid4())
+    await connection.aclose()
+
+    assert seen["reconnect"] is False
+    assert seen["transports"] is not shared
+    assert seen["transports"].kinds() == [TransportKind.USB_SERIAL]
+    assert shared.kinds() == kinds_before  # the process-wide transports are untouched
+
+
+async def test_open_replay_paces_by_recorded_time_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from livebench.hardware import replay as replay_module
+
+    asked: list[bool] = []
+    real = replay_module.replay_opener
+
+    def spy(recording: Any, *, realtime: bool = False) -> Any:
+        asked.append(realtime)
+        return real(recording, realtime=realtime)
+
+    monkeypatch.setattr(replay_module, "replay_opener", spy)
+    path = _capture(tmp_path)
+    for realtime in (True, False):
+        connection = await open_replay(_replay_config(path, realtime=realtime), project_id=uuid4())
+        await connection.aclose()
+    unasked = {"document": _robot_document(), "recording": str(path)}
+    await (await open_replay(unasked, project_id=uuid4())).aclose()
+
+    assert asked == [True, False, True]  # the default is the pane's: paced

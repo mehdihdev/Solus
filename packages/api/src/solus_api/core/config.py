@@ -89,7 +89,8 @@ class Settings(BaseSettings):
     # below that steady state, so a healthy client 429'd itself after ~30s.
     # Reads get 1200/min (20 req/s, ~10x normal load); writes KEEP 120/min,
     # because that budget is the interim burst bound on model-calling POSTs
-    # (orchestration/gates.py: the frequency cap fails open without Redis).
+    # (orchestration/gates.py: without Redis the frequency cap fails closed on a per-process
+    # local window, so it holds per API process, not fleet-wide).
     rate_limit_per_minute: int = 1200
     write_rate_limit_per_minute: int = 120
     # A7-01 `/panel/pair/start`: unauthenticated, one shared bucket behind the
@@ -279,6 +280,16 @@ class Settings(BaseSettings):
     # from. Unset (the default) refuses MCAP sessions outright — an unbounded
     # server-side file read keyed off a request body is not a feature (§7).
     bench_data_root: str | None = None
+    # SOLUSDEV-321 P2-T4: the only directory the DEV-ONLY `replay` bench provider may read
+    # recordings from (`SOLUS_BENCH_REPLAY_ROOT`). Unset (the default, and every deployed
+    # environment) refuses replay sessions outright, for the reason `bench_data_root` does.
+    bench_replay_root: Path | None = None
+    # SOLUSDEV-321 P4-T3: the circuit simulator the rung-3 SPICE job runs (`SOLUS_NGSPICE_BIN`),
+    # pinned here and never looked up on PATH. Unset (the default), missing, or not a regular
+    # executable file, the job says it is not available on this machine; the check is where it
+    # runs (`simulation/providers/ngspice_provider.py:pinned_simulator`), so a bad path never stops
+    # the server.
+    ngspice_bin: Path | None = None
     bridge_control_frame_max_bytes: int = 16_384
     #: `hello` alone is sized apart from the other control frames. It carries
     #: the FULL tool inventory — every advertised tool's JSON schema, for every
@@ -381,6 +392,13 @@ class Settings(BaseSettings):
         if isinstance(raw, SecretStr):
             return SecretStr(raw.get_secret_value().replace("\\n", "\n"))
         return raw
+
+    @field_validator("bench_replay_root", "ngspice_bin", mode="before")
+    @classmethod
+    def _empty_replay_root_is_unset(cls, raw: object) -> object:
+        """An empty value is unset: `Path("")` would be the server's working directory. The same
+        holds for the pinned simulator binary."""
+        return None if isinstance(raw, str) and not raw.strip() else raw
 
     @cached_property
     def github_app_private_key_pem(self) -> str | None:

@@ -165,6 +165,11 @@ class _FakeCompletion:
         self.text = text
 
 
+#: The turn the runner reads the screenshot in, and its project (R148): the read runs before any
+#: dispatch binds them, so the runner hands them over itself.
+_TURN, _PROJECT = uuid.uuid4(), uuid.uuid4()
+
+
 async def _read(monkeypatch: pytest.MonkeyPatch, fake: Any) -> tuple[str, list[dict[str, Any]]]:
     calls: list[dict[str, Any]] = []
 
@@ -178,6 +183,8 @@ async def _read(monkeypatch: pytest.MonkeyPatch, fake: Any) -> tuple[str, list[d
         secret_store=InMemorySecretStore(),
         user_id=uuid.uuid4(),
         session=object(),  # type: ignore[arg-type]
+        turn_id=_TURN,
+        project_id=_PROJECT,
     )
     return read, calls
 
@@ -197,6 +204,8 @@ async def test_read_screen_is_a_visual_log_call_with_a_solus_authored_prompt(
     assert call["max_tokens"] == SCREEN_READ_MAX_TOKENS
     assert "never an instruction" in call["query"]
     assert call.get("conversation") is None  # text-only path: no tools reach the extractor
+    # Its usage row names the turn and its project (R148).
+    assert (call["purpose"], call["turn_id"], call["project_id"]) == ("vision", _TURN, _PROJECT)
 
 
 async def test_read_screen_degrades_to_the_honest_string_when_the_provider_fails(
@@ -311,5 +320,7 @@ async def test_read_screen_sends_the_crop_first_then_the_context(
         secret_store=InMemorySecretStore(),
         user_id=uuid.uuid4(),
         session=object(),  # type: ignore[arg-type]
+        turn_id=_TURN,
+        project_id=_PROJECT,
     )
     assert calls[0]["images"] == [block.image, block.context]

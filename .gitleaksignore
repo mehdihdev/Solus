@@ -18,6 +18,12 @@
 # moves with every push — so a fingerprint here passes one pipeline and fails the
 # next. See the `regexes` block in .gitleaks.toml.
 
+# SOLUSDEV-321: three generic-api-key false positives (a ledger idempotency key
+# and a dedupe digest in recorded acceptance output, and the test_machine_tools
+# redaction fixture) are suppressed by VALUE in .gitleaks.toml, not here: the
+# first attempt pinned them by fingerprint and the pin's own comment, quoting the
+# fixture, tripped the next scan. Never quote a matched value in this file.
+
 # SOLUSDEV-260: reviewed historical false positives (31 detections, 30 unique
 # fingerprints; merge-parent patches repeat one finding). These exceptions are
 # bound to exact commits, paths, rules and lines. Future occurrences still scan.

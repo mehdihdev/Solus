@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  activeMentionToken,
-  MAX_MENTIONS,
-  mergeMentions,
-  replaceMentionToken
-} from './mentionToken'
+import { activeMentionToken, replaceMentionToken } from './mentionToken'
 
 describe('activeMentionToken', () => {
   it('finds the @token the caret is sitting in', () => {
@@ -63,15 +58,5 @@ describe('replaceMentionToken', () => {
       text: '@Camera ',
       caret: 8
     })
-  })
-})
-
-describe('mergeMentions', () => {
-  it('puts typed mentions first, dedupes, and caps at the server limit', () => {
-    expect(mergeMentions(['a', 'b'], ['b', 'c'])).toEqual(['a', 'b', 'c'])
-    expect(mergeMentions([], [])).toEqual([])
-    const many = Array.from({ length: 12 }, (_, i) => `n${i}`)
-    expect(mergeMentions(['t'], many)).toHaveLength(MAX_MENTIONS)
-    expect(mergeMentions(['t'], many)[0]).toBe('t')
   })
 })

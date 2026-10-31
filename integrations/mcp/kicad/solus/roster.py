@@ -29,13 +29,19 @@ EXPOSED_UPSTREAM_TOOLS: frozenset[str] = frozenset(
     }
 )
 
-# Solus-authored tools this overlay adds.
+# Solus-authored tools this overlay adds. `export_spice_netlist` (SOLUSDEV-321 P4-T3,
+# solus/spice_export.py) and `export_schematic_pdf` / `export_board_pdf` (SOLUSDEV-321 P5,
+# solus/pdf_export.py) widen an existing allowlist: drafted in-branch and flagged for the
+# humans to ratify (integrations/mcp/CLAUDE.md rule 2).
 SOLUS_AUTHORED_TOOLS: frozenset[str] = frozenset(
     {
         "export_netlist",
         "get_symbol_definition",
         "get_schematic_geometry",
         "check_erc",
+        "export_spice_netlist",
+        "export_schematic_pdf",
+        "export_board_pdf",
     }
 )
 

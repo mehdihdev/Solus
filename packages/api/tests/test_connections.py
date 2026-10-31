@@ -740,3 +740,58 @@ async def test_known_onshape_application_binding_updates_only_after_successful_r
                 account.config["_onshape_oauth_application"]
                 == hashlib.sha256(application.encode()).hexdigest()
             )
+
+
+async def test_the_session_a_confirmed_connection_starts_names_its_robot_and_owner(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-321 P2-T3 (C2), for `hardware/connections.py` (H9 pairs it with this file): the
+    session the confirm-and-connect flow starts is the robot's — the manager is told the robot and
+    the member who confirmed it, so the robot's window evaluator runs (and reads as them)."""
+    import uuid
+
+    from solus_api.hardware.connections import HardwareConnections
+    from test_hardware_detect import (
+        DEVICE_REF,
+        _confirm_body,
+        _detect_project,
+        _detect_url,
+        _DetectLocal,
+    )
+
+    local, manager, starts = _DetectLocal(), app.state.bench_sessions, list[dict[str, Any]]()
+    app.state.bench_local = local
+    start = manager.start
+
+    async def recording(project_id: uuid.UUID, **kwargs: Any) -> Any:
+        starts.append(kwargs)
+        return await start(project_id, **kwargs)
+
+    monkeypatch.setattr(manager, "start", recording)
+    coordinator = HardwareConnections(
+        sessions=app.state.sessionmaker,
+        manager=manager,
+        local=local,
+        hub=app.state.graph_hub,
+        owner=app.state.hardware_connections.owner,
+    )
+    app.state.hardware_connections = coordinator
+    user = await me(client, alice_headers)
+    project, _ = await _detect_project(client, alice_headers)
+    try:
+        response = await client.post(
+            _detect_url(project, "detected", DEVICE_REF, "confirm"),
+            headers=alice_headers,
+            json=_confirm_body(start_session=True),
+        )
+        assert response.status_code == 201, response.text
+        await coordinator.drain()
+    finally:
+        await coordinator.aclose()
+
+    (kwargs,) = starts
+    robot = uuid.UUID(response.json()["data"]["robot"]["id"])
+    assert (kwargs["robot_entity_id"], kwargs["owner_user_id"]) == (robot, uuid.UUID(user["id"]))

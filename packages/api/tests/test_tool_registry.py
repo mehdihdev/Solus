@@ -6,6 +6,7 @@ branches on `ok` and reads `error`, and a traceback is never surfaced.
 """
 
 import asyncio
+import uuid
 from typing import Any
 
 import pytest
@@ -20,6 +21,9 @@ from solus_api.agent.tools import (
     ToolRegistry,
     ToolResult,
 )
+from solus_api.agent.tools.finding_tools import register_finding_tools
+from solus_api.agent.tools.machine_tools import register_machine_tools
+from solus_api.agent.tools.search_tools import register_search_tools
 
 _X_SCHEMA = {
     "type": "object",
@@ -156,3 +160,57 @@ async def test_a_tool_that_returns_a_non_dict_is_tool_error_not_a_raise() -> Non
     # The invariant holds even for a buggy tool: a bad return is trapped, invoke never raises.
     result = await reg.invoke(ToolCall(tool="bad_return", args={}))
     assert _err(result).code is ToolErrorCode.TOOL_ERROR
+
+
+# SOLUSDEV-321 P1-T4 (and P2-T1's `get_envelope`): the retrieval tools join the contract. Their
+# handlers never run for arguments the schema refuses, so no database stands behind these
+# registries.
+
+_RETRIEVAL_NAMES = (
+    "get_envelope",
+    "get_environment_divergences",
+    "get_finding",
+    "get_history",
+    "get_machine",
+    "get_run",
+    "search_corpus",
+    "search_solus",
+    "search_workspace",
+)
+_JUNK_ARGS: tuple[dict[str, Any], ...] = (
+    {"project_id": "a project the model is not allowed to name"},
+    {
+        "q": 7,
+        "limit": "many",
+        "finding_id": [],
+        "run_id": {},
+        "part_id": 7,
+        "quantity": [],
+        "companion_id": 0,
+        "entity_id": False,
+        "since_days": None,
+    },
+)
+
+
+def _retrieval_registry() -> ToolRegistry:
+    sessions: Any = None
+    reg = ToolRegistry()
+    register_search_tools(reg, sessions, uuid.uuid4())
+    register_finding_tools(reg, sessions, uuid.uuid4())
+    register_machine_tools(reg, sessions, uuid.uuid4(), user_id=uuid.uuid4())
+    return reg
+
+
+def test_the_retrieval_registry_holds_exactly_the_nine_reads() -> None:
+    assert [d.name for d in _retrieval_registry().list()] == sorted(_RETRIEVAL_NAMES)
+
+
+@pytest.mark.parametrize("args", _JUNK_ARGS, ids=["unknown-key", "wrong-types"])
+@pytest.mark.parametrize("name", _RETRIEVAL_NAMES)
+async def test_junk_arguments_are_invalid_args_for_every_retrieval_tool(
+    name: str, args: dict[str, Any]
+) -> None:
+    result = await _retrieval_registry().invoke(ToolCall(tool=name, args=args))
+    assert result.ok is False
+    assert _err(result).code is ToolErrorCode.INVALID_ARGS

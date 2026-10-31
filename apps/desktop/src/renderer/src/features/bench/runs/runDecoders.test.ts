@@ -38,6 +38,11 @@ export const manifest = {
 it.each([
   ['list rows', () => listRuns('p'), { runs: [{ ...summary, name: {} }], next_cursor: null }],
   [
+    'baseline flag',
+    () => listRuns('p'),
+    { runs: [{ ...summary, baseline: 'yes' }], next_cursor: null }
+  ],
+  [
     'start',
     () => startRun('p', { robot_id: id, session_id: id, name: 'Run' }),
     { ...summary, packet_count: Infinity }
@@ -110,6 +115,24 @@ it.each([
 it('accepts a bounded complete manifest and preserves original values', async () => {
   vi.mocked(api.request).mockResolvedValue({ summary, manifest })
   expect(await getRun('p', id)).toEqual({ summary, manifest })
+})
+it('keeps the baseline flag a list row and a detail summary carry', async () => {
+  const marked = { ...summary, baseline: true }
+  vi.mocked(api.request).mockResolvedValue({
+    runs: [marked, { ...summary, baseline: false }],
+    next_cursor: null
+  })
+  expect((await listRuns('p')).runs.map((run) => run.baseline)).toEqual([true, false])
+  vi.mocked(api.request).mockResolvedValue({ summary: marked, manifest })
+  expect((await getRun('p', id)).summary).toEqual(marked)
+})
+it('reads a summary without a baseline key, as start, import and a live stop send it', async () => {
+  vi.mocked(api.request).mockResolvedValue(summary)
+  const started = await startRun('p', { robot_id: id, session_id: id, name: 'Run' })
+  expect(started).toEqual(summary)
+  expect(started.baseline).toBeUndefined()
+  vi.mocked(api.request).mockResolvedValue({ runs: [summary], next_cursor: null })
+  expect((await listRuns('p')).runs[0].baseline).toBeUndefined()
 })
 
 it('rejects oversized lists, text and aggregate manifest data before rendering', async () => {
@@ -193,4 +216,130 @@ it('accepts actual deterministic findings and comparison evidence shapes', async
   }
   vi.mocked(api.request).mockResolvedValue(comparison)
   expect(await compareRuns('p', id, id)).toEqual(comparison)
+})
+
+it('reads the findings a run recorded and the finding deltas compare reports', async () => {
+  const other = '22222222-2222-4222-8222-222222222222'
+  const recorded = {
+    finding_id: id,
+    rule_id: 'tracking_error_stall',
+    subjects: [id, other],
+    severity: 'critical',
+    count: 2,
+    first_seen: timestamp,
+    last_seen: '2026-01-01T00:00:09.250000Z'
+  }
+  vi.mocked(api.request).mockResolvedValue({
+    summary,
+    manifest: { ...manifest, findings: [recorded] }
+  })
+  expect((await getRun('p', id)).manifest.findings).toEqual([recorded])
+  for (const bad of [
+    { ...recorded, severity: 'fatal' },
+    { ...recorded, count: 0 },
+    { ...recorded, subjects: ['not-an-id'] },
+    { ...recorded, headline: 'not recorded' }
+  ]) {
+    vi.mocked(api.request).mockResolvedValue({
+      summary,
+      manifest: { ...manifest, findings: [bad] }
+    })
+    await expect(getRun('p', id)).rejects.toThrow(/Invalid run/)
+  }
+  const comparison = {
+    config_changes: [],
+    source_snapshots_changed: false,
+    divergences: [],
+    clamp_attributions: [],
+    insufficient: [],
+    finding_deltas: [
+      {
+        rule_id: 'rail_sag_correlated',
+        subjects: [id],
+        change: 'new',
+        severity: 'warning',
+        baseline: null,
+        candidate: { finding_id: other, count: 1 }
+      },
+      {
+        rule_id: 'tracking_error_stall',
+        subjects: [id, other],
+        change: 'persisting',
+        severity: 'critical',
+        baseline: { finding_id: id, count: 3 },
+        candidate: { finding_id: other, count: 5 }
+      }
+    ],
+    expected_source: 'baseline_run'
+  }
+  vi.mocked(api.request).mockResolvedValue(comparison)
+  expect(await compareRuns('p', id, id)).toEqual(comparison)
+  for (const bad of [
+    { ...comparison, expected_source: 'guess' },
+    { ...comparison, finding_deltas: [{ ...comparison.finding_deltas[0], change: 'moved' }] },
+    { ...comparison, finding_deltas: [{ ...comparison.finding_deltas[0], candidate: {} }] }
+  ]) {
+    vi.mocked(api.request).mockResolvedValue(bad)
+    await expect(compareRuns('p', id, id)).rejects.toThrow(/Invalid run/)
+  }
+})
+it('reads the evidence compare adds against a routine twin, and a comparison without it', async () => {
+  const other = '22222222-2222-4222-8222-222222222222'
+  const plain = {
+    config_changes: [],
+    source_snapshots_changed: false,
+    divergences: [],
+    clamp_attributions: [],
+    insufficient: [],
+    finding_deltas: [],
+    expected_source: 'sim'
+  }
+  const evidence = {
+    sim_result_id: id,
+    real_passed: false,
+    sim_passed: true,
+    task_passed: false,
+    sim_control: 'electrical_or_mechanical',
+    reason: null,
+    simulation_gap: true,
+    residuals: {
+      [id]: {
+        status: 'attributed',
+        parameter: 'mass',
+        explained: { mass: 0.93, limit: 0.1, sensor_offset: 0.2, contact: 0.05 },
+        estimate: {
+          mass: { tau_s: 0.1 },
+          limit: { side: 'upper', at: 45 },
+          sensor_offset: { offset: 1.5 },
+          contact: { at_s: 2 }
+        },
+        residual_rms: 0.3,
+        samples: 256
+      },
+      [other]: { status: 'consistent', parameter: null, residual_rms: 0, samples: 256 }
+    }
+  }
+  const unsaid = {
+    ...evidence,
+    real_passed: null,
+    sim_control: null,
+    reason: 'the real run states nothing that says whether it passed',
+    simulation_gap: false,
+    residuals: { [id]: { status: 'insufficient', parameter: null, reason: 'the run needs 8' } }
+  }
+  for (const comparison of [plain, { ...plain, evidence }, { ...plain, evidence: unsaid }]) {
+    vi.mocked(api.request).mockResolvedValue(comparison)
+    expect(await compareRuns('p', id, id)).toEqual(comparison)
+  }
+  for (const bad of [
+    { ...evidence, sim_control: 'hardware' },
+    { ...evidence, real_passed: 'no' },
+    { ...evidence, unexpected: true },
+    { ...evidence, residuals: { [id]: { status: 'guessed', parameter: null } } },
+    { ...evidence, residuals: { 'not-an-id': evidence.residuals[id] } },
+    { ...evidence, residuals: { [id]: { ...evidence.residuals[id], parameter: 'friction' } } }
+  ]) {
+    vi.mocked(api.request).mockResolvedValue({ ...plain, evidence: bad })
+    await expect(compareRuns('p', id, id)).rejects.toThrow(/Invalid run/)
+  }
 })

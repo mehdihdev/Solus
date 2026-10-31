@@ -9,6 +9,11 @@ tree-sitter and extracts, with exact file:line provenance:
   layer refuses to fake.
 * **pin constants** — `#define WRIST_PIN 5`, `const int basePin = 3`, `ELBOW_PIN = 7`.
 * **motor constants** — `const float MOTOR_KV = 920.0`.
+* **goal calls** (C++) — `setGoalPositionDeg(3, 200)`, `bus.setTarget(0x05, -90)`,
+  `writePosition(2, 512)`: a `write*` / `setGoal*` / `setTarget*` call whose first argument is a
+  numeric bus address, with the literal goal after it (None when the goal is not a literal). The
+  review row it becomes is how a literal goal reaches the graph (SOLUSDEV-321 P3-T2). A file's
+  goal calls have their own cap (`MAX_GOAL_FINDINGS`), outside its finding budget.
 
 Every finding is CTR-08 `firmware_symbol` evidence at 0.55 / LOW_CONFIDENCE — code
 intent only; the firmware may be stale or wrong relative to the physical build
@@ -56,8 +61,19 @@ _NOTE: Final = (
 )
 
 FindingKind = Literal[
-    "attach_call", "pin_constant", "motor_constant", "bus_begin", "analog_read", "library_include"
+    "attach_call",
+    "pin_constant",
+    "motor_constant",
+    "bus_begin",
+    "analog_read",
+    "library_include",
+    "goal_call",
 ]
+#: A goal call's name: two arguments or more, the first a numeric bus address. `digitalWrite`,
+#: and a one-argument `Wire.write(0x01)`, are not goal calls.
+_GOAL_CALL: Final = re.compile(r"^(?:write|setgoal|settarget)", re.IGNORECASE)
+#: A goal call's address is a bus address; past 32 bits it is no address (and never fails a file).
+_ADDRESS_BITS: Final = 32
 
 _CPP_LANGUAGE: Final = Language(tree_sitter_cpp.language())
 _PY_LANGUAGE: Final = Language(tree_sitter_python.language())
@@ -181,14 +197,55 @@ def _constant_finding(
     return None
 
 
-def _first_argument(call: Node) -> Node | None:
+def _arguments(call: Node) -> list[Node]:
+    """A call's argument nodes, in order (punctuation and comments are not arguments)."""
     args = call.child_by_field_name("arguments")
     if args is None:
+        return []
+    return [child for child in args.children if child.type not in ("(", ")", ",", "comment")]
+
+
+def _first_argument(call: Node) -> Node | None:
+    found = _arguments(call)
+    return found[0] if found else None
+
+
+def _number_or_none(node: Node) -> float | None:
+    """A numeric literal's finite value (hex, octal, a float, a `u`/`l` suffix); None for any
+    other argument — a symbol, an expression, or a number too large to be one."""
+    if node.type != "number_literal":
         return None
-    for child in args.children:
-        if child.type not in ("(", ")", ","):
-            return child
-    return None
+    text = _text(node).rstrip("uUlL")
+    whole = _int_or_none(text)
+    try:
+        number = float(whole) if whole is not None else _float_or_none(text)
+    except OverflowError:
+        return None
+    return number if number is not None and math.isfinite(number) else None
+
+
+def _cpp_goal_call(node: Node, file: str, line: int) -> FirmwareFinding | None:
+    """`setGoalPositionDeg(3, 200)`: the call's own name (a method's, for `bus.setTarget(…)`), the
+    numeric address its first argument states, and the literal goal after it."""
+    function = node.child_by_field_name("function")
+    if function is not None and function.type == "field_expression":
+        function = function.child_by_field_name("field")
+    name, args = _text(function), _arguments(node)
+    if not _GOAL_CALL.match(name) or len(args) < 2 or args[0].type != "number_literal":
+        return None
+    address = _int_or_none(_text(args[0]).rstrip("uUlL"))
+    if address is None or address < 0 or address.bit_length() > _ADDRESS_BITS:
+        return None
+    return FirmwareFinding(
+        name=name,
+        kind="goal_call",
+        file=file,
+        line=line,
+        language="cpp",
+        pin=address,
+        value=_number_or_none(args[1]),
+        pin_ref=_text(args[0]),
+    )
 
 
 def _cpp_constant(node: Node, file: str, line: int) -> FirmwareFinding | None:
@@ -245,7 +302,7 @@ def _cpp_findings(root: Node, file: str) -> Iterator[FirmwareFinding]:
         line = node.start_point[0] + 1
         finding = None
         if node.type == "call_expression":
-            finding = _cpp_call(node, file, line)
+            finding = _cpp_call(node, file, line) or _cpp_goal_call(node, file, line)
         elif node.type in ("preproc_def", "init_declarator"):
             finding = _cpp_constant(node, file, line)
         elif node.type == "preproc_include":
@@ -365,6 +422,9 @@ def extract_firmware_findings(root: Path) -> list[FirmwareFinding]:
 
 MAX_EXTRACTION_BYTES: Final = 256 * 1024
 MAX_EXTRACTION_FINDINGS: Final = 256
+#: Goal calls have their own cap, outside the finding budget, and fill only the room the other
+#: findings leave: a register-heavy file keeps its attach calls, its rows within the review's cap.
+MAX_GOAL_FINDINGS: Final = 64
 _OPAQUE_SOURCE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:@-]{0,511}")
 
 
@@ -400,9 +460,14 @@ def extract_firmware_bytes(source: bytes, *, suffix: str, source_ref: str) -> li
         raise ValueError("malformed firmware syntax")
     extractor = _cpp_findings if language == "cpp" else _py_findings
     findings: list[FirmwareFinding] = []
+    goals: list[FirmwareFinding] = []
     for finding in extractor(tree.root_node, source_ref):
         _bounded_finding(finding)
+        if finding.kind == "goal_call":
+            if len(goals) < MAX_GOAL_FINDINGS:
+                goals.append(finding)
+            continue
         if len(findings) >= MAX_EXTRACTION_FINDINGS:
             raise ValueError("firmware extraction exceeds finding budget")
         findings.append(finding)
-    return findings
+    return [*findings, *goals[: MAX_EXTRACTION_FINDINGS - len(findings)]]

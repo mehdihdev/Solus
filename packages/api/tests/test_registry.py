@@ -128,10 +128,17 @@ def test_providers_of_asks_capabilities_not_names() -> None:
     )
     assert registry.providers_of(Capability.NETLIST) == ["kicad"]
     assert registry.providers_of(Capability.WEBHOOK) == ["onshape"]
-    assert registry.providers_of(Capability.RENDER) == []
+    # SOLUSDEV-321 P5 (R104): the two connectors that draw a view declare it, and say how — KiCad
+    # through the companion's flagged PDF exports, Onshape through its own API.
+    assert registry.providers_of(Capability.RENDER) == ["kicad", "onshape"]
+    assert dict(getattr(registry.create("kicad"), "render_tools", {})) == {
+        "sheet": "kicad.export_schematic_pdf",
+        "board": "kicad.export_board_pdf",
+    }
+    assert callable(getattr(registry.create("onshape"), "render_view", None))
     catalog = {c["type"]: c for c in registry.catalog()}
     for provider in registry.providers():
         assert Capability.CHANGE_SIGNAL in registry.create(provider).capabilities, provider
         assert "change_signal" in catalog[provider]["capabilities"]
-    assert catalog["kicad"]["capabilities"] == ["change_signal", "netlist", "structure"]
+    assert catalog["kicad"]["capabilities"] == ["change_signal", "netlist", "render", "structure"]
     assert catalog["altium"]["capabilities"] == ["change_signal", "structure"]

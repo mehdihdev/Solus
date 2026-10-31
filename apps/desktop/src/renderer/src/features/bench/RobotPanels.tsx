@@ -80,7 +80,8 @@ export function RobotPanels({
   paused,
   focusEntityId,
   onStream,
-  onConfirmBoard
+  onConfirmBoard,
+  onOpenFinding
 }: {
   projectId: string
   robots: readonly RobotPanelInfo[]
@@ -89,6 +90,7 @@ export function RobotPanels({
   focusEntityId?: string
   onStream: (key: string, live: boolean) => void
   onConfirmBoard?: () => void
+  onOpenFinding?: (findingId: string) => void
 }): React.JSX.Element | null {
   const [releasing, setReleasing] = useState<RobotPanelInfo | null>(null)
   if (robots.length === 0) return null
@@ -120,6 +122,7 @@ export function RobotPanels({
             focusEntityId={focusEntityId}
             paused={paused}
             onConfirmBoard={onConfirmBoard}
+            onOpenFinding={onOpenFinding}
             showReasoning={false}
           />
         </section>

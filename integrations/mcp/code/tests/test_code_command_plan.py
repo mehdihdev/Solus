@@ -564,6 +564,24 @@ def test_project_runners_are_workspace_even_for_version_or_help(
         "PERL5LIB",
         "RUBYLIB",
         "CLASSPATH",
+        # SOLUSDEV-321 P6 (R136): `ros2` is a Python program, so where Python itself loads
+        # from counts too — the user site, the prefix, the platform lib dir, the executable.
+        "PYTHONUSERBASE",
+        "PYTHONHOME",
+        "PYTHONPLATLIBDIR",
+        "PYTHONEXECUTABLE",
+        # R137: the bytecode cache Python loads in place of a module's source, the executable a
+        # macOS launcher reports (its pyvenv.cfg picks the prefix), and the configuration `ros2`
+        # loads through its DDS layer and through libcrypto (providers and engines are code).
+        "PYTHONPYCACHEPREFIX",
+        "__PYVENV_LAUNCHER__",
+        "FASTRTPS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_ENVIRONMENT_FILE",
+        "CYCLONEDDS_URI",
+        "OPENSSL_CONF",
+        "OPENSSL_MODULES",
+        "OPENSSL_ENGINES",
     ],
 )
 def test_a_profile_search_path_into_the_workspace_is_workspace_scope(
@@ -573,8 +591,56 @@ def test_a_profile_search_path_into_the_workspace_is_workspace_scope(
     entry = ws / "install" / "lib"  # need not exist yet (an unbuilt overlay)
     profiles.save(ws, "overlay", "/x/setup.bash", None, {variable: f"/opt/ros/lib:{entry}"})
     profiles.save(ws, "system", "/x/setup.bash", None, {variable: "/opt/ros/lib"})
+    # a relative entry is read from the working directory, which is the workspace
+    profiles.save(ws, "relative", "/x/setup.bash", None, {variable: "lib"})
     assert _scope(ws, "exec", {"argv": ["ls"], "profile": "overlay"}) == "workspace"
     assert _scope(ws, "exec", {"argv": ["ls"], "profile": "system"}) == "system"
+    assert _scope(ws, "exec", {"argv": ["ls"], "profile": "relative"}) == "workspace"
+
+
+def test_the_judge_reads_exactly_the_twenty_six_search_path_variables() -> None:
+    """The count moved deliberately (SOLUSDEV-321 P6): 13 → 17 (R136: PYTHONUSERBASE,
+    PYTHONHOME, PYTHONPLATLIBDIR, PYTHONEXECUTABLE), then 17 → 26 (R137: PYTHONPYCACHEPREFIX and
+    `__PYVENV_LAUNCHER__`, the Fast DDS and Cyclone DDS configuration files, and libcrypto's
+    OPENSSL_CONF, OPENSSL_MODULES and OPENSSL_ENGINES), since `ros2`, a Python program over a
+    DDS layer, loads code or configuration from each."""
+    assert len(command_plan.SEARCH_PATH_VARIABLES) == 26
+    assert {
+        "PYTHONUSERBASE",
+        "PYTHONHOME",
+        "PYTHONPLATLIBDIR",
+        "PYTHONEXECUTABLE",
+        "PYTHONPYCACHEPREFIX",
+        "__PYVENV_LAUNCHER__",
+        "FASTRTPS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_DEFAULT_PROFILES_FILE",
+        "FASTDDS_ENVIRONMENT_FILE",
+        "CYCLONEDDS_URI",
+        "OPENSSL_CONF",
+        "OPENSSL_MODULES",
+        "OPENSSL_ENGINES",
+    } <= command_plan.SEARCH_PATH_VARIABLES
+
+
+def test_any_variable_that_names_a_workspace_path_is_workspace_scope(
+    ws: Path, tmp_path: Path
+) -> None:
+    """R137: no list of loader variables is ever complete (a colcon package hook can export any
+    variable), so an absolute path inside the workspace anywhere in ANY variable's value makes
+    the profile reach the workspace. A value that names no workspace path stays system."""
+    _executable(tmp_path / "roots" / "bin" / "ls")
+    reaching = {
+        "QT_PLUGIN_PATH": str(ws / "plugins"),
+        "JDK_JAVA_OPTIONS": f"-javaagent:{ws / 'agent.jar'}",
+        "TOOL_FLAGS": f"--config={ws / 'tool.cfg'}",
+        "SOME_URI": f"file://{ws / 'conf.xml'}",
+    }
+    for index, (name, value) in enumerate(reaching.items()):
+        profiles.save(ws, f"p{index}", "/x/setup.bash", None, {name: value})
+        assert _scope(ws, "exec", {"argv": ["ls"], "profile": f"p{index}"}) == "workspace", name
+    plain = {"ROS_DISTRO": "jazzy", "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp", "LOG": "/var/log"}
+    profiles.save(ws, "plain", "/x/setup.bash", None, plain)
+    assert _scope(ws, "exec", {"argv": ["ls"], "profile": "plain"}) == "system"
 
 
 def test_a_ros_overlay_makes_ros2_topic_list_workspace_scope(ws: Path, tmp_path: Path) -> None:

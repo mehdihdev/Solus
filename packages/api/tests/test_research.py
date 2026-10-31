@@ -21,19 +21,24 @@ from collections.abc import Sequence
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 from solus_api.agent.research import (
     LLM_CONTEXT_TOOL,
+    MAX_SOURCES,
+    MAX_URL,
     QUESTION_MAX,
     QUOTE_MAX,
+    TITLE_MAX,
     WEB_SEARCH_TOOL,
     ResearchBudget,
+    ResearchDigest,
     rank_url,
     research,
 )
 from solus_api.agent.tools import research_tool
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.research_tool import (
-    RESULT_CAP,
+    call_budget,
     register_research_tool,
     research_descriptor,
 )
@@ -378,7 +383,9 @@ def test_the_descriptor_is_read_only_and_outlives_its_own_budget() -> None:
     assert descriptor.name == "research"
     assert descriptor.requires_confirmation is False  # a read, and hard-budgeted
     assert descriptor.description_trusted is True  # Solus-authored, not a fork's
-    assert descriptor.result_cap == RESULT_CAP
+    # The model never reads this result (the digest is a fenced prompt section), so there is no
+    # per-tool cap to raise: the descriptor carries the default.
+    assert descriptor.result_cap is None
     # The registry's own timeout must not fire before the loop's wall-clock does.
     assert descriptor.timeout_seconds is not None
     assert descriptor.timeout_seconds > budget.max_seconds
@@ -457,3 +464,126 @@ async def test_the_budget_is_the_callers_to_tighten(scripted: ScriptedTools) -> 
     assert result.ok is True and result.value is not None
     assert result.value["queries_run"] == 1
     assert result.value["truncated_reason"] == "max_queries"
+
+
+# ----------------------------------- the search / fetch split (SOLUSDEV-321 P1-T5)
+
+
+async def test_max_searches_runs_that_many_searches_then_one_context_call() -> None:
+    """The server-driven shape: `min(max_searches, variants)` searches, then ONE context call that
+    reads up to `max_pages` — not the halving the old model-driven loop used."""
+    pages = tuple((f"https://docs.example.com/p{n}", f"page {n}", f"body {n}") for n in range(5))
+    tools = ScriptedTools(context=[context_payload(*pages)])
+    digest = await research(
+        "what voltage does the OV9281 need",
+        call_tool=tools,
+        budget=ResearchBudget(max_searches=2, max_pages=3, max_queries=3),
+        clock=tools.clock,
+        graph_hints=["OmniVision OV9281 camera"],  # three variants; two are searched
+    )
+    assert [name for name, _ in tools.calls] == [WEB_SEARCH_TOOL, WEB_SEARCH_TOOL, LLM_CONTEXT_TOOL]
+    assert tools.calls[-1][1]["maximum_number_of_urls"] == 3
+    assert (digest.searches_run, digest.queries_run, digest.pages_fetched) == (2, 3, 3)
+    assert digest.truncated_reason == "max_pages"  # five offered, three read
+
+
+async def test_max_searches_is_never_more_than_the_variants_there_are() -> None:
+    tools = ScriptedTools()
+    digest = await research(
+        "why is my robot slow",  # one variant: nothing to widen it
+        call_tool=tools,
+        budget=ResearchBudget(max_searches=3, max_queries=4),
+        clock=tools.clock,
+    )
+    assert (digest.searches_run, digest.queries_run) == (1, 2)
+    assert digest.truncated_reason is None  # the plan finished
+
+
+async def test_without_max_searches_the_query_budget_is_still_halved() -> None:
+    tools = ScriptedTools()
+    digest = await research(
+        "OV9281 datasheet voltage",
+        call_tool=tools,
+        budget=ResearchBudget(max_queries=4),
+        clock=tools.clock,
+        graph_hints=["OmniVision"],
+    )
+    assert len(tools.queries(WEB_SEARCH_TOOL)) == 2  # 4 // 2 searched, then the context calls
+    assert (digest.searches_run, digest.queries_run) == (2, 4)
+    assert digest.truncated_reason == "max_queries"
+
+
+async def test_an_overlong_url_is_dropped_never_truncated() -> None:
+    """A cut URL is a different address — the digest, the frame and a pill that opens it must
+    never carry one — so an over-long URL is ignored like any other malformed hit."""
+    too_long = "https://example.com/" + "a" * MAX_URL
+    ok = "https://docs.example.com/ok"
+    tools = ScriptedTools(
+        search=[search_payload((too_long, "Long", "d"), (ok, "OK", "d"))],
+        context=[context_payload((too_long, "Long", "q"), (ok, "OK", "q"))],
+    )
+    digest = await research(
+        "how does I2C addressing work", call_tool=tools, budget=ResearchBudget(), clock=tools.clock
+    )
+    assert [s.url for s in digest.sources] == [ok]
+    assert [f.url for f in digest.findings] == [ok]
+
+
+def test_the_servers_two_caps_are_optional_integers_of_the_registered_schema() -> None:
+    schema = research_descriptor(ResearchBudget()).params
+    assert schema["required"] == ["question"] and schema["additionalProperties"] is False
+    for name in ("max_searches", "max_pages"):
+        assert schema["properties"][name]["type"] == "integer"
+        assert schema["properties"][name]["minimum"] == 1
+
+
+def test_call_budget_never_lifts_the_query_ceiling_the_tool_was_registered_with() -> None:
+    """The server asks for `max_searches` searches plus ONE reading call; the registered budget
+    is the ceiling, so a registered `max_searches` above `max_queries - 1` cannot widen it."""
+    capped = call_budget(
+        ResearchBudget(max_queries=2, max_searches=5, max_pages=3),
+        {"max_searches": 5, "max_pages": 9},
+    )
+    assert (capped.max_searches, capped.max_queries, capped.max_pages) == (5, 2, 3)
+
+    roomy = call_budget(ResearchBudget(max_queries=6), {"max_searches": 3})
+    assert (roomy.max_searches, roomy.max_queries) == (3, 4)  # searches + 1 when there is room
+
+
+async def test_a_credential_straddling_a_cut_is_masked_before_the_cut() -> None:
+    """Titles and quotes are cut to a bound. Cut first, a key that starts just inside the bound
+    leaves its first characters behind — too short for any detector, so they would reach the
+    frame and the prompt. Masked first, the mask is what meets the bound."""
+    key = "AKIA" + "AB12" * 4
+    title = "t" * (TITLE_MAX - 6) + " " + key  # the key starts five characters before the cut
+    quote = "q" * (QUOTE_MAX - 6) + " " + key
+    url = "https://docs.example.com/ok"
+    tools = ScriptedTools(
+        search=[search_payload((url, title, "d"))], context=[context_payload((url, title, quote))]
+    )
+
+    digest = await research(
+        "how does I2C addressing work", call_tool=tools, budget=ResearchBudget(), clock=tools.clock
+    )
+
+    (finding,) = digest.findings
+    assert (finding.title, finding.quote) != ("", "")
+    assert "AKIA" not in digest.model_dump_json()
+    assert len(finding.title) <= TITLE_MAX and len(finding.quote) <= QUOTE_MAX
+
+
+def test_the_digest_re_proves_the_bounds_the_frame_and_the_prompt_rely_on() -> None:
+    source = {"url": "https://docs.example.com/a", "title": "t", "fetched": True}
+    ResearchDigest.model_validate({"sources": [source] * MAX_SOURCES})  # exactly at the bound
+
+    over = {
+        "too many sources": [source] * (MAX_SOURCES + 1),
+        "a long url": [{**source, "url": "https://example.com/" + "a" * MAX_URL}],
+        "a long title": [{**source, "title": "t" * (TITLE_MAX + 1)}],
+    }
+    for name, sources in over.items():
+        try:
+            ResearchDigest.model_validate({"sources": sources})
+        except ValidationError:
+            continue
+        pytest.fail(f"a digest with {name} was accepted")

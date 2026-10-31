@@ -124,9 +124,21 @@ class BuildExecutionPolicy:
         self.executed_calls: set[str] = set()
 
     async def prepare(self, call: ToolCall) -> bool | ToolResult:
+        from solus_api.agent.firmware_recipe import routed_by_firmware
+        from solus_api.agent.tools.apply_sim_change import routed_by_simulation
+
         # Review-only requests retain the normal central confirmation gate,
         # including for tools otherwise eligible for automatic Build execution.
-        tool = None if self._force_confirmation else self._owned(call)
+        # So does a routine `simulate` routed this turn to (SOLUSDEV-321 R115):
+        # the person asked to simulate, not to run a routine. And so does the
+        # write a firmware recipe routed this turn to (P6, R134): the person
+        # asked for firmware, not for a write.
+        forced = (
+            self._force_confirmation
+            or routed_by_simulation(call.tool)
+            or routed_by_firmware(call.tool)
+        )
+        tool = None if forced else self._owned(call)
         if tool is None:
             return False
         command = call.tool == AUTO_COMMAND_TOOL

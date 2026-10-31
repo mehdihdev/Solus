@@ -18,6 +18,9 @@ from typing import Any, Final, NamedTuple
 MAX_PDF_BYTES: Final = 40 * 1024 * 1024
 MAX_PAGES_PER_CALL: Final = 12
 RENDER_WIDTH: Final = 1400
+#: The tallest a rasterised page may be: a page is scaled to the width asked for, or less when
+#: that would make it taller than this (SOLUSDEV-321 P5 fix 1, M7).
+MAX_PAGE_HEIGHT: Final = 4096
 _PDF_MAGIC: Final = b"%PDF-"
 _TITLE_CAP: Final = 200
 
@@ -59,8 +62,11 @@ def _png(rgb_rows: list[bytes], width: int, height: int) -> bytes:
 
 
 def _render_page(page: Any, index: int, width: int) -> PageImage:
-    page_width, _ = page.get_size()
-    bitmap = page.render(scale=width / max(page_width, 1.0), rev_byteorder=True)
+    page_width, page_height = page.get_size()
+    # SOLUSDEV-321 P5 fix 1 (M7): the width asked for, unless that makes the page taller than
+    # MAX_PAGE_HEIGHT; then both bounds hold. A tall page never allocates an unbounded bitmap.
+    scale = min(width / max(page_width, 1.0), MAX_PAGE_HEIGHT / max(page_height, 1.0))
+    bitmap = page.render(scale=scale, rev_byteorder=True)
     try:
         if bitmap.mode != "RGB":
             raise DocumentError(f"unexpected bitmap mode {bitmap.mode}")
@@ -121,6 +127,7 @@ def render_pages(
 
 __all__ = [
     "MAX_PAGES_PER_CALL",
+    "MAX_PAGE_HEIGHT",
     "MAX_PDF_BYTES",
     "RENDER_WIDTH",
     "DocumentError",

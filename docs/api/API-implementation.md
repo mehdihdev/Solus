@@ -1040,17 +1040,21 @@ same active row and stored preview within the same owner's conversation. A
 conversation row lock serializes concurrent park checks and inserts. This does
 not reuse decided/expired rows or treat chat text as approval.
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, preferences?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
 SOLUSDEV-168: `mentions` is a list of graph entity ids the user pointed at with the composer's
 `@` — integration-agnostic, because an entity id addresses any node in the graph at any depth.
-They lead the neighbourhood's anchors (`reason.plan_query`), capped at `MAX_ANCHORS` (8) both
-here and again in the planner, since that cap is what bounds the traversal's DB work. Ids are
-NOT existence-checked: `load_neighborhood` is project-scoped, so one from another team yields
-an empty neighbourhood rather than a distinguishable error — answering differently for "exists
-elsewhere" than for "does not exist" would be a cross-tenant existence oracle.
+They lead the neighbourhood's anchors (`turn_scope.plan_scope`, SOLUSDEV-321 P1-T1), capped at
+`MAX_ANCHORS` (8) both here and again in the planner, since that cap is what bounds the
+traversal's DB work. Ids are
+checked for visibility at admission, before any spend: one the caller's current view of the
+project cannot see — another team's, deleted, hidden by a source view, or never existing — is
+`409 stale_mentions`, the same answer for all of them, so the refusal is no cross-tenant
+existence oracle. SOLUSDEV-321 (P0-T3) adds `pins`, `focus`, `finding_id` and `robot_id` as
+anchors of their own, each carrying the reason it is there; their stale-id rules are in
+API.md §2.9.
 Returns `text/event-stream`. The user turn is persisted
 (and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
 completes. SSE `event:` names and their `data` payloads:
@@ -1069,10 +1073,13 @@ and that they override shipped references (`kind=context_corpus`), and that they
 change rules, tools, scope, or what counts as data. Absent or all-blank ⇒ no block.
 
 - `token` — `{"text": "…"}` incremental reply delta
-- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped"}`
-  (SOLUSDEV-233) the turn's context manifest, streamed once at turn start. Section
-  TEXT never crosses the wire — kinds (`graph|telemetry|error|document`), verified
-  citation tokens, and token weights only. Drives the client's "context in use" panel.
+- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped","layers":[{"layer","tokens","sections","empty_reason"}],"anchors":[{"id","reason"}],"anchors_dropped":[{"id","reason","cause"}]}`
+  (SOLUSDEV-233; `layers`, `anchors` and `anchors_dropped` SOLUSDEV-321 P0-T4) the turn's
+  context manifest, streamed once at turn start. Section TEXT never crosses the wire — section
+  kinds (`graph|solus|error|document|corpus|telemetry|screen`), verified citation tokens, and
+  token weights only; `layers` lists all eleven context layers in prompt order, each empty one
+  with its reason (`docs/architecture/sol-context-layers.md`). Drives the client's "context in
+  use" panel.
 - `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
 - `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;
@@ -1226,6 +1233,15 @@ later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the wind
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
 
+Recorded bench runs (start/stop, the run manifest, compare against a sim twin, and the dev-only
+replay provider) are planned in `docs/api/bench-runs.md` (SOLUSDEV-321).
+
+**Finding markers (SOLUSDEV-321 P2-T3).** A `/bench/events` record may carry a `finding_id`: a
+marker a robot session's window evaluator (§15b) attached server-side at a finding's first raise
+in that session, on each channel its part streamed. The ingest model (`ObserverEventIn`,
+`extra="forbid"`) has no such field, so a posted event that names one is refused with `422`, and
+only server-attached ids ever reach the ring.
+
 ### Observed telemetry devices (SOLUSDEV-262 additive amendment)
 
 `GET /api/v1/projects/{project_id}/bench/telemetry-devices` returns the standard
@@ -1320,6 +1336,21 @@ stop it (`leader_lost`), a failed follower write stops it (`follower_lost`), and
 ending or API shutdown stops it. Data events: `bench.teleop_started`, `bench.teleop_stopped`
 (with `stop_reason`), `bench.robot_released`. `GET /bench/sessions` entries for saved robots add
 `device.robot_entity_id` so the UI can place each robot's scene and cards in its own panel.
+**Robot sessions run the window evaluator (SOLUSDEV-321 P2-T3).** A session started for a
+configured robot carries `robot_entity_id`, and session detail and list rows report it (null for
+any other session). This covers the `robot` and `hardware` providers here, and the sessions the
+hardware bind and connect flows start. `robot_entity_id` / `evidence.robot_id` is the session's
+ROOT entity — a robot, or a bare part bound on its own — and `missing_signals` lands on that root.
+Such a session runs one window evaluator:
+
+- it is a per-session ticker that reads the parts' buffered telemetry by event time;
+- it judges the live-signal rules over one-second event-time windows, each within a CPU budget
+  that grows with the session's parts (`docs/api/findings.md` §5);
+- it raises what they find as observer findings (`docs/api/findings.md` §5);
+- it starts once the session's connection is up and is cancelled when the session ends.
+
+The session also keeps the member who started it (or bound the robot) as its owner: the identity
+the evaluator reads the robot's baseline run under.
 
 Related (§2.5 amendment): `GET /api/v1/integrations/local-tools` lists vendor-run loopback MCP
 servers from the ADR-031 catalog (Fusion today) for the desktop's generic `local-bridge` tile —
@@ -1404,3 +1435,38 @@ open ports, create graph facts, alter focus, or change telemetry ownership.
 When true, the per-turn Build policy cannot automatically authorize owned routines; mutating
 calls follow the existing confirmation-card/decision path. Explicit host-mirror offers send true.
 The flag does not grant tool, workspace or project authority and does not make Guide executable.
+
+---
+
+## 17. Proposal outcomes and usage per turn (SOLUSDEV-321 P8) — LIVE
+
+Planned in `API.md` §2.9; the table is `docs/schemas/proposal-outcomes.md`. Both routes take the
+same paging parameters:
+
+| Param    | Type      | Default     | Notes                                                                     |
+| -------- | --------- | ----------- | ------------------------------------------------------------------------- |
+| `since`  | ISO 8601  | 90 days ago | A naive time is UTC; anything older than 90 days reads from 90 days ago.  |
+| `cursor` | opaque    | —           | The previous page's `meta.next_cursor`; malformed → `400 invalid_cursor`. |
+| `limit`  | int 1–200 | 50          | Outside the range → `422 validation_error`.                               |
+
+**`GET /api/v1/projects/{project_id}/outcomes`** — the project's proposal outcomes, newest first:
+`{"data": [{id, conversation_turn_id, tool, proposal_digest, decision, entity_ids,
+design_signals, machine_id, created_at}], "meta": {limit, has_next, next_cursor}}`. Every member
+lists every row; `conversation_turn_id`, `machine_id` and `proposal_digest` are null unless the
+caller made the decision. Implementation: `routers/outcomes.py::list_outcomes`; rows written by
+`services/outcomes.py:record_outcome`.
+
+**`GET /api/v1/projects/{project_id}/usage/turns`** — the caller's own usage rows for this project,
+newest first: `{"data": [{id, created_at, turn_id, purpose, tier, credits, tokens_in,
+tokens_out}], "meta": {limit, has_next, next_cursor}}`. `credits` is what the call spent (0 for a
+zero-credit call); `tier` is null for a web call. A teammate's rows and every balance are never
+returned. Implementation: `routers/usage_turns.py::list_usage_turns` (`credit_ledger.user_id`
+first, then `attrs.project_id`, usage rows only; the `(user_id, created_at)` index serves the
+order).
+
+- **Scoping:** `ProjectCtx` as every project route — 401 without a token; 404 for a non-member or
+  an unknown project, never 403.
+- **Rate limiting:** the app-wide read bucket (§7); neither route is metered.
+- **Example:** `GET {{base}}/api/v1/projects/{{project_id}}/outcomes?limit=2` with
+  `Authorization: Bearer {{jwt}}`; follow `meta.next_cursor` with `&cursor=…`.
+- Tests: `tests/test_outcomes.py`, `tests/test_usage_turns.py`, `tests/test_change_signals.py`.

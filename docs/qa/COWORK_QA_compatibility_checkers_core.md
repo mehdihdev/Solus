@@ -47,8 +47,8 @@ Run everything from the repo root.
   `sensor_frequency_clash`→`sensor_frequency_conflict`, `under_rated_supply` &
   `wrong_supply_voltage`→`power_compatibility`.
 - Each clean control (`clean_op_amp`, `clean_sensor`, `clean_supply`, `incomplete_graph`,
-  `unrelated_graph`) reports `warnings=0 -> ok`.
-- Final line: `catch_rate=100% (4/4)  false_positive_rate=0% (0/5, 0 spurious)`.
+  `unrelated_graph`, `malicious_attrs`) reports `warnings=0 -> ok`.
+- Final line: `catch_rate=100% (4/4)  false_positive_rate=0% (0/6, 0 spurious)`.
 
 - [ ] Flow 2 shows 100% catch, 0% false positives
 

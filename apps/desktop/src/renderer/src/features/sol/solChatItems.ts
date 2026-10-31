@@ -3,9 +3,16 @@
 // into immutable ChatItem updates. No store access, no side effects.
 import { ApiError } from '../../lib/api/envelope.types'
 import type { AutoRun } from '../../lib/api/solStream'
+import { toResearchSources } from './researchSources'
 import type { SolTurn } from './solApi'
 import type { ChatItem } from './solChatStore'
-import type { SolStreamEvent } from './solStream'
+import {
+  toAnswerSourceInfo,
+  toBudgetReachedInfo,
+  type CardReasoning,
+  type SolStreamEvent,
+  type ToolArgs
+} from './solStream'
 
 /** Per-turn rendered-content ceiling (SEC-H3). Far above any real reply. */
 export const MAX_TURN_CHARS = 200_000
@@ -23,6 +30,31 @@ export function turnToItem(turn: SolTurn): ChatItem {
     artifacts: [],
     // The server persists `attrs.screenshot = { width, height, app }` — never pixels.
     ...(turn.attrs.screenshot !== undefined ? { hasScreenshot: true } : {})
+  }
+}
+
+/** A server turn as a transcript item, with the sources its stored attrs carry (if they validate).
+ *  Lives here, not beside the validator: researchSources.ts must stay a leaf, or the stream parser
+ *  that imports it would close an import cycle through this file. */
+export function turnToSourcedItem(turn: SolTurn): ChatItem {
+  const item = turnToItem(turn)
+  const research = toResearchSources(turn.attrs.research_sources)
+  return research === null ? item : { ...item, researchSources: research }
+}
+
+/** A server turn as a transcript item: the research sources its stored attrs carry (P1-T5), the
+ *  tier that answered and the ceiling it reached (P1-T6) — each only when it validates. */
+export function turnToReasonedItem(turn: SolTurn): ChatItem {
+  const item = turnToSourcedItem(turn)
+  const answerSource = toAnswerSourceInfo({
+    source: turn.attrs.answer_source,
+    sources: turn.attrs.sources
+  })
+  const budgetReached = toBudgetReachedInfo(turn.attrs.budget_reached)
+  return {
+    ...item,
+    ...(answerSource ? { answerSource } : {}),
+    ...(budgetReached ? { budgetReached } : {})
   }
 }
 
@@ -118,6 +150,58 @@ export function applyEvent(patch: Patch, event: SolStreamEvent): void {
       return
     case 'context_used':
     case 'done':
+      return
+  }
+}
+
+function attachToolArgs(patch: Patch, callId: string, args: ToolArgs): void {
+  patch((item) => ({
+    ...item,
+    trace: item.trace.map((step) => (step.callId === callId ? { ...step, args } : step))
+  }))
+}
+
+/** SOLUSDEV-321 P7: the reasoning already hung on cards — every entry but the one still waiting. */
+const onCards = (item: ChatItem): readonly CardReasoning[] =>
+  (item.reasoning ?? []).filter((entry) => entry.confirmationId !== null)
+
+/** The waiting reasoning onto the card that just arrived: the proposal it preceded. A card with
+ *  none waiting, or one that already has its own, is left as it is.
+ *  ponytail: a round whose reasoning precedes no card (a read, an auto-run edit) leaves it waiting,
+ *  so a later round's card with no block of its own shows it; the frame naming its round would
+ *  close that if it ever misleads. */
+function hangOnCard(item: ChatItem, confirmationId: string): ChatItem {
+  const waiting = item.reasoning?.find((entry) => entry.confirmationId === null)
+  if (!waiting || onCards(item).some((entry) => entry.confirmationId === confirmationId)) {
+    return item
+  }
+  return { ...item, reasoning: [...onCards(item), { ...waiting, confirmationId }] }
+}
+
+/** SOLUSDEV-321 P1-T6: the frames that say how an answer was reached, onto the assistant item that
+ *  streamed them. Run right AFTER `applyEvent`, not inside it: that switch is already at the
+ *  complexity limit, and a call's args join the trace step `applyEvent` has just made — as a
+ *  proposal's reasoning (P7) joins the card `applyEvent` has just appended. */
+export function applyReasoningFrame(patch: Patch, event: SolStreamEvent): void {
+  switch (event.type) {
+    case 'answer_source':
+      patch((item) => ({ ...item, answerSource: event.answer }))
+      return
+    case 'budget_reached':
+      patch((item) => ({ ...item, budgetReached: event.budget }))
+      return
+    case 'tool_call':
+      if (event.args) attachToolArgs(patch, event.callId, event.args)
+      return
+    case 'reasoning':
+      // A newer round's reasoning replaces one still waiting for its card.
+      patch((item) => ({
+        ...item,
+        reasoning: [...onCards(item), { confirmationId: null, reasoning: event.reasoning }]
+      }))
+      return
+    case 'tool_confirmation':
+      patch((item) => hangOnCard(item, event.pending.confirmationId))
       return
   }
 }

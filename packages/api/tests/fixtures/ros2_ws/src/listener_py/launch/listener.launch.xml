@@ -1,0 +1,6 @@
+<launch>
+  <!-- Fixture (SOLUSDEV-321 P6): read through _xml_root, never launched. -->
+  <node pkg="listener_py" exec="listener" name="listener">
+    <remap from="chatter" to="/robot/chatter"/>
+  </node>
+</launch>

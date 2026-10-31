@@ -64,8 +64,13 @@ onshape-budget: ## SOLUSDEV-167: print the Onshape before/after call-count table
 corpus-validate: ## SOLUSDEV-241 CORPUS C2: validate the shipped engineering corpus tree + manifest
 	cd packages/api && uv run --no-sync python -m solus_api.corpus validate && uv run --no-sync python -m solus_api.corpus manifest --check
 
-corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DATABASE_URL) (the only write path)
-	cd packages/api && uv run --no-sync python -m solus_api.corpus ingest
+# Dev: SOL's search_corpus tool (SOLUSDEV-321 P1-T4) says "corpus not ingested" until this has run
+# on the database the API uses. The ingest reads SOLUS_DATABASE_URL from the environment, never
+# from .env, and SOL ranks the corpus by full text, so a dev box with no embedding key skips the
+# embeddings:  SOLUS_DATABASE_URL=postgresql+asyncpg://… make corpus-ingest INGEST_FLAGS=--no-embed
+# (the same as: SOLUS_DATABASE_URL=… uv run python -m solus_api.corpus ingest --no-embed).
+corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DATABASE_URL) (the only write path); dev: INGEST_FLAGS=--no-embed
+	cd packages/api && uv run --no-sync python -m solus_api.corpus ingest $(INGEST_FLAGS)
 
 corpus-eval: ## SOLUSDEV-241 CORPUS C2: retrieval eval with per-domain scores (keyless full-text path)
 	cd packages/api && uv run --no-sync pytest tests/corpus/test_corpus_eval.py -q -s

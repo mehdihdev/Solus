@@ -15,7 +15,7 @@ reconciliation sweep. This module is the orchestration-facing seam over it.
 import logging
 import math
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from sqlalchemy import select
@@ -134,6 +134,7 @@ async def track_cost(
     enqueue: EnqueueFn | None = None,
     extension_id: uuid.UUID | None = None,
     tokens_cached_in: int = 0,
+    meta: Mapping[str, Any] | None = None,
 ) -> None:
     """POST-call hook (phase 3): runs AFTER the model responds (`tokens_out` is only
     known then). Computes credits via `compute_call_credits` (with MO-02b breakpoint
@@ -145,6 +146,15 @@ async def track_cost(
     extension whose `sol.ask` caused it — on the ledger row AND on the dead-letter
     record, so a reconciled debit keeps it. The debit itself stays on `user_id`.
 
+    `meta` (SOLUSDEV-321) is caller context for the ledger row — the gateway passes
+    `purpose`, `tier`, and `turn_id` / `project_id` when the call has them. Its keys
+    are merged into the attrs UNDER the billing keys below, so a meta key can never
+    rewrite what was measured or billed; it reaches the dead-letter record too, so a
+    reconciled debit keeps it.
+
+    A call that costs nothing (a scripted or zero-priced one) still writes its row:
+    amount 0, the balance untouched (P8). Usage then counts every call.
+
     Debit-failure behavior (LOCKED, contract §6): the model call already ran and was
     paid for — NEVER fail the user's request on the accounting write. On any debit
     failure the debit is recorded in the billing dead-letter
@@ -155,9 +165,8 @@ async def track_cost(
     amount = compute_call_credits(
         model, tokens_in, tokens_out, cost, entry=entry, tokens_cached_in=tokens_cached_in
     )
-    if amount <= 0:
-        return
-    attrs = {
+    attrs: dict[str, Any] = {
+        **(meta or {}),
         "call_id": call_id,
         "model_name": model.model_name,
         "role": model.role,

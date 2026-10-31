@@ -3,7 +3,9 @@
 `run_checkers`, `query_graph`, `retrieve_errors`, `get_telemetry` — thin
 closures over the real `SolSystems` (SYS-04's `DbSolSystems`), so the tool
 layer and `build_context` share ONE data path per subsystem and cannot drift.
-`run_checkers` additionally feeds the graph slice through CHK-01's real rules.
+`run_checkers` additionally feeds the graph slice through CHK-01's real rules and,
+as a dry run, through the interaction matrix (SOLUSDEV-321 P3-T3, R64): it writes
+nothing, since the matrix job keeps results after every graph change.
 
 Scope discipline (CLAUDE.md §7): `project_id` is bound in the closure at
 registration by Solus code and appears in NO params schema — ingested content
@@ -32,14 +34,20 @@ from solus_api.agent.interfaces import (
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, Tool, ToolException
 from solus_api.checkers.core import run_all
+from solus_api.checkers.fact_store import build_fact_store
+from solus_api.checkers.interface import severity_rank
+from solus_api.checkers.matrix_runner import judge_matrix
 from solus_api.fingerprint.contract import FingerprintOutput
 from solus_api.widgets.graph_nodes import NON_WORKSPACE_DOMAINS
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
     from solus_api.agent.interfaces import SolSystems
 
-#: Matches `reason.plan_query`'s context cap — a tool result re-enters the model
-#: context, so it gets the same sub-sampling budget as the planned context pull.
+#: A tool result re-enters the model context, so it is sub-sampled like a context pull. This
+#: was the retired `reason.plan_query`'s cap; `turn_scope.plan_scope` now pulls at most
+#: `MAX_SCOPE_ENTITIES` (60) per turn, and a tool result keeps this wider bound.
 _GRAPH_BUDGET = ContextBudget(max_entities=200)
 #: Checkers read attributes off the whole reachable slice — always 2 hops.
 _CHECKER_DEGREE = 2
@@ -205,8 +213,14 @@ def _parse_entity_ids(raw: list[str]) -> list[UUID]:
         raise ToolException("entity_ids must be UUIDs", code=ToolErrorCode.INVALID_ARGS) from exc
 
 
-def build_builtin_tools(systems: SolSystems, project_id: UUID) -> list[Tool]:
-    """The four SYS-03 tools bound to ONE project scope, wrapping the real feeds."""
+def build_builtin_tools(
+    systems: SolSystems,
+    project_id: UUID,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> list[Tool]:
+    """The four SYS-03 tools bound to ONE project scope, wrapping the real feeds;
+    `session_factory` reads the facts `run_checkers`' matrix dry run judges with."""
 
     async def query_graph_handler(args: dict[str, Any]) -> dict[str, Any]:
         scope = GraphScope(
@@ -236,7 +250,12 @@ def build_builtin_tools(systems: SolSystems, project_id: UUID) -> list[Tool]:
             anchor_entity_ids=_parse_entity_ids(args["entity_ids"]), degree=_CHECKER_DEGREE
         )
         context = await systems.get_graph_context(project_id, scope, _GRAPH_BUDGET)
-        warnings = run_all(context, _EMPTY_FINGERPRINT)
+        # SOLUSDEV-321 P3-T3 (R64): the slice also goes through the interaction matrix — a dry
+        # run, so a SOL turn never writes results; the job does after every graph change.
+        async with session_factory() as session:
+            facts = await build_fact_store(session, project_id, context)
+        found = [*run_all(context, _EMPTY_FINGERPRINT), *judge_matrix(context, facts).warnings]
+        warnings = sorted(found, key=lambda w: severity_rank(w.severity), reverse=True)
         return {
             "warnings": [warning.model_dump(mode="json") for warning in warnings],
             "truncated": context.truncated,

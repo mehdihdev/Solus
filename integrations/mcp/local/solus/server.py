@@ -79,6 +79,7 @@ def _empty_scan() -> dict[str, Any]:
         "tools_installed": dict(_NO_TOOLS),
         "dependencies": [],
         "truncated_dependencies": False,
+        "ros": [],
     }
 
 
@@ -95,8 +96,10 @@ def _guarded(
 
 def tool_scan_folder() -> dict[str, Any]:
     """Scan the linked folder: git identity, tool-relevant files (path parts,
-    size, blake2b-128 hash, tool), digest, and the Python dependency
-    declarations (requirements*.txt, pyproject.toml, environment.yml)."""
+    size, blake2b-128 hash, tool), digest, the Python dependency
+    declarations (requirements*.txt, pyproject.toml, environment.yml) and the
+    bounded texts of its ROS packages (package.xml, launch and setup files, and
+    each package's own module directory), never run here."""
 
     def body() -> dict[str, Any]:
         root = workspace_root()

@@ -1494,6 +1494,8 @@ export interface BenchSession {
   device_ids: string[]
   counts: { ingested: number; unresolved: number }
   last_summary: BenchWindowSummary | null
+  /** The root a robot session observes (a robot, or a bare part); null for sim/serial sessions. */
+  robot_entity_id?: string | null
 }
 
 /** Start a bench session. Errors worth branching on (ApiError.code):

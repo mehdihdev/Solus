@@ -230,9 +230,13 @@ async def read_screen(
     enqueue: Any = None,
     adapters: Mapping[str, Any] | None = None,
     extension_id: uuid.UUID | None = None,
+    turn_id: uuid.UUID,
+    project_id: uuid.UUID,
 ) -> str:
     """The VISUAL_LOG extractor pass. Never raises: any failure is the honest
-    `SCREEN_READ_UNAVAILABLE` string and the turn carries on without a read."""
+    `SCREEN_READ_UNAVAILABLE` string and the turn carries on without a read.
+    `turn_id` / `project_id` are the turn's, handed over by the runner, which reads
+    the screenshot before any dispatch binds them; its usage row names both (R148)."""
     try:
         completion = await gateway.complete(
             _READ_PROMPT,
@@ -248,6 +252,9 @@ async def read_screen(
             enqueue=enqueue,
             max_tokens=SCREEN_READ_MAX_TOKENS,
             extension_id=extension_id,
+            purpose="vision",
+            turn_id=turn_id,
+            project_id=project_id,
         )
     except Exception as exc:  # noqa: BLE001 — vision is best-effort, never load-bearing
         # Class name only (review H2): a provider 400's message can quote the

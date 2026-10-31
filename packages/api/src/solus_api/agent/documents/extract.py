@@ -20,6 +20,11 @@ from pydantic import Field, ValidationError
 
 from solus_api.agent import prompt
 from solus_api.agent.documents.pdf import MAX_PAGES_PER_CALL, PageImage
+from solus_api.agent.turn_context import (
+    current_perception,
+    current_project_id,
+    current_turn_id,
+)
 from solus_api.connectors.contracts import FrozenModel
 from solus_api.orchestration import gateway
 from solus_api.orchestration.enums import Complexity, RouteType
@@ -172,9 +177,11 @@ async def extract_pages(
     proposals: list[DocumentProposal] = []
     notes: list[str] = []
     budget = min(max_calls, MAX_MODEL_CALLS)
+    turn = current_perception()
     for position, page in enumerate(pages):
-        if position >= budget:
-            notes.append(f"stopped after {budget} pages (model-call budget); later pages unread")
+        # M122: inside a SOL turn each page read is one of the turn's own `max_model_calls`.
+        if position >= budget or (turn is not None and not turn.take_model_call()):
+            notes.append(f"stopped after {position} pages (model-call budget); later pages unread")
             break
         try:
             completion = await gateway.complete(
@@ -189,6 +196,9 @@ async def extract_pages(
                 redis=redis,
                 enqueue=enqueue,
                 max_tokens=EXTRACT_MAX_TOKENS,
+                purpose="extract",
+                turn_id=current_turn_id(),  # R83: the SOL turn this read runs in, if any
+                project_id=current_project_id(),  # R148: that turn's project, bound beside it
             )
         except Exception as exc:  # noqa: BLE001 — vision is best-effort, never load-bearing
             # Class name only: a provider 400's message can quote the request body.

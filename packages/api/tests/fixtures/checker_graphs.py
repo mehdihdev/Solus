@@ -8,6 +8,10 @@ Two populations drive the eval that the ticket's acceptance criteria require:
 - **Clean controls** — well-matched graphs, plus deliberately UNDER-SPECIFIED and UNRELATED
   graphs, that must produce ZERO warnings → false-positive rate. The incomplete-graph control
   guards the core invariant: an incomplete graph is skipped, never guessed at.
+
+Every edge is a fact (confidence 1.0): the confirmed `wires` (an op-amp and the load it is wired
+to), `reads` (code → sensor) and `powers` the retargeted rules read (SOLUSDEV-321 P3-T2); an
+inferred `reads` is a 0.55 candidate no rule reads until a person confirms it.
 """
 
 from dataclasses import dataclass
@@ -72,7 +76,7 @@ def _wrong_op_amp() -> CheckerCase:
             av.REQUIRED_SUPPLY_V: 24.0,
         },
     )
-    graph = GraphContext(entities=[op_amp, stage], edges=[_edge(op_amp, stage, av.DRIVES)])
+    graph = GraphContext(entities=[op_amp, stage], edges=[_edge(op_amp, stage, av.WIRES)])
     return CheckerCase("wrong_op_amp", graph, frozenset({_OP_AMP}))
 
 
@@ -89,7 +93,7 @@ def _sensor_frequency_clash() -> CheckerCase:
         },
     )
     loop = _entity("control_loop.cpp", "code", {av.LOOP_RATE_HZ: 50.0})
-    graph = GraphContext(entities=[imu, loop], edges=[_edge(loop, imu, av.READS_FROM)])
+    graph = GraphContext(entities=[imu, loop], edges=[_edge(loop, imu, av.READS)])
     return CheckerCase("sensor_frequency_clash", graph, frozenset({_SENSOR}))
 
 
@@ -168,7 +172,7 @@ def _clean_op_amp() -> CheckerCase:
             av.REQUIRED_SUPPLY_V: 12.0,
         },
     )
-    graph = GraphContext(entities=[op_amp, load], edges=[_edge(op_amp, load, av.DRIVES)])
+    graph = GraphContext(entities=[op_amp, load], edges=[_edge(op_amp, load, av.WIRES)])
     return CheckerCase("clean_op_amp", graph, frozenset())
 
 
@@ -184,7 +188,7 @@ def _clean_sensor() -> CheckerCase:
         },
     )
     loop = _entity("odom.py", "code", {av.LOOP_RATE_HZ: 150.0})
-    graph = GraphContext(entities=[sensor, loop], edges=[_edge(loop, sensor, av.READS_FROM)])
+    graph = GraphContext(entities=[sensor, loop], edges=[_edge(loop, sensor, av.READS)])
     return CheckerCase("clean_sensor", graph, frozenset())
 
 
@@ -221,8 +225,8 @@ def _incomplete_graph() -> CheckerCase:
     graph = GraphContext(
         entities=[op_amp, load, sensor, code, supply],
         edges=[
-            _edge(op_amp, load, av.DRIVES),
-            _edge(code, sensor, av.READS_FROM),
+            _edge(op_amp, load, av.WIRES),
+            _edge(code, sensor, av.READS),
             _edge(supply, load, av.POWERS),
         ],
     )
@@ -268,7 +272,7 @@ def _malicious_attrs() -> CheckerCase:
     mcu = _entity("mcu", "electrical", {av.VOLTAGE_REQUIRED_V: 5.0, av.CURRENT_DRAW_A: -3.0})
     graph = GraphContext(
         entities=[op_amp, load, supply, mcu],
-        edges=[_edge(op_amp, load, av.DRIVES), _edge(supply, mcu, av.POWERS)],
+        edges=[_edge(op_amp, load, av.WIRES), _edge(supply, mcu, av.POWERS)],
     )
     return CheckerCase("malicious_attrs", graph, frozenset())
 

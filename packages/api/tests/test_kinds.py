@@ -62,6 +62,26 @@ def test_new_kinds_exist() -> None:
     assert kinds.SOLUS_GOAL == "solus_goal"
     assert kinds.SOLUS_CONSTRAINT == "solus_constraint"
     assert kinds.PACKAGE_REQUIREMENT == "package_requirement"
+    assert kinds.SIM_RESULT == "sim_result"  # SOLUSDEV-321 P4-T1: what one simulation run found
+    # SOLUSDEV-321 P6: a ROS workspace's launched nodes and the topics their modules declare
+    assert kinds.ROS_NODE == "ros_node"
+    assert kinds.ROS_TOPIC == "ros_topic"
+    assert {kinds.ROS_NODE, kinds.ROS_TOPIC} <= kinds.ALL_KINDS
+
+
+def test_descriptor_kinds_are_the_nodes_that_describe_another_entity() -> None:
+    """SOLUSDEV-321 M30: a node of these kinds describes another entity and carries its name
+    (`Hardware config — servo 3`), so the planner never ties it with that entity. A simulation
+    result is named after its subject the same way (`stress_mpa — bracket`, P4-T1)."""
+    assert kinds.DESCRIPTOR_KINDS == {
+        kinds.HARDWARE_CONFIG,
+        kinds.HARDWARE_EVIDENCE,
+        kinds.HARDWARE_PRESENCE_PLAN,
+        kinds.HARDWARE_WIRING_PROPOSAL,
+        kinds.SIM_RESULT,
+    }
+    assert isinstance(kinds.DESCRIPTOR_KINDS, frozenset)
+    assert kinds.DESCRIPTOR_KINDS <= kinds.ALL_KINDS
 
 
 def test_existing_literals_match_the_constants() -> None:

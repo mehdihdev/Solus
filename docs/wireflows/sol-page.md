@@ -43,8 +43,28 @@ protocol unchanged.
   lines in the backend's persisted format (`tool → outcome`), confirmation cards
   (unchanged CTR-03 flow) and the citation chips — the raw `[connector:ref]` token
   in a pill, a domain dot only when the connector maps to one of the four domains,
-  and an `[entity:id]` chip focuses that node in the Workspace. Messages enter with
-  a short fade-rise.
+  and a chip that opens the surface it names (SOLUSDEV-321 P7): an `[entity:id]` chip
+  focuses that node in the Workspace, a `[finding:id]` chip opens the Live Bench with that
+  finding opened and expanded in its Findings pane (the shell carries the id and the Bench takes
+  it on arrival, so it opens even with no robot connected), and a `[solus:section:id]` chip opens
+  that `.solus` entry — its node in the Workspace, whose sidebar shows the entry (an entry the
+  project's `.solus` no longer holds opens the Workspace and focuses nothing). Chips come only
+  from the message's server-verified `citations`, never from prose; an `[entity:id]` is served
+  only for an anchor the turn's project-scoped graph pull returned, so a pasted id of another
+  team's, deleted or unknown entity stays plain text. Every other connector stays a plain chip,
+  and the SOL window's chips stay inert. Messages enter with a short fade-rise.
+- **SOL's reasoning above a proposal** (SOLUSDEV-321 P7). In Build, SOL writes what it weighed
+  before proposing a change; the server takes it out of the reply — raw JSON never reaches the
+  chat — and streams it as one `reasoning` frame. A collapsible block, `SOL's reasoning`, sits
+  above the proposal's card: **Considered** (a list), **Ruled out** (`what — why`, one per line)
+  and **Proposing**, all plain text — model text the server masked and capped and the client
+  bounds again, never markdown, never a link. Guide opens the block; Expert keeps it shut until
+  clicked. It hangs on the card that followed it in the stream and sits directly above THAT card:
+  one block per card, gone with the card once it is decided, none for a card whose round wrote no
+  block, and none for a block that was malformed, oversize or never closed — the server dropped
+  it, and the card shows as before. A reply that was only a block, with a card waiting, reads
+  "See the proposal below." (Solus's words, never the model's). Live turns only: a reloaded turn
+  shows no block (the frame is not stored).
 - Composer: a bordered box with a **+** attach button (menu: **Upload file or
   image** → the project's `.solus/documentation`; **Add node from graph** →
   Workspace), an autosizing textarea (`Ask SOL about this project…`; Enter sends,
@@ -55,7 +75,9 @@ protocol unchanged.
   (click to override); with none (empty input / endpoint hiccup) it shows the
   honest idle line "auto routing · sizes each message to the cheapest capable model"
   in the same spot — no layout shift, never a fabricated tier. Every send carries
-  the typed `@`-mentions first, then the chat's pinned nodes, deduped and capped at 8.
+  three separate anchor fields (SOLUSDEV-321): the typed `@`-mentions (`mentions`), the
+  chat's pinned nodes (`pins`, the first 8) and the Workspace focus with the trail it was
+  reached through (`focus`, only when something is focused). The SOL window sends none of them.
   Typing `@` in the input opens a **graph-entity picker** (SOLUSDEV-168): a
   listbox above the composer, debounced ~400ms against
   `GET /projects/{id}/entities?q=&limit=8`, matching names and connected code paths,
@@ -75,6 +97,34 @@ protocol unchanged.
 - Turn rejections are named, not generic: 402 → "You're out of SOL credits —
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."
+- **`/web <question>`** (SOLUSDEV-321 P1-T5): typing `/web` ahead of a question asks for a web
+  lookup. The route strips the command into the turn's one query (the stored user turn keeps the
+  full text) and a `/web` message skips the graph-first answer — the person asked for the web.
+  The sources the lookup found appear under the reply as **Web sources** pills: title and URL as
+  plain text, never a link. **Open** is enabled for an `https` URL only and opens the system
+  browser; **File** saves the title and URL as plain text into
+  `.solus/documentation/datasheets`, only on a click. A reload shows the same pills
+  (`attrs.research_sources`).
+- **How the answer was reached** (SOLUSDEV-321 P1-T6). Everything below is fixed status text
+  written by Solus, drawn as text nodes and identical in Guide and Expert; the explanation is the
+  reply itself.
+  - **Answered from the graph.** When the first tier answers from the graph with no model call, a
+    mono chip under the reply reads `answered from the graph · sources: <fact sources>` — from
+    the `answer_source` frame, and after a reload from the turn's stored
+    `attrs.answer_source` / `attrs.sources`. It names the one source the server defines; any
+    other value shows nothing, never a guess. It stands in for the trace step a first-tier answer
+    no longer has, since it makes no tool call.
+  - **Budget notice.** When a turn stops on a budget, a warn-coloured status line reads
+    `SOL stopped: <limit> budget reached (<used>/<cap>)` and sits directly above the router's own
+    `loop_limit` error, so the person learns which ceiling the turn hit and how far it got. The
+    `<limit>` is the server's word as sent (`tool_calls`, `model_calls`, `web_searches`,
+    `web_fetches`, `input_tokens`, `model_rounds`). From the `budget_reached` frame, and after a
+    reload from `attrs.budget_reached`.
+  - **Tool args.** Under each step of the collapsed `N tool steps` trace, after its
+    `tool → outcome` line, the call's arguments as `key: value` text. Only the copy the server
+    redacted (`redact_value`, so a secret-named key reads `[REDACTED]`), cut to display size on
+    arrival: at most 16 entries, every key and value at most 64 characters, nested values as
+    JSON text. Live turns only — a reloaded tool turn is the persisted `tool → outcome` line.
 
 SOLUSDEV-262 demo review: the composer includes **Confirm every change**. This
 per-conversation preference sends the existing `force_confirmation` flag and
@@ -127,6 +177,32 @@ solus_sol_pinned_v1`, keyed by project and conversation; a fresh chat's pins fol
   budget truncation). Empty state before the first turn: "Send a message and SOL will
   show what it grounded the answer in…". Labels only — section text never reaches the
   client.
+- **WHY SOL LOOKED HERE** (SOLUSDEV-321 P1-T6; a card in CONTEXT IN USE, from the same
+  `context_used` frame). Three blocks, all in the server's words and order:
+
+  - **Anchors**, one line each — `<entity name or id8> — <reason>`. The reason is the server's
+    word as sent (`focused`, `mentioned`, `pinned`, `finding_subject`, `bench_robot`,
+    `name_match`, `ref_match`; a word it does not know is shown as is). The name appears only when
+    a neighbourhood already fetched for the open project has it (no request is made for it);
+    otherwise the id's first eight characters. No anchors: "No anchors — SOL searched the index."
+  - **Dropped anchors** — ids the turn named that never reached the scope:
+    `<id8> — dropped (<reason>): <cause>` (`not_visible`, `over_cap`). Never named, since the
+    caller may not be able to see them; five are listed, then `+N more dropped`.
+  - **Tokens per layer** — `<layer>: <n>` for every layer in the server's prompt order, and after
+    a `0` the server's own `empty_reason` (`screen: 0 — no screenshot on this turn`). Nothing is
+    worded by the client.
+
+  A frame from before the anchors existed shows no card — absent is not "no anchors".
+
+- **The graph glow.** When `context_used` arrives, the entities it anchored on glow on the
+  Workspace graph for six seconds (`graph-node-highlighted`: an accent outline and glow, with a
+  two-pulse settle-in that is switched off under `prefers-reduced-motion` — the static ring
+  stays, so the cue never depends on motion). One timer ends it: the next turn replaces the
+  entities and restarts the clock, a turn with no anchors puts the glow out, and a project
+  change drops it. Only the open project's graph glows: a turn still streaming for another
+  project (chat sessions outlive navigation) neither lights nor puts out the open project's glow,
+  though its own context panel still fills. Only cards on the level being viewed can glow. The
+  SOL window is its own renderer with no graph, so a turn there lights nothing.
 
 ## Session lifetime (SOLUSDEV-233)
 
@@ -169,6 +245,9 @@ JS timers in orb-adjacent files).
 - Usage fetch fails / offline: "Usage unavailable offline."; no fabricated
   numbers anywhere on the page.
 - Signed out (dev bypass): panels degrade to their offline states.
+- A `context_used`, `answer_source`, `budget_reached`, `tool_call` or `reasoning` frame whose
+  shape or size bounds the client cannot prove is dropped whole: the panel card, badge, notice,
+  args or reasoning block are absent — never half drawn, never invented.
 
 ## Compact intervention cards and autonomous Build — SOLUSDEV-261
 

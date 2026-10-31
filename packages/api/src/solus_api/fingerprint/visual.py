@@ -208,6 +208,7 @@ async def identify_from_image(
             redis=redis,
             enqueue=enqueue,
             max_tokens=_MAX_ANSWER_TOKENS,
+            purpose="vision",
         )
     except Exception as exc:  # noqa: BLE001 — vision is best-effort, never load-bearing
         # Class name only: a provider 400's cause chain can quote the image bytes.

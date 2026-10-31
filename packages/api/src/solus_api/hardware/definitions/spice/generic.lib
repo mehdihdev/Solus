@@ -1,0 +1,11 @@
+* SOLUSDEV-321 P4-T3: the only device models a rung-3 SPICE deck may hold.
+* Solus-authored and vendor-free: textbook parameters for a generic part of each kind, never a
+* real product's. A schematic element names one by its model name; any other name fails at run
+* time as "model not found". The deck reads this file through a closed grammar
+* (simulation/providers/spice_deck.py): `.model` lines, and `.subckt` blocks of element cards,
+* nothing else.
+.model d_generic D(is=1e-14 n=1 rs=0.1)
+.model npn_generic NPN(is=1e-14 bf=100)
+.model pnp_generic PNP(is=1e-14 bf=100)
+.model nmos_generic NMOS(level=1 vto=1 kp=2e-5)
+.model pmos_generic PMOS(level=1 vto=-1 kp=1e-5)

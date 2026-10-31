@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.graph import kinds
 from solus_api.graph.read_scope import current_scope
 from solus_api.hardware.config import PartConfig, is_private_source
 from solus_api.hardware.runtime import resolve_runtime_config
@@ -215,17 +216,19 @@ async def validate_references(session: AsyncSession, project_id: UUID, run: RunM
         if source_ids != allowed_sources:
             raise APIError(404, "not_found", "Run source reference not found")
     ids = part_ids | {item.entity_id for item in run.snapshots}
+    ids |= {f.finding_id for f in run.findings} | {s for f in run.findings for s in f.subjects}
     if ids:
-        available = set(
-            await session.scalars(
-                select(GraphEntity.id).where(
-                    current_scope(project_id).entity_predicate(),
-                    GraphEntity.id.in_(ids),
-                    GraphEntity.deleted_at.is_(None),
-                )
+        found = await session.execute(
+            select(GraphEntity.id, GraphEntity.kind).where(
+                current_scope(project_id).entity_predicate(),
+                GraphEntity.id.in_(ids),
+                GraphEntity.deleted_at.is_(None),
             )
         )
-        if available != ids:
+        available = {entity_id: kind for entity_id, kind in found.tuples()}
+        # A twin's marker names a simulation of this project, never another entity (P4-T5).
+        twins = {item.entity_id for item in run.snapshots if item.kind == kinds.SIM_RESULT}
+        if set(available) != ids or any(available[twin] != kinds.SIM_RESULT for twin in twins):
             raise APIError(404, "not_found", "Run graph reference not found")
 
 

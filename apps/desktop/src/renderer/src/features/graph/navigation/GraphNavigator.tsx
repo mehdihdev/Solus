@@ -18,6 +18,7 @@ import {
 } from './useGraphNavigation'
 import './navigation.css'
 import { useAuthStore } from '../../../store/authStore'
+import { selectHighlightedIds, useFocusStore } from '../../workspace/focusStore'
 import { useWorkspaceSessionGeneration } from '../workspaceSession'
 import { useGroupPositions } from './useGroupPositions'
 import { GraphSuggestions } from './GraphSuggestions'
@@ -120,6 +121,9 @@ function NavigationCards({
   previews: ChildPreviews
 }): React.JSX.Element {
   const { visible, points, select, enter, back, preview } = model
+  // Where SOL looked this turn (SOLUSDEV-321 P1-T6). Each card gets a boolean, so a glow starting
+  // or ending re-renders only the cards it touches.
+  const highlightedIds = useFocusStore(selectHighlightedIds)
   return (
     <>
       {visible.map((entity) => (
@@ -129,6 +133,7 @@ function NavigationCards({
           point={points[entity.id]}
           offset={offset}
           focused={props.focusedId === entity.id}
+          highlighted={highlightedIds.includes(entity.id)}
           childCount={previews.get(entity.id)?.length ?? 0}
           onRevealChild={scopeRootIds?.includes(entity.id) ? model.revealEntity : undefined}
           childPreviews={previews.get(entity.id)}

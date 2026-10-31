@@ -63,6 +63,16 @@ def test_render_pages_honours_the_page_selection_and_the_page_cap() -> None:
     assert render_pages(two_page_pdf(), pages=[]).pages == []
 
 
+def test_a_tall_page_is_scaled_to_fit_the_height_cap_as_well() -> None:
+    """SOLUSDEV-321 P5 fix 1 (M7): a 100x2000 pt page scaled to 1,400 px wide would be 28,000 px
+    tall. It is scaled to fit both bounds instead, so the rasteriser never allocates past
+    `MAX_PAGE_HEIGHT` px, whatever a fetched or companion-exported PDF declares."""
+    (page,) = render_pages(two_page_pdf(width=100, height=2000), pages=[1]).pages
+
+    assert pdf.MAX_PAGE_HEIGHT - 2 <= page.height <= pdf.MAX_PAGE_HEIGHT
+    assert abs(page.width - 100 * pdf.MAX_PAGE_HEIGHT / 2000) <= 1  # about 205 px, not 1,400
+
+
 @pytest.mark.parametrize(
     "data", [b"not a pdf at all", b"%PDF-1.4 truncated garbage", b"%PDF-" + b"x" * MAX_PDF_BYTES]
 )
@@ -297,6 +307,56 @@ async def test_extract_pages_degrades_per_page_and_stops_at_the_call_budget(
     calls = _script(monkeypatch, {1: PAGE_ONE_READ})
     proposals, notes = await _extract(rendered.pages, max_calls=1)
     assert len(calls) == 1
+    assert any("budget" in note for note in notes)
+
+
+async def test_each_page_read_carries_the_turn_it_runs_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R83: a page read inside a SOL turn is attributed to that turn, so its ledger row carries
+    the turn's id and the turn's budget counts it — and, R148, the turn's project, so the turn's
+    usage lists it. Outside a turn it carries neither."""
+    from solus_api.agent.turn_context import bind_turn_id
+
+    calls = _script(monkeypatch, {1: PAGE_ONE_READ, 2: PAGE_TWO_READ, 3: PAGE_ONE_READ})
+    rendered = render_pages(two_page_pdf())
+    turn_id, project_id = uuid.uuid4(), uuid.uuid4()
+    with bind_turn_id(turn_id, project_id):
+        await _extract(rendered.pages)
+    await _extract(rendered.pages[:1])
+
+    assert [call.get("turn_id") for call in calls] == [turn_id, turn_id, None]
+    assert [call.get("project_id") for call in calls] == [project_id, project_id, None]
+
+
+async def test_each_page_read_counts_against_the_turns_model_call_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """M122: inside a turn each page read is noted on the turn's budget (`take_model_call`), and
+    a turn one call short of its closing round reads no page at all — the budget note says so."""
+    from dataclasses import replace
+
+    from solus_api.agent.modes import ActionMode
+    from solus_api.agent.turn_budget import TurnBudget
+    from solus_api.agent.turn_context import PerceptionTurn, bind_perception, bind_turn_id
+    from solus_api.agent.turn_limits import turn_limits
+
+    def budget(max_model_calls: int) -> TurnBudget:
+        return TurnBudget(replace(turn_limits(ActionMode.GUIDE), max_model_calls=max_model_calls))
+
+    calls = _script(monkeypatch, {1: PAGE_ONE_READ, 2: PAGE_TWO_READ})
+    rendered = render_pages(two_page_pdf())
+    roomy = budget(6)
+    with bind_turn_id(uuid.uuid4()), bind_perception(PerceptionTurn(roomy)):
+        proposals, notes = await _extract(rendered.pages)
+    assert len(calls) == 2 and roomy.model_calls == 2 and notes == []
+
+    short = budget(3)
+    short.note_model_call()
+    short.note_model_call()  # the next call would be the closing round's
+    with bind_turn_id(uuid.uuid4()), bind_perception(PerceptionTurn(short)):
+        proposals, notes = await _extract(rendered.pages)
+    assert len(calls) == 2 and proposals == [] and short.model_calls == 2
     assert any("budget" in note for note in notes)
 
 

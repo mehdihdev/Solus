@@ -96,6 +96,53 @@ it('compares an explicit same-robot pair and keeps attribution separate from div
   expect(screen.getByText(/Positions follow the changed upper bound/)).toBeInTheDocument()
   expect(compareRuns).toHaveBeenCalledWith('p', 'baseline', 'candidate')
 })
+it('lists how the two runs’ findings changed, matched by rule, as text', async () => {
+  vi.mocked(compareRuns).mockResolvedValue({
+    config_changes: [],
+    source_snapshots_changed: false,
+    divergences: [],
+    clamp_attributions: [],
+    insufficient: [],
+    expected_source: 'baseline_run',
+    finding_deltas: [
+      {
+        rule_id: 'rail_sag_correlated',
+        subjects: ['part'],
+        change: 'new',
+        severity: 'warning',
+        baseline: null,
+        candidate: { finding_id: 'f2', count: 1 }
+      },
+      {
+        rule_id: 'sensor_frozen',
+        subjects: ['part'],
+        change: 'cleared',
+        severity: 'warning',
+        baseline: { finding_id: 'f0', count: 4 },
+        candidate: null
+      },
+      {
+        rule_id: '<b>tracking_error_stall</b>',
+        subjects: ['part'],
+        change: 'persisting',
+        severity: 'critical',
+        baseline: { finding_id: 'f1', count: 3 },
+        candidate: { finding_id: 'f3', count: 5 }
+      }
+    ]
+  })
+  const baseline = { ...run, id: 'baseline', name: 'Clamp 120', status: 'completed' as const }
+  const { container } = render(<RunEvidence projectId="p" run={run} runs={[baseline, run]} />)
+  fireEvent.change(screen.getByLabelText('Baseline run'), { target: { value: 'baseline' } })
+  const deltas = await screen.findByRole('list', { name: 'Finding changes' })
+  expect([...deltas.querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+    'New: rail_sag_correlated (warning) ×1',
+    'Cleared: sensor_frozen (warning) ×4 before',
+    'Persisting: <b>tracking_error_stall</b> (critical) ×3 → ×5'
+  ])
+  expect(container.querySelector('b')).toBeNull()
+  expect(screen.getByText(/compared against the baseline run/i)).toBeInTheDocument()
+})
 it('still opens playback when finding generation is unavailable', async () => {
   vi.mocked(runFindings).mockRejectedValue(new Error('unavailable'))
   render(<RunEvidence projectId="p" run={run} runs={[run]} />)

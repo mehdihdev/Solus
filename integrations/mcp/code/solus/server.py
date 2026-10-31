@@ -54,6 +54,7 @@ try:
         git_execution,
         git_operations,
         profiles,
+        ros2_reads,
     )
     from .execute import default_runner, execute_plan, pinned_which, prepare, refusal, run_sandboxed
     from .plan import DEFAULT_ENVIRONMENT, DEFAULT_PYTHON, DEFAULT_TEST_TARGET, plan_action
@@ -73,6 +74,7 @@ except ImportError:  # pragma: no cover - script mode under bin/launch
         git_execution,
         git_operations,
         profiles,
+        ros2_reads,
     )
     from solus.execute import (  # type: ignore[import-not-found, no-redef, unused-ignore]
         default_runner,
@@ -367,6 +369,28 @@ def tool_profile_list() -> dict[str, Any]:
     )
 
 
+def tool_ros2_nodes(profile: str | None = None) -> dict[str, Any]:
+    """List the live ROS 2 nodes (`ros2 node list --no-daemon --spin-time 2`) through a captured
+    SYSTEM profile (code.profile_capture of /opt/ros/<distro>/setup.bash). A profile that reaches
+    the linked folder (a workspace overlay) is refused: use code.exec. Starts no ROS daemon."""
+    return _guarded(
+        "ros2_nodes",
+        lambda: ros2_reads.read_refusal("nodes", "ros2_nodes failed"),
+        lambda: ros2_reads.ros2_nodes(workspace_root(), profile),
+    )
+
+
+def tool_ros2_topics(profile: str | None = None) -> dict[str, Any]:
+    """List the live ROS 2 topics and their types (`ros2 topic list --no-daemon -t`) through a
+    captured SYSTEM profile. A profile that reaches the linked folder (a workspace overlay) is
+    refused: use code.exec. Starts no ROS daemon."""
+    return _guarded(
+        "ros2_topics",
+        lambda: ros2_reads.read_refusal("topics", "ros2_topics failed"),
+        lambda: ros2_reads.ros2_topics(workspace_root(), profile),
+    )
+
+
 def tool_profile_delete(name: str) -> dict[str, Any]:
     """Delete a stored environment profile. Confirmation-gated."""
     return _guarded(
@@ -529,12 +553,15 @@ _TOOLS: dict[str, Callable[..., dict[str, Any] | Awaitable[dict[str, Any]]]] = {
     "profile_capture": tool_profile_capture,
     "profile_list": tool_profile_list,
     "profile_delete": tool_profile_delete,
+    # SOLUSDEV-321 P6: two unconfirmed reads of the live ROS graph (solus/ros2_reads.py).
+    "ros2_nodes": tool_ros2_nodes,
+    "ros2_topics": tool_ros2_topics,
 }
 #: Tools that stream incremental output (MCP progress) while they run.
 STREAMING_TOOLS = frozenset({"run", "test", "exec", "arduino_upload"})
 #: Strict argument models: extra fields forbidden, no type coercion.
 STRICT_PREFIXES = ("git_", "arduino_", "process_", "profile_")
-STRICT_TOOLS = frozenset({"exec"})
+STRICT_TOOLS = frozenset({"exec", "ros2_nodes", "ros2_topics"})
 
 
 def _streaming_tool(server: Any, function: Callable[..., Any]) -> Callable[..., Any]:

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import type { BenchSignalSeries } from '../../lib/api/resources'
-import { anomalyMarkers } from './signalAnomalies'
-import type { ObserverEventOut } from '../../widgets/livebench/telemetry'
+import { anomalyMarkers, type SignalAnomaly } from './signalAnomalies'
 import { chartSegments } from '../../widgets/livebench/telemetry'
 import {
   convertUnit,
@@ -17,10 +16,13 @@ interface Props {
   projectId: string
   deviceId: string
   series: BenchSignalSeries
-  events?: readonly ObserverEventOut[]
+  events?: readonly SignalAnomaly[]
   onScope?: () => void
   windowEndMs?: number
+  /** A marker that names a finding opens it in the Findings pane (SOLUSDEV-321 P2-T7). */
+  onOpenFinding?: (findingId: string) => void
 }
+type Marker = ReturnType<typeof anomalyMarkers>[number]
 interface Preference {
   name?: string
   unit?: string
@@ -172,10 +174,18 @@ function ScopedSignalWidget({
   events = [],
   preferenceKey,
   onScope,
-  windowEndMs
+  windowEndMs,
+  onOpenFinding
 }: Props & { preferenceKey: string | null }): React.JSX.Element {
   const { preference, save, saveFailed } = usePreference(preferenceKey)
   const view = signalView(series, preference, windowEndMs)
+  const markers = anomalyMarkers(
+    events,
+    deviceId,
+    series.signal,
+    displayPoints(series.points, view.unit),
+    windowEndMs === undefined ? undefined : { start: windowEndMs - 8000, end: windowEndMs }
+  )
   return (
     <section aria-label={`${view.name} signal`} className="bench-signal-card">
       {onScope && (
@@ -208,19 +218,42 @@ function ScopedSignalWidget({
         )}
       </div>
       {saveFailed && <p role="alert">This name or unit could not be saved on this machine.</p>}
+      <SignalChart
+        name={view.name}
+        segments={view.segments}
+        markers={markers}
+        onOpenFinding={onOpenFinding}
+      />
+    </section>
+  )
+}
+
+const markerKey = (marker: Marker): string =>
+  `${marker.kind}:${marker.at}:${marker.finding_id ?? ''}`
+
+/** The chart lets clicks fall through to the scope target; only a marker that names a finding
+ *  is a control (a button over its line), and only when a findings pane can open it. */
+function SignalChart({
+  name,
+  segments,
+  markers,
+  onOpenFinding
+}: {
+  name: string
+  segments: string[]
+  markers: Marker[]
+  onOpenFinding?: (findingId: string) => void
+}): React.JSX.Element {
+  return (
+    <div style={{ position: 'relative', pointerEvents: 'none' }}>
       <svg
         viewBox="0 0 240 48"
         role="img"
-        aria-label={`${view.name} rolling chart`}
-        style={{
-          width: '100%',
-          height: '3.5rem',
-          pointerEvents: 'none',
-          color: 'var(--bench-accent)'
-        }}
+        aria-label={`${name} rolling chart`}
+        style={{ width: '100%', height: '3.5rem', color: 'var(--bench-accent)' }}
         preserveAspectRatio="none"
       >
-        {view.segments.map((segment, index) => (
+        {segments.map((segment, index) => (
           <g key={`${index}:${segment}`}>
             <polygon
               points={`${segment} ${segment.split(' ').at(-1)?.split(',')[0]},48 ${segment.split(',')[0]},48`}
@@ -230,15 +263,9 @@ function ScopedSignalWidget({
             <polyline points={segment} fill="none" stroke="currentColor" strokeWidth="1.5" />
           </g>
         ))}
-        {anomalyMarkers(
-          events,
-          deviceId,
-          series.signal,
-          displayPoints(series.points, view.unit),
-          windowEndMs === undefined ? undefined : { start: windowEndMs - 8000, end: windowEndMs }
-        ).map((marker) => (
+        {markers.map((marker) => (
           <line
-            key={`${marker.kind}:${marker.at}`}
+            key={markerKey(marker)}
             aria-label={`${marker.kind} at ${marker.at}`}
             x1={marker.x}
             x2={marker.x}
@@ -253,6 +280,31 @@ function ScopedSignalWidget({
           </line>
         ))}
       </svg>
-    </section>
+      {onOpenFinding &&
+        markers.map(({ finding_id: findingId, ...marker }) =>
+          findingId ? (
+            <button
+              key={markerKey({ ...marker, finding_id: findingId })}
+              type="button"
+              aria-label={`Open finding: ${marker.kind} at ${marker.at}`}
+              title={`${marker.kind} at ${marker.at} — open the finding`}
+              onClick={() => onOpenFinding(findingId)}
+              style={{
+                position: 'absolute',
+                top: 0,
+                bottom: 0,
+                left: `${(marker.x / 240) * 100}%`,
+                marginLeft: -5,
+                width: 10,
+                padding: 0,
+                border: 0,
+                background: 'transparent',
+                cursor: 'pointer',
+                pointerEvents: 'auto'
+              }}
+            />
+          ) : null
+        )}
+    </div>
   )
 }

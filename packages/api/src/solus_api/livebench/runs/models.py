@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    model_validator,
+)
 
 from solus_api.graph.packet import TelemetryPacket
 
@@ -50,6 +58,24 @@ class RevisionSnapshot(StrictModel):
     data: Annotated[str, Field(max_length=65536)] | None = None
 
 
+#: The graph findings one run's manifest carries at most (SOLUSDEV-321 P2-T7).
+MAX_RUN_FINDINGS = 64
+
+
+class RunFinding(StrictModel):
+    """A graph finding the run's bench session raised while it ran (`runs/capture.py`): its id,
+    and what compare matches it on across runs — `rule_id` and the sorted `subjects`, since a
+    finding's id is per bench session — with how often and when it showed."""
+
+    finding_id: UUID
+    rule_id: Annotated[str, Field(min_length=1, max_length=128)]
+    subjects: Annotated[list[UUID], Field(max_length=64), AfterValidator(sorted)]
+    severity: Literal["info", "warning", "critical"]
+    count: int = Field(ge=1, le=10**9)
+    first_seen: AwareDatetime
+    last_seen: AwareDatetime
+
+
 class RunManifest(StrictModel):
     schema_version: Literal[1] = 1
     robot_id: UUID
@@ -58,6 +84,8 @@ class RunManifest(StrictModel):
     sensors: list[SensorReference] = Field(default_factory=list, max_length=10000)
     parts: list[PartEvidence] = Field(default_factory=list, max_length=256)
     snapshots: list[RevisionSnapshot] = Field(default_factory=list, max_length=256)
+    # Optional, so every manifest recorded before findings existed still loads.
+    findings: list[RunFinding] = Field(default_factory=list, max_length=MAX_RUN_FINDINGS)
 
     @model_validator(mode="after")
     def unique_parts(self) -> Self:

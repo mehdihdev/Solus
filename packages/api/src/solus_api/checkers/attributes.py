@@ -15,6 +15,8 @@ Two invariants make the rules safe on real, incomplete graphs:
 import math
 from typing import Any
 
+from solus_contracts.relations import RelationType
+
 from solus_api.agent.interfaces import EntityRead
 
 # --- entity classification (value of `part_class`) ----------------------------------------
@@ -31,7 +33,7 @@ OUTPUT_CURRENT_MAX_A = "output_current_max_a"
 SUPPLY_V_MIN = "supply_v_min"
 SUPPLY_V_MAX = "supply_v_max"
 
-# --- driven-load / circuit-role requirement (carried by the entity an op-amp `drives`) ----
+# --- driven-load / circuit-role requirement (carried by the load an op-amp is wired to) ---
 REQUIRED_GBW_HZ = "required_gbw_hz"
 REQUIRED_OUTPUT_CURRENT_A = "required_output_current_a"
 REQUIRED_SUPPLY_V = "required_supply_v"
@@ -53,11 +55,11 @@ BUS_MAX_HZ = "bus_max_hz"  # max throughput of the bus the sensor sits on
 # --- code / control loop ------------------------------------------------------------------
 LOOP_RATE_HZ = "loop_rate_hz"  # rate at which code reads / polls
 
-# --- relation types the rules traverse (well-known `graph_edge.relation_type` values) -----
-DRIVES = "drives"  # op-amp -> load it drives
-READS_FROM = "reads_from"  # code -> sensor it samples
-POWERS = "powers"  # supply -> load it powers
-CONNECTED_TO = "connected_to"  # generic electrical connection (e.g. sensor <-> bus)
+# --- relation types the rules traverse (the contracts' `RelationType` vocabulary) ---------
+WIRES = RelationType.WIRES.value  # component <-> component on a net: an op-amp and its load
+READS = RelationType.READS.value  # code -> sensor it samples (a candidate until confirmed)
+POWERS = RelationType.POWERS.value  # supply -> load it powers
+CONNECTED_TO = RelationType.CONNECTED_TO.value  # component -> net (EDA netlist)
 
 #: default supply-voltage tolerance when an entity does not declare its own (percent).
 DEFAULT_VOLTAGE_TOLERANCE_PCT = 5.0

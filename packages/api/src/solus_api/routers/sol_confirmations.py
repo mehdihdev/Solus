@@ -26,6 +26,7 @@ from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import (
+    BridgeSessionsDep,
     ProjectCtx,
     RequireVerified,
     SessionDep,
@@ -33,12 +34,18 @@ from solus_api.deps import (
     SolRegistryDep,
     require_role,
 )
-from solus_api.models import Role, Source, ToolConfirmation, TurnRole
+from solus_api.models import ConfirmationStatus, Role, Source, ToolConfirmation, TurnRole
 from solus_api.orchestration.config import load_orchestration_config
 from solus_api.orchestration.gates import FrequencyCapExceededError, check_frequency_cap
 from solus_api.schemas import ConfirmationDecision
 from solus_api.services.events import emit_event
 from solus_api.services.onshape_write_sync import schedule_onshape_write_sync
+from solus_api.services.outcomes import (
+    outcome_decision,
+    record_outcome,
+    signals_at_click,
+    stale_reason,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/sol")
 
@@ -144,11 +151,16 @@ async def _decided_row(
 ) -> Row[Any] | None:
     """SCOPED, like `decide_confirmation`'s own read. `session.get` by id alone
     would let another project's confirmation name a tool in this project's event
-    stream — the same no-existence-oracle rule, applied to the audit path."""
+    stream — the same no-existence-oracle rule, applied to the audit path. The status and
+    the card's rows are what the decision's outcome row is made of (SOLUSDEV-321 P8)."""
     return (
         await session.execute(
             select(
-                ToolConfirmation.tool, ToolConfirmation.conversation_id, ToolConfirmation.args
+                ToolConfirmation.tool,
+                ToolConfirmation.conversation_id,
+                ToolConfirmation.args,
+                ToolConfirmation.status,
+                ToolConfirmation.preview,
             ).where(
                 ToolConfirmation.id == confirmation_id,
                 ToolConfirmation.project_id == ctx.project.id,
@@ -182,14 +194,15 @@ async def _record_decision_turn(
     decided: Row[Any],
     decision: str,
     result: ToolResult,
-) -> None:
+) -> uuid.UUID:
     """THE OTHER HALF OF THE HISTORY FIX. The turn that proposed this recorded it
     as "parked, awaiting your approval" and then ended. Without a second turn
     recording what the decision actually did, the transcript stops at "parked"
     forever — so the next message shows SOL a change it proposed, never learned
-    the fate of, and will helpfully propose again."""
+    the fate of, and will helpfully propose again. Returns the turn's id, which
+    the decision's outcome row links (SOLUSDEV-321 P8)."""
     paths = call_display_paths(decided.tool, decided.args)
-    await SERVICE.append_turn(
+    turn = await SERVICE.append_turn(
         session,
         conversation_id=decided.conversation_id,
         project_id=ctx.project.id,
@@ -211,6 +224,7 @@ async def _record_decision_turn(
             allowed_paths=paths,
         ),
     )
+    return turn.id
 
 
 def _emit_decision_events(
@@ -250,6 +264,24 @@ def _emit_decision_events(
         )
 
 
+async def _status_before(
+    session: AsyncSession, ctx: ProjectCtx, confirmation_id: uuid.UUID
+) -> ConfirmationStatus | None:
+    """The card's status before this decision, read under the row lock `decide_confirmation`
+    takes next in the same transaction: a concurrent second click waits for the first and
+    then reads the card settled, so one card writes one outcome (SOLUSDEV-321 P8)."""
+    status: ConfirmationStatus | None = await session.scalar(
+        select(ToolConfirmation.status)
+        .where(
+            ToolConfirmation.id == confirmation_id,
+            ToolConfirmation.project_id == ctx.project.id,
+            ToolConfirmation.user_id == ctx.user.id,
+        )
+        .with_for_update()
+    )
+    return status
+
+
 @router.post("/confirmations/{confirmation_id}")
 async def decide_tool_confirmation(
     request: Request,
@@ -261,9 +293,15 @@ async def decide_tool_confirmation(
     registry: SolRegistryDep,
     settings: SettingsDep,
     _verified: RequireVerified,
+    bridge: BridgeSessionsDep,
 ) -> dict[str, Any]:
-    """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5)."""
+    """Approve or reject a destructive action SOL parked (SOLUS-ONS-A5). The decision it
+    settles becomes one outcome row: approve → `accepted`, reject → `rejected`, and the
+    gate's own `expired` / `stale` (SOLUSDEV-321 P8)."""
     await _admit_decision(request, ctx, session)
+    before = await _status_before(session, ctx, confirmation_id)
+    # M5 (R1): the design as it stood at the click, before an approved tool can run (N2: guarded).
+    signals = await signals_at_click(session, ctx.project.id, confirmation_id)
     result = await decide_confirmation(
         session,
         registry,
@@ -276,8 +314,25 @@ async def decide_tool_confirmation(
     if body.decision == "approve" and result.ok and decided is not None:
         enqueue = sync_enqueuer(request, background_tasks, settings, ctx)
         result = await _with_graph_sync(request, enqueue, ctx, decided, result)
+    turn_id = None
     if decided is not None and decided.conversation_id is not None:
-        await _record_decision_turn(session, ctx, confirmation_id, decided, body.decision, result)
+        turn_id = await _record_decision_turn(
+            session, ctx, confirmation_id, decided, body.decision, result
+        )
+    outcome = outcome_decision(before, decided.status if decided is not None else None)
+    if decided is not None and outcome is not None:
+        await record_outcome(
+            session,
+            ctx,
+            tool=decided.tool,
+            args=decided.args,
+            decision=outcome,
+            conversation_turn_id=turn_id,
+            preview=decided.preview,
+            bridge=bridge,
+            design_signals=signals,
+            stale_reason=stale_reason(outcome, result),
+        )
     _emit_decision_events(session, ctx, confirmation_id, decided, body.decision, result)
     await session.commit()
     return envelope(result.model_dump(mode="json"))

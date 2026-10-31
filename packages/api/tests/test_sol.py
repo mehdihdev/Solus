@@ -29,7 +29,7 @@ from solus_api.agent.modes import ActionMode
 from solus_api.agent.screen import MAX_DECODED_BYTES, ScreenshotBlock
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import ToolCall
-from solus_api.models import CreditBalance, Domain, GraphEntity, TurnRole
+from solus_api.models import ConversationTurn, CreditBalance, Domain, GraphEntity, TurnRole
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -453,6 +453,40 @@ async def test_empty_or_absent_preferences_reach_the_runner_as_none(
     assert runner.ctx.engineering_preferences is None
 
 
+async def test_slash_web_reaches_the_runner_as_a_research_query_with_the_prompt_whole(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-321 P1-T5: the composer's `/web <q>` is stripped HERE into `research_query` — the
+    one query the runner may search — while the prompt and the stored user turn keep the full text,
+    so history reads as the person wrote it. Every other message carries no query."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    resp = await client.post(
+        url, json={"content": "/web OV9281 supply voltage"}, headers=alice_headers
+    )
+    assert resp.status_code == 200
+    assert runner.ctx.research_query == "OV9281 supply voltage"
+    assert runner.ctx.prompt == "/web OV9281 supply voltage"
+    assert runner.ctx.research_cache is app.state.research_cache  # the shared 7-day cache
+
+    for content in ("/web", "/webcam stuff", "hello /web x", "what is I2C"):
+        resp = await client.post(url, json={"content": content}, headers=alice_headers)
+        assert resp.status_code == 200
+        assert runner.ctx.research_query is None and runner.ctx.prompt == content
+
+    stored = await db.scalars(
+        select(ConversationTurn.content)
+        .where(ConversationTurn.conversation_id == uuid.UUID(convo["id"]))
+        .where(ConversationTurn.role == TurnRole.USER)
+        .order_by(ConversationTurn.created_at)
+    )
+    assert list(stored)[0] == "/web OV9281 supply voltage"
+
+
 async def test_oversized_or_malformed_preferences_are_rejected_at_the_boundary(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
@@ -475,7 +509,7 @@ async def test_oversized_or_malformed_preferences_are_rejected_at_the_boundary(
 async def test_more_mentions_than_the_anchor_cap_is_rejected(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
-    """Bounded at the boundary as well as in `plan_query` — an unbounded list is
+    """Bounded at the boundary as well as in `turn_scope.plan_scope` — an unbounded list is
     unbounded DB work in the neighbourhood query (SEC-H3)."""
     _, project = await _project(client, alice_headers)
     convo = await _create_conversation(client, alice_headers, project["id"])
@@ -691,6 +725,7 @@ async def test_the_router_hands_the_runner_the_identity_it_needs(
     assert ctx.user_id is not None
     assert ctx.sessionmaker is not None
     assert ctx.secret_store is not None
+    assert ctx.research_allowed is True  # the person's own words may ask for the web
 
 
 async def test_persisted_tool_turns_carry_no_secret_shaped_values(

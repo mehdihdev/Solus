@@ -441,6 +441,140 @@ A `ModuleNotFoundError` comes back as a perfectly ok bridge result carrying `exi
 is precisely the failure Error logging exists to catch; the filed row reads
 `Error [tool_error]: exit 1. <stderr tail>`.
 
+### 6.3 SOLUSDEV-321 P3-T4 — `extract_rulebook` and `label_motifs`
+
+Two **ungated** SOL tools. Solus code binds each to the project and the requesting user. Their
+model calls are metered as that user, and attributed to the SOL turn they run in: the runner binds
+the turn's id (`agent/turn_context.py`), so the ledger rows carry it, and its perception, so each
+call is noted on the turn's own budget first (`PerceptionTurn.take_model_call`, M122): it counts
+against `max_model_calls` and never spends the closing round's call. A rulebook page read past
+that budget is not made (the read stops with its budget note); a labelling call past it is refused
+`UNAVAILABLE`, nothing labelled. Neither tool takes a scope field, and every failure is
+`ToolResult(ok=false)`.
+
+| tool               | params                                               | registered when                                           |
+| ------------------ | ---------------------------------------------------- | --------------------------------------------------------- |
+| `extract_rulebook` | `{entry_id, pages?}` (`pages` as in `read_document`) | a user, the artifact store and the secret store are bound |
+| `label_motifs`     | `{}`                                                 | a user and the secret store are bound                     |
+
+**`extract_rulebook` writes nothing.**
+
+- **What it reads.** An artifact entry of this project: a rulebook PDF, filed in any section. It
+  goes through `read_document`'s extractor: at most 12 pages rendered, and one metered vision call
+  a page (`purpose: "extract"`). An unknown or foreign entry is `not_found`, and a text entry is
+  `invalid_args`.
+- **What it returns.** Candidate rows `{payload, text, page, quote}`, with
+  `section: "constraints"` and `subsection: "rules"` saying where they go. It returns as many
+  rows as fit the result whole, under its 16,000-character cap as the prompt layer encodes it.
+  `notes` counts the rows that did not fit.
+  - A row exists only for a proposal that states one finite number, a unit and one bound.
+  - `payload` is a whole `ConstraintMeta` (§2.1) whose `source_entry_id` is the rulebook entry.
+- **How a candidate becomes a constraint.** Only through the existing routes: the person files
+  its `text` in `constraints` with `subsection: "rules"` (§3), then sets its `payload` (§3.2). The
+  tool creates no entry and changes no payload.
+
+**`label_motifs` writes only labels.**
+
+- **When it runs.** Only inside a SOL turn; outside one it is `unavailable`. It takes the
+  project's netlist motifs that the matrix job left at confidence 0.7 or below and that no label
+  names yet, at most 6 a call (docs/contracts/checker-interface.md, netlist motifs). It reads
+  their holders 200 at a time, oldest first, until 6 wait or the 5,000 the job can hold have been
+  read. So labelled holders never hide a later candidate.
+- **The call.** One light-tier call (`purpose: "motif"`, the turn's id) labels them, with the
+  parts fenced as data. A label outside the closed set (`divider_adc`, `rc_on_input`,
+  `decoupling_at_pin`, `h_bridge`, `level_shifter`, `unknown`) is dropped and counted, as is one
+  for a candidate it was not offered.
+- **What it writes.** A kept label goes on each member's `attrs.motif_labels`, with
+  `labelled_by: "model"` and the turn id. It never touches `attrs.motifs` or any `.solus` entry,
+  and no check reads a label.
+- **What it reports.** `labelled` lists a candidate only when at least one member kept its label.
+  The member rows another writer held are counted in `notes`.
+
+### 6.4 SOLUSDEV-321 P5 — `render_view`
+
+One **ungated** SOL tool (`agent/vision/render_view.py`; the architecture is
+`docs/architecture/sol-depth.md`, "Perception"). Solus code binds it to the project and the
+requesting user; it takes no scope field. It is registered in `build_sol_registry` when a user,
+their team, the secret store and the artifact store are bound, so a bare registry still lists only
+`get_entity`. It runs only inside a SOL turn (outside one it is `unavailable`); its timeout is
+120 s, its result cap 6,000 characters, and every failure is `ToolResult(ok=false)`. A companion
+tool flagged `returns_image` (the KiCad PDF exports) is never offered to the model: only this tool
+reaches it.
+
+| param       | type                   | meaning                                                                    |
+| ----------- | ---------------------- | -------------------------------------------------------------------------- |
+| `entity_id` | UUID                   | a live entity this user may read here; any other id is `not_found`         |
+| `question`  | string, 1–300 chars    | picks ONE view: a face, the part's bounds, the sheet, the board, isometric |
+| `show`      | boolean, default false | true only when the person asked to see the picture (the model is told so)  |
+
+- **Declined, not failed.** `{rendered: false, reason}` when the turn is about connectivity or
+  counts (the scope planner's `exclude_renders` / `counting`: those come from the graph), when
+  nothing renders the entity (no scene model, and its source's connector declares no
+  `Capability.RENDER`), or when its renderer refuses (no companion, an unflagged export tool, an
+  artifact store capped under 2 MiB, a degraded export, a scene the guard refuses, the Onshape
+  quota past its degrade ratio, no cached revision). A refusal also names the `view`.
+- **What it returns.** `{rendered: true, view, renderer, cached, read, graph_wins, findings, note}`.
+  `read` is the one vision read of the labelled render, with every length the graph states
+  differently replaced by the graph's value (`graph_wins` lists each, with both numbers).
+  `findings` names the `vision_fact_disagreement` info findings this ask filed: one per (entity,
+  `length`) per render. A cached answer (`cached: true`) cost no render, no model call and no
+  finding, so its `findings` is empty. The cache is reached only after the subject is read in the
+  requesting user's scope, and it holds values only, never an artifact or a finding (R127). A
+  companion-drawn view (a sheet or board the user's own companion exports) is cached for that user
+  alone; scene and connector views are shared within the project.
+- **Showing.** With `show: true`, the annotated PNG is stored as a fresh artifact of this project
+  for the requesting user, on every ask, a cached one's included (`image/png`, the artifacts
+  route's TTL). The result carries `artifact_id`, `uri`, `media_type`, `title` and `summary`; the
+  chat shows it as a card (`ARTIFACT_TOOLS`). Without it, no artifact is made and no pixels leave
+  the server.
+- **Model calls.** At most one per render (`purpose: "vision"`, `type: VISUAL_LOG`, the turn's id),
+  metered as the requesting user and counted against the turn's `max_model_calls`. It never spends
+  the turn's closing round's call: when only that one is left, `read` says the budget is spent.
+
+### 6.5 SOLUSDEV-321 P6 — `firmware_recipe`
+
+One **ungated** SOL tool (`agent/firmware_recipe.py`) that writes nothing itself: it returns the
+complete new firmware file for one board, and the write goes through `machine.write_file`'s card.
+Solus code binds it to the project and the requesting user. It is registered in
+`build_sol_registry` when a user, their team, the secret store and the owned `machine.write_file`
+(the person's companion advertises it) are all bound, and it runs only inside a SOL turn.
+
+| param      | type                | meaning                                                        |
+| ---------- | ------------------- | -------------------------------------------------------------- |
+| `board_id` | UUID                | a `hardware_brain` this user may read here; any other id fails |
+| `path`     | string, 1–400 chars | the workspace file to write, relative to the linked folder     |
+
+- **The topology** is read under the requesting user's scope (two bounded neighbourhood reads,
+  through `to_graph_context`): the board, the robots and parts its buses reach, the confirmed
+  `commands` / `reads` edges into those parts (the code lines they cite and any stated
+  `commanded` fact), the board definition's `pins[].capabilities`, and each part's telemetry
+  channels from its robot's runtime config. At most 64 of each go to the model.
+- **The path is decided before anything is read (R138).** When the topology names the board's
+  firmware (the code files its `commands` / `reads` edges come from), `path` must be one of them;
+  any other is refused (`unauthorized`) with one message that does not say whether the file
+  exists ("The graph does not name `<path>` as this board's firmware; named: …"), and nothing is
+  read. A named file is read through the owned write's dry run with empty content
+  (`MachineWriteTool.current_text`): nothing is written and no card is parked, and a file past a
+  card's ceiling, or one that sensitive-data filtering masked, is refused. When the topology names
+  no firmware for the board yet, the file is new: nothing is read, existing or not, the current
+  file is `null`, and the write's card shows whatever it would replace.
+- **One model call** (`purpose: "answer"`, `type: CODE`, the turn's id), metered as the requesting
+  user and counted against the turn's `max_model_calls`, never its closing round's. The
+  instruction is the Solus constant `FIRMWARE_RECIPE`. The facts follow as fenced data blocks:
+  `topology`, `pins`, `telemetry_library` (the SolusTelemetry API and the channels),
+  `current_file` (whole, never cut) and `code_style`, the turn's `Code style` preference, which
+  the runner binds (`PerceptionTurn.code_style`). The reply is one fenced block or plain text.
+- **The card ceiling.** A write card shows `CARD_ROWS` (40) rows of `ROW_CHARS` (400) characters:
+  the file and fingerprint rows, then one row per 400-character chunk of the longer side. A reply
+  past it is refused, naming the ceiling, and nothing is proposed.
+- **What it returns.** `{path, content, card_rows, next}`, where `next` says to call
+  `machine.write_file` with exactly that path and content.
+- **The card is forced.** The recipe routes its turn to `machine.write_file`
+  (`routed_by_firmware`), a term of `BuildExecutionPolicy.prepare`'s predicate: in that turn the
+  write keeps its card even in Build mode, since the person asked for firmware, not for a write.
+- **The event** `sol.firmware_recipe.prepared {card_rows, commands, pins, channels}` carries counts
+  only.
+
 ## 7. Events
 
 `solus.entry_added {entry_id, section, subsection, kind, context_entity_id?}` · `solus.entry_updated {entry_id}` ·

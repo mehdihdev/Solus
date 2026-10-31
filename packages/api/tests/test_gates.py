@@ -13,6 +13,7 @@ from solus_api.models import (
     SubscriptionStatus,
     User,
 )
+from solus_api.orchestration import gates
 from solus_api.orchestration.config import LimitsConfig
 from solus_api.orchestration.gates import (
     FrequencyCapExceededError,
@@ -59,6 +60,13 @@ class FakeRedis:
 _LIMITS = LimitsConfig(max_calls_per_minute=3, frequency_window_seconds=60)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_cap_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local window and the warn-once set are process state: every test starts clean."""
+    monkeypatch.setattr(gates, "_local_window", gates._LocalFrequencyWindow())
+    monkeypatch.setattr(gates, "_warned_causes", set())
+
+
 async def test_frequency_cap_blocks_at_limit_and_recovers_after_window() -> None:
     user_id = uuid.uuid4()
     redis = FakeRedis()
@@ -81,14 +89,20 @@ async def test_frequency_cap_is_per_user_with_expiry() -> None:
     assert redis.expirations[f"solus:freqcap:{alice}"] == 60  # TTL set — keys self-clean
 
 
-async def test_frequency_cap_fails_open_without_redis(
+async def test_frequency_cap_fails_closed_without_redis(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """User-confirmed policy: no Redis -> proceed with a loud structured warning
-    (the DB-backed spend cap still bounds sequential damage)."""
+    """SOLUSDEV-321: no Redis -> the per-process local window still enforces the cap (the 21st
+    call in a minute is refused) and warns, once, that it is doing so."""
+    user_id = uuid.uuid4()
+    limits = LimitsConfig(max_calls_per_minute=20, frequency_window_seconds=60)
     with caplog.at_level(logging.WARNING, logger="solus.orchestration.gates"):
-        await check_frequency_cap(uuid.uuid4(), redis=None, limits=_LIMITS)
-    assert any("fail-open" in record.message for record in caplog.records)
+        for _ in range(20):
+            await check_frequency_cap(user_id, redis=None, limits=limits, now=1_000.0)
+        with pytest.raises(FrequencyCapExceededError):
+            await check_frequency_cap(user_id, redis=None, limits=limits, now=1_000.0)
+    warnings = [r for r in caplog.records if "local per-process window" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 class BrokenRedis:
@@ -110,15 +124,21 @@ class BrokenRedis:
         raise ConnectionError("redis unreachable")
 
 
-async def test_frequency_cap_fails_open_when_redis_errors(
+async def test_frequency_cap_fails_closed_when_redis_errors(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Security-review MEDIUM-2: a CONFIGURED Redis that starts erroring must
-    apply the SAME fail-open policy — never fail closed as a mislabeled
-    provider error, never take down all model calls."""
+    """Security-review MEDIUM-2 (SOLUSDEV-321): a CONFIGURED Redis that starts erroring is
+    handled like `redis=None` — the connection error never escapes as a mislabeled provider
+    error, the local window keeps the cap (the 21st call is refused) and warns, once."""
+    user_id = uuid.uuid4()
+    limits = LimitsConfig(max_calls_per_minute=20, frequency_window_seconds=60)
     with caplog.at_level(logging.WARNING, logger="solus.orchestration.gates"):
-        await check_frequency_cap(uuid.uuid4(), redis=BrokenRedis(), limits=_LIMITS)
-    assert any("fail-open" in record.message for record in caplog.records)
+        for _ in range(20):
+            await check_frequency_cap(user_id, redis=BrokenRedis(), limits=limits, now=1_000.0)
+        with pytest.raises(FrequencyCapExceededError):
+            await check_frequency_cap(user_id, redis=BrokenRedis(), limits=limits, now=1_000.0)
+    warnings = [r for r in caplog.records if "local per-process window" in r.getMessage()]
+    assert len(warnings) == 1
 
 
 async def _seed(

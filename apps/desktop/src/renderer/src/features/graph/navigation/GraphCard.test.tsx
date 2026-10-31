@@ -1,4 +1,7 @@
 // SOLUSDEV-250 P5 — a card carries its domain for the stylesheet and never prints its id.
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { awaitMark, resetMarks, startConfirmation } from '../../../lib/perf/marks'
@@ -168,5 +171,45 @@ describe('GraphCard', () => {
     expect(onBack).not.toHaveBeenCalled()
     fireEvent.keyDown(screen.getByRole('button', { name: 'Select firmware' }), { key: 'ArrowLeft' })
     expect(onBack).toHaveBeenCalledOnce()
+  })
+})
+
+// SOLUSDEV-321 P1-T6 — the entities SOL looked at glow. The class is the whole contract with the
+// stylesheet, so a highlighted card keeps whatever else it is (focused, dragging).
+describe('GraphCard highlight', () => {
+  function cardWith(props: { highlighted?: boolean; focused?: boolean }): HTMLElement {
+    render(
+      <GraphCard
+        entity={entity}
+        point={{ x: 0, y: 0 }}
+        offset={{ x: 0, y: 0 }}
+        focused={props.focused ?? false}
+        highlighted={props.highlighted}
+        childCount={0}
+        onSelect={vi.fn()}
+        onEnter={vi.fn()}
+        onBack={vi.fn()}
+        onPreview={vi.fn()}
+        onMove={vi.fn()}
+      />
+    )
+    return screen.getByTestId(`graph-node-${entity.id}`)
+  }
+
+  it('is plain unless highlighted', () => {
+    expect(cardWith({})).not.toHaveClass('graph-node-highlighted')
+  })
+
+  it('wears the glow class when highlighted, beside focused', () => {
+    const card = cardWith({ highlighted: true, focused: true })
+    expect(card).toHaveClass('graph-node', 'graph-node-focused', 'graph-node-highlighted')
+  })
+
+  it('has a stylesheet that glows without animation under prefers-reduced-motion', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'GraphCard.css'), 'utf8')
+    expect(css).toMatch(/\.graph-node-highlighted\s*\{[^}]*outline:/)
+    expect(css).toMatch(/\.graph-node-highlighted\s*\{[^}]*animation:\s*graph-node-glow/)
+    const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'))
+    expect(reduced).toMatch(/\.graph-node-highlighted\s*\{[^}]*animation:\s*none/)
   })
 })

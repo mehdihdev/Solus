@@ -22,10 +22,12 @@ import {
   listSolConfirmations,
   streamSolMessage,
   type SolActionMode,
-  type SolScreenshot
+  type SolScreenshot,
+  type StreamSolMessageInput
 } from './solApi'
 import { preferencesForTurn } from '../preferences/preferencesStore'
-import type { ContextUsedInfo, SolStreamEvent } from './solStream'
+import type { ContextUsedInfo, ReasonedItem, SolStreamEvent } from './solStream'
+import type { AnswerSourceInfo, BudgetReachedInfo, ToolArgs } from './solStream'
 import type { AutoRun, PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
 import {
   purgeAllCachedChats,
@@ -40,13 +42,16 @@ import { finalOutputOf, type CommandRun } from './commandRuns'
 import { createRunTracker, refusalStatus } from './commandRunTracker'
 import { processIdOf, rememberProcessOwner, resetProcessOwners } from './processOwners'
 import type { WakeStart } from './processWake'
+import { attachResearchSources, type ResearchSources } from './researchSources'
+import { applyContextUsed } from './contextUsed'
 import {
   MAX_TURN_CHARS,
   appendContent,
   applyEvent,
+  applyReasoningFrame,
   blankItem,
   turnFailureText,
-  turnToItem,
+  turnToReasonedItem,
   type Patch
 } from './solChatItems'
 
@@ -56,6 +61,8 @@ export interface TraceEntry {
   /** Null while the call is in flight. */
   ok: boolean | null
   errorCode: string | null
+  /** The call's args: redacted by the server, bounded for display (SOLUSDEV-321 P1-T6). */
+  args?: ToolArgs
 }
 
 /** SOLUSDEV-252 S5: an artifact in the transcript plus where the user filed it.
@@ -64,7 +71,7 @@ export interface ChatArtifact extends SolArtifact {
   filedTo: SolusSection | null
 }
 
-export interface ChatItem {
+export interface ChatItem extends ReasonedItem {
   id: string
   role: 'user' | 'assistant' | 'tool'
   content: string
@@ -84,6 +91,11 @@ export interface ChatItem {
    *  Optional (like hasScreenshot) so reloaded/cached items and fixtures built
    *  before S5 stay valid — absent reads as none. */
   artifacts?: readonly ChatArtifact[]
+  /** SOLUSDEV-321 P1-T5: the web sources the turn's research found; absent reads as none. */
+  researchSources?: ResearchSources
+  /** SOLUSDEV-321 P1-T6: who answered (the graph, no model) and a ceiling the turn hit. */
+  answerSource?: AnswerSourceInfo
+  budgetReached?: BudgetReachedInfo
   /** SOLUSDEV-252 S3: this user turn carried a screen capture. A flag only —
    *  pixels live in memory for one send and never enter an item. */
   hasScreenshot?: boolean
@@ -265,7 +277,7 @@ export async function syncSession(projectId: string): Promise<void> {
     ])
     // Still the active conversation? A switch mid-fetch discards this load.
     if (selectConversationId(useSolSessionStore.getState(), projectId) !== active) return
-    const loaded = [...turns].reverse().map(turnToItem)
+    const loaded = [...turns].reverse().map(turnToReasonedItem)
     patchSession(projectId, (s) => ({
       ...s,
       // Merge, don't replace: a send may have appended local items while
@@ -349,6 +361,13 @@ function confirmationOptions(options?: { forceConfirmation?: boolean }): {
   return options?.forceConfirmation === true ? { forceConfirmation: true } : {}
 }
 
+/** What a send may carry beside its text: the Confirm-every-change choice and — from the SOL
+ *  page only — the anchors that say where the person is looking (`StreamSolMessageInput`). */
+type SendAnchors = Pick<StreamSolMessageInput, 'focus' | 'pins' | 'findingId' | 'robotId'>
+export interface SendOptions extends SendAnchors {
+  forceConfirmation?: boolean
+}
+
 export async function sendMessage(
   projectId: string,
   content: string,
@@ -356,7 +375,7 @@ export async function sendMessage(
   mentions: readonly string[] = [],
   thinkHarder = false,
   screenshot?: SolScreenshot,
-  options?: { forceConfirmation?: boolean }
+  options?: SendOptions
 ): Promise<boolean> {
   const text = content.trim()
   if (!text || !admitTurn(projectId)) return false
@@ -364,13 +383,17 @@ export async function sendMessage(
     ...blankItem(nextItemId(), 'user', text),
     ...(screenshot ? { hasScreenshot: true } : {})
   }
+  // Everything but `forceConfirmation` is the turn's anchors: they pass straight through, and
+  // `turnBody` leaves the unset ones off the wire.
+  const { forceConfirmation, ...anchors } = options ?? {}
   return runTurn(projectId, text, userItem, {
     projectId,
     content: text,
     actionMode,
     mentions,
     thinkHarder,
-    ...confirmationOptions(options),
+    ...confirmationOptions({ forceConfirmation }),
+    ...anchors,
     // The circled region rides THIS send only (sol-window.md §8); the caller
     // drops it from memory once handed over.
     ...(screenshot ? { screenshot } : {})
@@ -759,22 +782,18 @@ function handleTurnEvent(
   // Every other frame lands AFTER the prose it follows.
   batcher.flushNow()
   if (event.type === 'context_used') {
-    patchSession(projectId, (s) => ({
-      ...s,
-      contextUsed: {
-        sections: event.sections,
-        truncated: event.truncated,
-        dropped: event.dropped
-      }
-    }))
+    applyContextUsed(patchSession, projectId, event)
+    return false
+  }
+  if (event.type === 'research_sources') {
+    attachResearchSources(patch, event.research)
     return false
   }
   // Mid-stream credit exhaustion arrives as an error FRAME, not a 402.
-  if (event.type === 'error') {
-    if (event.code === 'insufficient_credits') {
-      patchSession(projectId, (s) => ({ ...s, creditsExhausted: true }))
-    }
+  if (event.type === 'error' && event.code === 'insufficient_credits') {
+    patchSession(projectId, (s) => ({ ...s, creditsExhausted: true }))
   }
   applyEvent(patch, event)
+  applyReasoningFrame(patch, event)
   return event.type === 'error'
 }

@@ -183,7 +183,8 @@ async def test_full_stack_ingest_fingerprint_link_check_graph(
 
     # 2 — the seeded known-bad sample: the KiCad MPU-6050 IMU carries a Nyquist
     # floor (manual enrichment); the GitHub reader polls it too slowly
-    # (connector properties); a manual reads_from edge spans code<->electrical.
+    # (connector properties); a manual, confirmed `reads` edge spans code<->electrical
+    # (the contracts' vocabulary; `reads_from` was retired by P3-T2, R40).
     (sensor,) = await _by_mpn(db, project_id, kicad_source.id, "MPU-6050")
     sensor.attrs = {**sensor.attrs, "min_sample_rate_hz": SENSOR_FLOOR_HZ}
     reader = await _entity(db, project_id, github_source.id, "firmware/imu_reader.cpp")
@@ -192,7 +193,7 @@ async def test_full_stack_ingest_fingerprint_link_check_graph(
             project_id=project_id,
             src_id=reader.id,
             dst_id=sensor.id,
-            relation_type="reads_from",
+            relation_type="reads",
             domain_pair="code<->electrical",
             confidence=1.0,
             origin="manual",
@@ -256,7 +257,7 @@ async def test_full_stack_ingest_fingerprint_link_check_graph(
     node = reader_nodes[0]
     assert node.domain is Domain.CODE
     assert node.distance == 1
-    assert node.path[0].relation == "reads_from"
+    assert node.path[0].relation == "reads"
     assert any("alias" in c.headline for c in node.consequences)
 
     # 6 — the graph HTTP API returns the linked result.
@@ -282,4 +283,4 @@ async def test_full_stack_ingest_fingerprint_link_check_graph(
     )
     assert response.status_code == 200
     reachable = {entity["id"] for entity in response.json()["data"]["entities"]}
-    assert str(reader_id) in reachable  # the manual cross-domain reads_from
+    assert str(reader_id) in reachable  # the manual cross-domain reads

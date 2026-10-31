@@ -35,9 +35,27 @@ def test_allowlist_validates_against_the_server_allowlist_model() -> None:
 
 def test_allowlist_is_the_complete_draft_in_one_file() -> None:
     """Read roster AND the T2b write tool land together so no later MR ever
-    widens an existing allowlist (integrations/mcp/CLAUDE.md rule 2)."""
+    widens an existing allowlist (integrations/mcp/CLAUDE.md rule 2). The
+    exceptions, `export_spice_netlist` (SOLUSDEV-321 P4-T3) and the two PDF exports
+    (P5), are drafted in-branch and flagged for the humans to ratify."""
     names = {tool.name for tool in _parsed().tools}
     assert names == READ_ROSTER | WRITE_ROSTER
+    assert {"export_spice_netlist", "export_schematic_pdf", "export_board_pdf"} <= names
+
+
+def test_only_the_pdf_exports_return_an_image() -> None:
+    """SOLUSDEV-321 P5 (R102, R125): `returns_image` marks the two exports SOL's render reads, and
+    no other entry: only their artifact is ever consumed as an image, and the cloud keeps them off
+    the model's tool list. Both stay unconfirmed reads with a reviewable reason."""
+    by_name = {tool.name: tool for tool in _parsed().tools}
+    flagged = {name for name, tool in by_name.items() if tool.returns_image}
+    assert flagged == {"export_schematic_pdf", "export_board_pdf"}
+    for name in flagged:
+        reason = by_name[name].reason
+        assert by_name[name].requires_confirmation is False
+        assert reason is not None and "ratification" in reason
+    specs = validate_inventory(_hello(sorted(by_name)), load_allowlist(MCP_ROOT))
+    assert {spec.remote_name for spec in specs if spec.returns_image} == flagged
 
 
 def test_read_roster_entries_are_unconfirmed_reads_with_reasons() -> None:
@@ -71,6 +89,7 @@ def test_load_allowlist_accepts_the_kicad_file_without_skips(
         loaded = load_allowlist(MCP_ROOT)
     assert [record.getMessage() for record in caplog.records] == []
     assert set(loaded.servers["kicad"]) == READ_ROSTER | WRITE_ROSTER
+    assert "export_spice_netlist" in loaded.servers["kicad"]  # SOLUSDEV-321 P4-T3, flagged
 
 
 # --- the ingress gate: validate_inventory -----------------------------------------

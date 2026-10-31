@@ -3,6 +3,7 @@
 Also pins the `Settings` env surface (core/config.py) where a field's
 presence/absence is itself the contract."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -301,6 +302,98 @@ def test_limits_bad_values_rejected() -> None:
         OrchestrationConfig.model_validate(data)
 
 
+def test_shipped_envelopes_section_loads() -> None:
+    """The warn bound of an envelope is a fraction of its limit, and the fraction lives here."""
+    assert load_orchestration_config().envelopes.warn_fraction == 0.8
+
+
+def test_envelopes_defaults_apply_and_bad_values_are_rejected() -> None:
+    data = _minimal("general_standard")
+    assert OrchestrationConfig.model_validate(data).envelopes.warn_fraction == 0.8
+    for bad in (0, 1, 1.5, -0.2):  # a fraction strictly between nothing and the whole limit
+        data["envelopes"] = {"warn_fraction": bad}
+        with pytest.raises(ValidationError):
+            OrchestrationConfig.model_validate(data)
+    data["envelopes"] = {"warn_fraction": 0.5, "unknown_knob": 1}
+    with pytest.raises(ValidationError):
+        OrchestrationConfig.model_validate(data)
+    data["envelopes"] = {"warn_fraction": 0.5}
+    assert OrchestrationConfig.model_validate(data).envelopes.warn_fraction == 0.5
+
+
+def test_shipped_simulation_section_loads() -> None:
+    """The ladder's bands and routing targets are data (SOLUSDEV-321 P4-T1). The shipped section
+    climbs at 0.8 of a limit, and its one external target is named here, never in code."""
+    simulation = load_orchestration_config().simulation
+    assert (simulation.escalate_at, simulation.band("stress_mpa")) == (0.8, 0.8)
+    assert [(t.name, t.rung, t.quantities) for t in simulation.targets] == [
+        ("isaac", 4, ("joint_trajectory",))
+    ]
+
+
+def test_simulation_defaults_apply_and_a_band_or_target_reads_back() -> None:
+    data = _minimal("general_standard")
+    simulation = OrchestrationConfig.model_validate(data).simulation
+    assert (simulation.escalate_at, simulation.bands, simulation.targets) == (0.8, {}, ())
+    data["simulation"] = {"bands": {"interference_mm": 0.5}, "targets": [_SIM_TARGET]}
+    simulation = OrchestrationConfig.model_validate(data).simulation
+    assert (simulation.band("interference_mm"), simulation.band("stress_mpa")) == (0.5, 0.8)
+    remote = simulation.target("remote_fea")
+    assert remote is not None and (remote.cost, remote.fidelity) == (None, None)  # → its rung
+    assert simulation.target("absent") is None
+
+
+_SIM_TARGET: dict[str, Any] = {
+    "name": "remote_fea",
+    "rung": 2,
+    "domain": "mechanical",
+    "quantities": ["stress_mpa"],
+}
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        {"escalate_at": 0},
+        {"escalate_at": 1},
+        {"escalate_at": 1.5},
+        {"bands": {"stress_mpa": 1}},
+        {"bands": {"Stress MPa": 0.5}},
+        {"unknown_knob": 1},
+        {"targets": [_SIM_TARGET, _SIM_TARGET]},
+        {"targets": [{**_SIM_TARGET, "rung": 0}]},
+        {"targets": [{**_SIM_TARGET, "rung": 5}]},
+        {"targets": [{**_SIM_TARGET, "quantities": []}]},
+        {"targets": [{**_SIM_TARGET, "name": "Remote FEA"}]},
+        {"targets": [{**_SIM_TARGET, "cost": -1}]},
+        {"targets": [{**_SIM_TARGET, "secret": "x"}]},
+    ],
+    ids=[
+        "band-of-nothing",
+        "band-of-the-whole-limit",
+        "band-past-the-limit",
+        "quantity-band-of-the-whole-limit",
+        "quantity-not-a-name",
+        "unknown-knob",
+        "target-named-twice",
+        "rung-below-1",
+        "rung-above-4",
+        "target-computing-nothing",
+        "target-not-a-name",
+        "negative-cost",
+        "unknown-target-field",
+    ],
+)
+def test_a_bad_simulation_section_is_rejected(section: dict[str, Any]) -> None:
+    """Refused for what it states, never as a section the config does not know."""
+    data = _minimal("general_standard")
+    data["simulation"] = section
+    with pytest.raises(ValidationError) as refused:
+        OrchestrationConfig.model_validate(data)
+    unknown = {e["loc"] for e in refused.value.errors() if e["type"] == "extra_forbidden"}
+    assert ("simulation",) not in unknown
+
+
 def test_duplicate_role_across_entries_is_rejected() -> None:
     data = _minimal("general_standard")
     data["catalog"].append(
@@ -437,3 +530,47 @@ def test_hosted_mcp_does_not_advertise_an_unwired_annual_entitlement() -> None:
     assert "onshape_fs_annual_call_allowance" not in Settings.model_fields
     # The separately governed non-exempt REST policy is not this allocation.
     assert "onshape_annual_call_allowance" in Settings.model_fields
+
+
+def test_bench_replay_root_is_unset_until_named_and_an_empty_value_is_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SOLUSDEV-321 P2-T4: the dev-only replay provider reads recordings from one directory the
+    operator names, and is off otherwise. An empty value is "unset" — `Path("")` would be the
+    server's working directory."""
+
+    def settings() -> Settings:
+        return Settings(  # type: ignore[call-arg]
+            _env_file=None, supabase_jwt_secret="dummy", database_url="sqlite+aiosqlite://"
+        )
+
+    monkeypatch.delenv("SOLUS_BENCH_REPLAY_ROOT", raising=False)
+    assert settings().bench_replay_root is None
+    monkeypatch.setenv("SOLUS_BENCH_REPLAY_ROOT", "")
+    assert settings().bench_replay_root is None
+    monkeypatch.setenv("SOLUS_BENCH_REPLAY_ROOT", str(tmp_path))
+    assert settings().bench_replay_root == tmp_path
+
+
+def test_ngspice_bin_is_unset_until_named_and_an_empty_value_is_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SOLUSDEV-321 P4-T3: the rung-3 SPICE job runs the one binary the operator pins
+    (`SOLUS_NGSPICE_BIN`) and never looks one up. An empty value is unset, as for the replay root.
+    The setting only names the path; whether it is a regular executable file is decided where it
+    runs (`simulation/providers/ngspice_provider.py:pinned_simulator`), so a missing binary is "not
+    available on this machine" and never a server that fails to start."""
+
+    def settings() -> Settings:
+        return Settings(  # type: ignore[call-arg]
+            _env_file=None, supabase_jwt_secret="dummy", database_url="sqlite+aiosqlite://"
+        )
+
+    monkeypatch.delenv("SOLUS_NGSPICE_BIN", raising=False)
+    assert settings().ngspice_bin is None
+    for blank in ("", "   "):
+        monkeypatch.setenv("SOLUS_NGSPICE_BIN", blank)
+        assert settings().ngspice_bin is None
+    absent = tmp_path / "no-such-binary"
+    monkeypatch.setenv("SOLUS_NGSPICE_BIN", str(absent))
+    assert settings().ngspice_bin == absent

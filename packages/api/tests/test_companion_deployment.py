@@ -360,3 +360,58 @@ async def test_real_bridge_handshake_requires_new_authorized_session(session_kin
         token_exp=datetime.now(UTC) + timedelta(seconds=-1 if session_kind == "expired" else 60),
     )
     assert await check("fixture-companion", "a" * 64) == (session_kind == "new")
+
+
+@pytest.mark.parametrize("precheck", ["proposes", "raises"])
+async def test_the_deploy_card_shows_the_simulation_first_and_parks_without_it(
+    client: Any,
+    alice_headers: Any,
+    db: Any,
+    app: Any,
+    tmp_path: Any,
+    engine: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    precheck: str,
+) -> None:
+    """R116: no one read gives the robot whose host topology holds a deployment's target, so the
+    deploy card's pre-check is about the target itself. When the ladder proposes a run for it,
+    the card carries that line after its own rows; when the pre-check raises, the card parks with
+    exactly its own rows (R99). Nothing deploys either way."""
+    from solus_api.agent.confirmations import PRECHECK_LABEL, request_confirmation
+    from solus_api.agent.tools import simulate as simulate_module
+    from solus_api.agent.tools.shapes import ToolCall
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    from test_firmware_presence import _near_its_yield
+
+    f = await setup(client, alice_headers, db, app, tmp_path)
+    response = await client.post(url(f), headers=alice_headers, json=body(f))
+    assert response.status_code == 201, response.text
+    plan = response.json()["data"]["plan_id"]
+    service = f["factory"](db, f["project"], f["user"], app.state.artifact_store)
+    own = [row["label"] for row in await service.preview(uuid.UUID(plan))]
+    await _near_its_yield(engine, f["project"], f["target"])
+
+    def broken(*args: Any) -> Any:
+        raise RuntimeError("the facts did not read")
+
+    if precheck == "raises":
+        monkeypatch.setattr(simulate_module, "build_fact_store", broken)
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        f["project"],
+        user_id=f["user"],
+        companion_deployment_service=service,
+    )
+    parked = await request_confirmation(
+        db,
+        registry,
+        ToolCall(tool="hardware.deploy_companion", args={"plan_id": plan}),
+        project_id=f["project"],
+        team_id=f["team"],
+        user_id=f["user"],
+    )
+
+    assert parked is not None and parked.confirmation_id is not None
+    labels = [row["label"] for row in parked.preview]
+    assert labels == [*own, *([PRECHECK_LABEL] if precheck == "proposes" else [])]
+    assert f["calls"] == []

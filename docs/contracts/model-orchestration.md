@@ -169,6 +169,13 @@ credits = ceil(dollars * margin_multiplier * credits_per_dollar)
   grants + profit — **not pure profit**, which is why it is `2.0`, not ~`1.25`.
 - **`credits_per_dollar` (config):** **provisional** — no real cost-per-op data yet (ADR-024);
   calibrate post-pilot. Both live in `cost:` in `models.yaml`, never in code.
+- **`web_call_credits` (config, default `2`):** **provisional** — what ONE web-search API call
+  costs, a search and the page-reading call that follows it alike (SOLUSDEV-321 P1-T5). A flat
+  knob, not token-priced: `agent/research.py` writes one `USAGE` ledger row of
+  `-web_call_credits` per call, keyed `web:<call_id>:<n>`, with `attrs.purpose = "web"`,
+  `attrs.kind` (`search` or `context`), `project_id` and `turn_id`; `0` still writes its row. It
+  is spent only after the same `assert_can_spend` pre-flight a model call passes, and a cached
+  answer spends nothing. Calibrate post-pilot; the value is human-set (§8).
 
 **Then debit** (MO-01): append a `CreditLedger` USAGE row (`amount = -credits`, `balance_after`
 snapshot, `attrs = {call_id, model_name, role, tokens_in, tokens_out}`) and update the cached
@@ -219,7 +226,7 @@ Validated by `OrchestrationConfig` (`orchestration/config.py`). Structure:
 - `matrix: { <complexity>: { <route_type>: <role> } }` — the `(complexity × type) → role` map
   (may be partial).
 - `default_role: str` — fallback for missing matrix cells.
-- `cost: { margin_multiplier, credits_per_dollar, price_unit: usd_per_million_tokens }`.
+- `cost: { margin_multiplier, credits_per_dollar, price_unit: usd_per_million_tokens, web_call_credits }` — `web_call_credits` defaults to `2`.
 - `providers: { <provider>: ProviderStanza }` (SOLUSDEV-252, default `{}`) — connection shape for
   providers that have **no dedicated adapter**. `ProviderStanza` (`extra=forbid`):
   `kind: "openai_compatible"`, `endpoint: str` (may be empty until deploy), `api_version: str`,
@@ -262,11 +269,11 @@ covers the addition. **Routing, complexity, window policy and cost mechanics abo
 
 `stream()` and `complete()` take one optional `conversation: ToolConversation`:
 
-| field | meaning |
-| --- | --- |
-| `system` | Solus-authored instruction text. The ONLY instruction position. |
+| field      | meaning                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `system`   | Solus-authored instruction text. The ONLY instruction position.                                             |
 | `messages` | `tuple[Turn, ...]` — multi-turn. A `Turn` carries `text`, `tool_uses` (assistant) or `tool_results` (user). |
-| `tools` | `tuple[ToolSpec, ...]` — `name`, `description`, `input_schema`. |
+| `tools`    | `tuple[ToolSpec, ...]` — `name`, `description`, `input_schema`.                                             |
 
 `ToolSpec.input_schema` is a `ToolDescriptor.params` **verbatim** (it is already JSON Schema), so a
 tool's `params` and `description` are now literally model-facing wire content — see
@@ -293,12 +300,12 @@ PROPOSALS: the shape carries no way to execute itself, and Solus code decides.
 
 ### Provider support is a real constraint on the matrix
 
-| provider | tool calling |
-| --- | --- |
-| anthropic | implemented (Messages API) |
-| openai | implemented (Responses API — SOLUSDEV-252 lane W1, same ticket) |
-| google (gemini) | raises `ToolCallingUnsupportedError` |
-| azure | config stanza only — no adapter, `UnknownProviderError` at dispatch |
+| provider        | tool calling                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| anthropic       | implemented (Messages API)                                          |
+| openai          | implemented (Responses API — SOLUSDEV-252 lane W1, same ticket)     |
+| google (gemini) | raises `ToolCallingUnsupportedError`                                |
+| azure           | config stanza only — no adapter, `UnknownProviderError` at dispatch |
 
 `ToolCallingUnsupportedError` is a `ProviderError` but deliberately **not** a
 `ProviderTransientError` — MO-03 backoff must not retry a structural gap.

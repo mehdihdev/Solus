@@ -7,13 +7,27 @@ Two DIFFERENT blocks with two DIFFERENT user messages, by design:
   (runaway agent loops), Redis-backed sliding window. Blocking is TRANSIENT —
   "too many requests, try again in a moment" — the user can simply retry after
   the window. Same limit for every plan; it is abuse protection, not a plan
-  feature. Redis down/unconfigured/erroring → FAIL-OPEN with a loud structured
-  warning (confirmed policy): a Redis blip must never take down all model
-  calls. NOTE the honest limit: while failed open, the DB-backed spend gate
-  bounds SEQUENTIAL damage only (pre-flight read, debit lands post-call) — a
-  concurrent burst can overshoot the trial cap unboundedly. Atomic at-debit cap
-  enforcement + a concurrency red-team test are route-exposure work (see
-  gateway.py deferral list).
+  feature. FAILS CLOSED (SOLUSDEV-321): Redis unconfigured, erroring, or slower
+  than `REDIS_TIMEOUT_SECONDS` hands the same check to a per-process
+  `_LocalFrequencyWindow`, so the limit still holds — per API process rather
+  than fleet-wide — and a Redis outage neither takes down model calls nor
+  waves callers through. Every call admitted through Redis is mirrored into
+  that window, so an outage that starts mid-window starts from this process's
+  own history, not from zero. One warning per process per cause; refusals are
+  recorded with `limiter: "redis" | "local"`. HONEST LIMITS: (1) the Redis path
+  (ZREMRANGEBYSCORE → ZCARD → ZADD) is not atomic, so a concurrent burst
+  through a healthy Redis is NOT bounded by the limit — callers each read a
+  count under it before any of them records; one atomic MULTI/EVAL script
+  would fix that (not implemented). The local window is atomic on the event
+  loop, so a burst on it admits exactly the limit. (2) The two windows
+  disagree across a flap: calls recorded locally during an outage are
+  invisible to Redis once it returns, and a Redis that comes back empty has
+  forgotten earlier calls, so recovery can admit up to about twice the limit.
+  (3) The DB-backed spend gate bounds SEQUENTIAL damage only (pre-flight read,
+  debit lands post-call), so a concurrent burst can overshoot the trial cap by
+  every call the frequency cap admits in it. Atomic at-debit cap enforcement +
+  a concurrency red-team test are route-exposure work (see gateway.py deferral
+  list).
 - Spend gate (`assert_can_spend`): TRIALING users are blocked at the
   configurable `limits.trial_credit_cap` with an UPGRADE call-to-action; paid
   users are gated on their cached credit balance instead. The check is
@@ -32,12 +46,14 @@ TrialExpiredError / InsufficientCreditsError → 402.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
 import uuid
+from collections import OrderedDict, deque
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from sqlalchemy import select
 
@@ -62,6 +78,13 @@ logger = logging.getLogger("solus.orchestration.gates")
 
 UPGRADE_URL = "/settings/billing"
 _FREQ_KEY_PREFIX = "solus:freqcap:"
+# One check's whole Redis interaction must finish inside this, or the local window answers
+# instead: a stopped Redis would otherwise stall each check for the client's 5 s connect timeout
+# per command. ponytail: no circuit breaker — every check retries Redis, so a hung Redis costs
+# each call up to this long; add a half-open breaker if outages become routine.
+REDIS_TIMEOUT_SECONDS = 0.25
+# Users the local window remembers before the least recently active one is forgotten.
+_LOCAL_WINDOW_MAX_USERS = 4096
 
 
 class RedisLike(Protocol):
@@ -115,6 +138,126 @@ class InsufficientCreditsError(RuntimeError):
         super().__init__(f"Not enough credits for this call — top up or upgrade: {UPGRADE_URL}")
 
 
+# ponytail: per-process window — Redis is the shared one; with Redis down the cap is per API
+# process. Calls Redis admits are mirrored here, so an outage that starts mid-window still
+# refuses the 21st call; the recovery direction (calls recorded here during an outage are
+# invisible to Redis once it returns) can still admit up to twice the limit across a flap, and
+# LRU eviction behind 4,096 more recently active users resets that user's count. Add a shared
+# fallback only if Redis outages become routine.
+class _LocalFrequencyWindow:
+    """The sliding window the cap falls back to whenever Redis cannot answer.
+
+    Same shape as the Redis sorted set — call timestamps per user, pruned to the window — held
+    in memory and LRU-bounded, so untrusted high-cardinality user ids cannot grow it without
+    limit. Every method is synchronous with no await inside, so check-then-record is atomic
+    on the event loop."""
+
+    def __init__(self) -> None:
+        self._calls: OrderedDict[uuid.UUID, deque[float]] = OrderedDict()
+
+    def count(self, user_id: uuid.UUID, now: float, window: float) -> int:
+        """Calls by `user_id` inside the window ending at `now`; expired ones are dropped."""
+        calls = self._calls.get(user_id)
+        if calls is None:
+            return 0
+        while calls and calls[0] <= now - window:  # inclusive edge, as Redis ZREMRANGEBYSCORE
+            calls.popleft()
+        if not calls:
+            del self._calls[user_id]  # an idle user holds no slot
+            return 0
+        self._calls.move_to_end(user_id)
+        return len(calls)
+
+    def record(self, user_id: uuid.UUID, now: float) -> None:
+        self._calls.setdefault(user_id, deque()).append(now)
+        self._calls.move_to_end(user_id)
+        if len(self._calls) > _LOCAL_WINDOW_MAX_USERS:
+            self._calls.popitem(last=False)
+
+    def oldest(self, user_id: uuid.UUID) -> float | None:
+        calls = self._calls.get(user_id)
+        return calls[0] if calls else None
+
+
+_local_window = _LocalFrequencyWindow()
+# Causes already warned about in this process: one warning per cause, never one per call.
+_warned_causes: set[str] = set()
+
+
+def _warn_local_once(cause: str, user_id: uuid.UUID, *, exc_info: bool = False) -> None:
+    if cause in _warned_causes:
+        return
+    _warned_causes.add(cause)
+    logger.warning(
+        "frequency cap is running on the local per-process window (%s): the limit holds per "
+        "API process, not fleet-wide, until redis answers again user_id=%s",
+        cause,
+        user_id,
+        exc_info=exc_info,
+    )
+
+
+async def _redis_oldest(redis: RedisLike, key: str) -> float | None:
+    try:
+        oldest = await redis.zrange(key, 0, 0, withscores=True)
+        return float(oldest[0][1]) if oldest else None
+    except Exception:
+        return None  # already over the limit; a broken read or reply never unblocks
+
+
+async def _redis_count_and_record(
+    redis: RedisLike, user_id: uuid.UUID, ts: float, window: int, limit: int
+) -> tuple[int, float | None]:
+    """The whole Redis side of one check, so a single timeout bounds all of it: drop expired
+    calls, count, then read the oldest call (at/over the limit) or record this one (under it)."""
+    key = f"{_FREQ_KEY_PREFIX}{user_id}"
+    await redis.zremrangebyscore(key, 0, ts - window)
+    count = await redis.zcard(key)
+    if count >= limit:
+        return count, await _redis_oldest(redis, key)
+    await redis.zadd(key, {uuid.uuid4().hex: ts})
+    await redis.expire(key, window)
+    return count, None
+
+
+def _local_count_and_record(
+    user_id: uuid.UUID, ts: float, window: int, limit: int
+) -> tuple[int, float | None]:
+    count = _local_window.count(user_id, ts, window)
+    if count >= limit:
+        return count, _local_window.oldest(user_id)
+    _local_window.record(user_id, ts)
+    return count, None
+
+
+async def _count_and_record(
+    redis: RedisLike | None, user_id: uuid.UUID, ts: float, window: int, limit: int
+) -> tuple[int, float | None, Literal["redis", "local"]]:
+    """(calls in the window, oldest call, which limiter answered); records this call when under
+    the limit. Redis answers when it can inside REDIS_TIMEOUT_SECONDS; otherwise the local
+    window does, so the cap never lifts because Redis is absent, erroring or slow. Every call
+    Redis admits is also mirrored into the local window (its own verdict is ignored), so an
+    outage that starts mid-window starts from this process's history, not from zero."""
+    if redis is None:
+        _warn_local_once("redis_missing", user_id)
+    else:
+        try:
+            count, oldest = await asyncio.wait_for(
+                _redis_count_and_record(redis, user_id, ts, window, limit),
+                timeout=REDIS_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _warn_local_once("redis_slow", user_id)
+        except Exception:  # CancelledError is a BaseException: an outer cancel still propagates
+            _warn_local_once("redis_error", user_id, exc_info=True)
+        else:
+            if count < limit:  # admitted: mirror it (via count(), which prunes), verdict ignored
+                _local_count_and_record(user_id, ts, window, limit)
+            return count, oldest, "redis"
+    count, oldest = _local_count_and_record(user_id, ts, window, limit)
+    return count, oldest, "local"
+
+
 async def check_frequency_cap(
     user_id: uuid.UUID,
     *,
@@ -126,57 +269,32 @@ async def check_frequency_cap(
     """Sliding-window frequency gate: at most `limits.max_calls_per_minute` calls
     per `limits.frequency_window_seconds` window per user. Raises
     FrequencyCapExceededError when at/over; otherwise records this call.
+    FAILS CLOSED: with Redis absent, erroring or slower than `REDIS_TIMEOUT_SECONDS`, the
+    per-process `_LocalFrequencyWindow` answers instead (see the module docstring).
     Deterministic given `now` (tests inject it)."""
-    if redis is None:
-        logger.warning(
-            "frequency cap SKIPPED — no redis configured, fail-open by policy user_id=%s",
-            user_id,
-        )
-        return
     ts = time.time() if now is None else now
-    window = limits.frequency_window_seconds
-    key = f"{_FREQ_KEY_PREFIX}{user_id}"
-    try:
-        await redis.zremrangebyscore(key, 0, ts - window)
-        count = await redis.zcard(key)
-    except Exception:
-        # Uniform policy: a broken limiter never takes down model calls —
-        # same fail-open as redis=None, whether Redis is absent or erroring.
-        logger.warning(
-            "frequency cap SKIPPED — redis unavailable, fail-open by policy user_id=%s",
-            user_id,
-            exc_info=True,
-        )
+    window, limit = limits.frequency_window_seconds, limits.max_calls_per_minute
+    count, oldest_ts, limiter = await _count_and_record(redis, user_id, ts, window, limit)
+    if count < limit:
         return
-    if count >= limits.max_calls_per_minute:
-        try:
-            oldest = await redis.zrange(key, 0, 0, withscores=True)
-            oldest_ts = float(oldest[0][1]) if oldest else ts
-        except Exception:
-            oldest_ts = ts  # already over the limit; a broken read never unblocks
-        retry_after = max(1, math.ceil(oldest_ts + window - ts))
-        logger.info(
-            "frequency cap blocked user_id=%s count=%d limit=%d retry_after=%ds",
+    # No readable oldest call means a full window: a broken read never unblocks early.
+    retry_after = max(1, math.ceil((ts if oldest_ts is None else oldest_ts) + window - ts))
+    logger.info(
+        "frequency cap blocked user_id=%s count=%d limit=%d retry_after=%ds limiter=%s",
+        user_id,
+        count,
+        limit,
+        retry_after,
+        limiter,
+    )
+    if session is not None:
+        await _emit_block_event(
+            session,
             user_id,
-            count,
-            limits.max_calls_per_minute,
-            retry_after,
+            reason="frequency_cap",
+            detail={"retry_after": retry_after, "limiter": limiter},
         )
-        if session is not None:
-            await _emit_block_event(
-                session, user_id, reason="frequency_cap", detail={"retry_after": retry_after}
-            )
-        raise FrequencyCapExceededError(retry_after)
-    try:
-        await redis.zadd(key, {uuid.uuid4().hex: ts})
-        await redis.expire(key, window)
-    except Exception:
-        logger.warning(
-            "frequency cap could not record this call — redis unavailable, "
-            "fail-open by policy user_id=%s",
-            user_id,
-            exc_info=True,
-        )
+    raise FrequencyCapExceededError(retry_after)
 
 
 async def assert_can_spend(

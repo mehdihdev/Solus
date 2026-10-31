@@ -512,6 +512,7 @@ class OnshapeConnector(OAuthConnector):
             Capability.STRUCTURE,
             Capability.GEOMETRY,
             Capability.CONSTRUCTION_HISTORY,
+            Capability.RENDER,
             Capability.WRITE_FEATURE,
             Capability.WRITE_PARAMETER,
         }
@@ -1448,6 +1449,13 @@ class OnshapeConnector(OAuthConnector):
                 "export_timeout",
                 f"Onshape did not finish the {_EXPORT_FORMAT} translation in time",
             ) from exc
+
+    async def render_view(self, **request: Any) -> bytes:
+        """RENDER (SOLUSDEV-321 P5, R104): one shaded view of a synced element, under its own
+        scoped, metered connection (`connectors/onshape_render.py`)."""
+        from solus_api.connectors.onshape_render import render_synced_view
+
+        return await render_synced_view(**request)
 
     def mirror_handle(self) -> tuple[IntegrationCache | None, str | None]:
         """Read-only `(integration cache, cache account ref)` for read-through callers.

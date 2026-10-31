@@ -539,3 +539,65 @@ def test_a_profile_whose_scope_changed_after_planning_is_refused(ws: Path) -> No
     kept = dataclasses.replace(planned, profile=overlay)
     recorder = Recorder()
     assert execute.execute_plan(ws, kept, runner=recorder)["ok"] is True
+
+
+# --- SOLUSDEV-321 P6 (R137): `cwd` moves where a command runs, never what judges it -------
+
+
+def _without_env_fd(argv: list[str]) -> list[str]:
+    """The sandboxed argv minus the Linux helper's per-call descriptor number."""
+    if "--env-fd" not in argv:
+        return argv
+    at = argv.index("--env-fd")
+    return [*argv[:at], *argv[at + 2 :]]
+
+
+def test_cwd_moves_only_where_the_command_runs(
+    ws: Path, scrub: None, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The program is resolved, the child environment built and the sandbox's writable
+    workspace granted from the linked folder, exactly as without `cwd`."""
+    neutral = tmp_path_factory.mktemp("neutral")
+    planned = dataclasses.replace(_planned_tool(ws), environment=".venv")
+    here = execute.prepare(ws, planned)
+    moved = execute.prepare(ws, planned, cwd=neutral)
+    assert not isinstance(here, str) and not isinstance(moved, str), (here, moved)
+    try:
+        assert (here.cwd, moved.cwd) == (ws, neutral)
+        assert moved.argv[-1] == str(ws / "tools" / "a.sh")  # resolved in the linked folder
+        assert moved.child_env == here.child_env
+        assert moved.child_env["VIRTUAL_ENV"] == str(ws / ".venv")
+        assert _without_env_fd(moved.argv) == _without_env_fd(here.argv)  # the same grants
+    finally:
+        here.close()
+        moved.close()
+
+
+def test_a_profile_that_comes_to_reach_the_folder_is_refused_from_any_cwd(
+    ws: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The scope judgement right before spawn stays on the linked folder whatever `cwd` is: a
+    profile entry that has come to reach the folder since planning refuses the run."""
+    outside, neutral = tmp_path_factory.mktemp("outside"), tmp_path_factory.mktemp("neutral")
+    link = outside / "lib"
+    link.symlink_to(tmp_path_factory.mktemp("system_lib"))
+    profile = profiles.Profile(
+        name="p",
+        setup_file="/x.sh",
+        extends=None,
+        captured_at="t",
+        variables=(("PYTHONPATH", str(link)),),
+        digest="d",
+    )
+    planned = plan.plan_action(ws, "exec", {"argv": ["/bin/true"]}, which=lambda _n: None)
+    assert planned.ok and planned.program_scope == "system", planned.reason
+    planned = dataclasses.replace(planned, profile=profile)
+    recorder = Recorder()
+    assert execute.execute_plan(ws, planned, runner=recorder, cwd=neutral)["ok"] is True
+    link.unlink()
+    link.symlink_to(ws)  # the same entry now reaches the folder
+
+    result = execute.execute_plan(ws, planned, runner=recorder, cwd=neutral)
+
+    assert len(recorder.calls) == 1 and recorder.calls[0][1] == neutral
+    assert result["ok"] is False and result["reason"] == execute.PROGRAM_CHANGED

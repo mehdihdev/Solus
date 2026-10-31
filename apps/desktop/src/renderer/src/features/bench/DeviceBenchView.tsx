@@ -16,6 +16,8 @@ import { latestOf, streamState } from '../../widgets/livebench/telemetry'
 import './bench.css'
 
 export const POLL_MS = 2500
+/** The all-clear copy, shared with the Findings pane for a connected robot with none. */
+export const NOTHING_OUT_OF_RANGE = '✓ Nothing out of range'
 const RECENT_LIMIT = 512
 const WINDOW_MS = 8000
 interface BatchData {
@@ -188,6 +190,10 @@ interface Props {
   showReasoning?: boolean
   /** Only the reasoning section, over these devices: the once-below copy for robot panels. */
   reasoningOnly?: boolean
+  /** A signal marker that names a finding opens it (SOLUSDEV-321 P2-T7). */
+  onOpenFinding?: (findingId: string) => void
+  /** Rendered under LIVE REASONING: the Live Bench mounts its Findings pane here. */
+  children?: React.ReactNode
 }
 export function DeviceBenchView({
   projectId,
@@ -198,7 +204,9 @@ export function DeviceBenchView({
   onConfirmBoard,
   robotCount,
   showReasoning,
-  reasoningOnly
+  reasoningOnly,
+  onOpenFinding,
+  children
 }: Props): React.JSX.Element {
   const deviceKey = deviceIds.join('\n')
   const [lastDevices, setLastDevices] = useState(deviceKey)
@@ -220,21 +228,34 @@ export function DeviceBenchView({
     onStreamChange?.(live)
   }, [live, onStreamChange, current?.fetchedAtMs])
   const displayed = selected ? rows.filter((row) => row.key === selected) : primary
-  const events = signalEvents(current, rows)
   const placeholders = rows.some(hasPlaceholder)
-  const windowEndMs = current?.fetchedAtMs
+  const grid = {
+    userId,
+    projectId,
+    windowEndMs: current?.fetchedAtMs,
+    events: signalEvents(current, rows),
+    onScope: (key: string) => setSelection({ scope, key }),
+    onOpenFinding
+  }
   const reasoning = (
-    <ReasoningSection
-      hidden={showReasoning === false}
-      failed={failedScope === scope}
-      current={current}
-      events={events}
-      count={rows.filter((row) => !row.stale).length}
-      robotCount={robotCount}
-    />
+    <>
+      <ReasoningSection
+        hidden={showReasoning === false}
+        failed={failedScope === scope}
+        current={current}
+        events={grid.events}
+        count={rows.filter((row) => !row.stale).length}
+        robotCount={robotCount}
+      />
+      {children}
+    </>
   )
   if (reasoningOnly)
-    return <section className="bench-signals bench-reasoning-only">{reasoning}</section>
+    return (
+      <section className="bench-signals bench-reasoning-only" aria-label="Live reasoning">
+        {reasoning}
+      </section>
+    )
   return (
     <section className="bench-signals" aria-label="Live signals">
       <div className="bench-section-heading">
@@ -254,24 +275,8 @@ export function DeviceBenchView({
           Show all signals
         </button>
       )}
-      <SignalGrid
-        rows={displayed}
-        userId={userId}
-        projectId={projectId}
-        windowEndMs={windowEndMs}
-        events={events}
-        onScope={(key) => setSelection({ scope, key })}
-      />
-      <Diagnostics
-        scope={scope}
-        selected={selected}
-        rows={diagnostics}
-        userId={userId}
-        projectId={projectId}
-        windowEndMs={windowEndMs}
-        events={events}
-        onScope={(key) => setSelection({ scope, key })}
-      />
+      <SignalGrid rows={displayed} {...grid} />
+      <Diagnostics scope={scope} selected={selected} rows={diagnostics} {...grid} />
       <PlaceholderBanner visible={placeholders} onConfirmBoard={onConfirmBoard} />
       {reasoning}
     </section>
@@ -348,7 +353,8 @@ function SignalGrid({
   projectId,
   windowEndMs,
   events,
-  onScope
+  onScope,
+  onOpenFinding
 }: {
   rows: SignalRow[]
   userId: string | null
@@ -356,6 +362,7 @@ function SignalGrid({
   windowEndMs?: number
   events: ObserverEventOut[]
   onScope: (key: string) => void
+  onOpenFinding?: (findingId: string) => void
 }): React.JSX.Element {
   return (
     <div className="bench-signal-grid">
@@ -370,6 +377,7 @@ function SignalGrid({
             windowEndMs={windowEndMs}
             events={events}
             onScope={() => onScope(row.key)}
+            onOpenFinding={onOpenFinding}
           />
         </div>
       ))}
@@ -509,9 +517,7 @@ function Reasoning({
         ))
       ) : (
         <article className="bench-finding">
-          <strong>
-            {count && current ? '✓ Nothing out of range' : 'Waiting for signal evidence'}
-          </strong>
+          <strong>{count && current ? NOTHING_OUT_OF_RANGE : 'Waiting for signal evidence'}</strong>
           <p>
             Watching {count} signals
             {robotCount === undefined ? '' : ` across ${robotCount} robots`}. Findings appear here

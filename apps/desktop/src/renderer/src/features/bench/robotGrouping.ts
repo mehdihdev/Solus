@@ -1,5 +1,6 @@
 // Groups active bench sessions into per-robot panels (teleoperation wireflow).
-// A robot panel is a session whose device echo carries `robot_entity_id`.
+// A robot panel is a session that carries `robot_entity_id` (on the session, SOLUSDEV-321,
+// or in its device echo).
 import type { BenchSession } from '../../lib/api/resources'
 
 export interface RobotPanelInfo {
@@ -28,7 +29,7 @@ export function groupRobotSessions(
   const robotDevices = new Set<string>()
   const others: string[] = []
   for (const session of sessions ?? []) {
-    const robotId = session.device?.robot_entity_id
+    const robotId = session.robot_entity_id ?? session.device?.robot_entity_id
     if (robotId && session.status !== 'ended') {
       session.device_ids.forEach((id) => robotDevices.add(id))
       robots.push({

@@ -16,13 +16,16 @@ is a human follow-up. See ``docs/contracts/checker-interface.md``.
 
 import abc
 import enum
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from solus_api.agent.interfaces import GraphContext
 from solus_api.fingerprint.contract import FingerprintOutput
+
+if TYPE_CHECKING:  # the fact store reads configs, which import this module
+    from solus_api.checkers.fact_store import FactStore
 
 
 class Severity(enum.StrEnum):
@@ -86,11 +89,15 @@ class Checker(abc.ABC):
     domains: ClassVar[tuple[str, ...]]
 
     @abc.abstractmethod
-    def check(self, graph: GraphContext, parts: FingerprintOutput) -> list["Warning"]:
-        """Walk ``graph`` (optionally using ``parts`` for canonical identity) and return the
-        warnings found. MUST be pure: no I/O, no mutation of inputs, deterministic for a given
-        input. MUST degrade gracefully — when the attributes a rule needs are absent, SKIP
-        rather than guess, so an incomplete graph never produces false positives."""
+    def check(
+        self, graph: GraphContext, parts: FingerprintOutput, facts: "FactStore | None" = None
+    ) -> list["Warning"]:
+        """Walk ``graph`` (optionally using ``parts`` for canonical identity, and ``facts`` for
+        what the project's configs state — a matrix run's ``FactStore``, built once per run) and
+        return the warnings found. A rule that reads no facts accepts and ignores them. MUST be
+        pure: no I/O, no mutation of inputs, deterministic for a given input. MUST degrade
+        gracefully — when the attributes or facts a rule needs are absent, SKIP rather than
+        guess, so an incomplete graph never produces false positives."""
         raise NotImplementedError
 
 
