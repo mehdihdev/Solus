@@ -325,3 +325,31 @@ async def test_oversized_metadata_rejects_before_read(
     )
     assert response.status_code == 413, response.text
     assert all(call.args[0] != oversized for call in get.call_args_list)
+
+
+async def test_listing_digest_lets_pollers_skip_unchanged_geometry(client, alice_headers, db):
+    project, _, robot = await setup(client, alice_headers, db)
+    base = f"/api/v1/projects/{project}/bench/scene/models"
+    empty = (await client.get(f"{base}/digest", headers=alice_headers)).json()["data"]["digest"]
+    assert empty == (await client.get(base, headers=alice_headers)).json()["data"]["digest"]
+    artifact = await upload(client, alice_headers, project)
+    body = {"robot_id": robot, "artifact_id": artifact, "name": "Local robot", "format": "urdf"}
+    assert (await client.post(base, headers=alice_headers, json=body)).status_code == 201
+    probe = await client.get(f"{base}/digest", headers=alice_headers)
+    assert probe.status_code == 200 and set(probe.json()["data"]) == {"digest"}
+    changed = probe.json()["data"]["digest"]
+    listing = (await client.get(base, headers=alice_headers)).json()["data"]
+    assert changed != empty and listing["digest"] == changed
+    again = (await client.get(f"{base}/digest", headers=alice_headers)).json()["data"]["digest"]
+    assert again == changed
+
+
+@pytest.mark.parametrize("role,status", [("foreign", 404), ("viewer", 403), ("member", 200)])
+async def test_listing_digest_access(client, alice_headers, bob_headers, db, role, status):
+    project, team, _ = await setup(client, alice_headers, db)
+    await me(client, bob_headers)
+    if role != "foreign":
+        await add_member(client, alice_headers, bob_headers, BOB, team, role=role)
+    url = f"/api/v1/projects/{project}/bench/scene/models/digest"
+    assert (await client.get(url, headers=bob_headers)).status_code == status
+    assert (await client.get(url)).status_code == 401

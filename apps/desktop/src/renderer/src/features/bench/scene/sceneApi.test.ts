@@ -60,10 +60,18 @@ it('rejects object-valued source metadata before React renders it', () => {
 })
 
 describe('shared scene model listing', () => {
+  let digest = 'a'.repeat(64)
+  const fullListings = (): number =>
+    vi.mocked(api.request).mock.calls.filter(([url]) => !String(url).endsWith('/digest')).length
+  const probes = (): number =>
+    vi.mocked(api.request).mock.calls.filter(([url]) => String(url).endsWith('/digest')).length
   beforeEach(() => {
     vi.useRealTimers()
+    digest = 'a'.repeat(64)
     vi.mocked(api.request).mockReset()
-    vi.mocked(api.request).mockResolvedValue({ models: [base] })
+    vi.mocked(api.request).mockImplementation(async (url: string) =>
+      url.endsWith('/digest') ? { digest } : { models: [base], digest }
+    )
   })
   it('lets every panel on a project share one multi-megabyte listing', async () => {
     const [a, b] = await Promise.all([
@@ -73,22 +81,42 @@ describe('shared scene model listing', () => {
     expect(api.request).toHaveBeenCalledTimes(1)
     expect(a).toBe(b)
   })
-  it('fetches again once the shared listing is older than the poll window', async () => {
+  it('after the poll window, probes the digest and keeps the same models when unchanged', async () => {
     vi.useFakeTimers()
-    await listSharedSceneModels('p-age')
+    const first = await listSharedSceneModels('p-age')
     vi.advanceTimersByTime(6000)
-    await listSharedSceneModels('p-age')
-    expect(api.request).toHaveBeenCalledTimes(2)
+    const second = await listSharedSceneModels('p-age')
+    expect(probes()).toBe(1)
+    expect(fullListings()).toBe(1)
+    expect(second).toBe(first)
+  })
+  it('downloads the listing again only when the digest changes', async () => {
+    vi.useFakeTimers()
+    await listSharedSceneModels('p-change')
+    digest = 'b'.repeat(64)
+    vi.advanceTimersByTime(6000)
+    await listSharedSceneModels('p-change')
+    expect(probes()).toBe(1)
+    expect(fullListings()).toBe(2)
   })
   it('bypasses the shared listing when a panel needs fresh models after an edit', async () => {
     await listSharedSceneModels('p-fresh')
     await listSharedSceneModels('p-fresh', { fresh: true })
-    expect(api.request).toHaveBeenCalledTimes(2)
+    expect(fullListings()).toBe(2)
+    expect(probes()).toBe(0)
   })
   it('does not keep a failed listing for the next caller', async () => {
     vi.mocked(api.request).mockRejectedValueOnce(new Error('offline'))
     await expect(listSharedSceneModels('p-fail')).rejects.toThrow()
     await expect(listSharedSceneModels('p-fail')).resolves.toHaveLength(1)
+  })
+  it('falls back to a full listing when the digest probe fails', async () => {
+    vi.useFakeTimers()
+    await listSharedSceneModels('p-probe')
+    vi.advanceTimersByTime(6000)
+    vi.mocked(api.request).mockRejectedValueOnce(new Error('offline'))
+    await expect(listSharedSceneModels('p-probe')).resolves.toHaveLength(1)
+    expect(fullListings()).toBe(2)
   })
 })
 describe('scene model comparison', () => {

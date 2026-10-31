@@ -57,7 +57,10 @@ simulation template. No physics server or runtime motion is started.
 
 All routes `/api/v1/projects/{project_id}/bench/scene`, centralized ProjectCtx and verified
 member. Foreign/deleted robots, model nodes, sources and artifacts return404.
-- GET /models → envelope {models:[...]}, maximum32 models per project.
+- GET /models → envelope {models:[...],digest}, maximum32 models per project.
+- GET /models/digest → envelope {digest} (SOLUSDEV-319): sha256 of the canonical JSON of
+  exactly the models GET /models would return, so a poller fetches the listing (megabytes of
+  mesh vertices) only when the digest changes. Same auth and roles as GET /models.
 - POST /models → {robot_id,artifact_id,name(1..120),format:urdf|mjcf,
   source_entity_id?:UUID, source_revision?:string(1..128)} →201 model.
   Explicitly uploaded bounded XML only; retain file through existing .solus docs filing;

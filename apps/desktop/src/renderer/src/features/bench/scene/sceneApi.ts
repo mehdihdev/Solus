@@ -208,29 +208,50 @@ export function verifiedModel(value: unknown): SceneModel {
   verifyBindings(value, jointNames)
   return value as unknown as SceneModel
 }
-export async function listSceneModels(project: string): Promise<SceneModel[]> {
-  const response = await api.request<{ models: unknown[] }>(path(project))
+interface Listing {
+  models: SceneModel[]
+  digest: string | null
+}
+const digestOf = (value: unknown): string | null =>
+  typeof value === 'string' && /^[0-9a-f]{64}$/.test(value) ? value : null
+async function fetchListing(project: string): Promise<Listing> {
+  const response = await api.request<{ models: unknown[]; digest?: unknown }>(path(project))
   if (!response || !Array.isArray(response.models) || response.models.length > 32)
     throw new Error('Invalid model list.')
-  return response.models.map(verifiedModel)
+  return { models: response.models.map(verifiedModel), digest: digestOf(response.digest) }
+}
+export async function listSceneModels(project: string): Promise<SceneModel[]> {
+  return (await fetchListing(project)).models
 }
 /** A listing carries every model's mesh vertices (megabytes), so the robot panels on one project
- *  share it for a poll window instead of each downloading, parsing and verifying it. */
+ *  share it for a poll window, and after that a poll asks only for the listing's digest: the
+ *  renderer downloads, parses and verifies the megabytes again only when something changed. */
 const SHARED_LISTING_MS = 5000
-const sharedListings = new Map<string, { at: number; models: Promise<SceneModel[]> }>()
+const sharedListings = new Map<string, { at: number; listing: Promise<Listing> }>()
+async function revalidated(project: string, previous: Promise<Listing>): Promise<Listing> {
+  const known = await previous.catch(() => null)
+  if (known?.digest) {
+    const probe = await api
+      .request<{ digest?: unknown }>(`${path(project)}/digest`)
+      .catch(() => null)
+    if (digestOf(probe?.digest) === known.digest) return known
+  }
+  return fetchListing(project)
+}
 export function listSharedSceneModels(
   project: string,
   { fresh = false }: { fresh?: boolean } = {}
 ): Promise<SceneModel[]> {
   const shared = sharedListings.get(project)
-  if (!fresh && shared && Date.now() - shared.at < SHARED_LISTING_MS) return shared.models
-  const models = listSceneModels(project)
-  const entry = { at: Date.now(), models }
+  if (!fresh && shared && Date.now() - shared.at < SHARED_LISTING_MS)
+    return shared.listing.then((l) => l.models)
+  const listing = !fresh && shared ? revalidated(project, shared.listing) : fetchListing(project)
+  const entry = { at: Date.now(), listing }
   sharedListings.set(project, entry)
-  models.catch(() => {
+  listing.catch(() => {
     if (sharedListings.get(project) === entry) sharedListings.delete(project)
   })
-  return models
+  return listing.then((l) => l.models)
 }
 /** Same models unless something other than geometry says otherwise: a geometry change always
  *  bumps the version, so comparing it spares stringifying megabytes of vertices every poll. */
