@@ -214,6 +214,31 @@ export async function listSceneModels(project: string): Promise<SceneModel[]> {
     throw new Error('Invalid model list.')
   return response.models.map(verifiedModel)
 }
+/** A listing carries every model's mesh vertices (megabytes), so the robot panels on one project
+ *  share it for a poll window instead of each downloading, parsing and verifying it. */
+const SHARED_LISTING_MS = 5000
+const sharedListings = new Map<string, { at: number; models: Promise<SceneModel[]> }>()
+export function listSharedSceneModels(
+  project: string,
+  { fresh = false }: { fresh?: boolean } = {}
+): Promise<SceneModel[]> {
+  const shared = sharedListings.get(project)
+  if (!fresh && shared && Date.now() - shared.at < SHARED_LISTING_MS) return shared.models
+  const models = listSceneModels(project)
+  const entry = { at: Date.now(), models }
+  sharedListings.set(project, entry)
+  models.catch(() => {
+    if (sharedListings.get(project) === entry) sharedListings.delete(project)
+  })
+  return models
+}
+/** Same models unless something other than geometry says otherwise: a geometry change always
+ *  bumps the version, so comparing it spares stringifying megabytes of vertices every poll. */
+export function sameSceneModels(a: SceneModel[], b: SceneModel[]): boolean {
+  const key = (models: SceneModel[]): string =>
+    JSON.stringify(models.map(({ model, ...rest }) => [rest, model.warnings]))
+  return a.length === b.length && key(a) === key(b)
+}
 export async function importSceneModel(
   project: string,
   input: ModelImport,

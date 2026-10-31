@@ -2,11 +2,12 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as workspaceSession from '../../graph/workspaceSession'
 import { ScenePanel } from './ScenePanel'
-import { listSceneModels, importSceneModel } from './sceneApi'
+import { listSharedSceneModels, importSceneModel } from './sceneApi'
 import { listEntities, uploadArtifact } from '../../../lib/api/resources'
 vi.mock('./SceneViewer', () => ({ SceneViewer: () => <div>3D scene</div> }))
-vi.mock('./sceneApi', () => ({
-  listSceneModels: vi.fn(),
+vi.mock('./sceneApi', async (actual) => ({
+  sameSceneModels: (await actual<typeof import('./sceneApi')>()).sameSceneModels,
+  listSharedSceneModels: vi.fn(),
   importSceneModel: vi.fn(),
   confirmSceneMapping: vi.fn()
 }))
@@ -24,7 +25,7 @@ const robot = {
   source_key: null
 }
 beforeEach(() => {
-  vi.mocked(listSceneModels).mockResolvedValue([])
+  vi.mocked(listSharedSceneModels).mockResolvedValue([])
   vi.mocked(listEntities).mockResolvedValue([robot])
 })
 describe('scene import', () => {
@@ -51,9 +52,13 @@ describe('scene import', () => {
         undefined
       )
     )
+    expect(listSharedSceneModels).toHaveBeenCalledWith('p', { fresh: false })
+    await waitFor(() =>
+      expect(listSharedSceneModels).toHaveBeenLastCalledWith('p', { fresh: true })
+    )
   })
   it('renders jointless models with an explicit reason', async () => {
-    vi.mocked(listSceneModels).mockResolvedValue([
+    vi.mocked(listSharedSceneModels).mockResolvedValue([
       {
         id: 'model',
         robot_id: 'robot',
@@ -70,7 +75,7 @@ describe('scene import', () => {
 })
 
 it('uploads only explicitly selected STL assets with reviewed references', async () => {
-  vi.mocked(listSceneModels).mockResolvedValue([])
+  vi.mocked(listSharedSceneModels).mockResolvedValue([])
   vi.mocked(uploadArtifact).mockResolvedValue({ artifact_id: 'selected' } as never)
   vi.mocked(importSceneModel).mockResolvedValue({ id: 'model' } as never)
   render(<ScenePanel projectId="p" />)
@@ -98,7 +103,7 @@ it('uploads only explicitly selected STL assets with reviewed references', async
 })
 
 it('keeps compact scene management in a closed inline disclosure', async () => {
-  vi.mocked(listSceneModels).mockResolvedValue([
+  vi.mocked(listSharedSceneModels).mockResolvedValue([
     {
       id: 'model',
       robot_id: 'robot',
@@ -166,7 +171,7 @@ describe('per-robot scene (robotId)', () => {
       model: { links: [], joints: [], warnings: [] }
     }) as never
   it('shows only the models of the given robot', async () => {
-    vi.mocked(listSceneModels).mockResolvedValue([
+    vi.mocked(listSharedSceneModels).mockResolvedValue([
       model('m1', 'r1', 'Leader arm'),
       model('m2', 'r2', 'Follower arm')
     ])
@@ -175,7 +180,7 @@ describe('per-robot scene (robotId)', () => {
     expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
   })
   it('leaves out robots that have their own panel (excludeRobotIds)', async () => {
-    vi.mocked(listSceneModels).mockResolvedValue([
+    vi.mocked(listSharedSceneModels).mockResolvedValue([
       model('m1', 'r1', 'Leader arm'),
       model('m3', 'r9', 'Unpanelled arm')
     ])

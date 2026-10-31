@@ -9,7 +9,7 @@ import {
 } from '../../graph/workspaceSession'
 import { SceneViewer } from './SceneViewer'
 import { loadPose, poseKey, savePose, ZERO_POSE, type DisplayPose } from './displayPose'
-import { importSceneModel, listSceneModels } from './sceneApi'
+import { importSceneModel, listSharedSceneModels, sameSceneModels } from './sceneApi'
 import { useSceneValues } from './useSceneValues'
 import { MappingReview } from './MappingReview'
 import type { SceneModel } from './types'
@@ -83,17 +83,17 @@ function ScopedScenePanel({
     if (paused) return
     let live = true,
       inFlight = false
-    async function load(): Promise<void> {
+    async function load(fresh = false): Promise<void> {
       if (inFlight) return
       inFlight = true
       try {
         const [listed, entities] = await Promise.all([
-          listSceneModels(projectId),
+          listSharedSceneModels(projectId, { fresh }),
           listEntities(projectId, { type: 'physical_robot', limit: 100 })
         ])
         if (!live || workspaceSessionGeneration() !== generation) return
         const next = scopeModels(listed, onlyRobotId, excluded)
-        setModels((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next))
+        setModels((old) => (sameSceneModels(old, next) ? old : next))
         setRobots(
           entities.filter(
             (robot) => robot.project_id === projectId && robot.type === 'physical_robot'
@@ -113,7 +113,8 @@ function ScopedScenePanel({
         inFlight = false
       }
     }
-    void load()
+    // After an import or mapping edit (refresh > 0) this panel must not reuse a shared listing.
+    void load(refresh > 0)
     const timer = setInterval(() => void load(), 10000)
     return () => {
       live = false
