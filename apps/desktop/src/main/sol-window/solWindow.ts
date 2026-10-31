@@ -167,6 +167,8 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   let pending: SolRegionPayload | null = null
   const placement = createPillPlacement(deps.screen)
   let busy = false
+  // A pill the user dragged stays up on blur until they close it (Esc, ×, the shortcut).
+  let pinned = false
   const now = deps.now ?? Date.now
   // SOLUSDEV-319: the exit animation's bounded wait, and when the pill last hid.
   let leaving: ReturnType<typeof setTimeout> | null = null
@@ -181,9 +183,11 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   }
 
   /** Cue the renderer's exit animation; hide when the bounded wait ends — a
-   *  dead or slow renderer cannot keep the pill up. */
+   *  dead or slow renderer cannot keep the pill up. Every caller but blur is a
+   *  close by hand, so it also unpins. */
   const hide = (): void => {
     if (!alive() || !current?.isVisible() || leaving !== null) return
+    pinned = false
     cue({ kind: 'leaving' })
     leaving = setTimeout(() => {
       leaving = null
@@ -200,11 +204,11 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     pending = null
     hiddenAt = null
     win.on('blur', () => {
-      if (!busy && current === win) hide()
+      if (!busy && !pinned && current === win) hide()
     })
-    // A drag (the renderer's -webkit-app-region handle) re-homes the pill.
+    // A drag (the renderer's -webkit-app-region handle) re-homes and pins the pill.
     win.on('moved', () => {
-      if (!win.isDestroyed() && win.isVisible()) placement.moved(win.getBounds())
+      if (!win.isDestroyed() && win.isVisible() && placement.moved(win.getBounds())) pinned = true
     })
     win.on('closed', () => {
       if (current !== win) return
@@ -212,6 +216,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       pending = null // ephemeral by construction: a region never outlives its window
       ready = false
       busy = false
+      pinned = false
       stopLeaving()
     })
   }
@@ -254,8 +259,12 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     },
     hide,
     resize(next) {
-      const bounds = alive() && current ? placement.grow(next, current.getBounds()) : null
-      if (bounds !== null) current?.setBounds(bounds)
+      if (!alive() || current === null) return
+      // A drag still in progress (macOS sends 'moved' only when it ends) pins too.
+      const live = current.getBounds()
+      if (placement.moved(live)) pinned = true
+      const bounds = placement.grow(next, live)
+      if (bounds !== null) current.setBounds(bounds)
     },
     setBusy: (flag) => void (busy = flag),
     focus: () => void (alive() && current?.focus()),

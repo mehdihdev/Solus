@@ -444,21 +444,37 @@ body {
   position: absolute;
   inset: -4px;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--acc) 45%, transparent), transparent 70%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--acc) 45%, transparent),
+    transparent 70%
+  );
   animation: sol-orb-breathe 4s ease-in-out infinite;
   pointer-events: none;
 }
 .sol-pill-orb.sol-pulse::after {
   animation-duration: 1.1s;
 }
-/* Drag: the bar's empty area, the orb and the footer move the window; every
-   control (input, buttons, toggles, the mention list) stays clickable. */
-.sol-pill-row,
-.sol-pill-footer {
+/* Drag: the whole frame moves the window — the panel's edge and padding, the
+   gaps between messages, the bar's empty area, the orb and the footer. Every
+   control and every message stays clickable and selectable. A drag also pins
+   the pill open on blur (main's solWindow) until it is closed by hand. */
+.sol-pill {
   -webkit-app-region: drag;
 }
-.sol-pill-row :is(input, textarea, button, label, select, a, [role], [contenteditable]),
-.sol-pill-footer :is(input, textarea, button, label, select, a, [role], [contenteditable]) {
+.sol-pill
+  :is(
+    input,
+    textarea,
+    button,
+    label,
+    select,
+    a,
+    summary,
+    [role],
+    [contenteditable],
+    .sol-thread > *
+  ) {
   -webkit-app-region: no-drag;
 }
 @media (prefers-reduced-motion: reduce) {

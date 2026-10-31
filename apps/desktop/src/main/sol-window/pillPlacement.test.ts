@@ -56,6 +56,13 @@ describe('createPillPlacement', () => {
     expect(grown.y + grown.height).toBe(dragging.y + dragging.height)
   })
 
+  it('moved answers whether it was a drag: its own setBounds is not', () => {
+    const p = createPillPlacement(screen)
+    const home = p.summon({ x: 600, y: 300 }, true)
+    expect(p.moved({ ...home, y: home.y + 1 })).toBe(false)
+    expect(p.moved({ ...home, x: home.x + 300 })).toBe(true)
+  })
+
   it('treats a rect within a couple of pixels of its own setBounds as its own', () => {
     const p = createPillPlacement(screen)
     const near = { x: 600, y: 300 }

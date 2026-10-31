@@ -25,8 +25,9 @@ export interface PillPlacement {
    *  window's live bounds: a drag still in progress (macOS sends 'moved' only
    *  when it ends) is adopted first, so growth never snaps the pill back. */
   grow(height: number, current?: Rect): Rect | null
-  /** The window moved. Our own setBounds is ignored; anything else is a drag. */
-  moved(bounds: Rect): void
+  /** The window moved. Our own setBounds is ignored; anything else is a drag
+   *  (true) and becomes home. */
+  moved(bounds: Rect): boolean
 }
 
 /** The OS may nudge a programmatic setBounds by a pixel or two; that is not a drag. */
@@ -48,11 +49,12 @@ export function createPillPlacement(screen: PillScreen): PillPlacement {
   let lastSet: Rect | null = null
   const workAreaAt = (p: Point): Rect => screen.getDisplayNearestPoint(p).workArea
   const remember = (r: Rect): Rect => (lastSet = r)
-  const moved = (bounds: Rect): void => {
-    if (home === null || sameRect(lastSet, bounds)) return
+  const moved = (bounds: Rect): boolean => {
+    if (home === null || sameRect(lastSet, bounds)) return false
     home = dragHome(bounds, workAreaAt(bottomCentre(bounds)))
     anchor = null
     lastSet = bounds
+    return true
   }
   return {
     summon(near, fresh = false) {

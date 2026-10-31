@@ -121,6 +121,7 @@ describe('manager', () => {
   registerWindowRegionReadinessTests()
   registerPillMotionTests()
   registerPillDragTests()
+  registerPillPinTests()
 })
 
 /** Let the exit animation's bounded wait run out. */
@@ -529,6 +530,48 @@ function registerPillDragTests(): void {
     vi.advanceTimersByTime(SOL_PILL_RESUME_MS + 1)
     m.open()
     expect(w.bounds).toEqual(placePill({ x: 600, y: 300 }, WA_A, pill))
+  })
+}
+
+function registerPillPinTests(): void {
+  it('a dragged pill stays open on blur until it is closed by hand', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    w.bounds = { x: 1000, y: 600, width: SOL_PILL_WIDTH, height: SOL_PILL_INITIAL_HEIGHT }
+    w.emit('moved')
+    w.emit('blur')
+    exitAnimation()
+    expect(w.visible).toBe(true)
+    m.hide() // Esc or the × — a hand close
+    exitAnimation()
+    expect(w.visible).toBe(false)
+    m.open() // within the resume window: same place, but no longer pinned
+    w.emit('blur')
+    exitAnimation()
+    expect(w.visible).toBe(false)
+  })
+
+  it('a drag caught mid-resize pins too; its own resizes and a toggle-close never do', () => {
+    const h = harness({ x: 600, y: 300 })
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    const w = h.windows[0]
+    m.resize(300) // our own setBounds, echoed as a move
+    w.emit('moved')
+    w.emit('blur')
+    exitAnimation()
+    expect(w.visible).toBe(false)
+    m.open()
+    w.bounds = { ...w.bounds, x: w.bounds.x + 400 } // dragging; 'moved' not sent yet
+    m.resize(320)
+    w.emit('blur')
+    exitAnimation()
+    expect(w.visible).toBe(true)
+    m.toggle() // the summon shortcut closes it by hand
+    exitAnimation()
+    expect(w.visible).toBe(false)
   })
 }
 

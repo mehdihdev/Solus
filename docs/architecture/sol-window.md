@@ -174,8 +174,8 @@ Wireflow: `docs/wireflows/sol-window.md` "SOLUSDEV-319 Ember Pill". Changes to t
   write); `sol:set-always-on-top`, `SolState.alwaysOnTop` and the bridge's `setAlwaysOnTop` are removed.
 - `main/sol-window/solWindow.ts`: the window is frameless, transparent, always on top, non-resizable,
   hidden from the taskbar. The manager gains `toggle()` (double-tap Ctrl), keeps a hidden window alive
-  between summons (`show` re-places it at the cursor), hides on `blur` unless the renderer reported busy,
-  and applies renderer resize requests through `growPill`.
+  between summons (`show` re-places it at the cursor), hides on `blur` unless the renderer reported busy
+  or the user dragged it, and applies renderer resize requests through `growPill`.
 - Three new invokes on `SOL_WINDOW_CHANNELS`, accepted only from the SOL window's own webContents and
   its top frame (`senderFrame === sender.mainFrame`):
   `sol:resize` (a finite number, clamped 80–min(620, 60 % of the work area)), `sol:set-busy` (boolean), `sol:hide` (no argument).
@@ -186,13 +186,17 @@ Wireflow: `docs/wireflows/sol-window.md` "SOLUSDEV-319 Ember Pill". Changes to t
 
 ### Ember Pill: drag, resume, height cap, motion
 
-- **Drag.** The bar's empty area, the orb and the footer are a `-webkit-app-region: drag` handle; every
-  control inside them (input, buttons, toggles, the Guide|Build switch, the mention list — anything with a
-  `role`) is `no-drag`, and the message list is outside the handle. The window is `maximizable: false` and
+- **Drag.** The whole pill frame is a `-webkit-app-region: drag` handle — the panel's edge and padding,
+  the gaps between messages, the bar's empty area, the orb and the footer. Every control (input, buttons,
+  toggles, the Guide|Build switch, the mention list — anything with a `role`, plus `summary`) and every
+  message (`.sol-thread > *`) is `no-drag`, so text stays selectable. The window is `maximizable: false` and
   `fullscreenable: false` so a double-click on the handle never zooms it. `main/sol-window/pillPlacement.ts`
   (new) owns the live placement: on the window's `moved` event the dragged bounds become the new home
   (`dragHome`, clamped into that display's work area) with no shift-aside anchor, so later `growPill` calls
   keep the user's x and bottom edge. Its own `setBounds` echoes are ignored (last-set comparison).
+- **Pinned after a drag.** A drag (a `moved` that is not our own `setBounds`, or a resize that finds
+  the window already dragged) pins the pill: blur no longer hides it. Only a close by hand — Esc, ×, or
+  the summon shortcut's toggle — hides it and unpins; the next summon (even a resume) hides on blur again.
 - **Resume within 5 s.** `SOL_PILL_RESUME_MS = 5000` (`solWindow.constants.ts`). Main records when the pill
   actually hid; a summon within 5 s shows it unchanged — same bounds, same renderer state (messages,
   draft, scroll) — and cues `{ kind: 'summoned', resume: true }`. After 5 s it is re-placed at the cursor
