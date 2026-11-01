@@ -19,7 +19,15 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, StrictBool, ValidationError, field_validator, model_validator
+from pydantic import (
+    Field,
+    StrictBool,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,8 +43,10 @@ from solus_api.agent.conversation import (
     serialize_turn,
 )
 from solus_api.agent.deterministic_facts import GraphFactSources
+from solus_api.agent.drive.binding import FrontAppBinding
 from solus_api.agent.execution_policy import BuildExecutionPolicy
 from solus_api.agent.expertise import turn_expertise
+from solus_api.agent.front_app import attached_event
 from solus_api.agent.history_evidence import enrich_history
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
 from solus_api.agent.onshape_turn_sync import OnshapeTurnSync, create_turn_sync
@@ -48,6 +58,7 @@ from solus_api.agent.runtime import (
     AgentRunContext,
     TurnView,
     build_dispatch,
+    with_front_app,
 )
 from solus_api.agent.screen import (
     MAX_DIMENSION,
@@ -81,6 +92,7 @@ from solus_api.deps import (
     SettingsDep,
     SolRegistryDep,
     SolSystemsDep,
+    _drive_budget,
     require_role,
 )
 from solus_api.extensions.attribution import ExtensionAttribution
@@ -332,9 +344,28 @@ class MessageCreate(StrictModel):
     #: SOLUSDEV-252 S3: at most one screenshot per turn. Pixels live for this
     #: turn only — the transcript keeps `{width, height, app}`.
     screenshot: ScreenshotIn | None = None
+    #: SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the app the person summoned SOL over,
+    #: from desktop main's summon snapshot. This turn only — never logged or persisted,
+    #: refused on resume and wake turns, and a 422 never echoes it (`_front_app_opaque`).
+    front_app: FrontAppBinding | None = None
+
+    @field_validator("front_app", mode="wrap")
+    @classmethod
+    def _front_app_opaque(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+        """One opaque error for any bad `front_app`: the nested errors would echo a
+        short title or name as their `input`, which the 422 handler only redacts when
+        it is long. The whole object is a dict, so the handler redacts it."""
+        try:
+            return handler(value)
+        except ValidationError:
+            raise PydanticCustomError("front_app", "front_app is not a valid snapshot") from None
 
     @model_validator(mode="after")
     def _content_or_resume(self) -> "MessageCreate":
+        if self.front_app is not None and (
+            self.process_prompt is not None or self.resume_confirmation_id is not None
+        ):
+            raise ValueError("a resume or wake carries no front_app")
         if self.process_prompt is not None:
             if (
                 self.content is not None
@@ -1007,6 +1038,16 @@ async def _record_user_message(
             "screenshot": screenshot is not None,
         },
     )
+    if body.front_app is not None:
+        # sol-drive.md §2.2: two booleans — never the title, name or bundle id.
+        emit_event(
+            session,
+            user=ctx.user,
+            event_type="sol.front_app_attached",
+            team_id=ctx.team.id,
+            project_id=ctx.project.id,
+            payload=attached_event(body.front_app),
+        )
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -1089,9 +1130,26 @@ async def post_message(
             session, ctx, conversation_id, content, body, attribution, screenshot
         )
     await session.commit()
+    # sol-drive.md §2.2: `drive.step` offers `front` only for this turn's drivable,
+    # window-bound front app, rebuilt on the caller's own companion scope.
+    registry = with_front_app(
+        registry,
+        body.front_app,
+        sessionmaker,
+        ctx.project.id,
+        bridge=bridge,
+        user_id=ctx.user.id,
+        team_id=ctx.team.id,
+        call_cap_bytes=settings.bridge_tool_call_max_bytes,
+        secret_store=secret_store,
+        redis=getattr(request.app.state, "redis", None),
+        enqueue=getattr(request.app.state, "enqueue", None),
+        budget=_drive_budget(settings),
+    )
 
     # Scope is bound by Solus code, before the runner sees any user content (§7) —
-    # in `deps.get_sol_registry`, which is the ONE place a registry is built.
+    # in `deps.get_sol_registry`, which is the ONE place a registry is built (above, only
+    # `drive.step` is rebuilt for the turn's front app, on the same server-derived scope).
     parked_calls: list[ParkedCall] = []
     #: What this turn has already parked, keyed by the concrete action. The loop
     #: keeps running after a park, so a model that re-proposes would otherwise
@@ -1253,6 +1311,8 @@ async def post_message(
         extension_slug=attribution.slug if attribution else None,
         # S3: pixels for this turn only; the runner's extractor pass reads them.
         screenshot=screenshot,
+        # SOLUSDEV-319 slice 4: this turn's front app — never stored.
+        front_app=body.front_app,
     )
     stream = _run_and_persist(
         runner=runner,

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     from solus_api.agent.confirmations import ParkedCall
     from solus_api.agent.deterministic import FactSources
+    from solus_api.agent.drive.binding import FrontAppBinding
     from solus_api.agent.drive.executor import Budget
     from solus_api.agent.execution_policy import BuildExecutionPolicy
     from solus_api.agent.expertise import Expertise
@@ -60,6 +61,7 @@ from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, model_result, stream
 from solus_api.agent.context import Context, build_context
 from solus_api.agent.deterministic import DeterministicAnswer, answer_first_tier, first_tier_events
 from solus_api.agent.errors_filing import file_tool_error
+from solus_api.agent.front_app import front_app_block
 from solus_api.agent.guide_toolkb_version import placed_tools
 from solus_api.agent.interfaces import GraphScope, SolSystems
 from solus_api.agent.modes import ActionMode
@@ -542,12 +544,42 @@ def _register_drive_step(
     """ADR-041: `drive.step` — the only model-facing way to the internal drive
     tools, offered when this user's companion advertises all of them and the
     metered model call has a secret store."""
+    tool = _drive_step_tool(
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget,
+    )
+    if tool is not None:
+        registry.register(tool)
+
+
+def _drive_step_tool(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+    front_app: "FrontAppBinding | None" = None,
+) -> "Tool | None":
     if bridge is None or user_id is None or team_id is None or secret_store is None:
-        return
+        return None
     from solus_api.agent.drive.executor import Budget
     from solus_api.agent.drive.wiring import build_drive_step
 
-    tool = build_drive_step(
+    return build_drive_step(
         bridge=bridge,
         user_id=user_id,
         team_id=team_id,
@@ -558,9 +590,53 @@ def _register_drive_step(
         redis=redis,
         enqueue=enqueue,
         budget=budget or Budget(),
+        front_app=front_app,
     )
-    if tool is not None:
-        registry.register(tool)
+
+
+def with_front_app(
+    registry: ToolRegistry,
+    front_app: "FrontAppBinding | None",
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+) -> ToolRegistry:
+    """SOLUSDEV-319 slice 4 (sol-drive.md §2.2): this turn's registry with `drive.step`
+    rebuilt from the turn's `front_app`, so it offers `app: "front"` — bound to exactly
+    that window — only when the app is drivable and window-bound. The rebuild goes
+    through the same scope (this user's own companion for this team and project); with
+    no window, no drive.step in the registry, or no companion, the registry is returned
+    unchanged. A new registry, never a mutation: the per-request dependency stays as built."""
+    if front_app is None or front_app.window() is None:
+        return registry
+    current = {tool.descriptor.name: tool for tool in registry.tools()}
+    fronted = _drive_step_tool(
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget,
+        front_app=front_app,
+    )
+    if fronted is None or fronted.descriptor.name not in current:
+        return registry
+    out = ToolRegistry()
+    for name, tool in current.items():
+        out.register(fronted if name == fronted.descriptor.name else tool)
+    return out
 
 
 def _internal_only(spec: "BridgeToolSpec") -> bool:
@@ -911,6 +987,10 @@ class AgentRunContext:
     #: extractor pass reads them, the live user Turn carries them, the
     #: transcript never sees them.
     screenshot: "screen.ScreenshotBlock | None" = None
+    #: SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the app the person summoned SOL over,
+    #: for THIS turn only — never stored. Its route ordering reaches the system prompt
+    #: (`front_app.route_note`); its name and title only the live turn's fenced block.
+    front_app: "FrontAppBinding | None" = None
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -1294,6 +1374,7 @@ class LlmRunner:
             action_mode=ctx.action_mode,
             nonce=nonce,
             expertise=ctx.expertise,
+            front_app=ctx.front_app,
         )
         # P1-T5: the model is offered every tool but the ones only the server drives (research).
         # P7: a GUI tool's knowledge note is read for the release on the asker's own machine.
@@ -1755,9 +1836,11 @@ class LlmRunner:
             else prompt.data_block(nonce, "user_message", ctx.prompt)
         )
         images = (ctx.screenshot.image,) if ctx.screenshot is not None else ()
-        turns.append(
-            Turn(role="user", text="\n".join((context.fenced_suffix(nonce), live)), images=images)
-        )
+        # SOLUSDEV-319 slice 4: the front app's fenced block, after the live layers and
+        # before the message — it varies per summon, so it stays out of the cached prefix.
+        front = (front_app_block(nonce, ctx.front_app),) if ctx.front_app is not None else ()
+        text = "\n".join((context.fenced_suffix(nonce), *front, live))
+        turns.append(Turn(role="user", text=text, images=images))
         return tuple(turns)
 
 

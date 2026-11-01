@@ -154,6 +154,33 @@ cache key. `_terminal_reply` still refuses a tool call that arrives anyway.
 `tokens_cached_in = cache_read_input_tokens`. `cost.compute_call_credits` bills the cached subset
 at the catalog entry's `price_cached_in`; the cache-write premium is not modelled.
 
+**The front app (`kind=front_app`, SOLUSDEV-319 slice 4 — not a numbered layer).** When a turn
+carries `front_app` (docs/api/API-implementation.md, streaming turn; `docs/architecture/sol-drive.md`
+§2.2 — the desktop sends it only on Build turns while driving is available), it reaches the prompt
+in two pieces, both from `agent/front_app.py`:
+
+- **The route note — in `system`.** `prompt.system_prompt(…, front_app=…)` appends
+  `front_app.route_note`, after the Build notes and before the preference blocks: integration API
+  tools first, then workspace file tools such as `machine.write_file` when the file lies in the
+  linked workspace, then `drive.step` (`app "front"` for a window-bound app, `app "kicad"` for a
+  project-bound one); for an app SOL cannot drive (`drivable: false`), "never call drive.step for
+  it" and the other two routes. It is one of three Solus-authored constants chosen from the
+  validated `drivable`/`binding` alone — no name, bundle id or title ever reaches instruction
+  position. Like `SCREENSHOT_NOTE`, a turn with it starts a new `system` cache entry.
+- **The data block — in the live turn.** `front_app.front_app_block(nonce, front_app)`: one
+  nonce-fenced `kind=front_app` block `{app, bundle_id, drivable, binding, window_title}` under the
+  conversation nonce, placed after `Context.fenced_suffix` and before the live message
+  (`LlmRunner._opening_turns`). The name and title are untrusted data from the person's machine and
+  appear only inside this fence; because the title changes per summon, the block stays out of
+  the cached prefix.
+
+It is not one of the eleven layers: `LAYER_ORDER` and the `context_used` manifest (which lists all
+eleven, API-implementation.md) are unchanged, and it reports no section or token count. The turn's
+`front_app` is never stored — not in the transcript, `sol.message` or history — so a later turn
+without it carries neither piece. `front_app` changes the tool set only as §2.2 says
+(`runtime.with_front_app` rebuilds `drive.step` on the caller's own companion scope so it offers
+`front` for a drivable, window-bound app) and never the mode or the scope.
+
 ## 3. Token budgets, as set in code
 
 The **total** follows the routing tier (SOLUSDEV-321). `models.yaml` `context_budget:` sets it —
@@ -235,8 +262,9 @@ carries.
 1. The fence nonce: `prompt.conversation_nonce(ctx.conversation_id)` — the router passes the
    conversation id from the route (`routers/sol.py`, `post_message`) — or a fresh
    `prompt.new_nonce()` when the turn has none.
-2. `prompt.system_prompt(mode, custom_instruction, engineering_preferences, with_screenshot=…, action_mode=…, nonce=…)`
-   — this is where the **preferences** layer's text actually goes — and
+2. `prompt.system_prompt(mode, custom_instruction, engineering_preferences, with_screenshot=…, action_mode=…, nonce=…, expertise=…, front_app=…)`
+   — this is where the **preferences** layer's text actually goes (and the front app's route
+   note, §2) — and
    `prompt.tool_specs(ctx.tools, nonce=…)`.
 3. `turn_scope.plan_scope(ScopeInputs(message=…, tier=…, mentions=…, pins=…, focus=…, robot_id=…, finding_subjects=…, history_entity_ids=…, not_visible=…), search=…, load=…, disambiguate=…, config=…)`
    (SOLUSDEV-321 P1-T1) — no model call of its own. Anchors, each with the reason it is one, in
