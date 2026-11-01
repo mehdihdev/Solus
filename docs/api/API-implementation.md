@@ -1389,6 +1389,12 @@ ROS-free live path POSTing straight into §15's ingest route — zero new API su
 
 ---
 
+## 15c. Bench view & SOL bench control (SOLUSDEV-319, ADR-014 2026-10-31) — PLANNED, route plan in [bench-view.md](bench-view.md)
+
+`GET`/`PATCH /api/v1/projects/{project_id}/bench/view` (shared, versioned derived signals + display),
+`GET /bench/setpoint` and `POST /bench/setpoint/stop`; SOL tools `bench_view.*`, `bench.session_start|stop`,
+`bench.setpoint`. Live hint `bench.view_changed`.
+
 ## 16. Extensions & Store (SOLUSDEV-235) — PLANNED, route plan in [extensions.md](extensions.md)
 
 Tier-1 route-plan amendment (ADR-032) written at the SOLUSDEV-235 Phase 2 plan (task EXT-00)
