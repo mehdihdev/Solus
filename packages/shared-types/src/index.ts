@@ -237,6 +237,7 @@ export {
 // SOLUSDEV-312 (ADR-037) — live change-hint frames. docs/contracts/live-events.md
 export {
   ACCOUNT_EVENT_TYPES,
+  BENCH_VIEW_CHANGED_FIELDS,
   FINDING_RAISED_FIELDS,
   FINDING_RESOLVED_FIELDS,
   FINDING_UPDATED_FIELDS,
@@ -247,6 +248,7 @@ export {
   type AccessRevoked,
   type AccountFrame,
   type AccountStreamReady,
+  type BenchViewChanged,
   type GraphChangeCounts,
   type GraphChanged,
   type HardwareDevicesChanged,
