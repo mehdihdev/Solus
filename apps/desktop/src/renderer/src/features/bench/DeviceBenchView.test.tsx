@@ -9,6 +9,9 @@ import { useAuthStore } from '../../store/authStore'
 import { DeviceBenchView, POLL_MS } from './DeviceBenchView'
 import { BenchRealtimeContext } from './BenchRealtime'
 import { getSignalAnomalies } from './signalAnomalies'
+import { EMPTY_BENCH_VIEW, type BenchView, type SignalTarget } from '@solus/shared-types'
+import { BenchViewContext } from './view/BenchViewContext'
+import { applyDisplayOps } from './view/viewOps'
 vi.mock('./signalAnomalies', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./signalAnomalies')>()),
   getSignalAnomalies: vi.fn(async () => [])
@@ -323,5 +326,57 @@ describe('DeviceBenchView showReasoning', () => {
     expect(await screen.findByText(/LIVE REASONING/)).toBeInTheDocument()
     expect(screen.queryByLabelText('qvel value')).not.toBeInTheDocument()
     expect(screen.queryByText(/SIGNALS · CLICK TO SCOPE/)).not.toBeInTheDocument()
+  })
+})
+
+// SOLUSDEV-319 — the team-shared bench view arranges the device (and robot) panel grid.
+describe('DeviceBenchView with the shared bench view', () => {
+  const t = (signal: string): SignalTarget => ({ kind: 'signal', device_id: 'dev', signal })
+  function multi(): BenchDeviceRecent {
+    const now = new Date().toISOString()
+    return {
+      device_id: 'dev',
+      resolved_entity_id: null,
+      signals: ['a', 'b', 'c', 'd'].map((signal) => ({
+        signal,
+        display_role: 'primary' as const,
+        points: [{ timestamp: now, value: 1, unit: 'rad' }]
+      }))
+    }
+  }
+  function renderWith(view: BenchView): void {
+    mockedRecent.mockImplementation(async () => [multi()])
+    render(
+      <BenchViewContext.Provider value={{ projectId: 'p1', view, canEdit: true, devices: {} }}>
+        <DeviceBenchView projectId="p1" deviceIds={['dev']} />
+      </BenchViewContext.Provider>
+    )
+  }
+  const cards = (): string[] =>
+    screen
+      .getAllByRole('region', { name: / signal$| plot group$/ })
+      .map((card) => card.getAttribute('aria-label') ?? '')
+
+  it('drops hidden and pinned cards and sorts by the shared order', async () => {
+    renderWith(
+      applyDisplayOps(EMPTY_BENCH_VIEW, [
+        { kind: 'set_display', target: t('a'), patch: { hidden: true } },
+        { kind: 'set_display', target: t('b'), patch: { pinned: true } },
+        { kind: 'set_display', target: t('d'), patch: { order: 0 } }
+      ])
+    )
+    expect(await screen.findByLabelText('d value')).toBeInTheDocument()
+    expect(cards()).toEqual(['d signal', 'c signal'])
+  })
+
+  it('overlays a plot group on one chart in the panel', async () => {
+    renderWith(
+      applyDisplayOps(EMPTY_BENCH_VIEW, [
+        { kind: 'set_display', target: t('a'), patch: { plot_group: 'Arm' } },
+        { kind: 'set_display', target: t('c'), patch: { plot_group: 'Arm' } }
+      ])
+    )
+    expect(await screen.findByRole('region', { name: 'Arm plot group' })).toBeInTheDocument()
+    expect(cards()).toEqual(['Arm plot group', 'b signal', 'd signal'])
   })
 })

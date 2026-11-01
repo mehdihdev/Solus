@@ -8,7 +8,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { getSignalAnomalies } from './signalAnomalies'
 import type { ObserverEventOut } from '../../widgets/livebench/telemetry'
 import { partitionSignals } from './primarySignals'
-import { SignalWidget } from './SignalWidget'
+import { ViewSignalGrid, type ViewSignalGridProps } from './view/ViewSignalGrid'
 import { retainedDevices } from './retainedSignals'
 import { useBenchRealtimeData } from './BenchRealtime'
 import { getBenchDeviceRecent, type BenchDeviceRecent } from '../../lib/api/resources'
@@ -275,7 +275,7 @@ export function DeviceBenchView({
           Show all signals
         </button>
       )}
-      <SignalGrid rows={displayed} {...grid} />
+      <ViewSignalGrid rows={displayed} {...grid} />
       <Diagnostics scope={scope} selected={selected} rows={diagnostics} {...grid} />
       <PlaceholderBanner visible={placeholders} onConfirmBoard={onConfirmBoard} />
       {reasoning}
@@ -326,7 +326,7 @@ function Diagnostics({
   scope,
   selected,
   ...grid
-}: React.ComponentProps<typeof SignalGrid> & {
+}: ViewSignalGridProps & {
   scope: string
   selected: string | null
 }): React.JSX.Element | null {
@@ -342,45 +342,7 @@ function Diagnostics({
       >
         Diagnostics · {grid.rows.length} signals
       </button>
-      {open && <SignalGrid {...grid} />}
-    </div>
-  )
-}
-
-function SignalGrid({
-  rows,
-  userId,
-  projectId,
-  windowEndMs,
-  events,
-  onScope,
-  onOpenFinding
-}: {
-  rows: SignalRow[]
-  userId: string | null
-  projectId: string
-  windowEndMs?: number
-  events: ObserverEventOut[]
-  onScope: (key: string) => void
-  onOpenFinding?: (findingId: string) => void
-}): React.JSX.Element {
-  return (
-    <div className="bench-signal-grid">
-      {rows.map((row) => (
-        <div key={row.key}>
-          {row.stale && <p role="status">{row.series.signal} · STALE — waiting for telemetry</p>}
-          <SignalWidget
-            userId={userId}
-            projectId={projectId}
-            deviceId={row.deviceId}
-            series={row.series}
-            windowEndMs={windowEndMs}
-            events={events}
-            onScope={() => onScope(row.key)}
-            onOpenFinding={onOpenFinding}
-          />
-        </div>
-      ))}
+      {open && <ViewSignalGrid {...grid} />}
     </div>
   )
 }
