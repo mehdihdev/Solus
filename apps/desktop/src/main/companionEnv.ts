@@ -180,26 +180,46 @@ export function companionEnv(
 
 /** The drive switch is NOT like its siblings: the setting is the consent, so
  *  an inherited value never wins — it is deleted unless the option says on.
- *  It also stays off when the workspace the child gets is not the folder the
- *  nested-folder rule checked (an inherited override). The slice 3 helper path
+ *  Window-bound driving needs no linked folder (ADR-041 2026-10-31), so the
+ *  switch is set with or without one; it stays off only when the workspace the
+ *  child gets is not the folder the nested-folder rule checked (an inherited
+ *  dev override — absent when no folder is linked). The slice 3 helper path
  *  variable is retired (3b) and always removed. */
 function applyDrive(env: Record<string, string | undefined>, options: CompanionEnvOptions): void {
   delete env.SOLUS_COMPANION_DRIVE
   delete env.SOLUS_DRIVE_HELPER
-  if (options.drive !== true || !options.workspace) return
-  if (env.SOLUS_COMPANION_WORKSPACE !== options.workspace) return
+  if (options.drive !== true) return
+  if (env.SOLUS_COMPANION_WORKSPACE !== (options.workspace || undefined)) return
   env.SOLUS_COMPANION_DRIVE = '1'
 }
 
-/** The workspace a child built from these inputs would drive in — exactly
- *  the env builder's decision (null: drive off). Main bakes and compares this
- *  (L6), so what the relay accepts as `--within` is what the child got. */
-export function companionDriveWorkspace(
+/** Drive for a child: off (null), or on with its checked folder or none. Same
+ *  shape as the relay's `attach` argument. */
+export type CompanionDrive = { workspace: string | null } | null
+
+/** The drive a child spawned with `env` for `workspace` actually got. */
+export function spawnedDrive(
+  env: Record<string, string | undefined>,
+  workspace: string | null | undefined
+): CompanionDrive {
+  return env.SOLUS_COMPANION_DRIVE === '1' ? { workspace: workspace || null } : null
+}
+
+/** The drive a child built from these inputs would get — exactly the env
+ *  builder's decision. Main bakes and compares this (L6), so what the relay
+ *  accepts as `--within` is what the child got. */
+export function companionDrive(
   inherited: Record<string, string | undefined>,
   options: Pick<CompanionEnvOptions, 'workspace' | 'drive' | 'packaged'>
-): string | null {
-  const env = companionEnv(inherited, '', options)
-  return env.SOLUS_COMPANION_DRIVE === '1' ? (options.workspace ?? null) : null
+): CompanionDrive {
+  return spawnedDrive(companionEnv(inherited, '', options), options.workspace)
+}
+
+/** A comparable key for a drive decision: null for off, otherwise the folder
+ *  ('' for none — registry folders are absolute, never empty). Off, on without
+ *  a folder and on with one all differ, so each transition respawns. */
+export function driveDecisionKey(drive: CompanionDrive): string | null {
+  return drive === null ? null : (drive.workspace ?? '')
 }
 
 /** Loopback always, plus the configured URL's host when it parses. */

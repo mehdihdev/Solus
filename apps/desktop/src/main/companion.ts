@@ -10,7 +10,13 @@
 import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { companionDriveWorkspace, companionEnv, findIntegrationsRoot } from './companionEnv'
+import {
+  companionDrive,
+  companionEnv,
+  driveDecisionKey,
+  findIntegrationsRoot,
+  spawnedDrive
+} from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
 import { createCompanionStdoutReader } from './drive/driveWindow'
 import {
@@ -184,10 +190,11 @@ let activeWorkspace: string | null | undefined
  *  workspace; no resolver ⇒ never. */
 type DriveResolver = (projectId: string | null) => boolean
 let driveResolver: DriveResolver | null = null
-/** The workspace a drive child was spawned for — the folder the nested-folder
- *  rule checked, and the only `--within` main relays for it (null: drive off).
+/** The drive decision baked into the running child, as `driveDecisionKey`:
+ *  null ⇒ drive off, '' ⇒ on without a folder, else the folder the
+ *  nested-folder rule checked (the only `--within` main relays for it).
  *  `undefined` ⇒ no child spawned yet. */
-let activeDriveWorkspace: string | null | undefined
+let activeDriveKey: string | null | undefined
 /** HIGH-1: main's own-bundle check, run at each drive spawn (null: dev, none). */
 let driveSpawnCheck: (() => Promise<boolean>) | null = null
 /** Main's transport to the helper (XPC packaged, debug helper in dev). */
@@ -209,14 +216,16 @@ function resolveDrive(): boolean {
   }
 }
 
-/** The drive workspace a child spawned now would get — the env builder's own
+/** The drive key a child spawned now would get — the env builder's own
  *  decision (L6), so a dev workspace override does not look like a change. */
-function driveWorkspaceNow(): string | null {
-  return companionDriveWorkspace(process.env, {
-    workspace: projectWorkspace(activeProjectId, realLocalStateDeps),
-    drive: resolveDrive(),
-    packaged: app.isPackaged
-  })
+function driveKeyNow(): string | null {
+  return driveDecisionKey(
+    companionDrive(process.env, {
+      workspace: projectWorkspace(activeProjectId, realLocalStateDeps),
+      drive: resolveDrive(),
+      packaged: app.isPackaged
+    })
+  )
 }
 
 function pidfilePath(): string {
@@ -320,7 +329,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   // so a folder-link change respawns only when the value actually changed.
   const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
   activeWorkspace = workspace
-  const drive = resolveDrive()
+  const driveOn = resolveDrive()
   let env: Record<string, string | undefined>
   let c: ChildProcess
   try {
@@ -345,7 +354,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
           : findIntegrationsRoot(app.getAppPath(), existsSync),
         projectId: activeProjectId,
         workspace,
-        drive,
+        drive: driveOn,
         // H-1: packaged builds never inherit SOLUS_COMPANION_* / PYTHON*.
         packaged: app.isPackaged
       }))
@@ -366,23 +375,24 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   })
   // Drive is on for this child only if its env says so (the env builder may
   // have refused, e.g. a dev workspace override); then `--within` must be the
-  // workspace checked for it. A child spawned without drive gets nothing.
-  const driveWorkspace = env.SOLUS_COMPANION_DRIVE === '1' ? workspace : null
-  activeDriveWorkspace = driveWorkspace
+  // workspace checked for it, or absent when no folder is linked (window-bound
+  // driving, ADR-041 2026-10-31). A child spawned without drive gets nothing.
+  const drive = spawnedDrive(env, workspace)
+  activeDriveKey = driveDecisionKey(drive)
   // HIGH-1: Solus.app's own signature is re-checked at every drive spawn; the
   // relay holds this child's calls until it answers, and a false answer
   // reaches no agent (main then re-evaluates and respawns without drive).
   driveRelay.attach(
     c,
-    driveWorkspace,
+    drive,
     driveRelayGate({
-      driveOn: driveWorkspace !== null,
+      driveOn: drive !== null,
       packaged: app.isPackaged,
       spawnCheck: driveSpawnCheck
     })
   )
   const reader = createCompanionStdoutReader({
-    onBounds: driveGeometry.attach(c, driveWorkspace !== null),
+    onBounds: driveGeometry.attach(c, drive !== null),
     onRequest: (request) => driveRelay.request(c, request),
     onCancel: (id) => driveRelay.cancel(c, id)
   })
@@ -505,8 +515,8 @@ export function setCompanionDriveResolver(resolver: DriveResolver | null): void 
  *  child only when its baked drive workspace differs. A child not yet (re)spawned reads
  *  the fresh decision at spawn anyway. */
 export function notifyCompanionDriveChanged(): void {
-  const state = { hasChild: child !== null, baked: activeDriveWorkspace }
-  if (driveRespawnNeeded(state, driveWorkspaceNow())) replaceChild()
+  const state = { hasChild: child !== null, baked: activeDriveKey }
+  if (driveRespawnNeeded(state, driveKeyNow())) replaceChild()
 }
 
 /** Main's outline hears the latest drive_window bounds; null when the child
