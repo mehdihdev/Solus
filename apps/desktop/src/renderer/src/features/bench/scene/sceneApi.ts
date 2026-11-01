@@ -188,7 +188,7 @@ function verifyBindings(value: Record<string, unknown>, jointNames: Set<string>)
         text(b.joint) &&
         jointNames.has(b.joint) &&
         ['part_entity_id', 'device_id', 'signal'].every((key) => text(b[key])) &&
-        ['rad', 'deg', 'm'].includes(String(b.unit)) &&
+        ['rad', 'deg', 'm', '%'].includes(String(b.unit)) &&
         typeof b.scale === 'number' &&
         Number.isFinite(b.scale) &&
         typeof b.offset === 'number' &&

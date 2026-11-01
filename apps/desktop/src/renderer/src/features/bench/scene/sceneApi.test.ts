@@ -20,6 +20,41 @@ describe('scene response validation', () => {
       ).toThrow()
     }
   })
+  it('accepts a percent binding (a gripper) and rejects an unknown unit', () => {
+    const jaw = (unit: string): unknown => ({
+      ...base,
+      bindings: [
+        {
+          joint: 'jaw',
+          part_entity_id: 'p',
+          device_id: 'd',
+          signal: 's',
+          unit,
+          scale: 1,
+          offset: 0
+        }
+      ],
+      model: {
+        links: [...base.model.links, { name: 'jaw', visuals: [] }],
+        joints: [
+          {
+            name: 'jaw',
+            type: 'revolute',
+            parent: 'base',
+            child: 'jaw',
+            xyz: [0, 0, 0],
+            rpy: [0, 0, 0],
+            axis: [0, 0, 1],
+            lower: 0,
+            upper: 1
+          }
+        ],
+        warnings: []
+      }
+    })
+    expect(verifiedModel(jaw('%')).bindings[0].unit).toBe('%')
+    expect(() => verifiedModel(jaw('A'))).toThrow()
+  })
   it('rejects cyclic link graphs', () => {
     expect(() =>
       verifiedModel({
