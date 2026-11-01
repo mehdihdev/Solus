@@ -2,8 +2,9 @@
 
 Same inventory and `CallToolResult` shapes as `machine`, so the cloud gate and
 `dispatch.map_result` treat it like any server. It advertises nothing unless
-the platform is macOS, a project workspace is linked, and the desktop app has
-switched driving on. Each call is relayed to the desktop app, which alone
+the platform is macOS and the desktop app has switched driving on; a linked
+workspace is optional (sol-drive.md §2.2) and only adds `--within` and the
+saved-file watch. Each call is relayed to the desktop app, which alone
 reaches the helper agent (slice 3b, XPC; `helper.py`), so a missing agent is a
 call-time `agent_unavailable`. Arguments are checked strictly here; the agent
 re-checks everything that matters for safety itself.
@@ -25,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from solus_companion.drive.helper import DriveHelperError, DriveRelay
 from solus_companion.drive.outline import Emit, outline_line, stdout_writer
-from solus_companion.watch import saved_design_fingerprint
+from solus_companion.drive.save_watch import SaveWatch, document_folder
 
 logger = logging.getLogger("solus.companion.drive")
 
@@ -33,8 +34,6 @@ ENV_SWITCH = "SOLUS_COMPANION_DRIVE"
 OFF = "SOL can't use your mouse and keyboard (off)"
 NO_HELPER = "the input helper is missing"
 NOT_MACOS = "driving apps needs macOS"
-NO_WORKSPACE = "no project workspace is linked"
-_SAVED = "a design file in this project changed; SOL stopped"
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _SUMMARY_CAP = 2000
 _COORD = 100_000
@@ -43,6 +42,8 @@ DEFAULT_TIMEOUTS = {"identify": 5.0, "capture": 15.0, "act": 10.0}
 
 Bundle = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$")
 WindowId = Field(ge=0, le=2**32 - 1)
+#: The window owner's pid from the summon snapshot (§2.2); the helper checks it.
+Pid = Field(default=None, ge=1, le=2**31 - 1)
 Coord = Field(default=None, ge=-_COORD, le=_COORD)
 #: Text a helper argument may carry: no NUL (it cannot cross argv).
 _NO_NUL = r"^[^\x00]*$"
@@ -59,12 +60,14 @@ class IdentifyArgs(_Args):
 class CaptureArgs(_Args):
     bundle: str = Bundle
     window: int = WindowId
+    pid: int | None = Pid
     max_edge: int = Field(default=1568, ge=256, le=2048)
 
 
 class ActArgs(_Args):
     bundle: str = Bundle
     window: int = WindowId
+    pid: int | None = Pid
     #: From the helper's own clock: identify.now, then the previous act's finishedAt.
     since: float = Field(ge=0, allow_inf_nan=False)
     verb: Literal["click", "move", "drag", "scroll", "key", "type", "wait"]
@@ -122,13 +125,24 @@ def _ok(value: dict[str, Any]) -> CallToolResult:
     )
 
 
+def _target(args: CaptureArgs | ActArgs) -> list[str]:
+    """`--bundle B --window W [--pid P]`: always an argument list, never a shell string."""
+    argv = ["--bundle", args.bundle, "--window", str(args.window)]
+    return argv if args.pid is None else [*argv, "--pid", str(args.pid)]
+
+
+def _forwarded(reply: dict[str, Any]) -> dict[str, Any]:
+    """The identify reply for the cloud: `front.documentDir` stays on this machine."""
+    front = reply.get("front")
+    if not isinstance(front, dict) or "documentDir" not in front:
+        return reply
+    return {**reply, "front": {k: v for k, v in front.items() if k != "documentDir"}}
+
+
 def act_argv(args: ActArgs) -> list[str]:
     argv = [
         "act",
-        "--bundle",
-        args.bundle,
-        "--window",
-        str(args.window),
+        *_target(args),
         "--since",
         repr(args.since),
         args.verb,
@@ -157,11 +171,13 @@ class DriveServer:
         #: Slice 3: where `drive_window` outline lines go (the companion's stdout).
         self.emit = emit if emit is not None else stdout_writer()
         self.enabled = enabled
-        #: ADR-041 amendment (M2): every helper command is bound to this folder.
+        #: ADR-041 M2: when linked, every helper command carries `--within` it.
         self.workspace = workspace.resolve() if workspace is not None else None
         self.platform = platform
-        #: Saved design files at the step's identify (M3): a change ends the step.
-        self._designs_at_bind: str | None = None
+        #: Set by the step's ok identify; `act` refuses `not_bound` before it.
+        self._bound = False
+        #: The step's saved-file watch (§2.2); None = off (nothing to report).
+        self._watch: SaveWatch | None = None
         self._since = datetime.now(UTC).isoformat()
         # One helper at a time: two acts must never interleave events in a window.
         self._one_at_a_time = asyncio.Lock()
@@ -173,8 +189,6 @@ class DriveServer:
             return OFF
         if self.helper is None:
             return NO_HELPER
-        if self.workspace is None:
-            return NO_WORKSPACE
         return None
 
     def inventory(self) -> dict[str, Any] | None:
@@ -200,7 +214,7 @@ class DriveServer:
         if spec is None:
             return _error(f"unknown_tool: drive.{tool}")
         reason = self._off_reason()
-        if reason is not None or self.helper is None or self.workspace is None:
+        if reason is not None or self.helper is None:
             return _error(f"drive_off: {reason or NO_HELPER}")
         try:
             parsed = spec[0].model_validate(args)
@@ -209,33 +223,33 @@ class DriveServer:
             return _error(f"invalid_arguments: {detail}")
         try:
             async with self._one_at_a_time:
-                return await self._run(self.helper, self.workspace, tool, parsed)
+                return await self._run(self.helper, tool, parsed)
         except DriveHelperError as exc:
             logger.warning("drive.%s helper failure: %s", tool, exc.code)
             return _error(str(exc))
 
-    async def _run(
-        self, helper: DriveRelay, workspace: Path, tool: str, args: _Args
-    ) -> CallToolResult:
+    async def _run(self, helper: DriveRelay, tool: str, args: _Args) -> CallToolResult:
         if isinstance(args, ActArgs):
-            stop = await self._saved_since_bind(workspace)
+            stop = await self._stop_before_act()
             if stop is not None:
                 return _error(stop)
-        if tool == "identify":
-            self._designs_at_bind = None  # each step binds afresh: no stale baseline
-        reply = await self._helper(helper, workspace, tool, args)
+        if tool == "identify":  # each step binds afresh: no stale baseline
+            self._bound, self._watch = False, None
+        reply = await self._helper(helper, tool, args)
         # A save is reported however the act ended (it may have saved, then been
         # refused), and by every capture: KiCad writes a moment after the click.
-        saved = tool != "identify" and await self._saved(workspace)
+        saved = tool != "identify" and await self._saved()
         if not reply["ok"]:
-            if tool == "act" and saved:
-                return _error(f"design_saved: {_SAVED}")
+            if tool == "act" and saved and self._watch is not None:
+                return _error(f"design_saved: {self._watch.stop_message}")
             return _error(f"{reply.get('code', 'refused')}: {reply.get('message', '')}")
         if tool == "identify":
-            self._designs_at_bind = await asyncio.to_thread(saved_design_fingerprint, workspace)
-            window = reply.get("window")
-            self._outline(window.get("bounds") if isinstance(window, dict) else None)
-            return _ok(reply)
+            front = reply.get("front")
+            front = front if isinstance(front, dict) else None
+            self._watch = await self._take_watch(front)
+            self._bound = True
+            self._outline(front.get("bounds") if front is not None else None)
+            return _ok(_forwarded(reply))
         if tool == "capture":
             result = _capture_result(reply, design_saved=saved)
             self._outline(reply.get("bounds"))
@@ -243,43 +257,47 @@ class DriveServer:
         self._outline(reply.get("bounds"))
         return _ok({**reply, "designSaved": saved})
 
+    async def _take_watch(self, front: dict[str, Any] | None) -> SaveWatch | None:
+        """§2.2: KiCad watches design files in the workspace; a window-bound app
+        watches its document's folder when that lies in the workspace; else off."""
+        if self.workspace is None:
+            return None
+        if front is not None and front.get("binding") == "window":
+            folder = document_folder(self.workspace, front.get("documentDir"))
+            if folder is None:
+                return None
+            return await asyncio.to_thread(SaveWatch.take, folder, every_file=True)
+        return await asyncio.to_thread(SaveWatch.take, self.workspace, every_file=False)
+
     def _outline(self, bounds: Any) -> None:
         """One `drive_window` line for valid bounds; nothing otherwise (§3)."""
         line = outline_line(bounds)
         if line is not None:
             self.emit(line)
 
-    async def _saved(self, workspace: Path) -> bool:
-        """A design file changed since the step's bind (or it cannot be seen)."""
-        if self._designs_at_bind is None:
+    async def _saved(self) -> bool:
+        """A watched file changed since the step's bind (or it cannot be seen)."""
+        if self._watch is None:
             return False
-        now = await asyncio.to_thread(saved_design_fingerprint, workspace)
-        return not now or now != self._designs_at_bind
+        return await asyncio.to_thread(self._watch.changed)
 
-    async def _saved_since_bind(self, workspace: Path) -> str | None:
-        """Why an act must not run: not bound yet, or a design was saved since."""
-        if self._designs_at_bind is None:
+    async def _stop_before_act(self) -> str | None:
+        """Why an act must not run: not bound yet, or a watched file changed since."""
+        if not self._bound:
             return "not_bound: identify the window first"
-        return f"design_saved: {_SAVED}" if await self._saved(workspace) else None
+        if self._watch is not None and await self._saved():
+            return f"design_saved: {self._watch.stop_message}"
+        return None
 
-    async def _helper(
-        self, helper: DriveRelay, workspace: Path, tool: str, args: _Args
-    ) -> dict[str, Any]:
+    async def _helper(self, helper: DriveRelay, tool: str, args: _Args) -> dict[str, Any]:
         if isinstance(args, CaptureArgs):
-            argv = [
-                "capture",
-                "--bundle",
-                args.bundle,
-                "--window",
-                str(args.window),
-                "--max-edge",
-                str(args.max_edge),
-            ]
+            argv = ["capture", *_target(args), "--max-edge", str(args.max_edge)]
         elif isinstance(args, ActArgs):
             argv = act_argv(args)
         else:
             argv = ["identify"]
-        argv[1:1] = ["--within", str(workspace)]
+        if self.workspace is not None:
+            argv[1:1] = ["--within", str(self.workspace)]
         extra = (args.ms or 0) / 1000 if isinstance(args, ActArgs) else 0.0
         return await helper.run(
             argv, timeout=helper.timeout_for(tool, DEFAULT_TIMEOUTS[tool]) + extra

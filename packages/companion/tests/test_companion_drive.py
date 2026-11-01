@@ -26,13 +26,33 @@ from solus_companion.artifacts import ArtifactStore
 from solus_companion.config import TokenBox, apply_token_line
 from solus_companion.dispatch import Dispatcher
 from solus_companion.drive.helper import DriveHelperError, DriveRelay
+from solus_companion.drive.save_watch import SaveWatch
 from solus_companion.drive.server import TOOL_NAMES, DriveServer, drive_server_from_env
 from solus_companion.frames import ArtifactFetchIn, ToolCallIn
 from solus_companion.supervisor import Supervisor
 from solus_companion.watch import saved_design_fingerprint
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
-OK_IDENTIFY = {"ok": True, "app": {"bundleId": "org.kicad.kicad"}, "allowed": True}
+OK_IDENTIFY = {
+    "ok": True,
+    "now": 1.0,
+    "front": {
+        "drivable": True,
+        "binding": "project",
+        "bundleId": "org.kicad.kicad",
+        "name": "KiCad",
+        "pid": 99,
+        "windowId": 7,
+        "title": "board",
+        "bounds": None,
+        "documentDir": None,
+    },
+}
+#: What the cloud sees: `front.documentDir` stays on the machine (§2.2).
+OK_IDENTIFY_FORWARDED = {
+    **OK_IDENTIFY,
+    "front": {k: v for k, v in OK_IDENTIFY["front"].items() if k != "documentDir"},
+}
 
 
 def make_helper(tmp_path: Path, body: str) -> Path:
@@ -160,8 +180,15 @@ def server_with(path: Path, *, bound: bool = True, **kwargs: Any) -> DriveServer
         platform="darwin",
     )
     if bound:
-        server._designs_at_bind = saved_design_fingerprint(server.workspace)
+        bind_kicad(server)
     return server
+
+
+def bind_kicad(server: DriveServer) -> None:
+    """As after a KiCad step's identify: bound, with the design-file baseline."""
+    assert server.workspace is not None
+    server._bound = True
+    server._watch = SaveWatch.take(server.workspace, every_file=False)
 
 
 def within(tmp_path: Path) -> list[str]:
@@ -175,10 +202,10 @@ def text_of(result: CallToolResult) -> str:
 # --- the pinned path -----------------------------------------------------------
 
 
-def test_from_env_needs_the_switch_macos_and_a_workspace(tmp_path: Path) -> None:
+def test_from_env_needs_the_switch_and_macos_but_no_workspace(tmp_path: Path) -> None:
     on = {"SOLUS_COMPANION_DRIVE": "1"}
     assert drive_server_from_env(on, workspace=tmp_path, platform="darwin").inventory() is not None
-    assert drive_server_from_env(on, workspace=None, platform="darwin").inventory() is None
+    assert drive_server_from_env(on, workspace=None, platform="darwin").inventory() is not None
     assert (
         drive_server_from_env(
             {"SOLUS_COMPANION_DRIVE": "true"}, workspace=tmp_path, platform="darwin"
@@ -211,10 +238,6 @@ def test_off_advertises_nothing_says_why_and_fails_closed(tmp_path: Path) -> Non
         (
             DriveServer(helper, enabled=True, workspace=tmp_path, platform="win32"),
             "driving apps needs macOS",
-        ),
-        (
-            DriveServer(helper, enabled=True, workspace=None, platform="darwin"),
-            "no project workspace is linked",
         ),
     ]:
         assert server.inventory() is None
@@ -256,7 +279,7 @@ async def test_identify_runs_the_helper_and_returns_its_json(tmp_path: Path) -> 
     server = server_with(echo_helper(tmp_path, OK_IDENTIFY))
     result = await server.call_tool("identify", {})
     assert not result.isError
-    assert result.structuredContent == OK_IDENTIFY
+    assert result.structuredContent == OK_IDENTIFY_FORWARDED
     assert calls(tmp_path) == [["identify", *within(tmp_path)]]
 
 
@@ -676,7 +699,7 @@ def test_builtins_include_drive_switched_off_by_default(tmp_path: Path) -> None:
 
 def test_builtins_switch_drive_on_from_the_environment(tmp_path: Path) -> None:
     env = {"SOLUS_COMPANION_DRIVE": "1"}
-    assert build_builtins(None, env=env, platform="darwin")[1].inventory() is None  # no project
+    assert build_builtins(None, env=env, platform="darwin")[1].inventory() is not None  # §2.2
     drive = build_builtins(str(tmp_path), env=env, platform="darwin")[1]
     inventory = drive.inventory()
     assert inventory is not None
@@ -711,7 +734,7 @@ def _schematic(ws: Path, text: str = "(kicad_sch)") -> Path:
     return path
 
 
-async def test_no_linked_workspace_refuses_without_running_the_helper(tmp_path: Path) -> None:
+async def test_no_linked_workspace_runs_identify_without_within(tmp_path: Path) -> None:
     server = DriveServer(
         desktop_relay(echo_helper(tmp_path, OK_IDENTIFY)),
         enabled=True,
@@ -719,8 +742,8 @@ async def test_no_linked_workspace_refuses_without_running_the_helper(tmp_path: 
         platform="darwin",
     )
     result = await server.call_tool("identify", {})
-    assert result.isError and "no project workspace" in text_of(result)
-    assert calls(tmp_path) == []
+    assert not result.isError
+    assert calls(tmp_path) == [["identify"]]
 
 
 async def test_the_workspace_is_sent_resolved(tmp_path: Path) -> None:
@@ -746,7 +769,8 @@ async def test_identify_takes_the_saved_design_baseline(tmp_path: Path) -> None:
     _schematic(ws)
     server = server_with(helper, bound=False)
     assert not (await server.call_tool("identify", {})).isError
-    assert server._designs_at_bind == saved_design_fingerprint(server.workspace)
+    assert server._bound and server._watch is not None
+    assert server._watch.baseline == saved_design_fingerprint(server.workspace)
 
 
 async def test_an_act_that_saves_reports_it(tmp_path: Path) -> None:

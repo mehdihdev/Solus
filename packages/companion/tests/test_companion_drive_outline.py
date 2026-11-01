@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 from solus_companion.drive.outline import outline_line, stdout_writer
 from solus_companion.drive.server import DriveServer
-from solus_companion.watch import saved_design_fingerprint
 from test_companion_drive import (  # noqa: F401 — _stop_desktops is an autouse fixture
     PNG,
     _stop_desktops,
+    bind_kicad,
     desktop_relay,
     echo_helper,
     workspace_of,
@@ -37,7 +37,7 @@ def outlined(tmp_path: Path, reply: dict[str, Any]) -> tuple[DriveServer, list[s
         platform="darwin",
         emit=lines.append,
     )
-    server._designs_at_bind = saved_design_fingerprint(server.workspace)
+    bind_kicad(server)
     return server, lines
 
 
@@ -112,17 +112,29 @@ def test_stdout_writer_survives_a_closed_stream() -> None:
 # --- when the server writes it ------------------------------------------------------
 
 
-async def test_ok_identify_with_a_window_writes_its_bounds(tmp_path: Path) -> None:
-    server, lines = outlined(
-        tmp_path, {"ok": True, "allowed": True, "window": {"id": 7, "bounds": BOUNDS}}
-    )
+async def test_ok_identify_writes_the_front_bounds(tmp_path: Path) -> None:
+    front = {"drivable": True, "binding": "window", "windowId": 7, "bounds": BOUNDS}
+    server, lines = outlined(tmp_path, {"ok": True, "front": front})
     assert not (await server.call_tool("identify", {})).isError
     assert lines == [LINE]
 
 
-async def test_identify_without_a_window_writes_nothing(tmp_path: Path) -> None:
-    server, lines = outlined(tmp_path, {"ok": True, "allowed": False})
-    await server.call_tool("identify", {})
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"ok": True, "front": None},
+        {"ok": True, "front": {"drivable": False, "bundleId": "com.apple.mail", "reason": "x"}},
+        {"ok": True, "front": {"drivable": True, "windowId": None, "bounds": None}},
+        {"ok": True, "front": "nonsense"},
+        # the slice 1-3 shape is no longer read (§2.2: the outline reads front.bounds)
+        {"ok": True, "allowed": True, "window": {"id": 7, "bounds": BOUNDS}},
+    ],
+)
+async def test_identify_without_front_bounds_writes_nothing(
+    tmp_path: Path, reply: dict[str, Any]
+) -> None:
+    server, lines = outlined(tmp_path, reply)
+    assert not (await server.call_tool("identify", {})).isError
     assert lines == []
 
 

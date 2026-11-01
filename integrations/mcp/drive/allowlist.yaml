@@ -1,4 +1,5 @@
-# integrations/mcp/drive/allowlist.yaml — DRAFT (SOLUSDEV-319 drive slice 2),
+# integrations/mcp/drive/allowlist.yaml — DRAFT (SOLUSDEV-319 drive slice 2; reasons
+# updated for slice 4, frontmost-app driving, sol-drive.md §2.2),
 # awaiting human ratification per integrations/mcp/CLAUDE.md rule 2.
 #
 # The Solus-owned allowlist for the companion's BUILT-IN `drive` server (ADR-041;
@@ -16,10 +17,10 @@ exposure: internal
 tools:
   - name: identify
     requires_confirmation: false
-    reason: reads which app and window are in front, only for allowlisted apps; no input
+    reason: reads which app and window are in front; a denied app reports only its name and id; no input
   - name: capture
     requires_confirmation: false
-    reason: captures one allowlisted app window as an image for the approved step; never stored
+    reason: captures the one window you summoned SOL over (never a denied app) for the approved step; never stored
   - name: act
     requires_confirmation: true
     reason: moves your mouse and types in the one window you approved, within the step's budget
