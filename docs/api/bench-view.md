@@ -151,7 +151,7 @@ and never exceed 64 (a request that would need more is refused 422 `too_many_ops
 | Status | code                                                        | When                                                                                            |
 | ------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | 401    | `unauthorized`                                              | No or invalid token                                                                             |
-| 404    | `not_found`                                                 | Not a member / another team's project                                                             |
+| 404    | `not_found`                                                 | Not a member / another team's project                                                           |
 | 403    | `forbidden`                                                 | Viewer                                                                                          |
 | 429    | `rate_limited`                                              | Over 120 PATCH requests a minute per user                                                       |
 | 422    | `validation_error`                                          | Body shape: unknown field, > 32 ops, empty patch, bad target, bound exceeded                    |
@@ -159,7 +159,7 @@ and never exceed 64 (a request that would need more is refused 422 `too_many_ops
 | 422    | `expression_error`                                          | An expression failed to parse or exceeded a bound (§4.4)                                        |
 | 422    | `too_many_derived` / `too_many_entries` / `too_many_groups` | The result would exceed 32 derived, 512 display entries, 16 groups or 8 targets in a group      |
 | 422    | `duplicate_name`                                            | Two derived signals would share a name                                                          |
-| 404    | `not_found`                                                 | An op names a derived id that does not exist (checked as ops apply)                              |
+| 404    | `not_found`                                                 | An op names a derived id that does not exist (checked as ops apply)                             |
 
 `expression_error` details: `[{"op_index": int, "code": str, "position": int, "length": int,
 "message": str}]`. `position` is a 0-based character offset into that op's `expression`, `length`
@@ -235,7 +235,7 @@ themselves contain filters (bounded by §4.4).
 | Expression length                                                                        | ≤ 512 characters                                                | `too_long`                                          |
 | Nodes (each number, reference, unary op, binary op and call is one; parentheses are not) | ≤ 64                                                            | `too_many_nodes`                                    |
 | Depth (root = 1)                                                                         | ≤ 12                                                            | `too_deep`                                          |
-| Distinct `(device_id, signal)` references                                                | 1–8                                                             | `too_many_refs` / `no_signal`                       |
+| Distinct `(device_id, signal)` references                                                | 0–8 (0 = a constant signal, §4.6)                               | `too_many_refs`                                     |
 | Number literal                                                                           | ≤ 32 chars, finite after parsing                                | `non_finite_literal`                                |
 | Filter window                                                                            | ≤ 10 s and ≤ 2000 samples (the evaluator keeps the newest 2000) | `param_range`                                       |
 | Reference strings                                                                        | reference charset; `device_id` 1–512, `signal` 1–128            | `bad_ref`                                           |
@@ -271,6 +271,28 @@ themselves contain filters (bounded by §4.4).
   results. The shared vectors (`packages/shared-types/fixtures/bench-expression-vectors.json`)
   are compared with relative tolerance 1e-9; NaN must equal NaN.
 - **Output** NaN renders as a gap, never as zero.
+
+### 4.6 Constant derived signals (SOLUSDEV-319 amendment: constant derived signals)
+
+An expression with **zero** references — a literal such as `10` or `-2.5`, or constant
+arithmetic such as `2*5` or `(1+2)/3` — is valid and defines a **constant signal**. Its `refs` is
+`[]`; `node_count` and `depth` count as usual. The former `no_signal` error code is **removed**:
+no input is rejected for having no reference.
+
+- **Time base.** With no primary reference, the output timestamps come from the evaluator's
+  caller instead. The batch evaluators (Python `evaluate`, TypeScript `evaluateExpression`) take
+  an optional time base `timestamps`: one output sample per timestamp, with the primary drop rule
+  (non-finite or not strictly greater than the previous accepted timestamp is dropped). Without a
+  time base they return a single sample at the evaluation time `at` (default: the current wall
+  clock, in seconds). The incremental evaluators take time-base timestamps through `tick(…)`. A
+  time base passed for an expression that has references is ignored (the primary reference is
+  the time base, §4.5).
+- **Filters** over a constant are allowed and follow §4.5 unchanged on that time base (so
+  `ma(10, 1)` is 10, `deriv(5)` is NaN then 0, and gaps reset filters as usual).
+- **Where it is evaluated.** The renderer evaluates a constant once per poll on the bench clock
+  (architecture/bench-view.md §2), giving a flat line and a current value; `bench_view.read`
+  evaluates it at read time, so `latest` is `{value: <constant>, at: <read time>}`.
+- The shared vectors pin these rules (`evaluate` cases carry `timestamps` or `at`).
 
 ## 5. Setpoint move state — `GET /setpoint`, `POST /setpoint/stop`
 

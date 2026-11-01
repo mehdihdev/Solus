@@ -24,7 +24,6 @@ export type ExpressionErrorCode =
   | 'too_many_nodes'
   | 'too_deep'
   | 'too_many_refs'
-  | 'no_signal'
   | 'non_finite_literal'
   | 'param_range'
   | 'bad_ref'
@@ -38,7 +37,6 @@ export const ERROR_MESSAGES: Readonly<Record<ExpressionErrorCode, string>> = {
   too_many_nodes: 'The expression has more than 64 terms.',
   too_deep: 'The expression nests more than 12 levels deep.',
   too_many_refs: 'The expression references more than 8 signals.',
-  no_signal: 'The expression must reference at least one signal.',
   non_finite_literal: 'A number is longer than 32 characters or not finite.',
   param_range: 'A filter or scale parameter is out of range.',
   bad_ref: 'A signal reference is empty, too long or has unsupported characters.',
@@ -108,7 +106,8 @@ export interface ParsedExpression {
   readonly root: ExprNode
   readonly nodeCount: number
   readonly depth: number
-  /** Distinct, first-appearance order; refs[0] is the time base. */
+  /** Distinct, first-appearance order; refs[0] is the time base. Empty = a constant
+   * signal timed by `tick` (bench-view.md §4.6). */
   readonly refs: readonly SignalRef[]
   readonly filterCount: number
 }
@@ -449,7 +448,6 @@ export function parseExpression(text: string): ParsedExpression {
   }
   const parser = new Parser(lex(chars))
   const root = parser.parse()
-  if (parser.refs.length === 0) throw new ExpressionError('no_signal', 0, chars.length)
   return {
     root,
     nodeCount: parser.nodeCount,
@@ -683,7 +681,8 @@ function applyFunction(name: string, args: readonly number[]): number {
 
 const refKey = (ref: SignalRef): string => JSON.stringify([ref.deviceId, ref.signal])
 
-/** Streaming evaluation with bounded state; outputs at the primary's timestamps.
+/** Streaming evaluation with bounded state; outputs at the primary's timestamps (a
+ * constant's come from `tick`).
  * `drain` equals a batch run provided every secondary sample with timestamp <= t was
  * fed before t is drained. */
 export class IncrementalEvaluator {
@@ -691,6 +690,7 @@ export class IncrementalEvaluator {
   private readonly buffers: ReferenceBuffer[]
   private readonly filters: FilterState[]
   private pending: number[] = []
+  private lastTick: number | null = null
 
   constructor(private readonly parsed: ParsedExpression) {
     this.index = new Map(parsed.refs.map((ref, i) => [refKey(ref), i]))
@@ -706,6 +706,20 @@ export class IncrementalEvaluator {
     const buffer = this.buffers[index]
     for (const sample of samples) {
       if (buffer.accept(sample.t, sample.value) && index === 0) this.pending.push(sample.t)
+    }
+    if (this.pending.length > MAX_BUFFERED_SAMPLES) {
+      this.pending = this.pending.slice(this.pending.length - MAX_BUFFERED_SAMPLES)
+    }
+  }
+
+  /** Time base of a zero-reference (constant) expression, with the primary drop rule;
+   * ignored when the expression has references (bench-view.md §4.6). */
+  tick(timestamps: readonly number[]): void {
+    if (this.parsed.refs.length > 0) return
+    for (const t of timestamps) {
+      if (!Number.isFinite(t) || (this.lastTick !== null && t <= this.lastTick)) continue
+      this.lastTick = t
+      this.pending.push(t)
     }
     if (this.pending.length > MAX_BUFFERED_SAMPLES) {
       this.pending = this.pending.slice(this.pending.length - MAX_BUFFERED_SAMPLES)
@@ -766,12 +780,23 @@ export class IncrementalEvaluator {
   }
 }
 
-/** Batch evaluation: samples at the primary timestamps; NaN marks a gap. */
+/** Time base of a zero-reference (constant) expression (bench-view.md §4.6). */
+export interface ConstantTimeBase {
+  /** Output timestamps; when absent, one sample at `at`. */
+  readonly timestamps?: readonly number[]
+  /** Evaluation time in seconds; defaults to now. */
+  readonly at?: number
+}
+
+/** Batch evaluation: samples at the primary timestamps; NaN marks a gap. A constant is
+ * sampled at `timestamps`, else once at `at`; both are ignored when references exist. */
 export function evaluateExpression(
   parsed: ParsedExpression,
-  series: readonly SeriesInput[]
+  series: readonly SeriesInput[],
+  base: ConstantTimeBase = {}
 ): Sample[] {
   const stream = new IncrementalEvaluator(parsed)
   for (const input of series) stream.feed(input.ref, input.samples)
+  if (parsed.refs.length === 0) stream.tick(base.timestamps ?? [base.at ?? Date.now() / 1000])
   return stream.drain()
 }

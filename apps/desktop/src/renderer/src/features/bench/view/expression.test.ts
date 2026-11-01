@@ -34,6 +34,8 @@ interface EvalVector {
   name: string
   expression: string
   inputs: EvalInput[]
+  timestamps?: VectorNumber[]
+  at?: number
   expected?: VectorPair[]
   expected_count?: number
   expected_head?: VectorPair[]
@@ -64,6 +66,10 @@ function vectorInputs(vector: EvalVector): SeriesInput[] {
     }))
     return { ref, samples }
   })
+}
+
+function timeBase(vector: EvalVector): number[] | undefined {
+  return vector.timestamps?.map(decodeVectorNumber)
 }
 
 function withinTolerance(actual: number, expected: number): boolean {
@@ -100,6 +106,15 @@ function checkVector(vector: EvalVector, output: Sample[]): void {
   expectSeries(output.slice(output.length - tail.length), tail)
 }
 
+function tickInChunks(stream: IncrementalEvaluator, base: number[]): Sample[] {
+  const out: Sample[] = []
+  for (let start = 0; start < base.length; start += 2) {
+    stream.tick(base.slice(start, start + 2))
+    out.push(...stream.drain())
+  }
+  return out
+}
+
 describe('parse vectors', () => {
   it.each(vectors.parse.map((v) => [v.name, v] as const))('%s', (_name, vector) => {
     if (vector.accept) {
@@ -130,17 +145,24 @@ describe('parse vectors', () => {
 
 describe('evaluate vectors', () => {
   it.each(vectors.evaluate.map((v) => [v.name, v] as const))('%s', (_name, vector) => {
+    const options = { timestamps: timeBase(vector), at: vector.at }
     checkVector(
       vector,
-      evaluateExpression(parseExpression(vector.expression), vectorInputs(vector))
+      evaluateExpression(parseExpression(vector.expression), vectorInputs(vector), options)
     )
   })
 
   it.each(vectors.evaluate.map((v) => [v.name, v] as const))('incremental: %s', (_name, vector) => {
     const parsed = parseExpression(vector.expression)
+    const stream = new IncrementalEvaluator(parsed)
+    const base = timeBase(vector) ?? (vector.at === undefined ? [] : [vector.at])
+    if (parsed.refs.length === 0) {
+      checkVector(vector, tickInChunks(stream, base))
+      return
+    }
+    stream.tick(base) // ignored: the primary reference is the time base
     const primary = parsed.refs[0]
     const inputs = vectorInputs(vector)
-    const stream = new IncrementalEvaluator(parsed)
     const isPrimary = (ref: SignalRef): boolean =>
       ref.deviceId === primary.deviceId && ref.signal === primary.signal
     for (const input of inputs) if (!isPrimary(input.ref)) stream.feed(input.ref, input.samples)
@@ -155,6 +177,30 @@ describe('evaluate vectors', () => {
 })
 
 describe('api', () => {
+  it('has no no_signal code (constant derived signals amendment)', () => {
+    expect(Object.keys(ERROR_MESSAGES)).not.toContain('no_signal')
+  })
+
+  it('samples a constant at the current time without a time base', () => {
+    const before = Date.now() / 1000
+    const [sample, ...rest] = evaluateExpression(parseExpression('2*5'), [])
+    expect(rest).toEqual([])
+    expect(sample.value).toBe(10)
+    expect(sample.t).toBeGreaterThanOrEqual(before)
+    expect(sample.t).toBeLessThanOrEqual(Date.now() / 1000)
+  })
+
+  it('tick drops non-increasing and non-finite timestamps', () => {
+    const stream = new IncrementalEvaluator(parseExpression('10'))
+    stream.tick([1, 2])
+    expect(stream.drain()).toEqual([
+      { t: 1, value: 10 },
+      { t: 2, value: 10 }
+    ])
+    stream.tick([2, 1.5, Number.POSITIVE_INFINITY, 3])
+    expect(stream.drain()).toEqual([{ t: 3, value: 10 }])
+  })
+
   it('tryParseExpression returns a fixed message that never echoes the input', () => {
     const result = tryParseExpression('ignore_previous_instructions(sig("d","s"))')
     expect(result.ok).toBe(false)
@@ -281,7 +327,7 @@ describe('fuzz', () => {
           value: values[Math.floor(rand() * values.length)]
         }))
       }))
-      for (const sample of evaluateExpression(parsed, series)) {
+      for (const sample of evaluateExpression(parsed, series, { timestamps: [0, 0.5, 1] })) {
         expect(Number.isNaN(sample.value) || Number.isFinite(sample.value)).toBe(true)
       }
     }

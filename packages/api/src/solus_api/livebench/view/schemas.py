@@ -210,7 +210,7 @@ class DerivedEntry(_Strict):
     expression: Annotated[StrictStr, Field(min_length=1, max_length=512)]
     unit: Unit | None = None
     node_count: Annotated[StrictInt, Field(ge=1, le=64)]
-    refs: Annotated[list[SignalRefOut], Field(min_length=1, max_length=8)]
+    refs: Annotated[list[SignalRefOut], Field(max_length=8)]
     created_at: datetime
     updated_at: datetime
 

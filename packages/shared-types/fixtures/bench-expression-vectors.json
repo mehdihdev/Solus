@@ -5,18 +5,19 @@
       "numbers": "Non-finite numbers are JSON strings: \"NaN\", \"Infinity\", \"-Infinity\". They may appear as input values, input timestamps and expected values. Expected outputs only ever contain finite numbers or \"NaN\".",
       "positions": "position/length are 0-based offsets in Unicode code points of the expression.",
       "parse": "accept: {node_count, depth, refs (distinct, first-appearance order)}; reject: {code, position, length}.",
-      "evaluate": "inputs: [{device_id, signal, samples: [[t, v], ...]}] in arrival order, or ramp: {count, dt, dv} meaning sample i = [i*dt, i*dv]. expected: [[t, v], ...] (full output), or expected_count + expected_head/expected_tail (first/last outputs).",
+      "evaluate": "inputs: [{device_id, signal, samples: [[t, v], ...]}] in arrival order, or ramp: {count, dt, dv} meaning sample i = [i*dt, i*dv]. expected: [[t, v], ...] (full output), or expected_count + expected_head/expected_tail (first/last outputs). Zero-reference (constant) expressions: inputs is [] and the case carries timestamps: [t, ...] (the time base; the primary drop rule applies) or at: t (no time base: one sample at t). A case with references may carry timestamps to prove they are ignored.",
       "tolerance": "relative 1e-9 (a == b or |a-b| <= 1e-9 * max(|a|,|b|)); NaN equals NaN; timestamps compare with the same tolerance."
     },
     "clarifications": {
       "depth": "Root = 1. A parenthesised group is not a node (node_count) but adds one depth level, so '((((...' fails at the 12th '(' (docs/architecture/bench-view.md section 2). too_deep is raised while descending (the opening '(', '-' or function name that enters level 13) or when a node is built whose height exceeds 12 (span = that node).",
-      "check_order": "too_long (before lexing); then lexical errors over the whole text (syntax: unexpected char / unterminated string; non_finite_literal); then parse errors in parse order (syntax, unknown_function, bad_ref, too_deep, arity, non_constant_param, param_range, too_many_nodes, too_many_refs - call checks run when the call's ')' is consumed); then no_signal (span = whole text).",
+      "check_order": "too_long (before lexing); then lexical errors over the whole text (syntax: unexpected char / unterminated string; non_finite_literal); then parse errors in parse order (syntax, unknown_function, bad_ref, too_deep, arity, non_constant_param, param_range, too_many_nodes, too_many_refs - call checks run when the call's ')' is consumed). A zero-reference expression is accepted as a constant signal (no_signal was removed by the SOLUSDEV-319 constant-derived-signals amendment).",
       "spans": "syntax: the offending token (length 0 at end of input; an unterminated string spans to the end); bad_ref: the string literal with quotes; unknown_function: the identifier; arity: the whole call; non_constant_param/param_range: the argument (param_range for scale in_lo == in_hi: the in_hi argument); too_many_nodes: the node whose construction made 65; too_many_refs: the sig(...) introducing the 9th ref.",
       "constants": "A constant is a number literal or '-' directly followed by one (no parentheses, no double minus).",
       "empty_call": "abs() does not match the grammar (call needs >= 1 argument): syntax.",
       "references": "Every reference (not only the primary) drops samples whose timestamp is not strictly greater than the previous accepted one, or is non-finite. Non-finite input values read as NaN. Primary values come from the same hold lookup (age 0 at its own timestamps).",
       "lowpass": "dt is measured from the last finite sample the filter consumed; the gap check uses consecutive output timestamps.",
-      "formulas": "scale = out_lo + (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo); trapezoid term = (t_i - t_prev) * (x_i + x_prev) / 2; lowpass RC = 1 / (2 * pi * fc); min/max fold left with < / >."
+      "formulas": "scale = out_lo + (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo); trapezoid term = (t_i - t_prev) * (x_i + x_prev) / 2; lowpass RC = 1 / (2 * pi * fc); min/max fold left with < / >.",
+      "constant_signals": "An expression with zero references is a constant signal (bench-view.md section 4.6): refs []; outputs at the supplied time base (timestamps) or one sample at 'at'; filters run on that time base per section 4.5."
     }
   },
   "parse": [
@@ -1178,21 +1179,66 @@
       }
     },
     {
-      "name": "no signal",
-      "expression": "1+2",
-      "reject": {
-        "code": "no_signal",
-        "position": 0,
-        "length": 3
+      "name": "constant literal",
+      "expression": "10",
+      "accept": {
+        "node_count": 1,
+        "depth": 1,
+        "refs": []
       }
     },
     {
-      "name": "no signal in filter",
+      "name": "negative constant",
+      "expression": "-2.5",
+      "accept": {
+        "node_count": 2,
+        "depth": 2,
+        "refs": []
+      }
+    },
+    {
+      "name": "constant product",
+      "expression": "2*5",
+      "accept": {
+        "node_count": 3,
+        "depth": 2,
+        "refs": []
+      }
+    },
+    {
+      "name": "constant group",
+      "expression": "(1+2)/3",
+      "accept": {
+        "node_count": 5,
+        "depth": 4,
+        "refs": []
+      }
+    },
+    {
+      "name": "constant sum",
+      "expression": "1+2",
+      "accept": {
+        "node_count": 3,
+        "depth": 2,
+        "refs": []
+      }
+    },
+    {
+      "name": "constant inside function",
       "expression": "abs(-3)",
-      "reject": {
-        "code": "no_signal",
-        "position": 0,
-        "length": 7
+      "accept": {
+        "node_count": 3,
+        "depth": 3,
+        "refs": []
+      }
+    },
+    {
+      "name": "constant inside filter",
+      "expression": "ma(10, 1)",
+      "accept": {
+        "node_count": 3,
+        "depth": 2,
+        "refs": []
       }
     },
     {
@@ -2561,6 +2607,113 @@
         [0, 0],
         [0.5, 0]
       ]
+    },
+    {
+      "name": "constant on a time base",
+      "expression": "10",
+      "inputs": [],
+      "timestamps": [0, 0.5, 1],
+      "expected": [
+        [0, 10],
+        [0.5, 10],
+        [1, 10]
+      ]
+    },
+    {
+      "name": "constant time base drops non-increasing and non-finite",
+      "expression": "2*5",
+      "inputs": [],
+      "timestamps": [0, 1, 1, "NaN", 0.5, 2],
+      "expected": [
+        [0, 10],
+        [1, 10],
+        [2, 10]
+      ]
+    },
+    {
+      "name": "constant at evaluation time",
+      "expression": "(1+2)/3",
+      "inputs": [],
+      "at": 5,
+      "expected": [[5, 1]]
+    },
+    {
+      "name": "negative constant at evaluation time",
+      "expression": "-2.5",
+      "inputs": [],
+      "at": 7.25,
+      "expected": [[7.25, -2.5]]
+    },
+    {
+      "name": "constant on an empty time base",
+      "expression": "10",
+      "inputs": [],
+      "timestamps": [],
+      "expected": []
+    },
+    {
+      "name": "constant divide by zero is NaN",
+      "expression": "1/0",
+      "inputs": [],
+      "timestamps": [0],
+      "expected": [[0, "NaN"]]
+    },
+    {
+      "name": "moving average of a constant",
+      "expression": "ma(10, 1)",
+      "inputs": [],
+      "timestamps": [0, 0.5, 1],
+      "expected": [
+        [0, 10],
+        [0.5, 10],
+        [1, 10]
+      ]
+    },
+    {
+      "name": "derivative of a constant",
+      "expression": "deriv(5)",
+      "inputs": [],
+      "timestamps": [0, 0.5, 1],
+      "expected": [
+        [0, "NaN"],
+        [0.5, 0],
+        [1, 0]
+      ]
+    },
+    {
+      "name": "derivative of a constant resets on a gap",
+      "expression": "deriv(5)",
+      "inputs": [],
+      "timestamps": [0, 0.5, 2],
+      "expected": [
+        [0, "NaN"],
+        [0.5, 0],
+        [2, "NaN"]
+      ]
+    },
+    {
+      "name": "integral of a constant",
+      "expression": "integ(2, 10)",
+      "inputs": [],
+      "timestamps": [0, 1, 2],
+      "expected": [
+        [0, 0],
+        [1, 2],
+        [2, 4]
+      ]
+    },
+    {
+      "name": "time base ignored when the expression has references",
+      "expression": "sig(\"d\",\"a\") + 1",
+      "inputs": [
+        {
+          "device_id": "d",
+          "signal": "a",
+          "samples": [[0, 1]]
+        }
+      ],
+      "timestamps": [5, 6],
+      "expected": [[0, 2]]
     }
   ]
 }

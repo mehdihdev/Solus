@@ -12,6 +12,7 @@ import io
 import json
 import math
 import random
+import time
 import tokenize
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -58,6 +59,12 @@ def _vector_inputs(case: Mapping[str, Any]) -> dict[SignalRef, Samples]:
                 (_decode_vector_number(t), _decode_vector_number(v)) for t, v in item["samples"]
             ]
     return series
+
+
+def _time_base(case: Mapping[str, Any]) -> list[float] | None:
+    if "timestamps" not in case:
+        return None
+    return [_decode_vector_number(t) for t in case["timestamps"]]
 
 
 def _within_tolerance(actual: float, expected: float) -> bool:
@@ -148,7 +155,8 @@ def test_non_string_input_is_a_syntax_error() -> None:
 @pytest.mark.parametrize("case", VECTORS["evaluate"], ids=lambda c: c["name"])
 def test_evaluate_vector(case: dict[str, Any]) -> None:
     parsed = parse_expression(case["expression"])
-    _check_vector_case(case, evaluate(parsed, _vector_inputs(case)))
+    output = evaluate(parsed, _vector_inputs(case), timestamps=_time_base(case), at=case.get("at"))
+    _check_vector_case(case, output)
 
 
 @pytest.mark.parametrize("case", VECTORS["evaluate"], ids=lambda c: c["name"])
@@ -156,12 +164,21 @@ def test_incremental_matches_batch(case: dict[str, Any]) -> None:
     """Secondaries fed first, primary fed in chunks with a drain after each."""
     parsed = parse_expression(case["expression"])
     series = _vector_inputs(case)
-    primary = parsed.refs[0]
     stream = IncrementalEvaluator(parsed)
+    base = _time_base(case) or ([case["at"]] if "at" in case else [])
+    if not parsed.refs:
+        out: Samples = []
+        for start in range(0, len(base), 2):
+            stream.tick(base[start : start + 2])
+            out.extend(stream.drain())
+        _check_vector_case(case, out)
+        return
+    stream.tick(base)  # ignored: the primary reference is the time base
+    primary = parsed.refs[0]
     for ref, samples in series.items():
         if ref != primary:
             stream.feed(ref, samples)
-    out: Samples = []
+    out = []
     primary_samples = series.get(primary, [])
     for start in range(0, max(len(primary_samples), 1), 3):
         stream.feed(primary, primary_samples[start : start + 3])
@@ -178,6 +195,27 @@ def test_drain_until_holds_later_primary_samples() -> None:
     stream.feed(SignalRef("d", "b"), [(1.0, 20.0)])
     assert stream.drain() == [(1.0, 22.0)]
     assert stream.drain() == []
+
+
+def test_no_signal_code_is_removed() -> None:
+    assert "no_signal" not in ERROR_MESSAGES
+
+
+def test_constant_without_time_base_samples_the_wall_clock() -> None:
+    parsed = parse_expression("2*5")
+    assert parsed.refs == ()
+    before = time.time()
+    [(t, value)] = evaluate(parsed, {})
+    assert before <= t <= time.time()
+    assert value == 10.0
+
+
+def test_constant_tick_drops_non_increasing_timestamps() -> None:
+    stream = IncrementalEvaluator(parse_expression("10"))
+    stream.tick([1.0, 2.0])
+    assert stream.drain() == [(1.0, 10.0), (2.0, 10.0)]
+    stream.tick([2.0, 1.5, math.inf, 3.0])
+    assert stream.drain() == [(3.0, 10.0)]
 
 
 def test_unreferenced_inputs_are_ignored() -> None:
@@ -278,9 +316,9 @@ def test_fuzz_parse_only_raises_expression_error() -> None:
             continue
         accepted += 1
         assert 1 <= parsed.node_count <= 64 and 1 <= parsed.depth <= 12
-        assert 1 <= len(parsed.refs) <= 8
+        assert 0 <= len(parsed.refs) <= 8
         values = [rng.uniform(-1e3, 1e3), math.nan, 1e308, 0.0]
         series = {ref: [(t * 0.05, rng.choice(values)) for t in range(30)] for ref in parsed.refs}
-        for _t, value in evaluate(parsed, series):
+        for _t, value in evaluate(parsed, series, timestamps=[0.0, 0.5, 1.0]):
             assert math.isnan(value) or math.isfinite(value)
     assert accepted > 100

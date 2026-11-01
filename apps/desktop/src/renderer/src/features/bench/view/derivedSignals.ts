@@ -2,7 +2,9 @@
 // Bench already retains (retainedSignals.ts), using the closed grammar evaluator
 // (expression.ts; docs/api/bench-view.md §4, architecture/bench-view.md §2).
 // Each poll re-feeds the retained window; the evaluator drops samples it has already
-// seen, so filter state carries across polls. Pure: no React, no store access.
+// seen, so filter state carries across polls. A zero-reference (constant) expression
+// has no primary stream, so it is ticked once per poll on the bench clock (§4.6).
+// Pure: no React, no store access.
 import type { BenchDeviceRecent, BenchSignalPoint } from '../../../lib/api/resources'
 import {
   ExpressionError,
@@ -87,10 +89,33 @@ function releaseHorizon(
   return Math.min(...horizons)
 }
 
+/** The bench clock: current wall time in seconds. */
+export type BenchClock = () => number
+
+const wallClock: BenchClock = () => Date.now() / 1000
+
+/** Feed every reference (secondaries first, so their samples are known before primary
+ * times are drained) and drain what the release horizon allows. */
+function drainReferences(
+  parsed: ParsedExpression,
+  evaluator: IncrementalEvaluator,
+  devices: Devices
+): Sample[] {
+  const samples = parsed.refs.map((ref) => seriesSamples(devices, ref))
+  samples.forEach((list, i) => {
+    if (i > 0) evaluator.feed(parsed.refs[i], list)
+  })
+  evaluator.feed(parsed.refs[0], samples[0])
+  return evaluator.drain(releaseHorizon(parsed, samples, evaluator.newestPending()))
+}
+
 export class DerivedSignalStream {
   private entries = new Map<string, StreamEntry>()
 
-  constructor(private readonly maxPoints = MAX_DERIVED_POINTS) {}
+  constructor(
+    private readonly maxPoints = MAX_DERIVED_POINTS,
+    private readonly now: BenchClock = wallClock
+  ) {}
 
   /** Feed the latest retained devices; returns one series per definition, in order. */
   update(definitions: readonly DerivedDefinition[], devices: Devices): DerivedSeries[] {
@@ -123,13 +148,9 @@ export class DerivedSignalStream {
   private advance(entry: StreamEntry, devices: Devices): void {
     const { parsed, evaluator } = entry
     if (!parsed || !evaluator) return
-    const samples = parsed.refs.map((ref) => seriesSamples(devices, ref))
-    // Secondaries first so their samples are known before primary times are drained.
-    samples.forEach((list, i) => {
-      if (i > 0) evaluator.feed(parsed.refs[i], list)
-    })
-    evaluator.feed(parsed.refs[0], samples[0])
-    const drained = evaluator.drain(releaseHorizon(parsed, samples, evaluator.newestPending()))
+    if (parsed.refs.length === 0) evaluator.tick([this.now()])
+    const drained =
+      parsed.refs.length === 0 ? evaluator.drain() : drainReferences(parsed, evaluator, devices)
     if (drained.length === 0) return
     const merged = [...entry.points, ...drained.map(toPoint)]
     entry.points = merged.slice(Math.max(0, merged.length - this.maxPoints))
@@ -141,11 +162,16 @@ export interface DerivedPreview {
   readonly error: ExpressionError | null
 }
 
-/** Editor preview: parse a draft and evaluate it over the retained data in one batch. */
-export function previewDerivedSignal(expression: string, devices: Devices): DerivedPreview {
+/** Editor preview: parse a draft and evaluate it over the retained data in one batch.
+ * A constant previews as one sample at `now` (seconds). */
+export function previewDerivedSignal(
+  expression: string,
+  devices: Devices,
+  now: number = wallClock()
+): DerivedPreview {
   const result = tryParseExpression(expression)
   if (!result.ok) return { points: [], error: result.error }
   const series = result.parsed.refs.map((ref) => ({ ref, samples: seriesSamples(devices, ref) }))
-  const points = evaluateExpression(result.parsed, series).map(toPoint)
+  const points = evaluateExpression(result.parsed, series, { at: now }).map(toPoint)
   return { points: points.slice(Math.max(0, points.length - MAX_DERIVED_POINTS)), error: null }
 }

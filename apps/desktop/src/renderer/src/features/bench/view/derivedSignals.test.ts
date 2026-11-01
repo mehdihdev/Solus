@@ -171,6 +171,55 @@ describe('DerivedSignalStream', () => {
   })
 })
 
+describe('constant derived signals (bench-view.md §4.6)', () => {
+  /** A bench clock that advances by `step` seconds per reading, from T0. */
+  function clock(step = 0.5): () => number {
+    let k = -1
+    return () => T0 / 1000 + ++k * step
+  }
+
+  it('emits one point per update at the current time: a flat line with a current value', () => {
+    const stream = new DerivedSignalStream(undefined, clock())
+    stream.update([def('10')], {})
+    stream.update([def('10')], {})
+    const [series] = stream.update([def('10')], {})
+    expect(series.error).toBeNull()
+    expect(series.points).toEqual([
+      { timestamp: iso(0), value: 10 },
+      { timestamp: iso(0.5), value: 10 },
+      { timestamp: iso(1), value: 10 }
+    ])
+  })
+
+  it('evaluates constant arithmetic and filters on the poll clock', () => {
+    const stream = new DerivedSignalStream(undefined, clock())
+    stream.update([def('2*5'), def('deriv(3)', 'd2')], {})
+    const [product, slope] = stream.update([def('2*5'), def('deriv(3)', 'd2')], {})
+    expect(values(product.points)).toEqual([10, 10])
+    expect(values(slope.points)).toEqual([Number.NaN, 0])
+  })
+
+  it('does not repeat a sample when the clock has not advanced', () => {
+    const stream = new DerivedSignalStream(undefined, () => T0 / 1000)
+    stream.update([def('-2.5')], {})
+    const [series] = stream.update([def('-2.5')], {})
+    expect(series.points).toEqual([{ timestamp: iso(0), value: -2.5 }])
+  })
+
+  it('keeps the point cap', () => {
+    const stream = new DerivedSignalStream(3, clock(1))
+    let series = stream.update([def('(1+2)/3')], {})
+    for (let i = 0; i < 5; i++) series = stream.update([def('(1+2)/3')], {})
+    expect(series[0].points.map((p) => p.timestamp)).toEqual([iso(3), iso(4), iso(5)])
+    expect(values(series[0].points)).toEqual([1, 1, 1])
+  })
+
+  it('previews a constant as one sample at the current time', () => {
+    const preview = previewDerivedSignal('2*5', {}, T0 / 1000 + 2)
+    expect(preview).toEqual({ points: [{ timestamp: iso(2), value: 10 }], error: null })
+  })
+})
+
 describe('previewDerivedSignal', () => {
   it('evaluates a draft expression over the retained data', () => {
     const data = devices(

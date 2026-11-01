@@ -3,7 +3,9 @@ and a tree-walking evaluator (docs/api/bench-view.md §4, architecture/bench-vie
 
 This is the write-time authority: every stored expression is parsed and bounded here.
 Pure module: no I/O, no globals mutated, no dynamic code path of any kind. Filter
-state lives on an explicit per-evaluation object. The shared conformance vectors
+state lives on an explicit per-evaluation object. The only clock read is the default
+evaluation time of a zero-reference (constant) expression in ``evaluate`` (§4.6).
+The shared conformance vectors
 (packages/shared-types/fixtures/bench-expression-vectors.json) pin every rule below,
 including the clarifications recorded in their ``_doc``.
 """
@@ -11,6 +13,7 @@ including the clarifications recorded in their ``_doc``.
 from __future__ import annotations
 
 import math
+import time
 from bisect import bisect_right
 from collections import deque
 from collections.abc import Iterable, Mapping
@@ -37,7 +40,6 @@ ERROR_MESSAGES: Final[dict[str, str]] = {
     "too_many_nodes": "The expression has more than 64 terms.",
     "too_deep": "The expression nests more than 12 levels deep.",
     "too_many_refs": "The expression references more than 8 signals.",
-    "no_signal": "The expression must reference at least one signal.",
     "non_finite_literal": "A number is longer than 32 characters or not finite.",
     "param_range": "A filter or scale parameter is out of range.",
     "bad_ref": "A signal reference is empty, too long or has unsupported characters.",
@@ -164,7 +166,8 @@ class ParsedExpression:
     root: Node
     node_count: int
     depth: int
-    refs: tuple[SignalRef, ...]  # distinct, first-appearance order; refs[0] is the time base
+    # Distinct, first-appearance order; refs[0] is the time base. Empty = constant (§4.6).
+    refs: tuple[SignalRef, ...]
     filter_count: int
 
 
@@ -432,8 +435,6 @@ def parse_expression(text: str) -> ParsedExpression:
         raise ExpressionError("too_long", MAX_EXPRESSION_CHARS, len(text) - MAX_EXPRESSION_CHARS)
     parser = _Parser(_lex(text))
     root = parser.parse()
-    if not parser.refs:
-        raise ExpressionError("no_signal", 0, len(text))
     return ParsedExpression(
         root=root,
         node_count=parser.node_count,
@@ -630,8 +631,9 @@ class _ReferenceBuffer:
 
 class IncrementalEvaluator:
     """Streaming evaluation with bounded state. Output samples are produced at the
-    primary reference's timestamps. ``drain`` gives the same results as a batch run
-    provided every secondary sample with timestamp <= t was fed before t is drained."""
+    primary reference's timestamps (a constant's come from ``tick``). ``drain`` gives
+    the same results as a batch run provided every secondary sample with timestamp <= t
+    was fed before t is drained."""
 
     def __init__(self, parsed: ParsedExpression) -> None:
         self._parsed = parsed
@@ -640,6 +642,7 @@ class IncrementalEvaluator:
         self._pending: deque[float] = deque(maxlen=MAX_BUFFERED_SAMPLES)
         calls = sorted(_filter_calls(parsed.root), key=lambda call: call.slot)
         self._filters = [_make_filter(call) for call in calls]
+        self._last_tick: float | None = None
 
     def feed(self, ref: SignalRef, samples: Iterable[tuple[float, float]]) -> None:
         index = self._index.get(ref)
@@ -649,6 +652,17 @@ class IncrementalEvaluator:
         for t, value in samples:
             if buffer.accept(float(t), float(value)) and index == 0:
                 self._pending.append(float(t))
+
+    def tick(self, timestamps: Iterable[float]) -> None:
+        """Time base of a zero-reference (constant) expression, with the primary drop
+        rule; ignored when the expression has references (§4.6)."""
+        if self._parsed.refs:
+            return
+        for raw in timestamps:
+            t = float(raw)
+            if math.isfinite(t) and (self._last_tick is None or t > self._last_tick):
+                self._last_tick = t
+                self._pending.append(t)
 
     def drain(self, until: float | None = None) -> list[tuple[float, float]]:
         out: list[tuple[float, float]] = []
@@ -715,10 +729,18 @@ def _apply(name: str, args: list[float]) -> float:
 
 
 def evaluate(
-    parsed: ParsedExpression, series: Mapping[SignalRef, Iterable[tuple[float, float]]]
+    parsed: ParsedExpression,
+    series: Mapping[SignalRef, Iterable[tuple[float, float]]],
+    *,
+    timestamps: Iterable[float] | None = None,
+    at: float | None = None,
 ) -> list[tuple[float, float]]:
-    """Batch evaluation: ``[(t, value)]`` at the primary timestamps; NaN marks a gap."""
+    """Batch evaluation: ``[(t, value)]`` at the primary timestamps; NaN marks a gap.
+    A zero-reference (constant) expression is sampled at ``timestamps`` when given,
+    else once at ``at`` (default: now); both are ignored when references exist."""
     stream = IncrementalEvaluator(parsed)
     for ref, samples in series.items():
         stream.feed(ref, samples)
+    if not parsed.refs:
+        stream.tick(timestamps if timestamps is not None else [time.time() if at is None else at])
     return stream.drain()

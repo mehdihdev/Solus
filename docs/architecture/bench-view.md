@@ -49,6 +49,13 @@ test for both. Outputs compare with relative tolerance 1e-9 and NaN == NaN. The 
 may be used for early feedback, but **the server's verdict wins**: a client that accepts what the
 server refuses shows the server's error.
 
+**Constant derived signals** (SOLUSDEV-319 amendment: constant derived signals). An expression
+with zero references (bench-view.md §4.6) has no primary stream to take timestamps from, so the
+renderer's `DerivedSignalStream` ticks it once per `update()` (each poll) at the bench clock's
+current time; the card shows a flat line and the constant as its current value, capped at the
+same 2000 points. The editor preview returns one sample of the constant at the current time; the
+server evaluates it at SOL read time.
+
 **Bounded work.** Parse is O(length) with length ≤ 512, the AST is ≤ 64 nodes and ≤ 12 deep
 (recursion is bounded by the depth check, applied while parsing, so a hostile `((((…` fails at
 depth 13 rather than exhausting the stack). Evaluation per output sample is O(nodes × window) with

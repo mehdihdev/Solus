@@ -233,6 +233,17 @@ async def test_upsert_creates_with_server_computed_refs_and_node_count(
     assert state((await undo(session, world, result)).view) == ([], {})
 
 
+@pytest.mark.parametrize(("expression", "node_count"), [("10", 1), ("2*5", 3)])
+async def test_upsert_constant_expression_is_a_zero_ref_derived_signal(
+    session: AsyncSession, world: World, expression: str, node_count: int
+) -> None:
+    """SOLUSDEV-319 amendment (bench-view.md §4.6): a constant is a valid derived signal."""
+    result = await apply(session, world, [upsert("mehdi_test", expression)])
+    (derived,) = result.view.model_dump(mode="json")["derived"]
+    assert derived["name"] == "mehdi_test" and derived["expression"] == expression
+    assert derived["refs"] == [] and derived["node_count"] == node_count
+
+
 async def test_upsert_with_existing_id_replaces_and_inverse_restores(
     session: AsyncSession, world: World
 ) -> None:
@@ -386,7 +397,6 @@ async def test_deleted_project_is_not_found(session: AsyncSession, world: World)
     ("expression", "code", "position"),
     [
         ('sig("a", "b") +', "syntax", 15),
-        ("1 + 2", "no_signal", 0),
         ('nope(sig("a", "b"))', "unknown_function", 0),
         ('ma(sig("a", "b"), 11)', "param_range", 18),
         ("x" * 600, "too_long", 512),
