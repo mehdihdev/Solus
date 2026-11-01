@@ -10,10 +10,11 @@ from typing import Any
 
 import pytest
 from solus_api.agent.confirmations import decide_confirmation, request_confirmation
+from solus_api.agent.drive.binding import FrontAppBinding, WindowBinding
 from solus_api.agent.drive.executor import Budget, StepOutcome
 from solus_api.agent.drive.port import DriveRefusal
 from solus_api.agent.drive.tool import DriveStepTool
-from solus_api.agent.drive.wiring import DRIVE_TOOLS, bridge_drive_port
+from solus_api.agent.drive.wiring import DRIVE_TOOLS, bridge_drive_port, build_drive_step
 from solus_api.agent.runtime import build_sol_registry
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode
@@ -194,3 +195,97 @@ async def test_a_teammate_cannot_approve_my_drive_step(
         )
         await db.commit()
     assert result.ok is True and runs == ["Place R1"]
+
+
+# --- SOLUSDEV-319 slice 4: the window binding is the requester's turn alone ------------
+
+FRONT = FrontAppBinding(
+    bundle_id="com.prusa3d.slic3r",
+    name="PrusaSlicer",
+    title="benchy.3mf",
+    pid=4321,
+    window_id=88,
+    drivable=True,
+    binding="window",
+)
+
+
+def _build(sessions: InMemoryBridgeSessionRegistry, scope: Scope, front: Any) -> Any:
+    return build_drive_step(
+        bridge=sessions,
+        user_id=scope[0],
+        team_id=scope[1],
+        project_id=scope[2],
+        call_cap_bytes=262_144,
+        session_factory=async_sessionmaker(),
+        secret_store=InMemorySecretStore(),
+        redis=None,
+        enqueue=None,
+        budget=Budget(),
+        front_app=front,
+    )
+
+
+def test_a_front_binding_never_conjures_drive_without_my_own_companion() -> None:
+    me: Scope = (uuid.uuid4(), uuid.uuid4(), uuid.uuid4())
+    teammate: Scope = (uuid.uuid4(), me[1], me[2])
+    sessions = InMemoryBridgeSessionRegistry()
+    sessions.bind(_drive_session(teammate, []))
+    assert _build(sessions, me, FRONT) is None
+    sessions.bind(_drive_session(me, []))
+    tool = _build(sessions, me, FRONT)
+    assert tool.descriptor.params["properties"]["app"]["enum"] == ["front", "kicad"]
+    # The runtime's existing call (no front_app) keeps working: kicad only.
+    assert _build(sessions, me, None).descriptor.params["properties"]["app"]["enum"] == ["kicad"]
+
+
+async def test_a_model_supplied_window_is_refused_at_the_gate(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async def record(*_a: Any) -> None:
+        return None
+
+    async def never(*_a: Any) -> StepOutcome:
+        raise AssertionError("must not run")
+
+    registry = ToolRegistry()
+    registry.register(DriveStepTool(run_step=never, record=record, budget=Budget(), front=FRONT))
+    (owner, team, project), _mate = await _scope(maker)
+    planted = {
+        "app": "front",
+        "intent": "Rotate the model",
+        "window": {**FRONT.model_dump(include={"bundle_id", "name", "title"}), "pid": 1,
+                   "window_id": 2},
+    }  # fmt: skip
+    async with maker() as db:
+        parked = await request_confirmation(
+            db,
+            registry,
+            ToolCall(tool="drive.step", args=planted),
+            project_id=project,
+            team_id=team,
+            user_id=owner,
+        )
+        await db.commit()
+    assert parked is not None and parked.confirmation_id is None
+    assert parked.result.error is not None
+    assert parked.result.error.code is ToolErrorCode.INVALID_ARGS
+
+
+async def test_the_stored_window_runs_even_when_another_binding_decides() -> None:
+    seen: list[Any] = []
+
+    async def run_step(_intent: str, target: Any, _p: Any) -> StepOutcome:
+        seen.append(target)
+        return StepOutcome(outcome="done", code=None, actions=0, seconds=0.0, summary="")
+
+    async def record(*_a: Any) -> None:
+        return None
+
+    mine = DriveStepTool(run_step=run_step, record=record, budget=Budget(), front=FRONT)
+    stored = mine.stored_args({"app": "front", "intent": "Rotate the model"})
+    someone_else = FrontAppBinding(**{**FRONT.model_dump(), "pid": 9, "window_id": 9})
+    deciding = DriveStepTool(run_step=run_step, record=record, budget=Budget(), front=someone_else)
+    await deciding.invoke(stored)
+    assert seen == [WindowBinding(**stored["window"])]
+    assert seen[0].pid == 4321 and seen[0].window_id == 88

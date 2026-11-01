@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 from solus_api.agent.drive.actions import ActRequest, Frame
+from solus_api.agent.drive.binding import BUNDLE_ID_PATTERN, PID_MAX, WINDOW_ID_MAX
 from solus_api.agent.tools.tool import Tool, ToolException
 
 PNG_MAGIC: Final = b"\x89PNG\r\n\x1a\n"
@@ -27,7 +28,10 @@ _CODE_PREFIX: Final = re.compile(r"^([a-z][a-z_]{0,39}): (.*)$", re.DOTALL)
 KNOWN_CODES: Final = frozenset(
     {
         "usage",
+        # Kept for older helpers; slice 4 helpers answer app_denied instead.
         "app_not_allowed",
+        "app_denied",
+        "pid_mismatch",
         "not_trusted",
         "screen_recording_denied",
         "not_frontmost",
@@ -60,6 +64,9 @@ KNOWN_CODES: Final = frozenset(
 #: One bridge round trip; BridgeTool.invoke is called directly here, outside
 #: the registry's own timeout.
 CALL_TIMEOUT_SECONDS: Final = 30.0
+_BUNDLE_ID: Final = re.compile(BUNDLE_ID_PATTERN)
+_BINDINGS: Final = frozenset({"project", "window"})
+_REASONS: Final = frozenset({"denied", "no_workspace", "outside_workspace"})
 
 
 class DriveRefusal(Exception):  # noqa: N818 — a refusal, not a bug
@@ -73,6 +80,10 @@ class DriveRefusal(Exception):  # noqa: N818 — a refusal, not a bug
 
 @dataclass(frozen=True)
 class Identity:
+    """The helper's `identify` reply (sol-drive.md §2.2 `front`). Never the
+    window title: the executor binds by ids alone."""
+
+    #: The app in front is drivable (`front.drivable`).
     allowed: bool
     bundle_id: str | None
     app_name: str | None
@@ -83,6 +94,11 @@ class Identity:
     #: The drivable app in front is working on a project outside the linked
     #: workspace (ADR-041 amendment, M2); the helper hid its identity.
     outside_workspace: bool = False
+    pid: int | None = None
+    #: `project` (KiCad) or `window` (any other drivable app).
+    binding: str | None = None
+    #: Why the app in front is not drivable: denied / no_workspace / outside_workspace.
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +120,9 @@ class ActDone:
 class DrivePort(Protocol):
     async def identify(self) -> Identity: ...
 
-    async def capture(self, bundle: str, window: int, *, max_edge: int) -> Shot: ...
+    async def capture(
+        self, bundle: str, window: int, *, max_edge: int, pid: int | None = None
+    ) -> Shot: ...
 
     async def act(
         self,
@@ -115,6 +133,7 @@ class DrivePort(Protocol):
         since: float,
         expect_width: int,
         expect_height: int,
+        pid: int | None = None,
     ) -> ActDone: ...
 
 
@@ -134,20 +153,38 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _bounded_int(value: Any, top: int) -> int | None:
+    return value if _positive_int(value) and value <= top else None
+
+
 def parse_identity(value: Any) -> Identity:
+    """The slice-4 `{…, front: Front | null}` reply. Anything else in `front`
+    (including the retired `allowed`/`app`/`window` shape) is not drivable."""
     if not isinstance(value, dict) or not _number(value.get("now")):
         raise _malformed("identify")
-    trust, app, window = (_mapping(value.get(key)) for key in ("trust", "app", "window"))
-    bundle, name, window_id = app.get("bundleId"), app.get("name"), window.get("id")
+    trust, front = _mapping(value.get("trust")), _mapping(value.get("front"))
+    bundle, name = front.get("bundleId"), front.get("name")
+    bundle_id = bundle if isinstance(bundle, str) and _BUNDLE_ID.match(bundle) else None
+    binding = front.get("binding") if front.get("binding") in _BINDINGS else None
+    reason = front.get("reason") if front.get("reason") in _REASONS else None
+    pid = _bounded_int(front.get("pid"), PID_MAX)
+    window_id = _bounded_int(front.get("windowId"), WINDOW_ID_MAX)
+    drivable = front.get("drivable") is True and bundle_id is not None and binding is not None
+    if binding == "window" and pid is None:
+        drivable = False
     return Identity(
-        allowed=value.get("allowed") is True,
-        bundle_id=bundle if isinstance(bundle, str) else None,
+        allowed=drivable,
+        bundle_id=bundle_id,
         app_name=name[:64] if isinstance(name, str) else None,
-        window_id=window_id if _positive_int(window_id) else None,
+        # A denied or unbound app never yields a pid or window to act on.
+        window_id=window_id if drivable else None,
         now=float(value["now"]),
         accessibility=trust.get("accessibility") is True,
         screen_recording=trust.get("screenRecording") is True,
-        outside_workspace=value.get("outsideWorkspace") is True,
+        outside_workspace=reason == "outside_workspace",
+        pid=pid if drivable else None,
+        binding=binding,
+        reason=None if drivable else reason,
     )
 
 
@@ -210,10 +247,13 @@ class BridgeDrivePort:
     async def identify(self) -> Identity:
         return parse_identity(await self._call(self._identify, {}))
 
-    async def capture(self, bundle: str, window: int, *, max_edge: int) -> Shot:
-        value = await self._call(
-            self._capture, {"bundle": bundle, "window": window, "max_edge": max_edge}
-        )
+    async def capture(
+        self, bundle: str, window: int, *, max_edge: int, pid: int | None = None
+    ) -> Shot:
+        args: dict[str, Any] = {"bundle": bundle, "window": window, "max_edge": max_edge}
+        if pid is not None:
+            args["pid"] = pid
+        value = await self._call(self._capture, args)
         artifact_id, frame, design_saved = parse_capture(value, max_edge=max_edge)
         try:
             png = await self._fetch(artifact_id)
@@ -232,6 +272,7 @@ class BridgeDrivePort:
         since: float,
         expect_width: int,
         expect_height: int,
+        pid: int | None = None,
     ) -> ActDone:
         args = {
             "bundle": bundle,
@@ -240,6 +281,7 @@ class BridgeDrivePort:
             "expect_width": expect_width,
             "expect_height": expect_height,
             **request.args(),
+            **({} if pid is None else {"pid": pid}),
         }
         value = await self._call(self._act, args)
         if not isinstance(value, dict) or not _number(value.get("finishedAt")):

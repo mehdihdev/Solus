@@ -12,7 +12,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Final
 
-from solus_api.agent.drive.executor import Budget, DriveExecutor, Progress, StepOutcome
+from solus_api.agent.drive.binding import FrontAppBinding
+from solus_api.agent.drive.executor import Budget, DriveExecutor, Progress, StepOutcome, Target
 from solus_api.agent.drive.port import BridgeDrivePort
 from solus_api.agent.drive.tool import DriveStepTool
 from solus_api.agent.tools.shapes import ToolErrorCode
@@ -64,7 +65,12 @@ def build_drive_step(
     redis: Any,
     enqueue: Any,
     budget: Budget,
+    front_app: FrontAppBinding | None = None,
 ) -> DriveStepTool | None:
+    """`front_app` is the turn's (sol-drive.md §2.2): `drive.step` offers
+    `app: "front"` only when it is drivable and window-bound. Optional, so a
+    turn without it — and the decide route, which runs the STORED window —
+    builds the kicad-only tool."""
     session = bridge.get(user_id, team_id, project_id)
     if session is None:
         return None
@@ -103,10 +109,10 @@ def build_drive_step(
             )
 
     async def run_step(
-        intent: str, drivable: frozenset[str], on_progress: "Callable[[Progress], None]"
+        intent: str, target: Target, on_progress: "Callable[[Progress], None]"
     ) -> StepOutcome:
         executor = DriveExecutor(port, model, budget=budget, on_progress=on_progress)
-        return await executor.run(intent, drivable)
+        return await executor.run(intent, target)
 
     async def record(event_type: str, payload: dict[str, Any]) -> None:
         from solus_api.models import User
@@ -127,7 +133,11 @@ def build_drive_step(
             await db.commit()
 
     return DriveStepTool(
-        run_step=run_step, record=record, budget=budget, lease=lambda: drive_lease(user_id)
+        run_step=run_step,
+        record=record,
+        budget=budget,
+        lease=lambda: drive_lease(user_id),
+        front=front_app,
     )
 
 

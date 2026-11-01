@@ -12,9 +12,12 @@ from typing import Any
 
 import pytest
 from solus_api.agent.command_output import STREAMING_TOOLS, current_output
+from solus_api.agent.confirmations import validate_tool_arguments
+from solus_api.agent.drive.binding import FrontAppBinding, WindowBinding
 from solus_api.agent.drive.executor import Budget, Progress, StepOutcome
 from solus_api.agent.drive.tool import DRIVABLE_APPS, DriveStepTool, progress_line
 from solus_api.agent.runtime import build_sol_registry
+from solus_api.agent.tools.shapes import ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.bridge.allowlist import load_allowlist, validate_inventory
 from solus_api.bridge.frames import HelloData
@@ -43,10 +46,10 @@ class Runner:
     def __init__(self, result: StepOutcome, progress: list[Progress] | None = None) -> None:
         self.result = result
         self.progress = progress or []
-        self.calls: list[tuple[str, frozenset[str]]] = []
+        self.calls: list[tuple[str, frozenset[str] | WindowBinding]] = []
 
     async def __call__(
-        self, intent: str, drivable: frozenset[str], on_progress: Any
+        self, intent: str, drivable: frozenset[str] | WindowBinding, on_progress: Any
     ) -> StepOutcome:
         self.calls.append((intent, drivable))
         for p in self.progress:
@@ -222,12 +225,15 @@ async def test_events_record_verbs_and_outcomes_never_text() -> None:
     ]
     actions = [payload for kind, payload in events.seen if kind == "drive.action"]
     assert actions == [
-        {"index": 1, "verb": "click", "result": "ok"},
-        {"index": 2, "verb": "key", "result": "chord_denied"},
+        {"index": 1, "verb": "click", "result": "ok", "binding": "project"},
+        {"index": 2, "verb": "key", "result": "chord_denied", "binding": "project"},
     ]
+    assert events.seen[0][1]["binding"] == "project"
+    assert events.seen[3][1] == {"outcome": "refused", "code": "chord_denied", "binding": "project"}
     ended = events.seen[-1][1]
     assert ended == {
         "app": "kicad",
+        "binding": "project",
         "actions": 2,
         "seconds": 12.0,
         "outcome": "refused",
@@ -386,3 +392,230 @@ def test_the_description_states_the_configured_budget() -> None:
         run_step=Runner(outcome()), record=Events(), budget=Budget(max_actions=8, max_seconds=90)
     ).descriptor
     assert "up to 8 actions · 1.5 min" in d.description
+
+
+# --- SOLUSDEV-319 slice 4: `front` (sol-drive.md §2.2) ---------------------------------
+
+FRONT = FrontAppBinding(
+    bundle_id="com.prusa3d.slic3r",
+    name="PrusaSlicer",
+    title="benchy.3mf - PrusaSlicer",
+    pid=4321,
+    window_id=88,
+    drivable=True,
+    binding="window",
+)
+FRONT_ARGS = {"app": "front", "intent": "Rotate the model 90 degrees"}
+WINDOW: dict[str, Any] = {
+    "bundle_id": "com.prusa3d.slic3r",
+    "name": "PrusaSlicer",
+    "title": "benchy.3mf - PrusaSlicer",
+    "pid": 4321,
+    "window_id": 88,
+}
+STORED = {**FRONT_ARGS, "window": WINDOW}
+
+
+def front_tool(
+    runner: Runner, events: Events | None = None, front: FrontAppBinding | None = FRONT
+) -> DriveStepTool:
+    return DriveStepTool(run_step=runner, record=events or Events(), budget=Budget(), front=front)
+
+
+@pytest.mark.parametrize(
+    ("front", "apps"),
+    [
+        (None, ["kicad"]),
+        (FRONT, ["front", "kicad"]),
+        (
+            FrontAppBinding(
+                bundle_id="com.apple.Terminal",
+                name="Terminal",
+                title=None,
+                pid=None,
+                window_id=None,
+                drivable=False,
+                binding=None,
+            ),
+            ["kicad"],
+        ),
+        (
+            FrontAppBinding(
+                bundle_id="org.kicad.kicad",
+                name="KiCad",
+                title="x.kicad_sch",
+                pid=9,
+                window_id=3,
+                drivable=True,
+                binding="project",
+            ),
+            ["kicad"],
+        ),
+    ],
+)
+def test_front_is_offered_only_for_a_drivable_window_bound_app(
+    front: FrontAppBinding | None, apps: list[str]
+) -> None:
+    params = front_tool(Runner(outcome()), front=front).descriptor.params
+    assert params["properties"]["app"]["enum"] == apps
+    assert params["additionalProperties"] is False
+    assert set(params["properties"]) == {"app", "intent"}  # never a binding field
+
+
+def test_solus_code_copies_the_turn_binding_into_the_stored_args() -> None:
+    t = front_tool(Runner(outcome()))
+    assert t.stored_args(FRONT_ARGS) == STORED
+    assert t.stored_args(ARGS) == ARGS  # kicad keeps its arguments
+
+
+@pytest.mark.parametrize(
+    "window",
+    [WINDOW, {**WINDOW, "pid": 1}, {"bundle_id": "com.apple.Terminal"}],
+)
+def test_a_model_supplied_window_is_invalid_args(window: dict[str, Any]) -> None:
+    t = front_tool(Runner(outcome()))
+    for args in ({**FRONT_ARGS, "window": window}, {**ARGS, "window": window}):
+        assert validate_tool_arguments(t.descriptor, args) is not None
+        with pytest.raises(ToolException) as caught:
+            t.stored_args(args)
+        assert caught.value.code is ToolErrorCode.INVALID_ARGS
+
+
+def test_front_without_a_window_bound_turn_is_invalid_args() -> None:
+    with pytest.raises(ToolException) as caught:
+        front_tool(Runner(outcome()), front=None).stored_args(FRONT_ARGS)
+    assert caught.value.code is ToolErrorCode.INVALID_ARGS
+
+
+async def test_the_front_card_names_the_app_the_window_and_what_sol_will_see() -> None:
+    rows = await front_tool(Runner(outcome())).preview(STORED)
+    assert [r["label"] for r in rows] == [
+        "App",
+        "Window",
+        "What SOL will do",
+        "Screen",
+        "Budget",
+        "Heads up",
+    ]
+    by_label = {r["label"]: r["after"] for r in rows}
+    assert by_label["App"] == "PrusaSlicer"
+    assert by_label["Window"] == "benchy.3mf - PrusaSlicer"
+    assert by_label["What SOL will do"] == FRONT_ARGS["intent"]
+    assert by_label["Screen"] == "SOL will see this window"
+    assert by_label["Budget"] == "up to 15 actions · 2 min"
+    untitled = await front_tool(Runner(outcome())).preview(
+        {**FRONT_ARGS, "window": {**WINDOW, "title": None}}
+    )
+    assert {r["label"]: r["after"] for r in untitled}["Window"] == "Untitled window"
+
+
+async def test_the_card_and_the_run_use_the_stored_binding_never_the_tools_own() -> None:
+    # The decide-time registry is built without the turn's front_app (or with a
+    # later one): the STORED window is what was shown and what runs.
+    runner = Runner(outcome())
+    other = FrontAppBinding(**{**FRONT.model_dump(), "pid": 1, "window_id": 2})
+    for front in (None, other):
+        t = front_tool(runner, front=front)
+        rows = await t.preview(STORED)
+        assert {r["label"]: r["after"] for r in rows}["App"] == "PrusaSlicer"
+        await t.invoke(STORED)
+    assert [target for _, target in runner.calls] == [WindowBinding(**WINDOW)] * 2
+
+
+async def test_front_without_its_stored_window_never_previews_or_runs() -> None:
+    runner = Runner(outcome())
+    t = front_tool(runner)
+    with pytest.raises(ToolException):
+        await t.preview(FRONT_ARGS)
+    with pytest.raises(ToolException):
+        await t.invoke(FRONT_ARGS)
+    with pytest.raises(ToolException):
+        await t.invoke({**ARGS, "window": WINDOW})  # a window never rides a kicad step
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        "Upload the sketch to the board",
+        "Click UPLOAD",
+        "flash the firmware",
+        "Click Re-Flash in the toolbar",
+        "Deploy to the robot",
+        "Press the deployment button",
+        "Open the uploads panel",
+    ],
+)
+async def test_upload_flash_and_deploy_intents_are_refused_for_every_app(intent: str) -> None:
+    runner = Runner(outcome())
+    t = front_tool(runner)
+    for args in ({"app": "kicad", "intent": intent}, {"app": "front", "intent": intent}):
+        with pytest.raises(ToolException) as caught:
+            t.stored_args(args)
+        assert caught.value.code is ToolErrorCode.INVALID_ARGS
+        assert "can't upload, flash or deploy" in caught.value.message
+    with pytest.raises(ToolException):
+        await t.preview({"app": "front", "intent": intent, "window": WINDOW})
+    with pytest.raises(ToolException):
+        await t.invoke({"app": "kicad", "intent": intent})
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "intent",
+    ["Place R1 near the reflash header", "Set the infill to 20%", "Open the preupload checklist"],
+)
+def test_words_that_only_contain_the_refused_stems_still_pass(intent: str) -> None:
+    assert front_tool(Runner(outcome())).stored_args({"app": "front", "intent": intent})
+
+
+@pytest.mark.parametrize(
+    ("kind", "code", "words"),
+    [
+        ("refused", "relaunched", "stopped — PrusaSlicer was restarted; summon SOL over"),
+        ("refused", "window_mismatch", "stopped — a different PrusaSlicer window is in front"),
+        ("refused", "app_denied", "stopped — SOL can't use the mouse and keyboard in that app"),
+        ("saved", "design_saved", "stopped — a file in this project changed"),
+        ("not_in_front", None, "PrusaSlicer was not in front"),
+        ("refused", "intent_refused", "drive.step can't upload, flash or deploy"),
+    ],
+)
+async def test_unfinished_front_steps_name_the_app_never_the_title(
+    kind: str, code: str | None, words: str
+) -> None:
+    with pytest.raises(ToolException) as caught:
+        await front_tool(Runner(outcome(kind, code))).invoke(STORED)
+    assert words in caught.value.message
+    assert "benchy" not in caught.value.message
+
+
+async def test_kicad_without_a_linked_folder_says_so() -> None:
+    with pytest.raises(ToolException) as caught:
+        await tool(Runner(outcome("refused", "no_workspace"))).invoke(ARGS)
+    assert "link a folder" in caught.value.message
+
+
+async def test_front_events_carry_the_binding_never_the_app_or_title() -> None:
+    progress = [Progress(action=1, max_actions=15, verb="click", elapsed=1.0)]
+    events = Events()
+    with pytest.raises(ToolException):
+        await front_tool(
+            Runner(outcome("refused", "window_mismatch", actions=1, failed=1), progress), events
+        ).invoke(STORED)
+    assert [kind for kind, _ in events.seen] == [
+        "drive.session_started",
+        "drive.action",
+        "drive.aborted",
+        "drive.session_ended",
+    ]
+    assert events.seen[0][1] == {
+        "app": "front",
+        "binding": "window",
+        "budget": "up to 15 actions · 2 min",
+    }
+    assert events.seen[1][1]["binding"] == "window"
+    assert events.seen[2][1]["binding"] == "window"
+    assert events.seen[-1][1]["app"] == "front" and events.seen[-1][1]["binding"] == "window"
+    flat = repr(events.seen)
+    for leak in ("PrusaSlicer", "benchy", "com.prusa3d", "4321", FRONT_ARGS["intent"]):
+        assert leak not in flat

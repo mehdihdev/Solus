@@ -3,9 +3,16 @@
 SOL proposes `drive.step {app, intent}`; the ordinary confirmation gate parks it
 and shows a card built from the arguments alone (App, What SOL will do, Budget,
 Heads up) — the pill is frontmost while the card waits, so a live "is KiCad in
-front" check there would always be stale. On approval the executor binds the
-window, runs one bounded loop and returns. Progress streams through the
-command-output channel (`STREAMING_TOOLS`), the way an approved command does.
+front" check there would always be stale.
+
+`app: "front"` (sol-drive.md §2.2) is offered only when the turn's `front_app`
+is drivable and window-bound. The model's arguments never carry a binding:
+`stored_args` — Solus code, before parking — copies the turn's window into the
+stored arguments, and the card and the run read only that stored window.
+
+On approval the executor binds the window, runs one bounded loop and returns.
+Progress streams through the command-output channel (`STREAMING_TOOLS`), the
+way an approved command does.
 
 An unfinished step (the user took over, budget used, a refusal) raises a
 `ToolException` with a Solus-written sentence, so a running plan stops there.
@@ -19,10 +26,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from solus_api.agent.command_output import current_output
-from solus_api.agent.drive.executor import Budget, Progress, StepOutcome
+from solus_api.agent.drive.binding import FrontAppBinding, WindowBinding
+from solus_api.agent.drive.executor import Budget, Progress, StepOutcome, Target, refused_intent
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import redact_text
@@ -40,38 +48,67 @@ INTENT_MAX: Final = 300
 #: the loop's prompt (executor._intro), so it must not be able to close the fence.
 _ONE_LINE: Final = re.compile("^[^\\x00-\\x1f\\x7f\\u2028\\u2029<>]+$")
 
-RunStep = Callable[[str, frozenset[str], Callable[[Progress], None]], Awaitable[StepOutcome]]
+RunStep = Callable[[str, Target, Callable[[Progress], None]], Awaitable[StepOutcome]]
 Record = Callable[[str, dict[str, Any]], Awaitable[None]]
+FRONT: Final = "front"
+INTENT_REFUSED: Final = (
+    "drive.step can't upload, flash or deploy; use the integration's own tools for that"
+)
 
 
 class DriveStepArgs(BaseModel):
+    """The model's arguments: no binding field, ever."""
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    app: Literal["kicad"]
+    app: Literal["kicad", "front"]
     intent: str = Field(min_length=1, max_length=INTENT_MAX, pattern=_ONE_LINE.pattern)
 
 
-_PARAMS: Final[dict[str, Any]] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["app", "intent"],
-    "properties": {
-        "app": {"type": "string", "enum": sorted(DRIVABLE_APPS)},
-        "intent": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": INTENT_MAX,
-            "description": "One plain sentence: what will change in the window.",
+class DriveStepStoredArgs(DriveStepArgs):
+    """A parked call's stored arguments: `window` is Solus-stamped, `front` only."""
+
+    window: WindowBinding | None = None
+
+    @model_validator(mode="after")
+    def _window_iff_front(self) -> "DriveStepStoredArgs":
+        if (self.app == FRONT) != (self.window is not None):
+            raise ValueError("a stored window belongs to a front step, and only there")
+        return self
+
+
+def _params(apps: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["app", "intent"],
+        "properties": {
+            "app": {
+                "type": "string",
+                "enum": apps,
+                "description": (
+                    "kicad: the user's KiCad window. front: the window the user "
+                    "summoned SOL over (offered only when SOL can drive it)."
+                ),
+            },
+            "intent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": INTENT_MAX,
+                "description": "One plain sentence: what will change in the window.",
+            },
         },
-    },
-}
+    }
 
 
 def _description(budget: Budget) -> str:
     return (
-        "Use the user's mouse and keyboard in their open KiCad window for ONE small, "
-        "concrete step that no KiCad tool can do (for example: open the Add Symbol "
-        "chooser and place a resistor). Prefer kicad.* tools whenever one fits. The "
+        "Use the user's mouse and keyboard in their open KiCad window, or the window "
+        "they summoned SOL over, for ONE small, concrete step that no integration tool "
+        "or workspace file tool can do (for example: open the Add Symbol chooser and "
+        "place a resistor). Prefer kicad.* and other integration tools, then file "
+        "tools such as machine.write_file, whenever one fits. Never upload, flash or "
+        "deploy with it. The "
         f"user approves each step; it runs {_budget_label(budget)}, and stops if they "
         "touch the mouse or keyboard. `intent` is shown to them word for word: one "
         "plain sentence saying what will change in the window."
@@ -98,8 +135,15 @@ _BY_CODE: Final = {
     "outside_workspace": (
         "stopped — the KiCad in front has a project outside this Solus project open"
     ),
+    "no_workspace": "stopped — link a folder to this project to let SOL use KiCad",
     "agent_unavailable": "stopped — the input helper is not running; check Settings › SOL",
+    "relaunched": "stopped — {app} was restarted; summon SOL over the window again",
+    "window_mismatch": "stopped — a different {app} window is in front",
+    "app_denied": "stopped — SOL can't use the mouse and keyboard in that app",
+    "intent_refused": INTENT_REFUSED,
 }
+#: A window-bound step's save watch cannot tell SOL's save from autosave.
+_WINDOW_SAVED: Final = "stopped — a file in this project changed"
 
 
 def progress_line(progress: Progress) -> str:
@@ -156,16 +200,20 @@ class DriveStepTool:
         record: Record,
         budget: Budget,
         lease: "Callable[[], AbstractAsyncContextManager[None]] | None" = None,
+        front: FrontAppBinding | None = None,
     ) -> None:
         self._run_step = run_step
         self._record = record
         self._budget = budget
         self._lease = lease or _no_lease
+        #: The turn's window, when `front` is offered; only `stored_args` reads it.
+        self._window = front.window() if front is not None else None
+        apps = sorted([*DRIVABLE_APPS, *([FRONT] if self._window is not None else [])])
         self._descriptor = ToolDescriptor(
             name="drive.step",
             description=_description(budget),
             consent_summary=_CONSENT,
-            params=_PARAMS,
+            params=_params(apps),
             returns={"type": "object"},
             requires_confirmation=True,
             # The loop's own wall-clock budget bounds it; this is the backstop.
@@ -176,10 +224,30 @@ class DriveStepTool:
     def descriptor(self) -> ToolDescriptor:
         return self._descriptor
 
+    def stored_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """What the gate parks: the model's arguments, checked like `_parse`, plus
+        — for `front` — the turn's window, copied by Solus code. A model-supplied
+        `window` is invalid_args (the model schema has no such field)."""
+        parsed = self._check(DriveStepArgs, args)
+        if parsed.app != FRONT:
+            return parsed.model_dump()
+        if self._window is None:
+            raise ToolException(
+                "drive.step can use the front app only when SOL was summoned over a "
+                "window it can drive",
+                code=ToolErrorCode.INVALID_ARGS,
+            )
+        return {**parsed.model_dump(), "window": self._window.model_dump()}
+
+    @classmethod
+    def _parse(cls, args: dict[str, Any]) -> DriveStepStoredArgs:
+        """Stored arguments, as the card and the run read them."""
+        return cls._check(DriveStepStoredArgs, args)
+
     @staticmethod
-    def _parse(args: dict[str, Any]) -> DriveStepArgs:
+    def _check[T: DriveStepArgs](model: type[T], args: dict[str, Any]) -> T:
         try:
-            parsed = DriveStepArgs.model_validate(args)
+            parsed = model.model_validate(args)
         except ValidationError:
             raise ToolException(
                 f"drive.step needs an allowlisted app and a one-line intent of at most "
@@ -202,23 +270,37 @@ class DriveStepTool:
                 "on the approval card; describe the step without it",
                 code=ToolErrorCode.INVALID_ARGS,
             )
+        if refused_intent(intent):
+            raise ToolException(INTENT_REFUSED, code=ToolErrorCode.INVALID_ARGS)
         return parsed
 
     async def preview(self, args: dict[str, Any]) -> list[dict[str, Any]]:
         parsed = self._parse(args)
+        heads_up = _row(
+            "Heads up",
+            "SOL will move your mouse and type in this window. "
+            "Move the mouse or press Esc to stop it.",
+        )
+        budget = _row("Budget", _budget_label(self._budget))
+        if parsed.window is None:
+            return [_row("App", _APP_NAMES[parsed.app]), _row("What SOL will do", parsed.intent),
+                    budget, heads_up]  # fmt: skip
+        # The title is untrusted: a card value the gate cleans and React renders as text.
         return [
-            _row("App", _APP_NAMES[parsed.app]),
+            _row("App", parsed.window.name),
+            _row("Window", parsed.window.title or "Untitled window"),
             _row("What SOL will do", parsed.intent),
-            _row("Budget", _budget_label(self._budget)),
-            _row(
-                "Heads up",
-                "SOL will move your mouse and type in this window. "
-                "Move the mouse or press Esc to stop it.",
-            ),
+            _row("Screen", "SOL will see this window"),
+            budget,
+            heads_up,
         ]
 
     async def invoke(self, args: dict[str, Any]) -> dict[str, Any]:
         parsed = self._parse(args)
+        window = parsed.window
+        target: Target = window if window is not None else DRIVABLE_APPS[parsed.app]
+        binding = "project" if window is None else "window"
+        app_name = _APP_NAMES[parsed.app] if window is None else window.name
         trail: list[Progress] = []
         sink = current_output.get()
 
@@ -229,10 +311,11 @@ class DriveStepTool:
 
         async with self._lease():
             await self._safe_record(
-                "drive.session_started", {"app": parsed.app, "budget": _budget_label(self._budget)}
+                "drive.session_started",
+                {"app": parsed.app, "binding": binding, "budget": _budget_label(self._budget)},
             )
             try:
-                result = await self._run_step(parsed.intent, DRIVABLE_APPS[parsed.app], on_progress)
+                result = await self._run_step(parsed.intent, target, on_progress)
             except asyncio.CancelledError:
                 # The registry backstop (or a dropped request) cancelled the
                 # step: the audit trail still ends, then cancellation proceeds.
@@ -241,20 +324,28 @@ class DriveStepTool:
                     landed = "cancelled" if progress is trail[-1] else "ok"
                     await self._safe_record(
                         "drive.action",
-                        {"index": progress.action, "verb": progress.verb, "result": landed},
+                        {
+                            "index": progress.action,
+                            "verb": progress.verb,
+                            "result": landed,
+                            "binding": binding,
+                        },
                     )
-                await self._safe_record("drive.aborted", {"outcome": "cancelled", "code": None})
+                await self._safe_record(
+                    "drive.aborted", {"outcome": "cancelled", "code": None, "binding": binding}
+                )
                 await self._safe_record(
                     "drive.session_ended",
                     {
                         "app": parsed.app,
+                        "binding": binding,
                         "actions": len(trail),
                         "outcome": "cancelled",
                         "code": None,
                     },
                 )
                 raise
-        await self._record_outcome(parsed.app, result, trail)
+        await self._record_outcome(parsed.app, binding, result, trail)
         if result.outcome == "done":
             return {
                 "outcome": "done",
@@ -264,31 +355,45 @@ class DriveStepTool:
                 # other persisted or streamed value.
                 "summary": redact_text(result.summary),
             }
-        sentence = _BY_CODE.get(result.code or "") or _UNFINISHED[result.outcome].format(
-            code=result.code or "unknown", app=_APP_NAMES[parsed.app]
-        )
+        sentence = (
+            _WINDOW_SAVED
+            if result.outcome == "saved" and window is not None
+            else (_BY_CODE.get(result.code or "") or _UNFINISHED[result.outcome])
+        ).format(code=result.code or "unknown", app=app_name)
         noun = "action" if result.actions == 1 else "actions"
         raise ToolException(
             f"Drive step {sentence} after {result.actions} {noun}.",
             code=ToolErrorCode.TOOL_ERROR,
         )
 
-    async def _record_outcome(self, app: str, result: StepOutcome, trail: list[Progress]) -> None:
+    async def _record_outcome(
+        self, app: str, binding: str, result: StepOutcome, trail: list[Progress]
+    ) -> None:
+        """ADR-011 events: `app` is kicad|front and `binding` project|window —
+        never a bundle id, app name or title (sol-drive.md §2.2)."""
         failed = result.outcome != "done"
         for progress in trail:
             refused = progress.action == result.failed_action
             code = result.code if refused and result.code else "ok"
             await self._safe_record(
-                "drive.action", {"index": progress.action, "verb": progress.verb, "result": code}
+                "drive.action",
+                {
+                    "index": progress.action,
+                    "verb": progress.verb,
+                    "result": code,
+                    "binding": binding,
+                },
             )
         if failed:
             await self._safe_record(
-                "drive.aborted", {"outcome": result.outcome, "code": result.code}
+                "drive.aborted",
+                {"outcome": result.outcome, "code": result.code, "binding": binding},
             )
         await self._safe_record(
             "drive.session_ended",
             {
                 "app": app,
+                "binding": binding,
                 "actions": result.actions,
                 "seconds": result.seconds,
                 "outcome": result.outcome,
