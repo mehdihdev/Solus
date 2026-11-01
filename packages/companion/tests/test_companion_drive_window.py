@@ -186,19 +186,21 @@ async def test_without_a_workspace_act_still_needs_the_identify_bind(tmp_path: P
     assert calls(tmp_path) == []
 
 
-# --- identify: documentDir stays local -----------------------------------------------------
+# --- identify: documentDir and title stay local --------------------------------------------
 
 
-async def test_identify_is_forwarded_without_document_dir(tmp_path: Path) -> None:
+async def test_identify_is_forwarded_without_document_dir_or_title(tmp_path: Path) -> None:
     server = server_for(stepping_helper(tmp_path, window_front("sub")))
     result = await server.call_tool("identify", {})
     assert not result.isError
     assert result.structuredContent is not None
     front = result.structuredContent["front"]
     assert "documentDir" not in front
-    expected = {k: v for k, v in window_front("sub").items() if k != "documentDir"}
+    assert "title" not in front
+    expected = {k: v for k, v in window_front("sub").items() if k not in ("documentDir", "title")}
     assert front == expected
     assert "documentDir" not in text_of(result)
+    assert TITLE not in text_of(result)  # the window title never leaves the machine
     assert "sub" not in text_of(result).replace("subdir", "")  # the folder never leaves
 
 

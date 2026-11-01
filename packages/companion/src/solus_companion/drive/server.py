@@ -131,12 +131,17 @@ def _target(args: CaptureArgs | ActArgs) -> list[str]:
     return argv if args.pid is None else [*argv, "--pid", str(args.pid)]
 
 
+#: `front` keys that never leave this machine: the API binds from the stored card
+#: args, never from identify's title (sol-drive.md §2.2).
+_LOCAL_FRONT_KEYS = frozenset({"documentDir", "title"})
+
+
 def _forwarded(reply: dict[str, Any]) -> dict[str, Any]:
-    """The identify reply for the cloud: `front.documentDir` stays on this machine."""
+    """The identify reply for the cloud: `front.documentDir` and `front.title` stay here."""
     front = reply.get("front")
-    if not isinstance(front, dict) or "documentDir" not in front:
+    if not isinstance(front, dict) or _LOCAL_FRONT_KEYS.isdisjoint(front):
         return reply
-    return {**reply, "front": {k: v for k, v in front.items() if k != "documentDir"}}
+    return {**reply, "front": {k: v for k, v in front.items() if k not in _LOCAL_FRONT_KEYS}}
 
 
 def act_argv(args: ActArgs) -> list[str]:

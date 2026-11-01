@@ -21,7 +21,6 @@ An unfinished step (the user took over, budget used, a refusal) raises a
 import asyncio
 import logging
 import re
-import unicodedata
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Final, Literal
@@ -30,7 +29,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from solus_api.agent.command_output import current_output
 from solus_api.agent.drive.binding import FrontAppBinding, WindowBinding
-from solus_api.agent.drive.executor import Budget, Progress, StepOutcome, Target, refused_intent
+from solus_api.agent.drive.executor import (
+    Budget,
+    Progress,
+    StepOutcome,
+    Target,
+    refused_intent,
+    visible_text,
+)
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import redact_text
@@ -161,25 +167,6 @@ def _budget_label(budget: Budget) -> str:
     return f"up to {budget.max_actions} actions · {span}"
 
 
-#: Letters that render as nothing (Hangul fillers, Khmer vowel inherents…).
-_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e\u2800")
-#: Format, private-use, unassigned, surrogate, separators and combining marks:
-#: none can be shown verbatim on a card a person reads.
-_HIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me"})
-
-
-def _visible_text(text: str) -> bool:
-    """Every character renders as itself: NFC, plain spaces only, nothing hidden."""
-    if unicodedata.normalize("NFC", text) != text:
-        return False
-    return all(
-        (ch == " " or unicodedata.category(ch) != "Zs")
-        and unicodedata.category(ch) not in _HIDDEN_CATEGORIES
-        and ch not in _INVISIBLE_LETTERS
-        for ch in text
-    )
-
-
 @asynccontextmanager
 async def _no_lease() -> AsyncIterator[None]:
     yield
@@ -192,6 +179,10 @@ def _row(label: str, value: str) -> dict[str, Any]:
 class DriveStepTool:
     """One approved, bounded drive step. Built per turn by the runtime only when
     the requesting user's companion advertises the internal drive tools."""
+
+    #: The gate validates a parked call's stored arguments (with the Solus-stamped
+    #: `window`) against this at decide time; never shown to the model.
+    stored_params: Final = DriveStepStoredArgs.model_json_schema()
 
     def __init__(
         self,
@@ -259,7 +250,7 @@ class DriveStepTool:
         # and redacts secret-shaped text, while the loop would get the raw intent.
         # Anything the card would alter is refused outright.
         intent = parsed.intent
-        if not _visible_text(intent) or "  " in intent or intent != intent.strip():
+        if not visible_text(intent) or "  " in intent or intent != intent.strip():
             raise ToolException(
                 "drive.step's intent must be plain visible text, single-spaced",
                 code=ToolErrorCode.INVALID_ARGS,

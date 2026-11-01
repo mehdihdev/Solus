@@ -213,7 +213,8 @@ family matches `com.google.Chrome.canary`, `com.google.Chrome.beta` and Chrome's
   `com.googlecode.iterm2`, `dev.warp.Warp-Stable`, `dev.warp.Warp-Preview`,
   `com.mitchellh.ghostty`, `net.kovidgoyal.kitty`, `org.alacritty`, `com.github.wez.wezterm`,
   `co.zeit.hyper`; script runners, which are shells by another name: `com.apple.ScriptEditor2`,
-  `com.apple.Automator`, `com.apple.shortcuts`.
+  `com.apple.Automator`, `com.apple.shortcuts`, `com.latenightsw.ScriptDebugger8` (Script Debugger).
+- **General-purpose hosts** (they open and run anything — apps, scripts, installers): `com.apple.finder`.
 - **Password managers and credential prompts:** `com.1password.1password`, `com.agilebits.onepassword7`,
   `com.bitwarden.desktop`, `com.dashlane.dashlanephonefinal` (Dashlane's macOS app is the Catalyst build of
   its iOS app and keeps that id), `com.lastpass.LastPass`, `org.keepassxc.keepassxc`,
@@ -297,7 +298,9 @@ family matches `com.google.Chrome.canary`, `com.google.Chrome.beta` and Chrome's
 exists and `SOLUS_COMPANION_DRIVE=1` — **no longer only with a linked workspace** (the `NO_WORKSPACE`
 off-reason is removed). `capture` and `act` argument models gain `pid: int | None` (1…2³¹−1), passed
 as `--pid`; `--within` is added only when a workspace is linked. From `identify` the companion keeps
-`front.documentDir` for itself and forwards the reply without it. The **saved-file watch**:
+`front.documentDir` and `front.title` for itself and forwards the reply without them (the window title
+never reaches the cloud from `identify`; the API binds from the stored card args, and `Identity` carries
+no title). The **saved-file watch**:
 
 | Situation                                              | Watch                                                                                                                                                                                           |
 | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -362,8 +365,13 @@ claiming SOL saved it.
   What SOL will do (the intent, verbatim), Screen (`SOL will see this window`), Budget
   (`up to 15 actions · 2 min`), Heads up (as for KiCad). Nothing is captured before the user confirms.
 - **Intent refusal.** `drive.step` refuses — at parse, so no card is parked, and again in the executor —
-  an intent containing, case-insensitively, a word starting with `upload`, `flash` or `deploy`
-  (`intent_refused`; for every app). **Residual (recorded):** an in-window button with such an effect
+  an intent containing a word starting with `upload`, `flash` or `deploy`, matched after Unicode NFKC
+  normalization and casefolding (so fullwidth and ligature forms such as `ｕｐｌｏａｄ` or `ﬂash` count),
+  and any intent with a character outside visible text (format, control, combining, private-use,
+  invisible letters — so `de<ZWSP>ploy` cannot split a stem); one shared check (`refused_intent`) serves
+  both places (`intent_refused`; for every app; at parse a hidden character is reported as the
+  `invalid_args` "plain visible text" refusal). Cross-script look-alikes (e.g. Cyrillic `а` in
+  `аpload`) are not folded by NFKC and fall under the residual below. **Residual (recorded):** an in-window button with such an effect
   (e.g. an IDE's Upload toolbar button, a slicer's "send to printer") is reachable by a click whose
   intent avoids those words; mitigated by per-step approval, the loop's system prompt ("never upload,
   flash, deploy, send or print") and the live A3 strip.

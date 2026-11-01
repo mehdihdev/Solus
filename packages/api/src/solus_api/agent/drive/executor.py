@@ -2,8 +2,9 @@
 
 Order is fixed by Solus code, never by the model:
 
-0. refuse — an intent with a word starting upload / flash / deploy never runs
-   (sol-drive.md §2.2; the tool refuses it at parse too);
+0. refuse — an intent with a word starting upload / flash / deploy (after NFKC
+   and casefold), or with any hidden character, never runs (sol-drive.md §2.2;
+   the tool refuses it at parse too, through the same `refused_intent`);
 1. bind — wait (briefly) for the target to be frontmost, check the OS grants,
    and fix `{bundle, pid, window}` BEFORE any model sees a pixel. A project-bound
    target is a set of bundle ids (KiCad); a window-bound one is the exact window
@@ -25,6 +26,7 @@ import asyncio
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, NoReturn, Protocol
@@ -71,15 +73,38 @@ _ERROR_CODES: Final = frozenset(
 _FINISHED: Final = frozenset({"end_turn", "stop_sequence"})
 SUMMARY_CAP: Final = 500
 _FOCUS_POLL_SECONDS: Final = 0.25
-#: sol-drive.md §2.2: a word starting with upload, flash or deploy, any case.
-_REFUSED_INTENT: Final = re.compile(r"(?<!\w)(?:upload|flash|deploy)", re.IGNORECASE)
+#: sol-drive.md §2.2: a word starting with upload, flash or deploy, matched on
+#: the NFKC-normalized, casefolded intent (so fullwidth and ligature forms count).
+_REFUSED_INTENT: Final = re.compile(r"(?<!\w)(?:upload|flash|deploy)")
+#: Letters that render as nothing (Hangul fillers, Khmer vowel inherents…).
+_INVISIBLE_LETTERS: Final = frozenset("\u115f\u1160\u3164\uffa0\u17b4\u17b5\u180e\u2800")
+#: Format, private-use, unassigned, surrogate, separators and combining marks:
+#: none can be shown verbatim on a card a person reads.
+_HIDDEN_CATEGORIES: Final = frozenset({"Cc", "Cf", "Co", "Cn", "Cs", "Zl", "Zp", "Mn", "Me"})
+
+
+def visible_text(text: str) -> bool:
+    """Every character renders as itself: NFC, plain spaces only, nothing hidden."""
+    if unicodedata.normalize("NFC", text) != text:
+        return False
+    return all(
+        (ch == " " or unicodedata.category(ch) != "Zs")
+        and unicodedata.category(ch) not in _HIDDEN_CATEGORIES
+        and ch not in _INVISIBLE_LETTERS
+        for ch in text
+    )
+
 
 #: What a step binds to: project-bound bundle ids, or the confirmed window.
 Target = frozenset[str] | WindowBinding
 
 
 def refused_intent(intent: str) -> bool:
-    return _REFUSED_INTENT.search(intent) is not None
+    """A hidden character could split a stem past the match, so it refuses too."""
+    if not visible_text(intent):
+        return True
+    folded = unicodedata.normalize("NFKC", intent).casefold()
+    return _REFUSED_INTENT.search(folded) is not None
 
 
 SYSTEM_PROMPT: Final = """\

@@ -563,6 +563,36 @@ async def test_upload_flash_and_deploy_intents_are_refused_for_every_app(intent:
 
 @pytest.mark.parametrize(
     "intent",
+    ["\uff55\uff50\uff4c\uff4f\uff41\uff44 the sketch", "\uff26lash it", "\ufb02ash the board"],
+)
+async def test_compatibility_forms_of_the_stems_are_refused(intent: str) -> None:
+    runner = Runner(outcome())
+    t = front_tool(runner)
+    for args in ({"app": "kicad", "intent": intent}, {"app": "front", "intent": intent}):
+        with pytest.raises(ToolException) as caught:
+            t.stored_args(args)
+        assert caught.value.code is ToolErrorCode.INVALID_ARGS
+        assert "can't upload, flash or deploy" in caught.value.message
+    with pytest.raises(ToolException):
+        await t.invoke({"app": "kicad", "intent": intent})
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("intent", ["de\u200bploy it", "\u2060deploy", "fla\u00adsh it"])
+async def test_stems_split_by_hidden_characters_are_refused(intent: str) -> None:
+    runner = Runner(outcome())
+    t = front_tool(runner)
+    for args in ({"app": "kicad", "intent": intent}, {"app": "front", "intent": intent}):
+        with pytest.raises(ToolException) as caught:
+            t.stored_args(args)
+        assert caught.value.code is ToolErrorCode.INVALID_ARGS
+    with pytest.raises(ToolException):
+        await t.invoke({"app": "kicad", "intent": intent})
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "intent",
     ["Place R1 near the reflash header", "Set the infill to 20%", "Open the preupload checklist"],
 )
 def test_words_that_only_contain_the_refused_stems_still_pass(intent: str) -> None:

@@ -26,7 +26,9 @@ public enum DeniedApps {
         // Terminals, shells and script runners
         "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp-Preview",
         "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty", "com.github.wez.wezterm", "co.zeit.hyper",
-        "com.apple.ScriptEditor2", "com.apple.Automator", "com.apple.shortcuts",
+        "com.apple.ScriptEditor2", "com.apple.Automator", "com.apple.shortcuts", "com.latenightsw.ScriptDebugger8",
+        // General-purpose hosts that open and run anything
+        "com.apple.finder",
         // Password managers, credential and consent prompts
         "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
         "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",

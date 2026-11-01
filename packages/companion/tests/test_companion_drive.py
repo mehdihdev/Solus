@@ -48,10 +48,10 @@ OK_IDENTIFY = {
         "documentDir": None,
     },
 }
-#: What the cloud sees: `front.documentDir` stays on the machine (§2.2).
+#: What the cloud sees: `front.documentDir` and `front.title` stay on the machine (§2.2).
 OK_IDENTIFY_FORWARDED = {
     **OK_IDENTIFY,
-    "front": {k: v for k, v in OK_IDENTIFY["front"].items() if k != "documentDir"},
+    "front": {k: v for k, v in OK_IDENTIFY["front"].items() if k not in ("documentDir", "title")},
 }
 
 

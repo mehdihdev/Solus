@@ -9,7 +9,13 @@ from typing import Any
 import pytest
 from solus_api.agent.drive.actions import TOOLSET, ActRequest, Frame
 from solus_api.agent.drive.binding import WindowBinding
-from solus_api.agent.drive.executor import SYSTEM_PROMPT, Budget, DriveExecutor, Progress
+from solus_api.agent.drive.executor import (
+    SYSTEM_PROMPT,
+    Budget,
+    DriveExecutor,
+    Progress,
+    refused_intent,
+)
 from solus_api.agent.drive.port import ActDone, DriveRefusal, Identity, Shot
 from solus_api.orchestration.providers import ToolUse
 
@@ -586,6 +592,46 @@ async def test_kicad_is_never_bound_by_a_front_step_or_vice_versa() -> None:
 @pytest.mark.parametrize("target", [KICAD, WINDOW])
 @pytest.mark.parametrize("intent", ["Upload the sketch", "re-flash it", "DEPLOY now"])
 async def test_the_executor_refuses_upload_flash_deploy_before_binding(
+    target: Any, intent: str
+) -> None:
+    port, model = FakePort(identities=[front(), kicad()]), FakeModel([click((1, 1))])
+    outcome = await executor(port, model)[0].run(intent, target)
+    assert (outcome.outcome, outcome.code, outcome.actions) == ("refused", "intent_refused", 0)
+    assert port.identify_calls == 0 and port.captures == 0 and model.calls == []
+
+
+#: Fullwidth, compatibility ligatures, mixed case and hidden characters around
+#: the refused stems (security review, SOLUSDEV-319): NFKC + casefold first.
+DISGUISED_INTENTS: list[str] = [
+    "\uff55\uff50\uff4c\uff4f\uff41\uff44 the sketch",  # fullwidth "upload"
+    "\uff26lash it",  # fullwidth F + "lash"
+    "\ufb02ash the board",  # "fl" ligature
+    "UPLOAD now",
+    "de\u200bploy it",  # zero-width space inside the stem
+    "\u2060deploy",  # word joiner before it
+    "fla\u00adsh it",  # soft hyphen
+    "up\u034fload",  # combining grapheme joiner
+]
+
+
+@pytest.mark.parametrize("intent", DISGUISED_INTENTS)
+def test_refused_intent_sees_through_compatibility_forms_and_hidden_characters(
+    intent: str,
+) -> None:
+    assert refused_intent(intent)
+
+
+@pytest.mark.parametrize(
+    "intent",
+    ["Place R1 near the reflash header", "Open the preupload checklist", "Set infill to 20\uff05"],
+)
+def test_refused_intent_keeps_the_narrow_stem_rule(intent: str) -> None:
+    assert not refused_intent(intent)
+
+
+@pytest.mark.parametrize("target", [KICAD, WINDOW])
+@pytest.mark.parametrize("intent", DISGUISED_INTENTS)
+async def test_the_executor_refuses_disguised_stems_before_binding(
     target: Any, intent: str
 ) -> None:
     port, model = FakePort(identities=[front(), kicad()]), FakeModel([click((1, 1))])

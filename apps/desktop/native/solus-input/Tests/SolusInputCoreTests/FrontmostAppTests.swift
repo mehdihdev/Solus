@@ -37,6 +37,7 @@ final class AppPolicyTests: XCTestCase {
         for id in ["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp-Preview",
                    "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty", "com.github.wez.wezterm",
                    "co.zeit.hyper", "com.apple.ScriptEditor2", "com.apple.Automator", "com.apple.shortcuts",
+                   "com.latenightsw.ScriptDebugger8", "com.apple.finder",
                    "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
                    "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",
                    "com.apple.keychainaccess", "com.apple.Passwords", "com.apple.SecurityAgent",
@@ -71,6 +72,13 @@ final class AppPolicyTests: XCTestCase {
                    "com.brave.BrowserX"] {
             XCTAssertFalse(DeniedApps.denies(id), id)
         }
+    }
+
+    func testFinderIsDeniedAsAGeneralPurposeHost() {
+        // Finder opens and runs anything (apps, scripts, installers): a code-execution host.
+        XCTAssertTrue(DeniedApps.denies("com.apple.finder"))
+        XCTAssertEqual(AppPolicy.classify("com.apple.finder"), .denied)
+        XCTAssertEqual(AppPolicy.classify("com.apple.finder.Open-iCloudDrive"), .windowBound)
     }
 
     func testExactEntriesAreByteExactAndNotFamilies() {
