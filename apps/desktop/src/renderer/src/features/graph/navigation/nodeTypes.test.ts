@@ -26,7 +26,7 @@ describe('NODE_TYPES', () => {
       [edge('f', 'p', 'contains'), edge('f', 'p', 'observed')]
     )
     expect(index.children.get('f') ?? []).toEqual([])
-    expect(index.roots.map((entity) => entity.id)).toEqual(['f', 'p'])
+    expect(index.roots.map((entity) => entity.id)).toEqual(['p'])
   })
 
   it('a member contains its machines', () => {

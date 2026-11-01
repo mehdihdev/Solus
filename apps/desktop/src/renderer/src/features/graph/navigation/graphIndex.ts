@@ -22,6 +22,10 @@ export function compareNodes(a: Entity, b: Entity): number {
   )
 }
 
+/** Types that badge other cards instead of being cards (a finding marks its subjects). They stay
+ * in `entities` for lookups but never become roots, children or drawn links. */
+const OFF_CANVAS: ReadonlySet<string> = new Set(['finding'])
+
 function rawIndex(entities: readonly Entity[], relations: readonly Relation[]) {
   const byId = new Map(entities.map((entity) => [entity.id, entity]))
   const outgoing = new Map<string, Relation[]>()
@@ -77,12 +81,19 @@ export function buildNavigationIndex(
   relations: readonly Relation[],
   registry: NodeTypeRegistry = NODE_TYPES
 ): NavigationIndex {
-  const { raw, valid } = rawIndex(entities, relations)
+  const { raw, valid: linked } = rawIndex(entities, relations)
   const forest = new ContainmentForest(raw)
-  const sorted = [...raw.entities.values()].sort(compareNodes)
+  const onCanvas = (id: string): boolean => !OFF_CANVAS.has(raw.entities.get(id)?.type ?? '')
+  const valid = linked.filter(
+    (edge) => onCanvas(edge.from_entity_id) && onCanvas(edge.to_entity_id)
+  )
+  const sorted = [...raw.entities.values()].filter((e) => onCanvas(e.id)).sort(compareNodes)
 
   for (const entity of sorted) {
-    const candidates = [...registry.children(entity, raw)].sort((a, b) => a.id.localeCompare(b.id))
+    const candidates = registry
+      .children(entity, raw)
+      .filter((edge) => onCanvas(edge.from_entity_id) && onCanvas(edge.to_entity_id))
+      .sort((a, b) => a.id.localeCompare(b.id))
     for (const relation of candidates) forest.add(entity, relation)
   }
   for (const list of forest.children.values()) list.sort(compareNodes)
