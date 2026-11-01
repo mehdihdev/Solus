@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from livebench.hardware.actuation import Actuator
     from livebench.hardware.connection import RobotConnection
     from livebench.hardware.replay import Recording
+    from livebench.setpoint import SetpointMove, SetpointPreview
     from livebench.teleop import TeleopLoop, TeleopPreview
 
 __all__ = [
@@ -73,6 +74,10 @@ __all__ = [
     "teleop_preview",
     "teleop_start",
     "robot_release",
+    "setpoint_preview",
+    "setpoint_apply",
+    "setpoint_status",
+    "setpoint_stop",
 ]
 
 logger = logging.getLogger(__name__)
@@ -672,3 +677,98 @@ async def teleop_start(
 def robot_release(conn: Any) -> None:
     """Torque off on the robot's calibrated joints. BLOCKING."""
     _actuator(conn).release()
+
+
+# ── SOL setpoint (SOLUSDEV-319, ADR-014 amendment 2026-10-31) ───────────────────
+
+
+def _setpoint_read(conn: Any, joint: str, target: float) -> "SetpointPreview":
+    """Fresh refusal checks + clamp on the robot's bus, with livebench errors translated into
+    the API's (the legal dependency direction, as for teleop). BLOCKING."""
+    from solus_api.livebench.setpoint import SetpointNotFoundError, SetpointRefusedError
+
+    from livebench.setpoint import JointNotFoundError, SetpointRefusalError, preview
+
+    actuator = _actuator(conn)
+    try:
+        return preview(actuator, joint, target)
+    except SetpointRefusalError as exc:
+        raise SetpointRefusedError(exc.code, unit=exc.unit) from None
+    except JointNotFoundError:
+        raise SetpointNotFoundError("joint") from None
+
+
+def setpoint_preview(conn: Any, joint: str, target: float) -> dict[str, Any]:
+    """The joint's present value and the clamped target, wire-shaped. BLOCKING."""
+    from livebench.setpoint import DEFAULT_MAX_STEP_TICKS
+
+    result = _setpoint_read(conn, joint, target)
+    return {
+        "address": result.address,
+        "joint": result.signal,
+        "unit": result.unit,
+        "current": result.current_value,
+        "target": result.target_value,
+        "requested": result.requested,
+        "clamped": result.clamped,
+        "goal_ticks": result.goal_ticks,
+        "max_step_ticks": DEFAULT_MAX_STEP_TICKS,
+        "max_step": result.max_step_value,
+    }
+
+
+class _SetpointHandle:
+    """One running move as the API sees it: no livebench types cross."""
+
+    def __init__(self, move: "SetpointMove", result: "SetpointPreview") -> None:
+        self._move = move
+        self.goal_ticks = result.goal_ticks
+        self.target = result.target_value
+        self.unit = result.unit
+        self.clamped = result.clamped
+
+    @property
+    def state(self) -> str:
+        return self._move.state
+
+    @property
+    def reason(self) -> str | None:
+        return self._move.reason
+
+    async def stop(self, reason: str = "user") -> None:
+        await self._move.stop(reason)
+
+
+async def setpoint_apply(
+    conn: Any,
+    joint: str,
+    target: float,
+    *,
+    on_ended: Callable[[str], object],
+    guard: Callable[[], str | None] | None = None,
+    rate_hz: float | None = None,
+) -> _SetpointHandle:
+    """Re-check every bus refusal on fresh readings, then start ONE bounded move."""
+    from livebench.setpoint import DEFAULT_RATE_HZ, SetpointMove
+
+    result = await asyncio.to_thread(_setpoint_read, conn, joint, target)
+    move = SetpointMove(
+        _actuator(conn),
+        result.address,
+        result.goal_ticks,
+        result.span,
+        rate_hz=rate_hz or DEFAULT_RATE_HZ,
+        guard=guard,
+        on_ended=on_ended,
+    )
+    move.start()
+    return _SetpointHandle(move, result)
+
+
+def setpoint_status(handle: _SetpointHandle) -> dict[str, Any]:
+    return {"state": handle.state, "reason": handle.reason}
+
+
+async def setpoint_stop(handle: _SetpointHandle, reason: str = "user") -> None:
+    """End the move; the joint holds its last goal with torque on."""
+    await handle.stop(reason)

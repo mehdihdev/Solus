@@ -52,3 +52,21 @@ class Actuator(Protocol):
     def release(self) -> None:
         """Torque off on every joint."""
         ...
+
+
+class TorqueReader(Protocol):
+    """The OPTIONAL torque-enable read (SOLUSDEV-319 setpoint, ADR-014 amendment 2026-10-31).
+
+    An actuator that implements it lets a setpoint refuse `torque_off` from the bus instead of
+    guessing; one that does not is refused as `uncalibrated` (docs/api/bench-view.md §6.2)."""
+
+    def torque_enabled(self) -> dict[int, bool]:
+        """Torque-enable per address; a silent servo is absent. Blocking (reads the bus)."""
+        ...
+
+
+def torque_state(actuator: object) -> dict[int, bool] | None:
+    """The actuator's torque-enable map, or None when its driver cannot read torque."""
+    if not callable(getattr(actuator, "torque_enabled", None)):
+        return None
+    return dict(actuator.torque_enabled())  # type: ignore[attr-defined]
