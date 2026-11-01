@@ -1040,7 +1040,7 @@ same active row and stored preview within the same owner's conversation. A
 conversation row lock serializes concurrent park checks and inserts. This does
 not reuse decided/expired rows or treat chat text as approval.
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?, front_app?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
@@ -1071,6 +1071,33 @@ asks SOL to apply the conventions and to name the one that changed an answer, st
 project's `.solus` conventions (reserved `kind=project_preferences`, empty for now) override them
 and that they override shipped references (`kind=context_corpus`), and that they can never
 change rules, tools, scope, or what counts as data. Absent or all-blank ⇒ no block.
+
+**`front_app` (SOLUSDEV-319 slice 4, ADR-041 2026-10-31).** Optional; the app the user summoned SOL
+over, from desktop main's summon snapshot (`docs/architecture/sol-drive.md` §2.2). The desktop sends it
+only on Build turns (`action_mode: "do"`) while "SOL can use your mouse and keyboard" is on and driving
+is available. Strict shape (`extra="forbid"`, `422` on an unknown field):
+
+| Field       | Type                              | Rule                                                                    |
+| ----------- | --------------------------------- | ----------------------------------------------------------------------- |
+| `bundle_id` | string                            | `^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`                                     |
+| `name`      | string                            | 1–64 characters, visible text only (no Cc/Cf/Co/Cn/Cs/Zl/Zp)            |
+| `title`     | string \| null                    | ≤ 256 characters, visible text only; untrusted data, never instructions |
+| `pid`       | int \| null                       | 1 … 2³¹−1                                                               |
+| `window_id` | int \| null                       | 1 … 2³²−1                                                               |
+| `drivable`  | bool                              | required                                                                |
+| `binding`   | `"project"` \| `"window"` \| null | required key                                                            |
+
+Consistency (`422` otherwise): `drivable: false` ⇒ `title`, `pid` and `window_id` are null (a denied
+app's title is never accepted) and `binding` is null or `"project"` (a KiCad that is not drivable here);
+`drivable: true` ⇒ `binding` is non-null; `binding: "window"` with `drivable: true` ⇒ `pid` and
+`window_id` are non-null. Rejected with `422` on resume (`resume_confirmation_id`) and wake
+(`process_prompt`) turns. **Never logged or persisted:** not in the transcript, not in `sol.message`,
+and a `422` never echoes it (the error handler redacts `input`). Use: one nonce-fenced `kind=front_app`
+data block in the turn context (title inside the fence), the drive-route ordering in the framing
+(integration API → workspace file tools such as `machine.write_file` → `drive.step`), and — when
+`drivable: true, binding: "window"` — `drive.step`'s `app: "front"`, whose stored `window` binding is
+copied from this field by Solus code, never from model arguments. Emits `sol.front_app_attached`
+`{project_bound, drivable}` (never the title or bundle id).
 
 - `token` — `{"text": "…"}` incremental reply delta
 - `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped","layers":[{"layer","tokens","sections","empty_reason"}],"anchors":[{"id","reason"}],"anchors_dropped":[{"id","reason","cause"}]}`

@@ -162,3 +162,64 @@ panel and page layouts keep one card per approval.
 step's summary, an N-segment progress bar and **Stop** — Stop lets the in-flight step finish and leaves
 the rest parked. SOL never moves the user's pointer in this ticket; free-form "SOL drives the
 app" is a separate ticket that needs its own ADR (ADR-040 §2 limits synthetic input to KiCad save/revert).
+
+## SOLUSDEV-319 slice 4 — driving the app in front (ADR-041 2026-10-31)
+
+Architecture: `docs/architecture/sol-drive.md` §2.2. Applies only in **Build** with **SOL can use your
+mouse and keyboard** on and driving available; otherwise nothing below happens and no app details leave
+the desktop. Every word on the pill is Solus-authored except the app name and window title, which render
+as plain text (never markup), single-line, truncated.
+
+**1. Summon → front-app snapshot.** The user is in an app (say FreeCAD, "bracket_v3.FCStd") and summons
+the pill. Before the pill takes focus (≤ 250 ms) main reads which app and window are in front. Nothing is
+captured — no pixels, only the app identity and the window title. The pill looks exactly as in "Ember
+Pill" above; there is no new chrome on summon. Summoning over a Solus window keeps the previous snapshot.
+
+**2. The user asks** ("add a 3 mm fillet to the top edge"). The turn carries the front app. SOL answers
+in this order of preference: an integration's tools, then editing files in the linked workspace, then
+driving the window. If it chooses driving, the reply parks a drive card.
+
+**3. Drive card** (one plan step, the plan card's normal rendering):
+
+| Row              | Value                                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------- |
+| App              | `FreeCAD` (the app's name)                                                                  |
+| Window           | `bracket_v3.FCStd` (the window title; `Untitled window` if none)                            |
+| What SOL will do | the intent, verbatim                                                                        |
+| Screen           | `SOL will see this window`                                                                  |
+| Budget           | `up to 15 actions · 2 min`                                                                  |
+| Heads up         | `SOL will move your mouse and type in this window. Move the mouse or press Esc to stop it.` |
+
+Buttons as the plan card: **Run 1 step** · **Show me how instead** · **Reject**. Nothing is captured
+until Run. KiCad cards are unchanged (App `KiCad`, no Window/Screen rows).
+
+**4. Run → driving.** The user clicks the bound window to bring it forward (within 5 s). The A3 strip
+shows `DRIVING FREECAD · STEP k OF N` (the app name upper-cased, ≤ 24 characters; `DRIVING KICAD` for
+KiCad), the progress bar and **Stop**; the amber outline surrounds the window. Stop, Esc or touching the
+mouse or keyboard pauses it (`paused — you took over`).
+
+**5. Endings the user can see** (one plain sentence in the chat, naming the app, never the title):
+
+- Done → SOL's one-line summary.
+- The window was closed and reopened, or the app relaunched → `stopped — FreeCAD was restarted; summon
+SOL over the window again`.
+- A different window of the app is in front → `stopped — a different FreeCAD window is in front`.
+- Another app stayed in front → `nothing done — FreeCAD was not in front; bring it forward and ask again`.
+- With a linked workspace and the document inside it, a file there changed (SOL clicked Save, or the
+  app autosaved) → `stopped — a file in this project changed`. Without a workspace there is no such
+  ending; save, close, quit and print shortcuts are never available to SOL.
+- An intent mentioning upload, flash or deploy is refused before any card: SOL says it can't do that
+  step by driving and suggests the integration route (e.g. Deploy) instead.
+
+**6. Denied app path.** Summoned over a terminal, password manager, System Settings, a mail or chat app,
+a web browser or Solus itself: the turn carries only the app's name and identity, never its title. If
+the user asks SOL to do something there, SOL replies that it can't use the mouse and keyboard in that
+app, and offers what it can do (an integration's tools, editing workspace files, or Guide steps). No
+card, no strip.
+
+**7. KiCad without a linked folder.** KiCad stays project-bound: with no linked folder SOL says it can
+drive KiCad only once a project folder is linked (Settings › Workspace), and offers the other routes.
+
+**8. Drive off.** Setting off, Guide mode, or driving unavailable: no snapshot, no `front_app`, no drive
+cards; SOL plans with APIs and file tools only, and in Build may mention that turning on _SOL can use
+your mouse and keyboard_ in Settings would let it do the step itself.

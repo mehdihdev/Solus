@@ -185,6 +185,212 @@ user's session to get a drive step from the cloud; a user LaunchAgent that claim
 first sees main's requests (the workspace path, typed text) but cannot answer them (the client requires
 the agent's signature), so drive fails rather than misbehaves.
 
+### 2.2 Frontmost-app driving (SOLUSDEV-319 slice 4, ADR-041 2026-10-31)
+
+Governing text: ADR-041 amendments "frontmost-app driving" and "window-bound driving without a workspace"
+(both 2026-10-31). They replace ADR-041 §3 (the allowlist) and narrow M2. **Where this section and §2–§5
+disagree, this section wins**; the earlier sections describe slices 1–3b. Unchanged: §2 opt-in / Build
+only, §4 budget, §5 vocabulary and checks (secure-field refusal included), §7 kill switch, §9, the team
+policy flag, the XPC transport (§2.1) and main as the agent's only client.
+
+**Three classes of app**, decided by the helper from the window owner's bundle id (never the title):
+
+| Class             | Members                                        | Binding                                                                                | Workspace                                                    |
+| ----------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| **Denied**        | the denylist below, Solus itself, no bundle id | none — never captured, never driven                                                    | —                                                            |
+| **Project-bound** | `org.kicad.kicad`, `org.kicad.eeschema`        | M2: the window's process works at or below `--within` (unchanged §2 check 0)           | **required** (no linked folder ⇒ KiCad is not drivable)      |
+| **Window-bound**  | every other app with a bundle id               | the summon snapshot `{bundleId, pid, windowId}`, re-verified before every `drive.step` | **not required**; when present it only scopes the save watch |
+
+**The denylist** (compiled into `solus-input` as `DeniedApps`; widening or narrowing it is an ADR-041
+amendment; the API and main never decide denial themselves). Matching: the window owner's
+`CFBundleIdentifier`, compared **byte-exact** (case-sensitive) against an entry, or — for the entries
+marked _family_ — equal to the entry or starting with the entry followed by `.` (so `com.google.Chrome`
+family matches `com.google.Chrome.canary`, `com.google.Chrome.beta` and Chrome's PWA shims
+`com.google.Chrome.app.*`, but not `com.google.Chromecast`). An owner with no bundle id, or one not matching
+`^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`, is denied.
+
+- **Terminals and shells** (typing runs commands outside the ADR-031 sandbox): `com.apple.Terminal`,
+  `com.googlecode.iterm2`, `dev.warp.Warp-Stable`, `dev.warp.Warp-Preview`,
+  `com.mitchellh.ghostty`, `net.kovidgoyal.kitty`, `org.alacritty`, `com.github.wez.wezterm`,
+  `co.zeit.hyper`; script runners, which are shells by another name: `com.apple.ScriptEditor2`,
+  `com.apple.Automator`, `com.apple.shortcuts`.
+- **Password managers and credential prompts:** `com.1password.1password`, `com.agilebits.onepassword7`,
+  `com.bitwarden.desktop`, `com.dashlane.dashlanephonefinal` (Dashlane's macOS app is the Catalyst build of
+  its iOS app and keeps that id), `com.lastpass.LastPass`, `org.keepassxc.keepassxc`,
+  `com.apple.keychainaccess`, `com.apple.Passwords` _(family)_; macOS authentication and consent prompts:
+  `com.apple.SecurityAgent`, `com.apple.loginwindow`, `com.apple.coreservices.uiagent`,
+  `com.apple.UserNotificationCenter`.
+- **System Settings and system administration:** `com.apple.systempreferences` _(family — System Settings
+  on macOS 13+ still uses this id; its panes run as extension processes under it)_,
+  `com.apple.settings` _(family: the pane extensions, e.g. `com.apple.settings.PrivacySecurity.extension`)_,
+  `com.apple.SystemSettings` (no shipping app uses it today; listed so a future rename fails closed),
+  `com.apple.ActivityMonitor`, `com.apple.DiskUtility`, `com.apple.installer`.
+- **Mail and messaging:** `com.apple.mail`, `com.microsoft.Outlook`, `com.readdle.smartemail-Mac`,
+  `com.readdle.SparkDesktop`, `org.mozilla.thunderbird`, `com.mimestream.Mimestream`, `com.apple.MobileSMS`,
+  `com.apple.FaceTime`, `com.tinyspeck.slackmacgap`, `com.hnc.Discord`, `com.microsoft.teams2`,
+  `com.microsoft.teams`, `net.whatsapp.WhatsApp`, `ru.keepcoder.Telegram`, `org.telegram.desktop`,
+  `org.whispersystems.signal-desktop`, `us.zoom.xos`.
+- **Web browsers** (browser-hosted tools such as Onshape come later, each by amendment): `com.apple.Safari`,
+  `com.apple.SafariTechnologyPreview`, `com.google.Chrome` _(family)_, `org.chromium.Chromium`,
+  `org.mozilla.firefox`, `org.mozilla.firefoxdeveloperedition`, `org.mozilla.nightly`,
+  `company.thebrowser.Browser` (Arc), `company.thebrowser.dia`, `com.microsoft.edgemac` _(family: Beta, Dev,
+  Canary)_, `com.brave.Browser` _(family: beta, nightly)_, `com.operasoftware.Opera` _(family)_,
+  `com.operasoftware.OperaGX` _(separate entry: it shares the prefix without a dot, so the family rule
+  does not reach it)_, `com.vivaldi.Vivaldi` _(family)_, `com.kagi.kagimacOS` (Orion),
+  `app.zen-browser.zen`.
+- **Solus itself:** `com.solusforge.solus` _(family: the Electron helpers `com.solusforge.solus.helper.*`,
+  the drive agent `com.solusforge.solus.input`, the companion `com.solusforge.solus.companion`)_ — the app
+  id is electron-builder's `appId`; and the dev shell `com.github.Electron` _(family)_, which is what an
+  unpackaged Solus runs as (this also denies any other unpackaged Electron app — accepted).
+
+**Project-bound list** (`ProjectBoundApps`, compiled in; replaces `DrivableApps`): `org.kicad.kicad`,
+`org.kicad.eeschema`. These keep every M2/M3 rule in §2–§4 and still need a linked workspace.
+
+**Helper CLI changes (A1).**
+
+- `--within WS` becomes **optional** on `identify`, `capture` and `act`. When present it is validated as
+  today (§2 "Workspace"). `capture`/`act` with a project-bound `--bundle` and no `--within` are a `usage`
+  refusal; for a window-bound bundle `--within` is accepted and used only for `documentDir` (below).
+- `capture` and `act` take **`--pid P`** (decimal, 1…2³¹−1). It is **required** for a window-bound
+  `--bundle` (`usage` without it) and optional for a project-bound one (checked when given). Checks, in
+  order, before any capture or event: the bundle is not denied (`app_denied`); W exists and is on screen
+  (`window_not_found`); W's owner bundle is B (`window_mismatch`); W's owner pid is P (`pid_mismatch`);
+  for `act`, the frontmost app's pid is P and its front layer-0 window is W (`pid_mismatch` /
+  `window_mismatch`; `not_frontmost` when another bundle is in front). `act` re-checks bundle, pid and
+  window before every posted event (`focus_lost` mid-verb, as today).
+- **`identify` reply** (replaces `allowed`, `app`, `window` and `outsideWorkspace`, which are removed;
+  the companion's outline reads `front.bounds`):
+
+  ```
+  {ok, now, trust:{accessibility, screenRecording}, unsignedDev, front: Front | null}
+
+  Front (drivable)  = {drivable: true, binding: "project"|"window", bundleId, name, pid,
+                       windowId: int|null, title: string|null, bounds: {x,y,width,height}|null,
+                       documentDir: string|null}
+  Front (not drivable) = {drivable: false, bundleId, name, binding: "project"|null,
+                          reason: "denied"|"no_workspace"|"outside_workspace"}
+  ```
+
+  `front` is null when nothing is in front or the owner has no usable bundle id (nothing about it
+  leaves the machine). A **denied** app reports only `bundleId`, `name`, `reason: "denied"` — never a
+  pid, window id, title or bounds. A project-bound app without `--within` reports
+  `reason: "no_workspace"`, and one working outside it `reason: "outside_workspace"`, again with no
+  pid/window/title (another project's window title never leaves the machine — M2). `windowId`, `title`
+  and `bounds` are null when the drivable app has no ordinary window in front (nothing can be bound).
+  `name` is the app's localized name, ≤ 64 scalars, visible text only (the helper drops control/format
+  characters and truncates). `title` is the window title, ≤ 256 scalars, same cleaning, null when the
+  window has none or Screen Recording is not granted. `documentDir` is the bound window's `AXDocument`
+  folder **relative to `--within`** (POSIX, `""` for the workspace root), resolved with `realpath` and
+  byte-compared by whole segment; null when there is no `--within`, the app exposes no `AXDocument`, or
+  the document lies outside the workspace. Never an absolute path.
+
+- **Denied chords for every binding** (`DeniedChords`, checked before the chord allowlist, so a future
+  widening of the allowlist can never admit them; today the allowlist already refuses all of them):
+  save `cmd+s`, `cmd+shift+s`, `cmd+option+s`, `cmd+option+shift+s`; close `cmd+w`, `cmd+shift+w`,
+  `cmd+option+w`; quit `cmd+q`, `cmd+shift+q`, `cmd+option+q`, `cmd+option+shift+q`; print `cmd+p`,
+  `cmd+shift+p`, `cmd+option+p`. Refusal `chord_denied`. Tests pin each one for a window-bound and a
+  project-bound bundle.
+- New refusal codes: `app_denied`, `pid_mismatch` (added to `port.KNOWN_CODES`; `window_mismatch` already
+  exists). `app_not_allowed` is no longer produced (kept in `KNOWN_CODES` for older helpers).
+
+**Companion (A2).** `drive` advertises its tools whenever the platform is macOS, the helper relay
+exists and `SOLUS_COMPANION_DRIVE=1` — **no longer only with a linked workspace** (the `NO_WORKSPACE`
+off-reason is removed). `capture` and `act` argument models gain `pid: int | None` (1…2³¹−1), passed
+as `--pid`; `--within` is added only when a workspace is linked. From `identify` the companion keeps
+`front.documentDir` for itself and forwards the reply without it. The **saved-file watch**:
+
+| Situation                                              | Watch                                                                                                                                                                                           |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| project-bound (KiCad)                                  | unchanged §3 (design files in the workspace)                                                                                                                                                    |
+| window-bound, workspace linked, `documentDir` non-null | every regular file under `<workspace>/<documentDir>` (same exclusions and 10,000-entry cap as §3; `""` = whole workspace): a change ends the step `design_saved`, and `designSaved` is reported |
+| window-bound, workspace linked, `documentDir` null     | off                                                                                                                                                                                             |
+| window-bound, no workspace                             | off — `act` still needs the step's `identify` bind (`not_bound`), but takes no baseline; a step can never report "SOL saved"                                                                    |
+
+Autosave writes count as changes (the watch cannot tell them apart), so with the watch on, an
+autosaving app ends a step as `saved`; the sentence says "a file in this project changed" rather than
+claiming SOL saved it.
+
+**Main: summon snapshot and relay (A3).**
+
+- **Snapshot.** On every summon of the pill (any path), while driving is available and the setting is on,
+  main sends `identify` (with `--within` when the drive child has a workspace) through the agent and
+  shows the pill when it answers or after **250 ms**, whichever is first; a reply arriving after the pill
+  took focus is discarded. The reply's `front` becomes the **front snapshot**, unless it is denied as
+  Solus itself (then the previous snapshot is kept). The snapshot is cleared on drive off, project
+  switch, companion restart and child exit. Main gives the renderer only
+  `{bundleId, name, title, pid, windowId, drivable, binding}` (no bounds, no `documentDir`).
+- **Availability** (§5) no longer needs a linked folder: `no_folder` stops being a reason driving is
+  unavailable and instead means only that KiCad is not drivable (the Settings row says so). The
+  nested-folder rule still makes driving unavailable when a linked folder conflicts.
+- **Relay rule** (extends `relayRefusal`, §5): `identify` is always relayed. `--within`, when the child has
+  a workspace, may appear at most once and must equal it; when the child has none it must be absent.
+  `capture`/`act` whose `--bundle` is project-bound need `--within`. Every other `capture`/`act` needs
+  `--pid`, and `(--bundle, --pid, --window)` must equal the snapshot's `(bundleId, pid, windowId)` with
+  the snapshot `drivable: true, binding: "window"`; otherwise main replies `window_mismatch` (or
+  `usage` for malformed argv) and nothing reaches the agent. A compromised renderer or companion can
+  therefore aim a window-bound step only at the window the user summoned SOL over.
+
+**Turn `front_app` and the API (A4a/A4b).**
+
+- **Sent only while driving is available.** The renderer adds `front_app` to a turn's body only on a
+  Build turn (`action_mode: "do"`), with the setting on and driving available, from main's snapshot
+  (shape: `docs/api/API-implementation.md`, streaming turn). Never on resume or wake turns (422). A
+  denied app is sent as `{bundle_id, name, drivable: false}`; no title, pid or window id ever leaves the
+  desktop for it.
+- **Prompt.** The turn context carries one nonce-fenced `kind=front_app` data block: app name, bundle id,
+  whether SOL can drive it and how it is bound; the title inside the fence as untrusted data. The
+  Solus-authored framing orders the routes: **integration API tools first, then workspace file tools
+  (e.g. `machine.write_file`), then `drive.step`**; for a denied app SOL says it cannot drive that app
+  and offers the other routes. `front_app` never changes the tool set except as below, the mode, or the
+  scope.
+- **`drive.step {app, intent}`**, `app` enum **`kicad | front`**. `front` is offered only when the turn
+  carries a `front_app` with `drivable: true, binding: "window"`; `kicad` keeps today's rules. The model's
+  arguments are validated against that schema (no binding fields — a model-supplied `window` is
+  `invalid_args`); then Solus code copies the turn's `front_app` into the parked call's stored arguments
+  as `window: {bundle_id, name, title, pid, window_id}`. The binding therefore comes **only** from the
+  turn's `front_app`, never from model arguments; the card's rows are built from it, so the decide-time
+  staleness re-check covers it, and execution binds to exactly what was shown.
+- **Bind for `front`** (before any capture): poll `identify` up to the 5 s focus wait. While a Solus
+  window (denied as Solus) or nothing is in front, keep polling. `front` with the stored bundle and pid
+  and window id ⇒ bound. Same bundle, different pid ⇒ end `refused/relaunched`; same bundle and pid,
+  different window ⇒ `refused/window_mismatch`; a denied app ⇒ `refused/app_denied`; any other app
+  until the wait ends ⇒ `not_in_front`. Nothing is captured in any of these. Every `capture` and `act` then
+  carries `pid`. A relaunch or window change mid-step surfaces as the helper's `pid_mismatch` /
+  `window_mismatch` / `focus_lost` and ends the step.
+- **Card rows for `front`:** App (`front_app.name`), Window (the title, escaped like every card value —
+  React text, the preview cleaner's single-line and redaction pass; `Untitled window` when null),
+  What SOL will do (the intent, verbatim), Screen (`SOL will see this window`), Budget
+  (`up to 15 actions · 2 min`), Heads up (as for KiCad). Nothing is captured before the user confirms.
+- **Intent refusal.** `drive.step` refuses — at parse, so no card is parked, and again in the executor —
+  an intent containing, case-insensitively, a word starting with `upload`, `flash` or `deploy`
+  (`intent_refused`; for every app). **Residual (recorded):** an in-window button with such an effect
+  (e.g. an IDE's Upload toolbar button, a slicer's "send to printer") is reachable by a click whose
+  intent avoids those words; mitigated by per-step approval, the loop's system prompt ("never upload,
+  flash, deploy, send or print") and the live A3 strip.
+- New outcome codes: `relaunched`, `intent_refused` (plus the helper's `app_denied`, `pid_mismatch`).
+  Unfinished-step sentences name the app from the stored `window.name` (`{app}`), never the title:
+  `relaunched` → "stopped — {app} was restarted; summon SOL over the window again";
+  `window_mismatch` → "stopped — a different {app} window is in front"; `app_denied` → "stopped — SOL
+  can't use the mouse and keyboard in that app"; `saved` for a window-bound step → "stopped — a file in
+  this project changed"; `intent_refused` (a parse-time `invalid_args`) → "drive.step can't upload, flash
+  or deploy; use the integration's own tools for that".
+
+**Data events (ADR-011).** `drive.session_started` `{app, binding, budget}`, `drive.action`
+`{index, verb, result, binding}`, `drive.aborted` `{outcome, code, binding}`, `drive.session_ended`
+`{app, binding, actions, seconds, outcome, code}` — `app` is `kicad` or `front`, `binding` is
+`project` or `window`; never a bundle id, app name or title. `sol.front_app_attached`
+`{project_bound, drivable}` (booleans) once per turn that carries `front_app`; never the title or the
+bundle id.
+
+**Pill (A5).** The A3 strip reads `DRIVING <APP NAME> · STEP k OF N` with the app name from the
+snapshot, upper-cased, as text, truncated to 24 characters (`KICAD` for KiCad). The wireflow is
+`docs/wireflows/sol-window.md` "SOLUSDEV-319 slice 4".
+
+**Residuals (accepted in the amendments):** typing into a terminal pane inside an allowed app (e.g. VS
+Code's integrated terminal) cannot be detected; with no workspace nothing ties the window to the project
+and a click inside it can still save or change a file outside any project. Both are covered only by
+per-step approval and the live A3 strip.
+
 ## 3. Companion `drive` server (slices 1–2)
 
 `packages/companion/src/solus_companion/drive/` — a `BuiltinServer` like `machine`:
@@ -405,8 +611,15 @@ default off).
    events, red-team; the server wired; the allowlist drafted (human ratifies); bridge-protocol note.
 3. **Done on the branch (2026-10-27):** helper app packaging (signing human), caller check, the setting
    with the nested-folder rule, A3 strip, outline, listener quiet period.
-4. **3b — helper as an XPC agent (ADR-041 amendments C1, 3b, 2026-10-28):** an SMAppService agent
+   3b. **Helper as an XPC agent (ADR-041 amendments C1, 3b, 2026-10-28):** an SMAppService agent
    registered by Solus.app holds the grants and serves only Solus.app's main process over XPC
    (send-time audit tokens, both sides verify requirements); the companion relays through main; the
    packaged companion environment is allowlisted; fuses locked and verified; no dyld entitlement; no
    remote debugging. Then the team ID can be set and release builds can drive.
+4. **Frontmost-app driving (SOLUSDEV-319 slice 4, ADR-041 2026-10-31; §2.2):** A0 these docs;
+   A1 `solus-input` denylist, project-bound list, `--pid`, optional `--within`, the new `identify` reply
+   and pinned denied chords; A2 companion `pid`, drive without a workspace, the `documentDir` watch;
+   A3 desktop main front snapshot at summon and the window-bound relay rule; A4b API `drive.step` app
+   `front` with the stored window binding, bind re-verification, intent refusal, events and red-team;
+   A4a turn `front_app` (schema, prompt block and ordering, `sol.front_app_attached`); A5 pill renderer
+   (`front_app` on Build turns, front card rows, `DRIVING <APP NAME>` strip).

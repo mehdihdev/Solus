@@ -353,6 +353,27 @@ registers them in NO agent tool set; only Solus code dispatches them (the drive 
 `drive.step`, docs/architecture/sol-drive.md §4). Like `requires_confirmation`, exposure comes ONLY from
 the allowlist — nothing a companion advertises can make an internal tool model-facing.
 
+**Window-bound drive arguments (SOLUSDEV-319 slice 4, ADR-041 2026-10-31).** Still no new frame types.
+The internal `drive.capture` and `drive.act` input schemas gain optional `pid` (integer,
+1 … 2³¹−1), passed to the helper as `--pid`; the helper **requires** it for a window-bound app and
+checks it when given for a project-bound one (`pid_mismatch`). `drive.identify`'s `tool_result`
+`structuredContent` is the helper's slice 4 reply minus `front.documentDir` (kept by the companion):
+
+```
+{"ok": true, "now": 1234.5, "unsignedDev": false,
+ "trust": {"accessibility": true, "screenRecording": true},
+ "front": null
+        | {"drivable": true, "binding": "project" | "window", "bundleId": "…", "name": "…",
+           "pid": 123, "windowId": 456 | null, "title": "…" | null,
+           "bounds": {"x": 0, "y": 0, "width": 0, "height": 0} | null}
+        | {"drivable": false, "bundleId": "…", "name": "…", "binding": "project" | null,
+           "reason": "denied" | "no_workspace" | "outside_workspace"}}
+```
+
+A not-drivable `front` never carries a pid, window id, title or bounds. The cloud parses all of it as
+untrusted (`agent/drive/port.py`); new refusal codes in error text: `app_denied`, `pid_mismatch`.
+Details: `docs/architecture/sol-drive.md` §2.2.
+
 **Deviations adopted during implementation (review with the paste):**
 
 1. "Bridge offline" currently maps to `ToolError(code=TOOL_ERROR, retryable=true)`; the
