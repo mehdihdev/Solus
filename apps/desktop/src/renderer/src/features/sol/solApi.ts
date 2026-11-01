@@ -11,6 +11,8 @@ import { ApiError } from '../../lib/api/envelope.types'
 import { unwrapEnvelope } from '../../lib/api/client'
 import { createSolStreamParser, type SolStreamEvent } from './solStream'
 import { toPendingConfirmation, type PendingConfirmation } from '../../lib/api/solStream'
+import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
+import { toFrontAppBody } from './frontAppBody'
 
 /** How SOL may act on one message: explain and point, or operate tools (SOLX-01). */
 export type SolActionMode = 'guide' | 'do'
@@ -135,6 +137,13 @@ async function defaultToken(): Promise<string | null> {
   return useAuthStore.getState().accessToken
 }
 
+/** The pill's front-app snapshot. Only the SOL window subscribes to main's
+ *  pushes (useFrontAppSnapshot), so in every other renderer this is null. */
+async function defaultFrontApp(): Promise<SolFrontApp | null> {
+  const { useSolWindowStore } = await import('./solWindowStore')
+  return useSolWindowStore.getState().frontApp
+}
+
 export interface StreamSolMessageInput {
   projectId: string
   conversationId: string
@@ -184,6 +193,12 @@ export interface StreamSolMessageInput {
   preferences?: EngineeringPreferences | null
   /** The attached screen region, when the user circled one for this turn. */
   screenshot?: SolScreenshot
+  /**
+   * SOLUSDEV-319 slice 4: the app the pill was summoned over (sol-drive.md §2.2).
+   * Omitted ⇒ the pill's snapshot (null outside the SOL window). Sent as
+   * `front_app` on Build turns only — never on a resume or a wake turn.
+   */
+  frontApp?: SolFrontApp | null
   /** Receives each validated stream event in arrival order. */
   onEvent: (event: SolStreamEvent) => void
   signal?: AbortSignal
@@ -206,9 +221,13 @@ function anchorFields(input: StreamSolMessageInput): Record<string, unknown> {
 /** The JSON body of a turn. `mentions` is always present, so the server sees
  *  one body shape whether or not the user picked anything. A resume turn omits
  *  `content` when it is empty. */
-function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
+function turnBody(
+  input: StreamSolMessageInput,
+  frontApp: SolFrontApp | null
+): Record<string, unknown> {
   if (input.processPrompt) return wakeBody(input, input.processPrompt)
   const resume = input.resumeConfirmationId
+  const sendFront = !resume && input.actionMode === 'do' && frontApp !== null
   return {
     ...(resume && input.content === '' ? {} : { content: input.content }),
     ...(resume ? { resume_confirmation_id: resume } : {}),
@@ -218,7 +237,8 @@ function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
     ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
     ...(input.thinkHarder ? { think_harder: true } : {}),
     ...(input.preferences ? { preferences: input.preferences } : {}),
-    ...(input.screenshot ? { screenshot: input.screenshot } : {})
+    ...(input.screenshot ? { screenshot: input.screenshot } : {}),
+    ...(sendFront ? { front_app: toFrontAppBody(frontApp) } : {})
   }
 }
 
@@ -243,7 +263,9 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
     Accept: 'text/event-stream'
   }
   if (token) headers.Authorization = `Bearer ${token}`
-  return { method: 'POST', headers, body: JSON.stringify(turnBody(input)), signal: input.signal }
+  const frontApp = input.frontApp !== undefined ? input.frontApp : await defaultFrontApp()
+  const body = JSON.stringify(turnBody(input, frontApp))
+  return { method: 'POST', headers, body, signal: input.signal }
 }
 
 /**

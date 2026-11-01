@@ -25,7 +25,7 @@ import { SolChat } from './SolChat'
 import { GuideTasks } from '../guide/GuideTasks'
 import { selectSession, startNewChat, useSolChatStore } from './solChatStore'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
-import { connectSolBridge, useSolWindowStore } from './solWindowStore'
+import { connectSolBridge, useFrontAppSnapshot, useSolWindowStore } from './solWindowStore'
 import { measurePill } from './pillMeasure'
 import { pillHeightCap } from './solPill.constants'
 
@@ -246,6 +246,8 @@ export function SolWindow(): React.JSX.Element {
   // The first getState() is what tells main this renderer is up (markReady)
   // and flushes a region captured before the window finished loading.
   useEffect(() => connectSolBridge(), [])
+  // SOLUSDEV-319 slice 4: the pill's turns carry the app it was summoned over.
+  useFrontAppSnapshot()
   useWorkspaceFollow()
   usePillChrome(projectId)
   useReportHeight(ref, cap)

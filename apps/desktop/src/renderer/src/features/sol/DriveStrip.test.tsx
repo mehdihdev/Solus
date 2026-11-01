@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DriveStrip } from './DriveStrip'
 import { newCommandRun, type CommandRun } from './commandRuns'
 import { fakeDriveBridge } from '../settings/drive.fixtures'
+import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
+import { useSolWindowStore } from './solWindowStore'
 
 const running = (text = ''): CommandRun => ({ ...newCommandRun('cf1', 'drive.step'), text })
 
@@ -95,5 +97,59 @@ describe('DriveStrip — Stop', () => {
   it('still renders without the drive bridge', () => {
     render(<DriveStrip run={running()} bridge={null} />)
     expect(screen.getByText('DRIVING KICAD · STARTING')).toBeInTheDocument()
+  })
+})
+
+describe('DriveStrip app name (SOLUSDEV-319 slice 4)', () => {
+  const freecad = (title: string): SolFrontApp => ({
+    drivable: true,
+    binding: 'window',
+    bundleId: 'org.freecad.FreeCAD',
+    name: 'FreeCAD',
+    pid: 4242,
+    windowId: 77,
+    title
+  })
+  afterEach(() => useSolWindowStore.setState({ frontApp: null }))
+
+  it('names the window-bound app in front, upper-cased', () => {
+    useSolWindowStore.setState({ frontApp: freecad('bracket_v3.FCStd') })
+    render(<DriveStrip run={running('action 2/9 · click · 1.0 s\n')} bridge={fakeDriveBridge()} />)
+    expect(screen.getByText('DRIVING FREECAD · STEP 2 OF 9')).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: 'SOL is driving FreeCAD' })).toBeInTheDocument()
+  })
+
+  it('an explicit app name from the step wins; KiCad is the fallback', () => {
+    useSolWindowStore.setState({ frontApp: freecad('x') })
+    const { rerender } = render(
+      <DriveStrip run={running()} appName="Blender" bridge={fakeDriveBridge()} />
+    )
+    expect(screen.getByText('DRIVING BLENDER · STARTING')).toBeInTheDocument()
+    useSolWindowStore.setState({
+      frontApp: {
+        drivable: true,
+        binding: 'project',
+        bundleId: 'org.kicad.kicad',
+        name: 'KiCad',
+        pid: 3,
+        windowId: null,
+        title: null
+      }
+    })
+    rerender(<DriveStrip run={running()} bridge={fakeDriveBridge()} />)
+    expect(screen.getByText('DRIVING KICAD · STARTING')).toBeInTheDocument()
+  })
+
+  it('a hostile app name or title renders as text, capped at 24 characters', () => {
+    useSolWindowStore.setState({
+      frontApp: { ...freecad('<img src=x onerror=alert(1)>'), name: '<img src=x onerror=1>' }
+    })
+    const { container, unmount } = render(<DriveStrip run={running()} bridge={fakeDriveBridge()} />)
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText('DRIVING <IMG SRC=X ONERROR=1> · STARTING')).toBeInTheDocument()
+    unmount()
+    useSolWindowStore.setState({ frontApp: { ...freecad('t'), name: 'A'.repeat(40) } })
+    render(<DriveStrip run={running()} bridge={fakeDriveBridge()} />)
+    expect(screen.getByText(`DRIVING ${'A'.repeat(24)} · STARTING`)).toBeInTheDocument()
   })
 })
