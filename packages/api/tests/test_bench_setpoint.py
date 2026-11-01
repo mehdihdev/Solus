@@ -308,6 +308,89 @@ async def test_one_move_in_flight_per_physical_robot(
     assert (await manager.start(project, uuid.UUID(again["preview_id"])))["state"] == "moving"
 
 
+async def test_two_robots_moving_in_one_project_are_both_tracked_and_stopped(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, first, _ = await _robot(client, alice_headers)
+    second = await _session(client, alice_headers, project, "ARM0000002")
+    a = await manager.start(
+        project, uuid.UUID((await manager.preview(project, first, PAN, 1.0))["preview_id"])
+    )
+    b = await manager.start(
+        project, uuid.UUID((await manager.preview(project, second, PAN, 2.0))["preview_id"])
+    )
+    assert manager.current(project)["id"] == b["id"]  # type: ignore[index]  # most recent
+    # the first move is still tracked: in_flight on its robot, and stoppable by robot
+    await _refused("in_flight", manager.preview(project, first, PAN, 3.0))
+    await manager.stop_robots({"usb:ARM0000001"}, "teleop")
+    assert (local.handles[0].state, local.handles[0].reason) == ("stopped", "teleop")
+    assert local.handles[1].state == "moving"
+    assert a["id"] != b["id"]
+
+
+async def test_stop_stops_every_moving_move_in_the_project(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, first, _ = await _robot(client, alice_headers)
+    second = await _session(client, alice_headers, project, "ARM0000002")
+    for session in (first, second):
+        preview = await manager.preview(project, session, PAN, 1.0)
+        await manager.start(project, uuid.UUID(preview["preview_id"]))
+    stopped = await manager.stop(project)
+    assert stopped is not None and stopped["state"] == "stopped"
+    assert [(h.state, h.reason) for h in local.handles] == [("stopped", "user")] * 2
+
+
+async def test_shutdown_and_session_end_reach_an_older_move_in_the_project(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, first, _ = await _robot(client, alice_headers)
+    second = await _session(client, alice_headers, project, "ARM0000002")
+    for session in (first, second):
+        preview = await manager.preview(project, session, PAN, 1.0)
+        await manager.start(project, uuid.UUID(preview["preview_id"]))
+    resp = await client.post(
+        f"/api/v1/projects/{project}/bench/sessions/{first}/stop", headers=alice_headers
+    )
+    assert resp.status_code == 200
+    assert (local.handles[0].state, local.handles[0].reason) == ("stopped", "session_ended")
+    await manager.aclose()
+    assert local.handles[1].reason == "shutdown"
+
+
+async def test_refusals_read_teleop_through_its_public_accessors(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, session, _ = await _robot(client, alice_headers)
+    teleop = manager._teleop
+    teleop._releasing.add("usb:ARM0000001")
+    assert teleop.robot_role("usb:ARM0000001") == "releasing"
+    await _refused("torque_off", manager.preview(project, session, PAN, 1.0))
+
+
+@pytest.mark.parametrize("built", ["main", "lazy"])
+async def test_a_manager_wires_itself_so_teleop_release_and_start_stop_its_move(
+    app: FastAPI, client: AsyncClient, alice_headers: dict[str, str], local: Any, built: str
+) -> None:
+    if built == "lazy":  # no manager from main.py: the first use builds one
+        app.state.bench_setpoint = app.state.bench_teleop.setpoints = None
+    else:
+        assert app.state.bench_setpoint is not None
+    manager = setpoint_manager(app)
+    assert app.state.bench_teleop.setpoints is manager
+    project, session, _ = await _robot(client, alice_headers)
+    preview = await manager.preview(project, session, PAN, 1.0)
+    await manager.start(project, uuid.UUID(preview["preview_id"]))
+    await app.state.bench_teleop.release(project, session)
+    assert (local.handles[0].state, local.handles[0].reason) == ("stopped", "release")
+    follower = await _session(client, alice_headers, project, "ARM0000002")
+    preview = await manager.preview(project, follower, PAN, 1.0)
+    await manager.start(project, uuid.UUID(preview["preview_id"]))
+    teleop_preview = await app.state.bench_teleop.preview(project, session, follower)
+    await app.state.bench_teleop.start(project, uuid.UUID(teleop_preview["preview_id"]))
+    assert (local.handles[1].state, local.handles[1].reason) == ("stopped", "teleop")
+
+
 async def test_a_refusal_at_apply_releases_the_reservation(
     client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
 ) -> None:

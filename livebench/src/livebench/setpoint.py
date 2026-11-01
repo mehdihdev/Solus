@@ -121,6 +121,11 @@ def preview(actuator: Actuator, signal: str, target: float) -> SetpointPreview:
     _check_torque(actuator, joint)
     present = _present(actuator, joint)
     low, high = joint.span
+    if not low - DEFAULT_MAX_STEP_TICKS <= present <= high + DEFAULT_MAX_STEP_TICKS:
+        # The first goal would re-clamp into the span and jump more than one step.
+        raise SetpointRefusalError(
+            "uncalibrated", "the joint rests outside its calibrated range", joint.unit
+        )
     goal = min(high, max(low, actuator.to_goal(joint.address, target)))
     bounds = sorted((actuator.to_value(joint.address, low), actuator.to_value(joint.address, high)))
     step = actuator.to_value(joint.address, present + DEFAULT_MAX_STEP_TICKS)
@@ -232,6 +237,9 @@ class SetpointMove:
         )
         goal = min(self._span[1], max(self._span[0], stepped[self.address]))
         if goal == self._last:
+            return
+        if abs(goal - last) > self._max_step:
+            self._finish("failed", "step_limit")  # never a jump, whatever the clamp did
             return
         preempt = self._guard() if self._guard is not None else None
         if preempt is not None:

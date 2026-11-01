@@ -125,7 +125,7 @@ def test_preview_reads_the_present_value_and_converts_the_target() -> None:
 
 
 def test_preview_clamps_a_target_outside_the_calibrated_span() -> None:
-    high = preview(FakeActuator({1: 0}, span=(100, 950)), PAN, 120.0)
+    high = preview(FakeActuator({1: 500}, span=(100, 950)), PAN, 120.0)
     assert (high.goal_ticks, high.target_value, high.clamped) == (950, 95.0, True)
     low = preview(FakeActuator({1: 500}, span=(100, 950)), PAN, -5.0)
     assert (low.goal_ticks, low.target_value, low.clamped) == (100, 10.0, True)
@@ -229,6 +229,36 @@ async def test_move_from_a_rest_outside_the_span_never_writes_outside_it() -> No
     move = SetpointMove(actuator, 1, 900, (100, 950), rate_hz=FAST_HZ)
     assert await _run(move) == "reached"
     assert all(100 <= w[1] <= 950 for w in actuator.writes)
+
+
+@pytest.mark.parametrize(
+    ("present", "refused"),
+    [
+        (4000 + DEFAULT_MAX_STEP_TICKS, False),  # just within one step of the span: movable
+        (4000 + DEFAULT_MAX_STEP_TICKS + 1, True),
+        (100 - DEFAULT_MAX_STEP_TICKS - 1, True),
+    ],
+)
+def test_preview_refuses_a_rest_more_than_one_step_outside_the_span(
+    present: int, refused: bool
+) -> None:
+    actuator = FakeActuator({1: present}, span=(100, 4000))
+    if not refused:
+        assert preview(actuator, "arm-shoulder_pan.position", 50.0).present_ticks == present
+        return
+    with pytest.raises(SetpointRefusalError) as caught:
+        preview(actuator, "arm-shoulder_pan.position", 50.0)
+    assert caught.value.code == "uncalibrated"
+
+
+async def test_a_write_more_than_one_step_from_the_last_goal_fails_the_move() -> None:
+    # The rest drifted far outside the span after preview: re-clamping the stepped goal into the
+    # span would jump more than one step, so the move fails before it writes.
+    actuator = FakeActuator({1: 1200}, span=(100, 950))
+    ended: list[str] = []
+    move = SetpointMove(actuator, 1, 900, (100, 950), rate_hz=FAST_HZ, on_ended=ended.append)
+    assert await _run(move) == "failed"
+    assert (move.reason, ended, actuator.writes) == ("step_limit", ["failed"], [])
 
 
 async def test_actuator_lost_mid_move_fails_and_stops_writing() -> None:
@@ -346,3 +376,10 @@ async def test_local_apply_rechecks_refusals_on_fresh_readings() -> None:
     with pytest.raises(SetpointRefusedError):
         await local.setpoint_apply(Conn(actuator), PAN, 10.0, on_ended=lambda _s: None)
     assert actuator.writes == []
+
+
+async def test_local_apply_refuses_a_rest_far_outside_the_span() -> None:
+    actuator = FakeActuator({1: 4000 + DEFAULT_MAX_STEP_TICKS + 1}, span=(100, 4000))
+    with pytest.raises(SetpointRefusedError) as caught:
+        await local.setpoint_apply(Conn(actuator), PAN, 10.0, on_ended=lambda _s: None)
+    assert caught.value.code == "uncalibrated" and actuator.writes == []

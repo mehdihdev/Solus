@@ -89,6 +89,7 @@ class _Preview:
 @dataclass
 class _Move:
     id: UUID
+    project_id: UUID
     session_id: UUID
     robot: str
     joint: str
@@ -130,9 +131,12 @@ class SetpointManager:
         #: Test seam: the move's tick rate (None = the livebench default, 30 Hz).
         self.rate_hz: float | None = None
         self._previews: dict[UUID, dict[UUID, _Preview]] = {}
-        self._moves: dict[UUID, _Move] = {}  # the project's most recent move
+        #: Per physical robot: its latest move, replaced only once it is no longer moving.
+        self._moves: dict[str, _Move] = {}
+        self._recent: dict[UUID, _Move] = {}  # the project's most recent move (GET /setpoint)
         self._reserved: set[str] = set()  # robots whose move is being started
         sessions.add_end_listener(self._session_ended)
+        teleop.setpoints = self  # teleop start / release end a move on their robots first
 
     # ── refusals ────────────────────────────────────────────────────────────────
 
@@ -155,23 +159,24 @@ class SetpointManager:
     def _teleop_reason(self, project_id: UUID, key: str) -> str | None:
         """Why teleoperation forbids moving this robot now, as a §6.2 code, or None.
         Reads the TeleopManager's state (same process, same lock) — see the module doc."""
-        teleop = self._teleop
-        live = [t for t in teleop._teleops.values() if t.running]
-        live += list(teleop._starting.values())
-        if teleop._running(project_id) is not None or project_id in teleop._starting:
+        if self._teleop.project_active(project_id):
             return "teleop_active"
-        if key in {t.keys[1] for t in live}:
-            return "follower"
-        if key in {t.keys[0] for t in live}:
-            return "teleop_active"  # a leader in another project: moving it would steer
-        if key in teleop._releasing:
-            return "torque_off"
-        return None
+        # A leader in another project is teleop_active too: moving it would steer its follower.
+        roles = {"follower": "follower", "leader": "teleop_active", "releasing": "torque_off"}
+        role = self._teleop.robot_role(key)
+        return roles[role] if role is not None else None
 
     def _in_flight(self, key: str) -> bool:
-        return key in self._reserved or any(
-            m.key == key and m.state == "moving" for m in self._moves.values()
-        )
+        move = self._moves.get(key)
+        return key in self._reserved or (move is not None and move.state == "moving")
+
+    def _live(self, project_id: UUID | None = None) -> list[_Move]:
+        """Every moving move (in one project, when given)."""
+        return [
+            m
+            for m in self._moves.values()
+            if m.state == "moving" and (project_id is None or m.project_id == project_id)
+        ]
 
     def _check(self, project_id: UUID, key: str) -> None:
         code = self._teleop_reason(project_id, key)
@@ -231,7 +236,7 @@ class SetpointManager:
         """Consume a fresh preview and start its move. Returns the move record plus `clamped`.
         Raises PreviewExpiredError, SetpointRefusedError or SetpointNotFoundError."""
         local = self._require_local()
-        async with self._teleop._start_lock:  # decided atomically against teleop starts
+        async with self._teleop.start_lock:  # decided atomically against teleop starts
             preview = self._previews.get(project_id, {}).pop(preview_id, None)
             if preview is None or preview.expires < self.clock():
                 raise PreviewExpiredError(str(preview_id))
@@ -250,6 +255,7 @@ class SetpointManager:
     ) -> _Move:
         move = _Move(
             id=uuid.uuid4(),
+            project_id=project_id,
             session_id=preview.session_id,
             robot=out.label,
             joint=preview.joint,
@@ -285,7 +291,8 @@ class SetpointManager:
             move.handle.target,
             move.handle.clamped,
         )
-        self._moves[project_id] = move
+        self._moves[key] = move  # `_check` refused in_flight, so no moving move is dropped
+        self._recent[project_id] = move
         logger.info(
             "setpoint started: project=%s move=%s session=%s", project_id, move.id, move.session_id
         )
@@ -294,37 +301,38 @@ class SetpointManager:
     # ── state / stop ────────────────────────────────────────────────────────────
 
     def current(self, project_id: UUID) -> dict[str, Any] | None:
-        move = self._moves.get(project_id)
+        move = self._recent.get(project_id)
         return move.out() if move is not None else None
 
-    async def stop(self, project_id: UUID, reason: str = "user") -> dict[str, Any] | None:
-        """Stop and HOLD (torque stays on). Idempotent; None when the project has no move."""
-        move = self._moves.get(project_id)
-        if move is None:
-            return None
+    async def _stop_move(self, move: _Move, reason: str) -> None:
         if move.state == "moving":
             await self._local().setpoint_stop(move.handle, reason)
-        return move.out()
+
+    async def stop(self, project_id: UUID, reason: str = "user") -> dict[str, Any] | None:
+        """Stop and HOLD every move in the project (torque stays on). Idempotent; returns the
+        most recent move, None when the project has none."""
+        for move in self._live(project_id):
+            await self._stop_move(move, reason)
+        return self.current(project_id)
 
     async def stop_robots(self, keys: Iterable[str], reason: str) -> None:
         """Stop any move on these physical robots (teleop start / release call this first)."""
-        wanted = set(keys)
-        for project_id, move in list(self._moves.items()):
-            if move.key in wanted and move.state == "moving":
-                await self.stop(project_id, reason)
+        for key in set(keys):
+            move = self._moves.get(key)
+            if move is not None:
+                await self._stop_move(move, reason)
 
     async def _session_ended(self, project_id: UUID, session_id: UUID) -> None:
-        move = self._moves.get(project_id)
-        if move is not None and move.session_id == session_id and move.state == "moving":
-            await self.stop(project_id, "session_ended")
+        for move in self._live(project_id):
+            if move.session_id == session_id:
+                await self._stop_move(move, "session_ended")
 
     async def aclose(self) -> None:
-        for project_id, move in list(self._moves.items()):
-            if move.state == "moving":
-                try:
-                    await self.stop(project_id, "shutdown")
-                except Exception:
-                    logger.exception("setpoint shutdown stop failed: %s", move.id)
+        for move in self._live():
+            try:
+                await self._stop_move(move, "shutdown")
+            except Exception:
+                logger.exception("setpoint shutdown stop failed: %s", move.id)
 
 
 def emit_setpoint_event(

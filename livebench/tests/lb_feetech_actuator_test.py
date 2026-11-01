@@ -170,6 +170,35 @@ def test_release_reports_a_calibrated_joint_that_stays_torqued() -> None:
         actuator.release()
 
 
+class TorqueChannel(FeetechFakeChannel):
+    """The scripted bus, also answering Torque_Enable reads (id -> 0/1; a missing id is silent)."""
+
+    def __init__(self, positions: dict[int, int], torques: dict[int, int]) -> None:
+        super().__init__(positions)
+        self.torques = dict(torques)
+
+    def _registers(self, address: int) -> dict[int, int] | None:
+        return self.torques if address == TORQUE else super()._registers(address)
+
+
+def test_torque_enabled_reads_every_joint_and_omits_a_silent_one() -> None:
+    from livebench.hardware.actuation import TorqueReader, torque_state
+
+    channel = TorqueChannel({1: 2000, 6: 2100, 3: 1000}, {1: 1, 6: 0})  # 3 answers no torque read
+    _, _, actuator = _opened(channel, _arm())
+    reader: TorqueReader = actuator  # satisfies the protocol (mypy-checked)
+    assert reader.torque_enabled() == {1: True, 6: False}
+    assert torque_state(actuator) == {1: True, 6: False}
+    assert channel.writes == []  # a read never writes
+
+
+async def test_torque_enabled_needs_an_open_link() -> None:
+    _, source, actuator = _opened(TorqueChannel({1: 2000, 6: 2100}, {1: 1, 6: 1}), _arm())
+    await source.aclose()
+    with pytest.raises(ActuatorUnavailableError):
+        actuator.torque_enabled()
+
+
 @pytest.mark.parametrize(
     "values", [{"range_min": 100, "range_max": 5000}, {"range_min": -50, "range_max": 3000}]
 )

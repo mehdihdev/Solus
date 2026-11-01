@@ -69,6 +69,15 @@ class FeetechActuator:
             if (ticks := bus.read_register(address, "Present_Position")) is not None
         }
 
+    def torque_enabled(self) -> dict[int, bool]:
+        """Torque-enable per joint (`TorqueReader`); a servo that does not answer is absent."""
+        bus, joints = self._link()
+        return {
+            address: bool(value)
+            for address in joints
+            if (value := bus.read_register(address, "Torque_Enable")) is not None
+        }
+
     def to_value(self, address: int, ticks: int) -> float:
         return self._link()[1][address].position(ticks)[0]
 

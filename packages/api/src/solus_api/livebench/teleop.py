@@ -16,10 +16,10 @@ import asyncio
 import logging
 import time
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, Literal, Protocol
 from uuid import UUID
 
 from solus_api.livebench.sessions import BenchSessionOut, SessionManager, SessionNotFoundError
@@ -110,6 +110,14 @@ class _Teleop:
 
 
 StopRecorder = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+RobotRole = Literal["leader", "follower", "releasing"]
+
+
+class SetpointStopper(Protocol):
+    """What teleop needs of the setpoint manager (wired by its owner, not imported: the setpoint
+    module imports this one). A teleop start or a release ends any move on its robots first."""
+
+    async def stop_robots(self, keys: Iterable[str], reason: str) -> None: ...
 
 
 class TeleopManager:
@@ -125,6 +133,8 @@ class TeleopManager:
         self._releasing: set[str] = set()
         self._start_lock = asyncio.Lock()
         self._recording: set[asyncio.Task[None]] = set()  # keep stop-event tasks referenced
+        #: Optional; None leaves start / release exactly as before (no setpoint to stop).
+        self.setpoints: SetpointStopper | None = None
         sessions.add_end_listener(self._session_ended)
 
     def _running(self, project_id: UUID) -> _Teleop | None:
@@ -135,6 +145,30 @@ class TeleopManager:
         """Physical robots in any running or starting teleop, across every project."""
         live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
         return {key for teleop in live for key in teleop.keys} | self._releasing
+
+    # ── read accessors (for the setpoint manager's refusals) ──────────────────────
+
+    @property
+    def start_lock(self) -> asyncio.Lock:
+        """Held while a start or release is checked and claimed; decide against it under it."""
+        return self._start_lock
+
+    def project_active(self, project_id: UUID) -> bool:
+        """A teleop is running or starting in this project."""
+        return self._running(project_id) is not None or project_id in self._starting
+
+    def robot_role(self, key: str) -> RobotRole | None:
+        """This physical robot's part in any running or starting teleop, or its torque-off."""
+        live = [t for t in self._teleops.values() if t.running] + list(self._starting.values())
+        if key in {t.keys[1] for t in live}:
+            return "follower"
+        if key in {t.keys[0] for t in live}:
+            return "leader"
+        return "releasing" if key in self._releasing else None
+
+    async def _stop_setpoints(self, keys: Iterable[str], reason: str) -> None:
+        if self.setpoints is not None:
+            await self.setpoints.stop_robots(set(keys), reason)
 
     @staticmethod
     def _end(session_id: UUID, label: str) -> dict[str, str]:
@@ -217,6 +251,8 @@ class TeleopManager:
         follower_id = UUID(teleop.follower["session_id"])
         _, leader_conn = self._sessions.connection(project_id, leader_id)
         _, follower_conn = self._sessions.connection(project_id, follower_id)
+        # Reserved (so no new move can start on these robots); end any in flight before hold.
+        await self._stop_setpoints(teleop.keys, "teleop")
 
         def stopped(reason: str) -> None:
             if not teleop.running:
@@ -278,6 +314,7 @@ class TeleopManager:
                 raise TeleopRunningError("stop teleoperation before releasing its follower")
             self._releasing.add(key)
         try:
+            await self._stop_setpoints({key}, "release")  # never torque off under a move
             await asyncio.to_thread(self._local().robot_release, conn)
         finally:
             self._releasing.discard(key)
