@@ -4,13 +4,16 @@ import { ApiError } from '../../lib/api/envelope.types'
 import type { SolTurn } from './solApi'
 import type { ChatItem } from './solChatStore'
 import {
+  BENCH_VIEW_SUMMARY_CHARS,
   MAX_TURN_CHARS,
   appendContent,
   applyEvent,
   applyReasoningFrame,
   blankItem,
   turnFailureText,
+  toBenchViewChange,
   turnToReasonedItem,
+  withBenchViewChange,
   type Patch
 } from './solChatItems'
 import type { SolStreamEvent } from './solStream'
@@ -227,5 +230,89 @@ describe('turnToReasonedItem', () => {
     const item = turnToReasonedItem(turn('user', {}))
     expect(item).not.toHaveProperty('answerSource')
     expect(item).not.toHaveProperty('budgetReached')
+  })
+})
+
+// SOLUSDEV-319 B8: a direct SOL bench-view write's result becomes the turn's change chip
+// (route doc bench-view.md §6–§7). The value is model-adjacent data: validated whole.
+describe('bench view change results', () => {
+  const inverse = [{ kind: 'delete_derived', id: 'd9' }]
+  const value = { version: 7, id: 'd9', node_count: 3, inverse_ops: inverse, summary: 'Made it' }
+  const withCall = (tool: string): ChatItem => ({
+    ...blankItem('a', 'assistant', ''),
+    trace: [{ callId: 'c1', tool, ok: true, errorCode: null }]
+  })
+
+  it('reads version, inverse ops and summary from a valid result', () => {
+    expect(toBenchViewChange('c1', value)).toEqual({
+      callId: 'c1',
+      summary: 'Made it',
+      version: 7,
+      inverseOps: inverse
+    })
+  })
+
+  it('keeps the chip but drops Undo when the inverse ops or version do not validate', () => {
+    for (const bad of [
+      { ...value, inverse_ops: [{ kind: 'drop_table' }] },
+      { ...value, inverse_ops: [] },
+      { ...value, inverse_ops: 'x' },
+      { ...value, inverse_ops: Array.from({ length: 65 }, () => inverse[0]) },
+      { ...value, version: -1 },
+      { ...value, version: 1.5 }
+    ]) {
+      expect(toBenchViewChange('c1', bad)).toMatchObject({ summary: 'Made it', inverseOps: null })
+    }
+  })
+
+  it('shows no chip without a usable summary', () => {
+    for (const bad of [null, 'x', [], { ...value, summary: 3 }, { ...value, summary: ' ' }]) {
+      expect(toBenchViewChange('c1', bad)).toBeNull()
+    }
+  })
+
+  it('caps the summary length', () => {
+    const long = toBenchViewChange('c1', { ...value, summary: 'x'.repeat(5_000) })
+    expect(long?.summary).toHaveLength(BENCH_VIEW_SUMMARY_CHARS)
+  })
+
+  it('adds a chip only for update_display and upsert_derived, once per call, immutably', () => {
+    for (const tool of ['bench_view.update_display', 'bench_view.upsert_derived']) {
+      const before = withCall(tool)
+      const added = withBenchViewChange(before, 'c1', value)
+      expect(added.benchViewChanges).toHaveLength(1)
+      expect(before.benchViewChanges).toBeUndefined()
+      expect(withBenchViewChange({ ...before, ...added }, 'c1', value)).toEqual({})
+    }
+    for (const tool of ['bench_view.delete_derived', 'bench_view.read', 'code.exec']) {
+      expect(withBenchViewChange(withCall(tool), 'c1', value)).toEqual({})
+    }
+    expect(withBenchViewChange(withCall('bench_view.upsert_derived'), 'other', value)).toEqual({})
+  })
+
+  it('attaches the chip from a tool_result event carrying the value', () => {
+    const { patch, item } = patcher(blankItem('a', 'assistant', ''))
+    applyEvent(patch, { type: 'tool_call', callId: 'c1', tool: 'bench_view.upsert_derived' })
+    applyEvent(patch, {
+      type: 'tool_result',
+      callId: 'c1',
+      ok: true,
+      errorCode: null,
+      value
+    } as SolStreamEvent)
+    expect(item().benchViewChanges?.map((c) => c.version)).toEqual([7])
+  })
+
+  it('adds nothing for a failed result', () => {
+    const { patch, item } = patcher(blankItem('a', 'assistant', ''))
+    applyEvent(patch, { type: 'tool_call', callId: 'c1', tool: 'bench_view.upsert_derived' })
+    applyEvent(patch, {
+      type: 'tool_result',
+      callId: 'c1',
+      ok: false,
+      errorCode: 'invalid_args',
+      value
+    } as SolStreamEvent)
+    expect(item().benchViewChanges).toBeUndefined()
   })
 })

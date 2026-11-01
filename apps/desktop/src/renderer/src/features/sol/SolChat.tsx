@@ -22,6 +22,7 @@ import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
 import { commandHeader } from './commandCard'
 import { PlanCard } from './PlanCard'
 import { AutoRunsView } from './AutoRunRow'
+import { BenchViewChangesView } from './BenchViewChangeCard'
 import { ResearchPills } from './ResearchPills'
 import { AnswerSourceBadge } from './AnswerSourceBadge'
 import { BudgetNotice } from './BudgetNotice'
@@ -313,6 +314,8 @@ const MessageRow = memo(function MessageRow({
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
       {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
       <AutoRunsView runs={item.autoRuns} />
+      {/* SOLUSDEV-319 B8: SOL's direct bench-view writes, each with a user Undo. */}
+      <BenchViewChangesView changes={item.benchViewChanges} projectId={projectId} />
       {item.content ? (
         <SolMarkdown content={item.content} />
       ) : item.pending ? (

@@ -1,6 +1,7 @@
 // Pure transcript-item helpers for the SOL chat store (split from
 // solChatStore.ts to keep it focused): turning server turns and stream events
 // into immutable ChatItem updates. No store access, no side effects.
+import { BENCH_VIEW_LIMITS, isBenchViewOp, type BenchViewOp } from '@solus/shared-types'
 import { ApiError } from '../../lib/api/envelope.types'
 import type { AutoRun } from '../../lib/api/solStream'
 import { toResearchSources } from './researchSources'
@@ -104,6 +105,74 @@ function withAutoRun(item: ChatItem, autoRun: AutoRun | undefined): Partial<Chat
   return { autoRuns: [...runs, autoRun] }
 }
 
+/** SOLUSDEV-319 B8: a direct SOL bench-view write, as the turn's change chip (wireflow
+ *  live-bench-view.md §5). `version` + `inverseOps` are null when they did not validate — the
+ *  chip still shows, with no Undo. */
+export interface BenchViewChange {
+  readonly callId: string
+  /** Solus-composed one-line description; plain text only. */
+  readonly summary: string
+  readonly version: number | null
+  readonly inverseOps: readonly BenchViewOp[] | null
+}
+
+declare module './solChatStore' {
+  interface ChatItem {
+    /** Runtime only, like autoRuns: never cached. */
+    benchViewChanges?: readonly BenchViewChange[]
+  }
+}
+
+/** The direct writes whose result is a change chip (route doc bench-view.md §6). */
+export const BENCH_VIEW_CHANGE_TOOLS: ReadonlySet<string> = new Set([
+  'bench_view.update_display',
+  'bench_view.upsert_derived'
+])
+export const BENCH_VIEW_SUMMARY_CHARS = 200
+
+function inverseOpsOf(value: unknown): readonly BenchViewOp[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null
+  if (value.length > BENCH_VIEW_LIMITS.maxInverseOps) return null
+  return value.every(isBenchViewOp) ? value : null
+}
+
+/** A tool result value `{version, inverse_ops, summary, ...}` as a chip, or null without a
+ *  usable summary. Model-adjacent data: every field is checked, nothing is trusted. */
+export function toBenchViewChange(callId: string, value: unknown): BenchViewChange | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const { summary, version, inverse_ops: inverse } = value as Record<string, unknown>
+  if (typeof summary !== 'string' || !summary.trim()) return null
+  const inverseOps = inverseOpsOf(inverse)
+  const validVersion = Number.isSafeInteger(version) && (version as number) >= 0
+  const undoable = inverseOps !== null && validVersion
+  return {
+    callId,
+    summary: summary.slice(0, BENCH_VIEW_SUMMARY_CHARS),
+    version: undoable ? (version as number) : null,
+    inverseOps: undoable ? inverseOps : null
+  }
+}
+
+/** The chip a tool result adds to its item: only for the two direct writes (by the trace step's
+ *  tool, never the value's say-so), once per call. */
+export function withBenchViewChange(
+  item: ChatItem,
+  callId: string,
+  value: unknown
+): Pick<ChatItem, 'benchViewChanges'> {
+  const tool = item.trace.find((step) => step.callId === callId)?.tool
+  const changes = item.benchViewChanges ?? []
+  if (!tool || !BENCH_VIEW_CHANGE_TOOLS.has(tool)) return {}
+  if (changes.some((change) => change.callId === callId)) return {}
+  const change = toBenchViewChange(callId, value)
+  return change ? { benchViewChanges: [...changes, change] } : {}
+}
+
+/** A successful result's value, when the frame carries one. */
+function resultValue(event: Extract<SolStreamEvent, { type: 'tool_result' }>): unknown {
+  return event.ok && 'value' in event ? event.value : undefined
+}
+
 export function applyEvent(patch: Patch, event: SolStreamEvent): void {
   switch (event.type) {
     case 'token':
@@ -121,7 +190,8 @@ export function applyEvent(patch: Patch, event: SolStreamEvent): void {
         trace: m.trace.map((t) =>
           t.callId === event.callId ? { ...t, ok: event.ok, errorCode: event.errorCode } : t
         ),
-        ...withAutoRun(m, event.autoRun)
+        ...withAutoRun(m, event.autoRun),
+        ...withBenchViewChange(m, event.callId, resultValue(event))
       }))
       return
     case 'tool_confirmation':
