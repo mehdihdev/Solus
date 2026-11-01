@@ -101,3 +101,17 @@ export function valueDomain(
   const mid = (vMin + vMax) / 2
   return { vMin: mid - floor / 2, vMax: mid + floor / 2 }
 }
+
+/** The team's display unit (bench view) when the packet unit converts to it; else the packet unit. */
+export function sharedUnit(packetUnit: string | null, teamUnit: string | null): string | null {
+  return teamUnit !== null && unitOptions(packetUnit).includes(teamUnit) ? teamUnit : packetUnit
+}
+
+/** A fixed y-axis range from the shared view wins over autoscale (display only). */
+export function limitedDomain(
+  values: readonly number[],
+  unit: string | null,
+  limits: { min: number; max: number } | null
+): { vMin: number; vMax: number } {
+  return limits ? { vMin: limits.min, vMax: limits.max } : valueDomain(values, unit)
+}

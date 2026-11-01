@@ -1,5 +1,9 @@
 import { useState } from 'react'
+import type { BenchViewLimits, BenchViewTarget } from '@solus/shared-types'
 import type { BenchSignalSeries } from '../../lib/api/resources'
+import { useBenchViewContext } from './view/BenchViewContext'
+import { displayFor, type DisplaySettings } from './view/viewOps'
+import { ViewControls, type DerivedActions } from './view/ViewControls'
 import { anomalyMarkers, type SignalAnomaly } from './signalAnomalies'
 import { chartSegments } from '../../widgets/livebench/telemetry'
 import {
@@ -7,8 +11,8 @@ import {
   displayGroups,
   displayPoints,
   formatValue,
-  unitOptions,
-  valueDomain
+  limitedDomain,
+  sharedUnit
 } from './signalUnits'
 
 interface Props {
@@ -21,11 +25,16 @@ interface Props {
   windowEndMs?: number
   /** A marker that names a finding opens it in the Findings pane (SOLUSDEV-321 P2-T7). */
   onOpenFinding?: (findingId: string) => void
+  /** The shared-view target; defaults to the (deviceId, signal) pair. Derived cards pass theirs. */
+  target?: BenchViewTarget
+  /** Keyboard reorder, supplied by the panel that knows the siblings. */
+  onMove?: (delta: -1 | 1) => void
+  derived?: DerivedActions
 }
 type Marker = ReturnType<typeof anomalyMarkers>[number]
+/** Per-user, per-machine: only the display name. The unit is the team's (bench view). */
 interface Preference {
   name?: string
-  unit?: string
 }
 
 function boundedString(value: unknown, max: number): string | undefined {
@@ -38,10 +47,7 @@ function readPreference(key: string | null): Preference {
     if (!raw || raw.length > 2048) return {}
     const value: unknown = JSON.parse(raw)
     if (typeof value !== 'object' || value === null) return {}
-    return {
-      name: boundedString('name' in value ? value.name : undefined, 128),
-      unit: boundedString('unit' in value ? value.unit : undefined, 64)
-    }
+    return { name: boundedString('name' in value ? value.name : undefined, 128) }
   } catch {
     return {}
   }
@@ -114,6 +120,7 @@ function NameEditor({
 function segmentsFor(
   series: BenchSignalSeries,
   unit: string | null,
+  limits: BenchViewLimits | null,
   windowEndMs?: number
 ): string[] {
   const comparable = displayPoints(series.points, unit)
@@ -121,9 +128,10 @@ function segmentsFor(
   const domain = {
     tMin: windowEndMs === undefined ? Date.parse(comparable[0].timestamp) : windowEndMs - 8000,
     tMax: windowEndMs ?? Date.parse(comparable[comparable.length - 1].timestamp),
-    ...valueDomain(
+    ...limitedDomain(
       comparable.map((point) => point.value),
-      unit
+      unit,
+      limits
     )
   }
   return displayGroups(series.points, unit).flatMap((points) =>
@@ -134,26 +142,22 @@ function segmentsFor(
 function signalView(
   series: BenchSignalSeries,
   preference: Preference,
+  settings: DisplaySettings,
   windowEndMs?: number
 ): {
   name: string
   unit: string | null
-  options: readonly string[]
-  packetUnit: string | null
   value: number | null
   segments: string[]
 } {
   const latest = series.points.at(-1)
   const packetUnit = latest?.unit ?? null
-  const options = unitOptions(packetUnit)
-  const unit = preference.unit && options.includes(preference.unit) ? preference.unit : packetUnit
+  const unit = sharedUnit(packetUnit, settings.unit)
   return {
     name: preference.name || series.signal,
     unit,
-    options,
-    packetUnit,
     value: latest ? convertUnit(latest.value, packetUnit, unit) : null,
-    segments: segmentsFor(series, unit, windowEndMs)
+    segments: segmentsFor(series, unit, settings.limits, windowEndMs)
   }
 }
 
@@ -175,10 +179,16 @@ function ScopedSignalWidget({
   preferenceKey,
   onScope,
   windowEndMs,
-  onOpenFinding
+  onOpenFinding,
+  target,
+  onMove,
+  derived
 }: Props & { preferenceKey: string | null }): React.JSX.Element {
   const { preference, save, saveFailed } = usePreference(preferenceKey)
-  const view = signalView(series, preference, windowEndMs)
+  const context = useBenchViewContext()
+  const viewTarget = target ?? { kind: 'signal', device_id: deviceId, signal: series.signal }
+  const settings = displayFor(context?.view ?? null, viewTarget)
+  const view = signalView(series, preference, settings, windowEndMs)
   const markers = anomalyMarkers(
     events,
     deviceId,
@@ -196,35 +206,78 @@ function ScopedSignalWidget({
         />
       )}
       <div className="bench-signal-controls">
-        <NameEditor name={view.name} onSave={(name) => save({ ...preference, name })} />
-        {view.options.length > 1 && (
-          <select
-            aria-label={`Display unit for ${view.name}`}
-            value={view.unit ?? ''}
-            onChange={(event) => save({ ...preference, unit: event.target.value })}
-          >
-            {view.options.map((option) => (
-              <option key={option}>{option}</option>
-            ))}
-          </select>
-        )}
-      </div>
-      <div className="bench-signal-value" aria-label={`${view.name} value`}>
-        {view.value === null ? '—' : formatValue(view.value, view.unit)}
-        {view.unit ? (
-          <span className="bench-unit">{view.unit}</span>
+        {viewTarget.kind === 'derived' ? (
+          <span className="bench-signal-name" title={view.name}>
+            {view.name}
+          </span>
         ) : (
-          <span className="bench-unit bench-unit-unknown">no unit</span>
+          <NameEditor name={view.name} onSave={(name) => save({ ...preference, name })} />
         )}
+        <ViewControls
+          target={viewTarget}
+          label={view.name}
+          packetUnit={series.points.at(-1)?.unit ?? null}
+          onMove={onMove}
+          derived={derived}
+        />
       </div>
-      {saveFailed && <p role="alert">This name or unit could not be saved on this machine.</p>}
+      <SignalValue name={view.name} value={view.value} unit={view.unit} />
+      {saveFailed && <p role="alert">This name could not be saved on this machine.</p>}
       <SignalChart
         name={view.name}
         segments={view.segments}
         markers={markers}
+        limits={settings.limits}
         onOpenFinding={onOpenFinding}
       />
     </section>
+  )
+}
+
+function SignalValue({
+  name,
+  value,
+  unit
+}: {
+  name: string
+  value: number | null
+  unit: string | null
+}): React.JSX.Element {
+  return (
+    <div className="bench-signal-value" aria-label={`${name} value`}>
+      {value === null ? '— (no data)' : formatValue(value, unit)}
+      {unit ? (
+        <span className="bench-unit">{unit}</span>
+      ) : (
+        <span className="bench-unit bench-unit-unknown">no unit</span>
+      )}
+    </div>
+  )
+}
+
+/** The fixed axis range is the chart's edges; mark them so a clipped line reads as clipped. */
+function LimitLines({ limits }: { limits: BenchViewLimits }): React.JSX.Element {
+  return (
+    <>
+      {[
+        { label: `Axis max ${limits.max}`, y: 0.5 },
+        { label: `Axis min ${limits.min}`, y: 47.5 }
+      ].map(({ label, y }) => (
+        <line
+          key={label}
+          aria-label={label}
+          x1={0}
+          x2={240}
+          y1={y}
+          y2={y}
+          stroke="var(--mut)"
+          strokeDasharray="2 3"
+          strokeWidth="0.75"
+        >
+          <title>{label}</title>
+        </line>
+      ))}
+    </>
   )
 }
 
@@ -237,11 +290,13 @@ function SignalChart({
   name,
   segments,
   markers,
+  limits,
   onOpenFinding
 }: {
   name: string
   segments: string[]
   markers: Marker[]
+  limits: BenchViewLimits | null
   onOpenFinding?: (findingId: string) => void
 }): React.JSX.Element {
   return (
@@ -263,6 +318,7 @@ function SignalChart({
             <polyline points={segment} fill="none" stroke="currentColor" strokeWidth="1.5" />
           </g>
         ))}
+        {limits && <LimitLines limits={limits} />}
         {markers.map((marker) => (
           <line
             key={markerKey(marker)}

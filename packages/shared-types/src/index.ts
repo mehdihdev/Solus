@@ -293,3 +293,29 @@ export {
   type RelationClass,
   type RelationType,
 } from "./relations";
+
+// SOLUSDEV-319 — the team-shared Live Bench view. docs/api/bench-view.md
+export {
+  BENCH_VIEW_LIMITS,
+  EMPTY_BENCH_VIEW,
+  benchTargetKey,
+  isBenchView,
+  isBenchViewOp,
+  type BenchView,
+  type BenchViewConflictDetail,
+  type BenchViewDerived,
+  type BenchViewDisplayEntry,
+  type BenchViewDisplayPatch,
+  type BenchViewExpressionErrorDetail,
+  type BenchViewLimits,
+  type BenchViewOp,
+  type BenchViewPatchBody,
+  type BenchViewPatchResult,
+  type BenchViewSignalRef,
+  type BenchViewTarget,
+  type DeleteDerivedOp,
+  type DerivedTarget,
+  type SetDisplayOp,
+  type SignalTarget,
+  type UpsertDerivedOp,
+} from "./bench-view";

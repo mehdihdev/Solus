@@ -17,6 +17,9 @@ import { activeDeviceIds, useActiveBenchSessions } from './useActiveBenchSession
 import { useExternalBenchDevices } from './useExternalBenchDevices'
 import './bench.css'
 import { BenchRealtimeContext, useBenchRealtime } from './BenchRealtime'
+import { BenchViewContext } from './view/BenchViewContext'
+import { BenchViewBottom, BenchViewTop } from './view/BenchViewPanels'
+import { useBenchViewContextValue } from './view/useBenchViewContextValue'
 
 const RunsView = lazy(() =>
   import('./runs/RunsView').then((module) => ({ default: module.RunsView }))
@@ -70,6 +73,14 @@ export function BenchScreen({
   const externalDevices = useExternalBenchDevices(projectId, true)
   const focusEntityId = benchFocusId(focus)
   const realtime = useBenchRealtime(projectId, sessions, focusEntityId)
+  // The team-shared view (pins, hidden, order, units, ranges, groups, derived signals).
+  const activeTeamId = useWorkspaceStore((s) => s.teamId)
+  const benchView = useBenchViewContextValue(
+    projectId,
+    project?.teamId ?? activeTeamId,
+    realtime.devices,
+    realtime.receivedAt
+  )
   const onFocusChange = useCallback((next: Focus | null): void => {
     if (next) void useFocusStore.getState().focus(next.entity.entityId)
   }, [])
@@ -79,58 +90,62 @@ export function BenchScreen({
   const deviceIds = [...new Set([...activeDeviceIds(sessions), ...externalDevices])]
   return (
     <BenchRealtimeContext.Provider value={realtime}>
-      <div className="bench-workspace">
-        <BenchHeader
-          paused={paused}
-          live={stream?.generation === generation && stream.live}
-          empty={deviceIds.length === 0}
-          onAddHardware={onAddHardware}
-          onConnections={() => setConnectionGeneration(generation)}
-          onPause={() => {
-            if (paused) setStream(null)
-            setPausedAt(paused ? null : generation)
-          }}
-        />
-        {paused && (
-          <p className="bench-device-chips">
-            Scene and signal panes paused. Hardware sessions and recording continue.
-          </p>
-        )}
-        {connectionGeneration === generation && (
-          <ConnectDeviceModal
-            projectId={project.id}
-            onClose={() => setConnectionGeneration(null)}
-          />
-        )}
-        <SessionChips sessions={sessions} />
-        <ConnectionStatus sessions={sessions} paused={paused} realtime={realtime} />
-        <BenchPanels
-          projectId={project.id}
-          sessions={sessions}
-          externalDevices={externalDevices}
-          allDeviceIds={deviceIds}
-          paused={paused}
-          focusEntityId={focusEntityId}
-          onStreamChange={onStreamChange}
-          onConfirmBoard={onAddHardware}
-        />
-        <section className="bench-secondary" aria-label="Runs and capture">
-          <Suspense fallback={<p role="status">Loading runs…</p>}>
-            <RunsView projectId={project.id} sessions={sessions} />
-          </Suspense>
-        </section>
-        <section className="bench-secondary" aria-label="Workspace widgets">
-          <BenchCanvasHost
-            projectId={project.id}
-            focus={focus}
-            onFocusChange={onFocusChange}
-            sessions={sessions}
-            onNavigate={onNavigate}
+      <BenchViewContext.Provider value={benchView}>
+        <div className="bench-workspace">
+          <BenchHeader
+            paused={paused}
+            live={stream?.generation === generation && stream.live}
+            empty={deviceIds.length === 0}
             onAddHardware={onAddHardware}
-            embedded
+            onConnections={() => setConnectionGeneration(generation)}
+            onPause={() => {
+              if (paused) setStream(null)
+              setPausedAt(paused ? null : generation)
+            }}
           />
-        </section>
-      </div>
+          {paused && (
+            <p className="bench-device-chips">
+              Scene and signal panes paused. Hardware sessions and recording continue.
+            </p>
+          )}
+          {connectionGeneration === generation && (
+            <ConnectDeviceModal
+              projectId={project.id}
+              onClose={() => setConnectionGeneration(null)}
+            />
+          )}
+          <SessionChips sessions={sessions} />
+          <ConnectionStatus sessions={sessions} paused={paused} realtime={realtime} />
+          <BenchViewTop />
+          <BenchPanels
+            projectId={project.id}
+            sessions={sessions}
+            externalDevices={externalDevices}
+            allDeviceIds={deviceIds}
+            paused={paused}
+            focusEntityId={focusEntityId}
+            onStreamChange={onStreamChange}
+            onConfirmBoard={onAddHardware}
+          />
+          <BenchViewBottom />
+          <section className="bench-secondary" aria-label="Runs and capture">
+            <Suspense fallback={<p role="status">Loading runs…</p>}>
+              <RunsView projectId={project.id} sessions={sessions} />
+            </Suspense>
+          </section>
+          <section className="bench-secondary" aria-label="Workspace widgets">
+            <BenchCanvasHost
+              projectId={project.id}
+              focus={focus}
+              onFocusChange={onFocusChange}
+              sessions={sessions}
+              onNavigate={onNavigate}
+              onAddHardware={onAddHardware}
+              embedded
+            />
+          </section>
+        </div>
+      </BenchViewContext.Provider>
     </BenchRealtimeContext.Provider>
   )
 }

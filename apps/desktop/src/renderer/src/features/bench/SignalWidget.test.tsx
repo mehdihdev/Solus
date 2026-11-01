@@ -64,16 +64,13 @@ describe('signal widget preferences', () => {
       }
     }
     const first = render(<SignalWidget {...props} />)
-    fireEvent.change(screen.getByLabelText('Display unit for position'), {
-      target: { value: 'deg' }
-    })
-    expect(screen.getByLabelText('position value')).toHaveTextContent(/180\.0\s*deg/)
+    expect(screen.getByLabelText('position value')).toHaveTextContent(/3\.142\s*rad/)
     fireEvent.click(screen.getByRole('button', { name: 'Rename position' }))
     fireEvent.change(screen.getByLabelText('Signal name'), { target: { value: 'Wrist angle' } })
     fireEvent.keyDown(screen.getByLabelText('Signal name'), { key: 'Enter' })
     first.unmount()
     const second = render(<SignalWidget {...props} />)
-    expect(screen.getByLabelText('Wrist angle value')).toHaveTextContent(/180\.0\s*deg/)
+    expect(screen.getByLabelText('Wrist angle value')).toBeInTheDocument()
     second.unmount()
     const third = render(<SignalWidget {...props} projectId="p2" />)
     expect(screen.getByLabelText('position value')).toBeInTheDocument()
@@ -81,7 +78,25 @@ describe('signal widget preferences', () => {
     third.rerender(<SignalWidget {...props} userId="u2" />)
     expect(screen.getByLabelText('position value')).toBeInTheDocument()
     expect(screen.queryByText(/Wrist angle/)).not.toBeInTheDocument()
-    expect(screen.getByRole('combobox')).toHaveValue('rad')
+  })
+
+  it('ignores a per-user unit saved before the shared view (the team unit replaces it)', () => {
+    localStorage.setItem(
+      `solus.signal.v1:${JSON.stringify(['u9', 'p9', 'd9', 'position'])}`,
+      JSON.stringify({ unit: 'deg' })
+    )
+    render(
+      <SignalWidget
+        userId="u9"
+        projectId="p9"
+        deviceId="d9"
+        series={{
+          signal: 'position',
+          points: [{ timestamp: '2026-09-14T12:00:00Z', value: Math.PI, unit: 'rad' }]
+        }}
+      />
+    )
+    expect(screen.getByLabelText('position value')).toHaveTextContent(/3\.142\s*rad/)
   })
 
   it('does not offer conversion for unitless packets', () => {
@@ -122,8 +137,6 @@ it('places evidence markers on time without converting unknown event values', ()
       }}
     />
   )
-  expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
-  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'deg' } })
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
 })
 
