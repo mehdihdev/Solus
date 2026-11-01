@@ -543,6 +543,35 @@ class WorkspaceLayout(TimestampMixin, Base):
     positions: Mapped[dict[str, dict[str, float]]] = mapped_column(JSONB, default=dict)
 
 
+class BenchView(TimestampMixin, Base):
+    """The project's one team-shared Live Bench view (SOLUSDEV-319, docs/schemas/bench-view.md).
+    Entry shapes are validated by the service's Pydantic models; the table bounds the arrays."""
+
+    __tablename__ = "bench_views"
+    __table_args__ = (
+        CheckConstraint("version >= 0", name="ck_bench_views_version_nonnegative"),
+        CheckConstraint("jsonb_typeof(display) = 'array'", name="ck_bench_views_display_array"),
+        CheckConstraint("jsonb_typeof(derived) = 'array'", name="ck_bench_views_derived_array"),
+        CheckConstraint("jsonb_array_length(display) <= 512", name="ck_bench_views_display_bound"),
+        CheckConstraint("jsonb_array_length(derived) <= 32", name="ck_bench_views_derived_bound"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    display: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    derived: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
+    #: Last writer (or whose SOL turn wrote); never exposed by `GET /view`.
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+
+
 # --------------------------------------------------------------------- billing
 class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Per-USER billing (ADR-023/032, SOLUSDEV-72 Decisions C-E). Each user has their own
