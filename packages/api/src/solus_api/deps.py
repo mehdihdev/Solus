@@ -551,6 +551,7 @@ async def get_sol_registry(
         bridge=bridge_sessions,
         user_id=ctx.user.id,
         team_id=ctx.team.id,
+        bench_state=request.app.state,
         bridge_call_cap_bytes=settings.bridge_tool_call_max_bytes,
         secret_store=secret_store,
         connectors=connectors,

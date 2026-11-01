@@ -137,6 +137,7 @@ def build_sol_registry(
     graph_hub: "LiveHub | None" = None,
     enqueue_sim: "SimEnqueue | None" = None,
     artifact_max_bytes: int | None = None,
+    bench_state: Any | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
@@ -149,6 +150,7 @@ def build_sol_registry(
     package relays JSON only, so the reasoning import graph stays MCP-free."""
     registry = ToolRegistry()
     _register_scene(registry, session_factory, project_id, user_id, scene_enqueue)
+    _register_bench_view(registry, session_factory, project_id, user_id, team_id, bench_state)
     _register_presence(registry, presence_service)
     _register_companion_deployment(registry, companion_deployment_service)
     registry.register(build_get_entity_tool(session_factory, project_id))
@@ -1869,4 +1871,24 @@ def _register_scene(
         from solus_api.agent.tools.bench_scene import build_bench_scene_tools
 
         for tool in build_bench_scene_tools(session_factory, project_id, user_id, scene_enqueue):
+            registry.register(tool)
+
+
+def _register_bench_view(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    bench_state: Any | None,
+) -> None:
+    """SOLUSDEV-319: the bench view + bench control tools, for the requesting person in their
+    team (docs/api/bench-view.md §6). Always registered with a person, so SOL learns why a
+    capability is unavailable rather than not knowing it exists; `bench_state` is the app
+    state (None: the control tools refuse as unavailable)."""
+    if user_id is not None and team_id is not None:
+        from solus_api.agent.tools.bench_view import BenchScope, build_bench_view_tools
+
+        scope = BenchScope(project_id=project_id, team_id=team_id, user_id=user_id)
+        for tool in build_bench_view_tools(session_factory, scope, bench_state):
             registry.register(tool)
