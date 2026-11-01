@@ -53,6 +53,8 @@ export interface DriveController {
   setProject(projectId: string | null): void
   /** May the companion for `projectId` drive: on AND available. */
   companionDrive(projectId: string | null): boolean
+  /** On AND available for the active project (the front-app snapshot's gate). */
+  active(): boolean
   status(): Promise<DriveStatus>
   setDrive(on: boolean): Promise<DriveStatus>
   requestPermissions(): Promise<DriveStatus>
@@ -146,9 +148,9 @@ export function createDriveController(deps: DriveControllerDeps): DriveControlle
       projectId = id
       refresh()
     },
-    companionDrive(id) {
-      return wanted(reasonFor(id))
-    },
+    // No project ⇒ no companion to drive through (a folder is no longer needed).
+    companionDrive: (id) => id !== null && wanted(reasonFor(id)),
+    active: () => projectId !== null && wanted(reasonFor(projectId)),
     status: () => status().then(publish),
     async setDrive(on) {
       deps.settings.setDrive(on) // onChange → refresh (agent, companion, broadcast)

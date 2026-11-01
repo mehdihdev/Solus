@@ -188,17 +188,19 @@ describe('the agent', () => {
     c.refresh()
     expect(h.agentWanted).toHaveBeenLastCalledWith(true) // nested_folder: the project, not the agent
     c.setProject('none')
-    expect(h.agentWanted).toHaveBeenLastCalledWith(true) // no_folder: likewise
-    expect(c.companionDrive('none')).toBe(false) // …but that project's companion never drives
+    expect(h.agentWanted).toHaveBeenLastCalledWith(true) // no folder: likewise
+    // §2.2: no folder no longer blocks window-bound driving.
+    expect(c.companionDrive('none')).toBe(true)
   })
 
   it('L3: agent state and grants show while on and installed, even for an unavailable project', async () => {
     const h = harness({ agentState: () => 'requires_approval' })
     const c = createDriveController(h.deps)
-    c.setProject('no-folder-project')
+    h.folders.q = '/w'
+    c.setProject('p')
     expect(await c.status()).toMatchObject({
       available: false,
-      reason: 'no_folder',
+      reason: 'nested_folder',
       agent: 'requires_approval',
       trust: TRUST.trust
     })
@@ -259,9 +261,22 @@ describe('changes', () => {
     const c = createDriveController(h.deps)
     c.setProject('p')
     await flush()
+    h.folders.other = '/w/p/inner'
     c.setProject('other')
     await flush()
-    expect(h.broadcasts.at(-1)?.reason).toBe('no_folder')
+    expect(h.broadcasts.at(-1)?.reason).toBe('nested_folder')
+  })
+
+  it('active() is on AND available for the current project (the front-app context)', () => {
+    const h = harness()
+    const c = createDriveController(h.deps)
+    c.setProject('p')
+    expect(c.active()).toBe(true)
+    h.deps.settings.setDrive(false)
+    expect(c.active()).toBe(false)
+    h.deps.settings.setDrive(true)
+    h.folders.q = '/w'
+    expect(c.active()).toBe(false)
   })
 })
 

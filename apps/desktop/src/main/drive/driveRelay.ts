@@ -1,12 +1,19 @@
 // SOLUSDEV-319 drive slice 3b, XPC (docs/architecture/sol-drive.md §3 relay,
-// §5 "Main and the agent"; ADR-041 amendment 2026-10-28): the companion never
-// reaches the helper; it relays each call to main over the pipes main created.
-// Main answers only the CURRENT child it spawned with drive on, and only for
-// identify/capture/act bound (`--within`, exactly once) to the workspace main
-// checked for that child with the nested-folder rule. Anything else gets a
-// `usage` reply and nothing reaches the agent. drive_cancel, or the child going
-// away, aborts the call in flight.
+// §5 "Main and the agent"; ADR-041 amendment 2026-10-28) and slice 4 (§2.2
+// "Relay rule", ADR-041 2026-10-31): the companion never reaches the helper; it
+// relays each call to main over the pipes main created. Main answers only the
+// CURRENT child it spawned with drive on, and only for identify/capture/act:
+//   - `--within`: at most once and equal to the workspace main checked for that
+//     child (nested-folder rule); absent when the child has none.
+//   - project-bound (KiCad) capture/act need `--within`.
+//   - every other capture/act is window-bound: exactly one `--pid`, and
+//     (--bundle, --pid, --window) equal to the summon snapshot — else
+//     `window_mismatch`.
+// Anything else gets a refusal and nothing reaches the agent. drive_cancel, or
+// the child going away, aborts the call in flight.
 import type { DriveTransport } from './driveTransport'
+import { frontAppLink, type FrontAppContext, type FrontAppLink } from './frontApp'
+import { isProjectBoundBundle, type SolFrontApp } from './frontAppShape'
 
 const RELAYED_COMMANDS: ReadonlySet<string> = new Set(['identify', 'capture', 'act'])
 /** argv as JSON, so the whole XPC request (`{"v":1,"op":"run","argv":…}`)
@@ -15,14 +22,83 @@ export const MAX_RELAY_ARGV_BYTES = 60 * 1024
 /** The companion refuses a reply over 24 MiB as JSON; main says so instead (L4). */
 export const MAX_RELAY_REPLY_BYTES = 24 * 1024 * 1024
 
-/** Why `argv` may not be relayed for `workspace`, or null when it may. */
-export function relayRefusal(argv: readonly string[], workspace: string): string | null {
-  if (!RELAYED_COMMANDS.has(argv[0] ?? '')) return 'only identify, capture and act are relayed'
-  if (Buffer.byteLength(JSON.stringify(argv)) > MAX_RELAY_ARGV_BYTES) return 'argv is too large'
-  const at = argv.flatMap((arg, i) => (arg === '--within' ? [i] : []))
-  if (at.length !== 1) return '--within must appear exactly once'
-  if (argv[at[0] + 1] !== workspace) return "--within is not this companion's workspace"
+export interface RelayRefusal {
+  code: 'usage' | 'window_mismatch'
+  message: string
+}
+
+const usage = (message: string): RelayRefusal => ({ code: 'usage', message })
+const mismatch = (message: string): RelayRefusal => ({ code: 'window_mismatch', message })
+
+/** The flags the relay checks; their `--flag=value` form would slip past it. */
+const BOUND_FLAGS = ['--within', '--bundle', '--pid', '--window'] as const
+
+const positions = (argv: readonly string[], flag: string): number[] =>
+  argv.flatMap((arg, i) => (arg === flag ? [i] : []))
+
+/** The value of a flag that appears exactly once, else undefined. */
+function single(argv: readonly string[], flag: string): string | undefined {
+  const at = positions(argv, flag)
+  return at.length === 1 ? argv[at[0] + 1] : undefined
+}
+
+function withinRefusal(argv: readonly string[], workspace: string | null): RelayRefusal | null {
+  const at = positions(argv, '--within')
+  if (workspace === null) {
+    return at.length === 0
+      ? null
+      : usage('this companion has no workspace: --within must be absent')
+  }
+  if (at.length > 1) return usage('--within may appear at most once')
+  if (at.length === 1 && argv[at[0] + 1] !== workspace) {
+    return usage("--within is not this companion's workspace")
+  }
   return null
+}
+
+/** A window-bound capture/act must aim at exactly the summoned window. */
+function windowRefusal(
+  argv: readonly string[],
+  bundle: string,
+  front: SolFrontApp | null
+): RelayRefusal | null {
+  const window = single(argv, '--window')
+  if (window === undefined) return usage('--window must appear exactly once')
+  const pid = positions(argv, '--pid')
+  if (pid.length !== 1) return mismatch('a window-bound call needs exactly one --pid')
+  if (front === null || !front.drivable || front.binding !== 'window' || front.windowId === null) {
+    return mismatch('SOL was not summoned over a drivable window')
+  }
+  const same =
+    bundle === front.bundleId &&
+    argv[pid[0] + 1] === String(front.pid) &&
+    window === String(front.windowId)
+  return same ? null : mismatch('not the window SOL was summoned over')
+}
+
+/** Why `argv` may not be relayed for a child with `workspace` (null: none)
+ *  given the summon snapshot `front`, or null when it may. */
+export function relayRefusal(
+  argv: readonly string[],
+  workspace: string | null,
+  front: SolFrontApp | null
+): RelayRefusal | null {
+  const command = argv[0] ?? ''
+  if (!RELAYED_COMMANDS.has(command)) return usage('only identify, capture and act are relayed')
+  if (Buffer.byteLength(JSON.stringify(argv)) > MAX_RELAY_ARGV_BYTES) {
+    return usage('argv is too large')
+  }
+  if (argv.some((arg) => BOUND_FLAGS.some((flag) => arg.startsWith(`${flag}=`)))) {
+    return usage('binding flags take their value as the next argument')
+  }
+  const within = withinRefusal(argv, workspace)
+  if (within !== null || command === 'identify') return within
+  const bundle = single(argv, '--bundle')
+  if (bundle === undefined) return usage('--bundle must appear exactly once')
+  if (!isProjectBoundBundle(bundle)) return windowRefusal(argv, bundle, front)
+  return positions(argv, '--within').length === 1
+    ? null
+    : usage('a project-bound app needs --within')
 }
 
 /** `type` MUST serialise first: the companion admits an oversize stdin line (a
@@ -53,13 +129,22 @@ export interface DriveRelayDeps {
   transport(): DriveTransport | null
   /** Write one line to that child's stdin. */
   write(child: object, line: string): void
+  /** The summon snapshot and the drive-child report (default: the process link). */
+  frontApp?: Pick<FrontAppLink, 'snapshot' | 'setDriveChild'>
 }
 
+/** Drive for a spawned child: off (null), or on with or without a workspace.
+ *  A bare string is the slice 3b form (drive on, that workspace). */
+export type RelayDrive = string | FrontAppContext | null
+
+const driveContext = (drive: RelayDrive): FrontAppContext | null =>
+  typeof drive === 'string' ? { workspace: drive } : drive
+
 export interface DriveRelay {
-  /** A child was spawned; `workspace` is the checked folder when drive is on,
-   *  else null. `bundleOk` is the spawn-time own-bundle check (HIGH-1): calls
-   *  wait for it, and a false answer reaches no agent. */
-  attach(child: object, workspace: string | null, bundleOk?: Promise<boolean>): void
+  /** A child was spawned; `drive` says whether drive is on for it and with
+   *  which checked workspace. `bundleOk` is the spawn-time own-bundle check
+   *  (HIGH-1): calls wait for it, and a false answer reaches no agent. */
+  attach(child: object, drive: RelayDrive, bundleOk?: Promise<boolean>): void
   /** The child exited, was replaced or stopped. */
   detach(child: object): void
   request(child: object, request: { id: number; argv: string[] }): void
@@ -67,7 +152,8 @@ export interface DriveRelay {
 }
 
 export function createDriveRelay(deps: DriveRelayDeps): DriveRelay {
-  let current: { child: object; workspace: string; bundleOk: Promise<boolean> } | null = null
+  const front = deps.frontApp ?? frontAppLink
+  let current: { child: object; workspace: string | null; bundleOk: Promise<boolean> } | null = null
   const inflight = new Map<number, AbortController>()
 
   const abortAll = (): void => {
@@ -100,20 +186,27 @@ export function createDriveRelay(deps: DriveRelayDeps): DriveRelay {
   }
 
   return {
-    attach(child, workspace, bundleOk = Promise.resolve(!deps.packaged)) {
+    attach(child, drive, bundleOk = Promise.resolve(!deps.packaged)) {
       abortAll()
-      current = workspace === null ? null : { child, workspace, bundleOk }
+      const context = driveContext(drive)
+      current = context === null ? null : { child, workspace: context.workspace, bundleOk }
+      front.setDriveChild(context) // a new child: the old snapshot is gone
     },
     detach(child) {
       if (current?.child !== child) return
       abortAll()
       current = null
+      front.setDriveChild(null)
     },
     request(child, { id, argv }) {
       if (current?.child !== child) return // not the drive child: ignored
       const refused =
-        inflight.size > 0 ? 'one drive call at a time' : relayRefusal(argv, current.workspace)
-      if (refused !== null) return deps.write(child, driveReplyLine(id, refusal('usage', refused)))
+        inflight.size > 0
+          ? usage('one drive call at a time')
+          : relayRefusal(argv, current.workspace, front.snapshot())
+      if (refused !== null) {
+        return deps.write(child, driveReplyLine(id, refusal(refused.code, refused.message)))
+      }
       const controller = new AbortController()
       inflight.set(id, controller)
       void run(child, id, argv, controller)

@@ -46,6 +46,7 @@ import {
   type XpcModule
 } from './driveTransport'
 import { createBundleCheck } from './driveBundleCheck'
+import { createFrontAppTracker, frontAppLink, type FrontAppTracker } from './frontApp'
 
 export interface DriveHandle {
   /** The renderer's active project (bridge:project). */
@@ -132,7 +133,7 @@ async function trustVia(
 export function startDrive(opts: {
   ipc: SolWindowIpc
   settings: SolSettings
-  windows: Pick<SolWindowManager, 'broadcast'>
+  windows: Pick<SolWindowManager, 'broadcast' | 'setSummonGate' | 'pushFrontApp'>
   isAllowedSender: (event: IpcMainInvokeEvent) => boolean
   /** The main renderer only — consent actions (drive on, `trust --prompt`, approval pane). */
   isMainSender: (event: IpcMainInvokeEvent) => boolean
@@ -186,19 +187,58 @@ export function startDrive(opts: {
     },
     { isAllowedSender: opts.isAllowedSender, isMainSender: opts.isMainSender }
   )
+  const frontApp = startFrontApp(opts, transport, () => controller.active())
   // First evaluation: clears an agent registration a previous run left behind
   // while the setting is now off.
   controller.refresh()
   void bundle?.check()
   return {
-    setProject: (projectId) => controller.setProject(projectId),
+    setProject: (projectId) => {
+      frontApp.tracker.clear() // §2.2: a project switch drops the snapshot
+      controller.setProject(projectId)
+    },
     refresh: () => controller.refresh(),
     isQuiet: () => session.isQuiet(),
     dispose: () => {
+      frontApp.dispose()
       onCompanionDriveWindow(null)
       setCompanionDriveTransport(null)
       setCompanionDriveSpawnCheck(null)
       session.dispose()
+    }
+  }
+}
+
+/** SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the front-app snapshot — taken by
+ *  the summon gate before the pill takes focus, pushed to the SOL window, read
+ *  by the relay through frontAppLink; cleared on drive off (here), project
+ *  switch (setProject) and companion restart/exit (the relay's child report). */
+function startFrontApp(
+  opts: {
+    settings: SolSettings
+    windows: Pick<SolWindowManager, 'setSummonGate' | 'pushFrontApp'>
+  },
+  transport: () => DriveTransport | null,
+  active: () => boolean
+): { tracker: FrontAppTracker; dispose(): void } {
+  const tracker = createFrontAppTracker({
+    context: () => (active() ? frontAppLink.driveChild() : null),
+    transport,
+    publish: (front) => opts.windows.pushFrontApp(front),
+    setTimeout: (cb, ms) => setTimeout(cb, ms),
+    clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout)
+  })
+  frontAppLink.setTracker(tracker)
+  opts.windows.setSummonGate(() => tracker.beforeSummon())
+  const offSettings = opts.settings.onChange((state) => {
+    if (!state.drive) tracker.clear()
+  })
+  return {
+    tracker,
+    dispose() {
+      offSettings()
+      opts.windows.setSummonGate(null)
+      frontAppLink.setTracker(null)
     }
   }
 }

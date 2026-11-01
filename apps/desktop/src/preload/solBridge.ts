@@ -8,6 +8,7 @@ import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 import type { SolPillEvent, SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 import type { SolActionMode } from '../main/solSettings'
 import { DRIVE_AGENT_STATES, DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
+import { isSolFrontApp, type SolFrontApp } from '../main/drive/frontAppShape'
 
 /** Structural slice of ipcRenderer — just what the bridge needs. */
 export interface SolBridgeIpc {
@@ -47,7 +48,13 @@ export interface SolBridge {
   onRegion(handler: (region: SolRegionPayload) => void): () => void
   /** SOLUSDEV-319: the pill's motion cues (summoned / leaving) — SOL window only. */
   onPill?(handler: (event: SolPillEvent) => void): () => void
+  /** SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the front-app summon snapshot —
+   *  SOL window only; null when none (drive off, cleared, nothing in front). */
+  onFrontApp?(handler: (front: SolFrontApp | null) => void): () => void
 }
+
+const isFrontAppPush = (raw: unknown): raw is SolFrontApp | null =>
+  raw === null || isSolFrontApp(raw)
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -159,7 +166,8 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     onDriveStatus: (handler) => subscribe(c.driveStatus, isDriveStatus, handler),
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler),
-    onPill: (handler) => subscribe(c.pill, isSolPillEvent, handler)
+    onPill: (handler) => subscribe(c.pill, isSolPillEvent, handler),
+    onFrontApp: (handler) => subscribe(c.frontApp, isFrontAppPush, handler)
   }
 }
 

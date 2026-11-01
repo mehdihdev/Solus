@@ -62,10 +62,12 @@ describe('startDrive', () => {
   it('wires the resolver, the invokes and the quiet period', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     const broadcast = vi.fn()
+    const setSummonGate = vi.fn()
+    const pushFrontApp = vi.fn()
     const drive = startDrive({
       ipc: { handle: (c, l) => void handlers.set(c, l as (...args: unknown[]) => unknown) },
       settings: settings(),
-      windows: { broadcast },
+      windows: { broadcast, setSummonGate, pushFrontApp },
       isAllowedSender: () => true,
       isMainSender: () => true
     })
@@ -83,6 +85,13 @@ describe('startDrive', () => {
     handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.(PILL, true)
     expect(drive.isQuiet()).toBe(true)
     handlers.get(SOL_WINDOW_CHANNELS.setDriving)?.(PILL, false)
+
+    // §2.2: the summon gate is installed; driving unavailable ⇒ snapshot null.
+    expect(setSummonGate).toHaveBeenCalledWith(expect.any(Function))
+    const gate = setSummonGate.mock.calls[0][0] as () => Promise<void>
+    await gate()
+    expect(pushFrontApp).not.toHaveBeenCalled() // still null: nothing changed
     drive.dispose()
+    expect(setSummonGate).toHaveBeenLastCalledWith(null)
   })
 })

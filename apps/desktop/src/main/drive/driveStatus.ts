@@ -2,7 +2,9 @@
 // main hands the renderer for Settings › SOL "SOL can use your mouse and
 // keyboard". Shared by main (producer), preload (validator) and renderer.
 
-/** Why driving cannot be turned on for the active project. `bundle_modified`
+/** Why driving cannot be turned on for the active project. `no_folder` is
+ *  no longer produced (sol-drive.md §2.2: no folder only means KiCad is not
+ *  drivable); it stays in the union for older renderer copy. `bundle_modified`
  *  (review HIGH-1): a packaged Solus.app whose own signature — nested code and
  *  resources included — does not validate (a relocated copy with swapped files). */
 export type DriveUnavailable =

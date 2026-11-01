@@ -12,30 +12,37 @@ import {
   relayRefusal
 } from './driveRelay'
 import type { DriveOp, DriveTransport } from './driveTransport'
+import { createFrontAppLink } from './frontApp'
 
 const WS = '/w/rover'
 const REPLY = { ok: true, verb: 'click' }
 
-describe('relayRefusal', () => {
+const KICAD = ['--bundle', 'org.kicad.kicad', '--window', '7', '--within', WS]
+const KICAD_CAPTURE = ['capture', ...KICAD]
+const KICAD_ACT = ['act', ...KICAD, '--since', '1', 'click', '--x', '1', '--y', '1']
+
+describe('relayRefusal — the workspace (slice 3b rules, narrowed by §2.2)', () => {
   it.each([
     [['identify', '--within', WS]],
-    [['capture', '--bundle', 'org.kicad.kicad', '--window', '7', '--within', WS]],
-    [['act', '--within', WS, '--bundle', 'b', 'click', '--x', '1', '--y', '2']]
+    [['identify']],
+    [KICAD_CAPTURE],
+    [['act', '--within', WS, '--bundle', 'org.kicad.eeschema', '--window', '7', 'click']]
   ])('accepts %j', (argv) => {
-    expect(relayRefusal(argv, WS)).toBeNull()
+    expect(relayRefusal(argv, WS, null)).toBeNull()
   })
 
   it.each([
     ['trust is not relayed', ['trust', '--within', WS]],
     ['serve is not relayed', ['serve']],
-    ['no --within', ['identify']],
     ['--within twice', ['identify', '--within', WS, '--within', WS]],
     ['another workspace', ['identify', '--within', '/w/other']],
     ['a workspace inside it', ['identify', '--within', `${WS}/inner`]],
     ['--within without a value', ['identify', '--within']],
-    ['--within=value form', [`identify`, `--within=${WS}`]]
-  ])('refuses: %s', (_label, argv) => {
-    expect(relayRefusal(argv, WS)).toEqual(expect.any(String))
+    ['--within=value form', [`identify`, `--within=${WS}`]],
+    ['KiCad without --within', ['capture', '--bundle', 'org.kicad.kicad', '--window', '7']],
+    ['capture without --bundle', ['capture', '--window', '7', '--within', WS]]
+  ])('refuses with usage: %s', (_label, argv) => {
+    expect(relayRefusal(argv, WS, null)).toEqual({ code: 'usage', message: expect.any(String) })
   })
 })
 
@@ -50,6 +57,7 @@ function harness(
   const relay = createDriveRelay({
     packaged,
     transport: () => transport,
+    frontApp: createFrontAppLink(),
     write: (child, line) => {
       expect(line.endsWith('\n')).toBe(true)
       writes.push([child, JSON.parse(line)])
@@ -129,7 +137,7 @@ describe('createDriveRelay — cancellation', () => {
     const h = harness({ request })
     const child = {}
     h.relay.attach(child, WS)
-    h.relay.request(child, { id: 9, argv: ['act', '--within', WS] })
+    h.relay.request(child, { id: 9, argv: KICAD_ACT })
     h.relay.cancel(child, 9)
     await flush()
     expect(seen!.aborted).toBe(true)
@@ -157,7 +165,7 @@ describe('createDriveRelay — cancellation', () => {
     const child = {}
     h.relay.attach(child, WS)
     h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
-    h.relay.request(child, { id: 2, argv: ['capture', '--within', WS] })
+    h.relay.request(child, { id: 2, argv: KICAD_CAPTURE })
     h.relay.request(child, { id: 1, argv: ['identify', '--within', WS] })
     await flush()
     expect(h.writes).toEqual([
@@ -200,7 +208,7 @@ describe('createDriveRelay — limits and the bundle gate', () => {
     const h = harness({ request: async () => huge })
     const child = {}
     h.relay.attach(child, WS)
-    h.relay.request(child, { id: 3, argv: ['capture', '--within', WS] })
+    h.relay.request(child, { id: 3, argv: KICAD_CAPTURE })
     await flush()
     expect(h.writes[0][1]).toMatchObject({ id: 3, reply: { ok: false, code: 'helper_output' } })
   })
@@ -237,7 +245,7 @@ describe('createDriveRelay — limits and the bundle gate', () => {
     h.relay.attach(child, WS)
     h.relay.request(child, {
       id: 1,
-      argv: ['act', '--within', WS, 'click', '--x', '1', '--y', '1']
+      argv: KICAD_ACT
     })
     await flush()
     expect(h.writes[0][1]).toMatchObject({ reply: { ok: false, code: 'agent_unavailable' } })
@@ -267,11 +275,12 @@ it('every reply line starts with {"type":"drive_reply", — the companion admits
   const relay = createDriveRelay({
     packaged: false,
     transport: () => ({ request: async () => capture }),
+    frontApp: createFrontAppLink(),
     write: (_child, line) => void lines.push(line)
   })
   const child = {}
   relay.attach(child, WS)
-  relay.request(child, { id: 5, argv: ['capture', '--within', WS] })
+  relay.request(child, { id: 5, argv: KICAD_CAPTURE })
   relay.request(child, { id: 6, argv: ['serve'] }) // refusals too
   await new Promise((r) => setTimeout(r, 0))
   expect(lines).toHaveLength(2)

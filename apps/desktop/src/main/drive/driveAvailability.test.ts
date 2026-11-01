@@ -85,14 +85,18 @@ describe('driveUnavailable', () => {
     expect(driveUnavailable({ ...base, bundleOk: true })).toBeNull()
   })
 
-  it('checks in order: not_macos → no_helper → no_folder → nested_folder', () => {
+  it('§2.2: no linked folder no longer makes driving unavailable (only KiCad is not drivable)', () => {
+    expect(driveUnavailable({ ...base, projectId: null })).toBeNull()
+    expect(driveUnavailable({ ...base, folders: {} })).toBeNull()
+    expect(driveUnavailable({ ...base, folders: { q: '/w/q' } })).toBeNull()
+  })
+
+  it('checks in order: not_macos → no_helper → nested_folder', () => {
     const nested = { p: '/w/p', q: '/w/p/q' }
     expect(driveUnavailable({ ...base, platform: 'linux', helperOk: false, projectId: null })).toBe(
       'not_macos'
     )
     expect(driveUnavailable({ ...base, helperOk: false, projectId: null })).toBe('no_helper')
-    expect(driveUnavailable({ ...base, projectId: null })).toBe('no_folder')
-    expect(driveUnavailable({ ...base, folders: {} })).toBe('no_folder')
     expect(driveUnavailable({ ...base, folders: nested })).toBe('nested_folder')
   })
 })

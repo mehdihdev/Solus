@@ -18,6 +18,7 @@ import type { CapabilityState } from '../platform/capabilities'
 import type { ActiveWindowInfo } from '../capture/activeWindow'
 import { SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH, type Point, type Rect } from './pillGeometry'
 import { createPillPlacement } from './pillPlacement'
+import type { SolFrontApp } from '../drive/frontAppShape'
 
 export type { Point, Rect } from './pillGeometry'
 
@@ -157,6 +158,12 @@ export interface SolWindowManager {
   markReady(sender: unknown): void
   /** True for the live SOL window's webContents — the IPC sender gate. */
   isSender(sender: unknown): boolean
+  /** SOLUSDEV-319 slice 4: run before every summon shows or focuses the pill
+   *  (the front-app identify, ≤ 250 ms). Null: summon synchronously. */
+  setSummonGate(gate: (() => Promise<void>) | null): void
+  /** The front-app snapshot → the SOL window only; the latest is delivered
+   *  when a fresh renderer mounts. */
+  pushFrontApp(front: SolFrontApp | null): void
 }
 
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
@@ -173,6 +180,10 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   // SOLUSDEV-319: the exit animation's bounded wait, and when the pill last hid.
   let leaving: ReturnType<typeof setTimeout> | null = null
   let hiddenAt: number | null = null
+  // SOLUSDEV-319 slice 4: the summon gate and the latest front-app snapshot.
+  let summonGate: (() => Promise<void>) | null = null
+  let summoning = false
+  let frontApp: { value: SolFrontApp | null } | null = null
   const alive = (): boolean => current !== null && !current.isDestroyed()
   const cue = (event: SolPillEvent): void => {
     if (alive()) current?.webContents.send(SOL_WINDOW_CHANNELS.pill, event)
@@ -239,8 +250,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     cue({ kind: 'summoned', resume })
   }
 
-  const open = (opts?: { near?: Point }): void => {
-    const near = opts?.near ?? deps.screen.getCursorScreenPoint()
+  const show = (near: Point): void => {
     if (!alive() || current === null) return create(near)
     if (leaving !== null) {
       stopLeaving()
@@ -249,6 +259,28 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       resummon(current, near)
     }
     current.focus()
+  }
+
+  /** Every summon path: the gate (the front-app identify) runs BEFORE the pill
+   *  is shown or takes focus; a summon while it runs is coalesced. */
+  const open = (opts?: { near?: Point }): void => {
+    const near = opts?.near ?? deps.screen.getCursorScreenPoint()
+    const gate = summonGate
+    if (gate === null) return show(near)
+    if (summoning) return
+    summoning = true
+    void gate()
+      .catch(() => undefined)
+      .then(() => {
+        summoning = false
+        show(near)
+      })
+  }
+
+  const sendFrontApp = (): void => {
+    if (frontApp !== null && alive() && ready) {
+      current?.webContents.send(SOL_WINDOW_CHANNELS.frontApp, frontApp.value)
+    }
   }
 
   return {
@@ -283,11 +315,19 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     },
     markReady(sender) {
       if (!alive() || current === null || current.webContents !== sender) return
-      ready = true
+      if (!ready) {
+        ready = true
+        sendFrontApp()
+      }
       if (pending !== null) current.webContents.send(SOL_WINDOW_CHANNELS.region, pending)
       pending = null
     },
-    isSender: (sender) => alive() && current?.webContents === sender
+    isSender: (sender) => alive() && current?.webContents === sender,
+    setSummonGate: (gate) => void (summonGate = gate),
+    pushFrontApp(front) {
+      frontApp = { value: front }
+      sendFrontApp()
+    }
   }
 }
 

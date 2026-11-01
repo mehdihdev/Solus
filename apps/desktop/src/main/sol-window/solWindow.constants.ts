@@ -37,7 +37,10 @@ export const SOL_WINDOW_CHANNELS = {
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */
-  region: 'sol:region'
+  region: 'sol:region',
+  /** SOLUSDEV-319 slice 4 (sol-drive.md §2.2) main → the SOL window only: the
+   *  front-app summon snapshot (`SolFrontApp | null`), on every change. */
+  frontApp: 'sol:front-app'
 } as const
 
 /** SOLUSDEV-319: a re-summon within this long of a hide resumes the same

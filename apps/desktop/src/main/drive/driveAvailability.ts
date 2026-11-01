@@ -1,5 +1,5 @@
-// SOLUSDEV-319 drive slice 3 (docs/architecture/sol-drive.md §5): may SOL
-// drive for the active project right now? Pure — the filesystem enters only
+// SOLUSDEV-319 drive slice 3 (docs/architecture/sol-drive.md §5, narrowed by
+// §2.2): may SOL drive for the active project right now? Pure — the filesystem enters only
 // through the injected realpath and the caller's helper check.
 //
 // The nested-folder rule (security review M1 of ADR-041 M2/M3): the helper's
@@ -61,8 +61,10 @@ export function driveUnavailable(input: DriveAvailabilityInput): DriveUnavailabl
   if (input.platform !== 'darwin') return 'not_macos'
   if (!input.helperOk) return 'no_helper'
   if (input.bundleOk === false) return 'bundle_modified'
+  // §2.2 (ADR-041 2026-10-31): no linked folder only means KiCad (project-
+  // bound) is not drivable; window-bound apps need none.
   const { projectId, folders } = input
-  if (projectId === null || !Object.hasOwn(folders, projectId)) return 'no_folder'
+  if (projectId === null || !Object.hasOwn(folders, projectId)) return null
   if (nestedFolderConflict(projectId, folders, input.realpath, input.platform)) {
     return 'nested_folder'
   }
