@@ -182,17 +182,21 @@ function scanToken(chars: readonly string[], i: number): Token {
   const c = chars[i]
   if (c.length === 1 && PUNCTUATION.includes(c)) return token(c, chars, i, i + 1)
   if (isDigit(c) || (c === '.' && isDigit(chars[i + 1]))) return numberToken(chars, i)
-  if (isIdentStart(c)) {
-    let end = i + 1
-    while (isIdentStart(chars[end]) || isDigit(chars[end])) end++
-    return token('ident', chars, i, end)
-  }
-  if (c === '"') {
-    const close = chars.indexOf('"', i + 1)
-    if (close < 0) throw new ExpressionError('syntax', i, chars.length - i)
-    return token('str', chars, i, close + 1)
-  }
+  if (isIdentStart(c)) return identToken(chars, i)
+  if (c === '"') return stringToken(chars, i)
   throw new ExpressionError('syntax', i, 1)
+}
+
+function identToken(chars: readonly string[], i: number): Token {
+  let end = i + 1
+  while (isIdentStart(chars[end]) || isDigit(chars[end])) end++
+  return token('ident', chars, i, end)
+}
+
+function stringToken(chars: readonly string[], i: number): Token {
+  const close = chars.indexOf('"', i + 1)
+  if (close < 0) throw new ExpressionError('syntax', i, chars.length - i)
+  return token('str', chars, i, close + 1)
 }
 
 function numberToken(chars: readonly string[], i: number): Token {
