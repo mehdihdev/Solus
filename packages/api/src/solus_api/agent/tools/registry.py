@@ -9,6 +9,7 @@ server-side and never placed in a result.
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from jsonschema import Draft202012Validator
 
@@ -33,6 +34,9 @@ _INTERNAL_ERROR_MESSAGE = "The tool failed unexpectedly."
 class _Registration:
     tool: Tool
     validator: Draft202012Validator
+    #: Validates a PARKED call's stored arguments (`stored_params`); None means
+    #: the stored arguments are the model's and `validator` applies.
+    stored_validator: Draft202012Validator | None = None
 
 
 class ToolRegistry:
@@ -50,10 +54,12 @@ class ToolRegistry:
         name = tool.descriptor.name
         if name in self._registry:
             raise ValueError(f"tool {name!r} is already registered")
-        params = tool.descriptor.params
-        Draft202012Validator.check_schema(params)  # raises SchemaError on a malformed schema
-        validator = Draft202012Validator(params, format_checker=Draft202012Validator.FORMAT_CHECKER)
-        self._registry[name] = _Registration(tool=tool, validator=validator)
+        validator = _compiled(tool.descriptor.params)
+        # Optional, duck-typed like `preview`: a tool whose `stored_args` adds
+        # Solus-derived fields declares their schema. Never shown to the model.
+        stored_params = getattr(tool, "stored_params", None)
+        stored = _compiled(stored_params) if stored_params is not None else None
+        self._registry[name] = _Registration(tool, validator, stored_validator=stored)
 
     def tools(self) -> list[Tool]:
         """The registered tool OBJECTS, name-sorted.
@@ -71,13 +77,26 @@ class ToolRegistry:
 
     async def invoke(self, call: ToolCall) -> ToolResult:
         """THE SAFETY SEQUENCE — look up, validate args, run (timeout-bounded and
-        exception-trapped), return a `ToolResult`. This method NEVER raises."""
+        exception-trapped), return a `ToolResult`. This method NEVER raises.
+        Arguments are validated against the MODEL schema (`descriptor.params`)."""
+        return await self._invoke(call, stored=False)
+
+    async def invoke_stored(self, call: ToolCall) -> ToolResult:
+        """The same safety sequence for an APPROVED parked call: its stored
+        arguments are validated against the tool's `stored_params` (falling back
+        to the model schema). Only the confirmation gate calls this — model
+        dispatch goes through `invoke`, so the model can never supply a
+        stored-only field (SOLUSDEV-319)."""
+        return await self._invoke(call, stored=True)
+
+    async def _invoke(self, call: ToolCall, *, stored: bool) -> ToolResult:
         registration = self._registry.get(call.tool)
         if registration is None:
             return _failure(call, ToolErrorCode.NOT_FOUND, f"No tool named {call.tool!r}")
 
+        validator = (stored and registration.stored_validator) or registration.validator
         try:
-            schema_errors = sorted(registration.validator.iter_errors(call.args), key=str)
+            schema_errors = sorted(validator.iter_errors(call.args), key=str)
         except Exception:
             # A schema can pass `check_schema` at register time yet explode during
             # validation (e.g. an unresolvable $ref) — that is the TOOL's defect,
@@ -108,6 +127,12 @@ class ToolRegistry:
             # Full traceback to the server log; the model only ever sees the generic message.
             logger.exception("tool %s (call %s) raised", call.tool, call.call_id)
             return _failure(call, ToolErrorCode.TOOL_ERROR, _INTERNAL_ERROR_MESSAGE)
+
+
+def _compiled(schema: dict[str, Any]) -> Draft202012Validator:
+    """Check a JSON Schema now (fail fast: raises SchemaError) and compile it."""
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
 
 
 def _group_failure(call: ToolCall, group: BaseExceptionGroup) -> ToolResult:

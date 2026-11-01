@@ -61,6 +61,7 @@ from solus_api.agent.tools.shapes import (
     ToolErrorCode,
     ToolResult,
 )
+from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
 from solus_api.models import ConfirmationStatus, Conversation, ToolConfirmation, User, utcnow
 
@@ -474,6 +475,32 @@ async def _card_preview(
     return [], _refusal(call.call_id, message, ToolErrorCode.UNAVAILABLE)
 
 
+def _with_stored_args(registry: ToolRegistry, call: ToolCall) -> ToolCall | ParkedCall:
+    """The call as it will be parked: a tool may add Solus-derived fields (the
+    drive.step front-app `window`, SOLUSDEV-319) through `stored_args(args)`.
+
+    Runs only AFTER the model's arguments passed the model schema, so a
+    stored-only field can never come from the model. A `ToolException` is the
+    tool's own refusal — nothing is parked. The result is what the duplicate
+    check, the card and the stored row all read, and what executes.
+    """
+    tool = next((t for t in registry.tools() if t.descriptor.name == call.tool), None)
+    stamp = getattr(tool, "stored_args", None)
+    if stamp is None:
+        return call
+    try:
+        stored = stamp(dict(call.args))
+    except ToolException as exc:
+        return _unparked(call, _refusal(call.call_id, exc.message, exc.code))
+    except Exception:
+        logger.exception("stored_args failed for %s", call.tool)
+        stored = None
+    if not isinstance(stored, dict):
+        message = f"{call.tool} could not be prepared for approval. Nothing was parked."
+        return _unparked(call, _refusal(call.call_id, message, ToolErrorCode.TOOL_ERROR))
+    return ToolCall(tool=call.tool, args=stored, call_id=call.call_id)
+
+
 def _parked_message(call: ToolCall, summary: str) -> str:
     """The ONLY thing the model learns about the park, and after SOLUSDEV-168's
     loop change it keeps reasoning afterwards — so it says three things: the
@@ -507,12 +534,19 @@ async def request_confirmation(
     if descriptor is None or not descriptor.requires_confirmation:
         return None
     scope = _ParkScope(project_id, team_id, user_id, conversation_id)
-    early = await _refused_before_preview(
-        session, descriptor, call, scope
-    ) or await _pending_duplicate(session, call, scope)
-    if early is not None:
-        return early
+    refused_early = await _refused_before_preview(session, descriptor, call, scope)
+    if refused_early is not None:
+        return refused_early
+    # The summary words the MODEL's arguments; Solus-derived fields reach the
+    # person on the card's rows, built from the stored arguments below.
     summary = _summarize(descriptor, call.args)
+    stamped = _with_stored_args(registry, call)
+    if isinstance(stamped, ParkedCall):
+        return stamped
+    call = stamped
+    duplicate = await _pending_duplicate(session, call, scope)
+    if duplicate is not None:
+        return duplicate
     preview, refused = await _card_preview(registry, call)
     if refused is not None:
         return _unparked(call, refused)
@@ -661,7 +695,8 @@ async def decide_confirmation(
     stored = ToolCall(tool=row.tool, args=dict(row.args), call_id=call_id)
 
     async def _approved(call: ToolCall) -> ToolResult:
-        return await registry.invoke(call)  # the sanctioned post-approval site
+        # The sanctioned post-approval site: stored args, stored-args schema.
+        return await registry.invoke_stored(call)
 
     from solus_api.agent.command_output import current_output, output_store
 
@@ -748,6 +783,10 @@ async def _feed_back_outcome(
 #: The label of the rows the simulation pre-check adds to a real-world action's card
 #: (`agent/tools/simulate.py:precheck_rows`, R99). No other preview composes it.
 PRECHECK_LABEL: Final = "Simulate first"
+#: Card rows that are advice or a live reading, not the action's effect: left out of
+#: the stale-divergence key. `Current value` is a setpoint card's live joint reading
+#: (docs/api/bench-view.md §6.1) — it moving must not void the card; Target still does.
+INFORMATIONAL_LABELS: Final = frozenset({PRECHECK_LABEL, "Current value"})
 
 
 def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
@@ -759,14 +798,15 @@ def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
     are derived from the stored args and therefore cannot drift. The pre-check's
     rows are advice, not effect, rebuilt from state the action does not change:
     they are left out (R118), so a pre-check that fails or words its line anew at
-    approval never refuses the card; `_complete_preview` still bounds them.
+    approval never refuses the card; `_complete_preview` still bounds them. The
+    same holds for every `INFORMATIONAL_LABELS` row.
     """
 
     def key(rows: Any) -> list[tuple[Any, Any, Any]]:
         return sorted(
             (row.get("label"), row.get("before"), row.get("after"))
             for row in (rows if isinstance(rows, list) else [])
-            if isinstance(row, dict) and row.get("label") != PRECHECK_LABEL
+            if isinstance(row, dict) and row.get("label") not in INFORMATIONAL_LABELS
         )
 
     return key(shown) != key(current)
@@ -774,6 +814,7 @@ def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
 
 __all__ = [
     "CONFIRMATION_TTL",
+    "INFORMATIONAL_LABELS",
     "PRECHECK_LABEL",
     "ParkedCall",
     "command_outcome_text",
