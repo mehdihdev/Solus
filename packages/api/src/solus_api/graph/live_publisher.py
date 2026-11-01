@@ -41,6 +41,7 @@ from typing import Any
 from pydantic import BaseModel
 from solus_contracts.live_events import (
     AccessRevoked,
+    BenchViewChanged,
     FindingRaised,
     FindingResolved,
     FindingUpdated,
@@ -64,6 +65,7 @@ from solus_api.graph.kinds import FINDING
 from solus_api.graph.live import HUB_INFO_KEY, Channel
 from solus_api.models import (
     Activity,
+    BenchView,
     GraphEntity,
     Invite,
     Job,
@@ -245,6 +247,15 @@ def _layout(row: WorkspaceLayout, kind: _Kind, at: str) -> _Derived:
         )
 
 
+def _bench_view(row: BenchView, kind: _Kind, at: str) -> _Derived:
+    # A new row or a new version only: the frame carries no view content (ADR-014 2026-10-31).
+    if kind == "new" or (kind == "dirty" and _changed(row, "version")):
+        yield (
+            Channel.project(row.project_id),
+            BenchViewChanged(project_id=row.project_id, version=row.version, at=at),
+        )
+
+
 def _job(row: Job, kind: _Kind, at: str) -> _Derived:
     # Progress ticks are chatty and show nowhere a hint would help: status only.
     if kind == "new" or (kind == "dirty" and _changed(row, "status")):
@@ -307,6 +318,7 @@ _DERIVERS: dict[type, Callable[[Any, _Kind, str], _Derived]] = {
     Project: _project,
     Source: _source,
     WorkspaceLayout: _layout,
+    BenchView: _bench_view,
     Job: _job,
 }
 

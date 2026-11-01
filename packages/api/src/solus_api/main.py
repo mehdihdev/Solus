@@ -67,8 +67,11 @@ from solus_api.livebench.runs.capture import RunCaptureManager
 from solus_api.livebench.runs.router import router as bench_runs_router
 from solus_api.livebench.scene.router import router as bench_scene_router
 from solus_api.livebench.sessions import SessionManager, load_local
+from solus_api.livebench.setpoint import SetpointManager
+from solus_api.livebench.setpoint import router as bench_setpoint_router
 from solus_api.livebench.teleop import TeleopManager
 from solus_api.livebench.teleop_router import router as bench_teleop_router
+from solus_api.livebench.view.router import router as bench_view_router
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.orchestration.gateway import complete, default_orchestration_config
@@ -344,6 +347,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             # Pushed last so it runs FIRST (LIFO): teleop stops ("shutdown"; the follower holds)
             # before anything ends a session or closes a bus.
             cleanup.push_async_callback(served.state.bench_teleop.aclose)
+            # A setpoint move stops before teleop and before any session ends (LIFO).
+            cleanup.push_async_callback(served.state.bench_setpoint.aclose)
             await served.state.graph_hub.start()
             await served.state.hardware_connections.startup()
             if served.state.device_watch is not None:
@@ -519,6 +524,10 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     )
     # SOLUSDEV-319: leader → follower teleoperation beside the sessions (ADR-014 amendment).
     app.state.bench_teleop = TeleopManager(app.state.bench_sessions, lambda: app.state.bench_local)
+    # SOLUSDEV-319: one bounded SOL setpoint move per robot, sharing teleop's lock and keys.
+    app.state.bench_setpoint = SetpointManager(
+        app.state.bench_sessions, app.state.bench_teleop, lambda: app.state.bench_local
+    )
     provider_factory = getattr(app.state.bench_local, "presence_provider", None)
     app.state.presence_provider = (
         provider_factory()
@@ -672,6 +681,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(bench_stream_router)
     app.include_router(bench_router)
     app.include_router(bench_teleop_router)
+    app.include_router(bench_setpoint_router)
+    app.include_router(bench_view_router)
     app.include_router(bench_runs_router)
     app.include_router(bench_scene_router)
     app.include_router(bridge.router)
