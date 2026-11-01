@@ -1,11 +1,83 @@
-// The Solus-authored policy compiled into the helper (ADR-041 §3, §5;
-// sol-drive.md §2). Widening any of it is an ADR-041 amendment.
+// The Solus-authored policy compiled into the helper (ADR-041 §3, §5 and the
+// 2026-10-31 amendments; sol-drive.md §2, §2.2). Widening any of it is an ADR-041 amendment.
 
-/// Apps SOL may drive, by bundle identifier. KiCad's schematic editor runs
-/// inside the project manager (`org.kicad.kicad`) or standalone (`eeschema`).
-public enum DrivableApps {
+/// How the helper treats an app, decided from the window owner's bundle id only
+/// (sol-drive.md §2.2; ADR-041 amendments 2026-10-31).
+public enum AppClass: Equatable {
+    /// Never captured, never driven.
+    case denied
+    /// M2: the window's process works inside `--within` (KiCad).
+    case projectBound
+    /// Bound to the summon snapshot `{bundleId, pid, windowId}`.
+    case windowBound
+}
+
+public enum AppPolicy {
+    public static func classify(_ bundleId: String) -> AppClass {
+        if DeniedApps.denies(bundleId) { return .denied }
+        return ProjectBoundApps.contains(bundleId) ? .projectBound : .windowBound
+    }
+}
+
+/// Apps SOL never drives. Byte-exact match, or — for a family — the entry itself
+/// or the entry followed by `.` and anything. An unusable bundle id is denied.
+public enum DeniedApps {
+    static let exact: Set<String> = [
+        // Terminals, shells and script runners
+        "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "dev.warp.Warp-Preview",
+        "com.mitchellh.ghostty", "net.kovidgoyal.kitty", "org.alacritty", "com.github.wez.wezterm", "co.zeit.hyper",
+        "com.apple.ScriptEditor2", "com.apple.Automator", "com.apple.shortcuts",
+        // Password managers, credential and consent prompts
+        "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
+        "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",
+        "com.apple.keychainaccess", "com.apple.SecurityAgent", "com.apple.loginwindow",
+        "com.apple.coreservices.uiagent", "com.apple.UserNotificationCenter",
+        // System Settings and administration
+        "com.apple.SystemSettings", "com.apple.ActivityMonitor", "com.apple.DiskUtility", "com.apple.installer",
+        // Mail and messaging
+        "com.apple.mail", "com.microsoft.Outlook", "com.readdle.smartemail-Mac", "com.readdle.SparkDesktop",
+        "org.mozilla.thunderbird", "com.mimestream.Mimestream", "com.apple.MobileSMS", "com.apple.FaceTime",
+        "com.tinyspeck.slackmacgap", "com.hnc.Discord", "com.microsoft.teams2", "com.microsoft.teams",
+        "net.whatsapp.WhatsApp", "ru.keepcoder.Telegram", "org.telegram.desktop",
+        "org.whispersystems.signal-desktop", "us.zoom.xos",
+        // Web browsers
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview", "org.chromium.Chromium", "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly", "company.thebrowser.Browser",
+        "company.thebrowser.dia", "com.operasoftware.OperaGX", "com.kagi.kagimacOS", "app.zen-browser.zen",
+    ]
+    static let families: [String] = [
+        "com.apple.Passwords", "com.apple.systempreferences", "com.apple.settings",
+        "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi",
+        // Solus itself (app, Electron helpers, drive agent, companion) and the unpackaged dev shell
+        "com.solusforge.solus", "com.github.Electron",
+    ]
+    static let maxLength = 128
+
+    public static func denies(_ bundleId: String) -> Bool {
+        guard isUsable(bundleId) else { return true }
+        let id = Array(bundleId.utf8)
+        if exact.contains(where: { Array($0.utf8) == id }) { return true }
+        return families.contains { entry in
+            let family = Array(entry.utf8)
+            return id == family || id.starts(with: family + Array(".".utf8))
+        }
+    }
+
+    /// `^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`, by bytes.
+    public static func isUsable(_ bundleId: String) -> Bool {
+        let bytes = Array(bundleId.utf8)
+        func alnum(_ b: UInt8) -> Bool { (48...57).contains(b) || (65...90).contains(b) || (97...122).contains(b) }
+        guard let first = bytes.first, alnum(first), bytes.count <= maxLength else { return false }
+        return bytes.allSatisfy { alnum($0) || $0 == UInt8(ascii: ".") || $0 == UInt8(ascii: "-") }
+    }
+}
+
+/// Apps that keep the M2 working-folder binding and need a linked workspace.
+/// KiCad's schematic editor runs inside the project manager or standalone.
+public enum ProjectBoundApps {
     public static let bundleIds = ["org.kicad.kicad", "org.kicad.eeschema"]
-    public static func allows(_ bundleId: String) -> Bool { bundleIds.contains(bundleId) }
+    public static func contains(_ bundleId: String) -> Bool { bundleIds.contains { Array($0.utf8) == Array(bundleId.utf8) } }
 }
 
 /// ANSI-layout virtual key codes for the named keys a chord may use.
@@ -75,4 +147,17 @@ public enum ChordPolicy {
         default: return false
         }
     }
+}
+
+/// Save, close, quit and print — refused for every binding BEFORE the allowlist,
+/// so a future widening of `ChordPolicy` can never admit them (sol-drive.md §2.2).
+public enum DeniedChords {
+    public static let chords: [Chord] = [
+        "cmd+s", "cmd+shift+s", "cmd+option+s", "cmd+option+shift+s",
+        "cmd+w", "cmd+shift+w", "cmd+option+w",
+        "cmd+q", "cmd+shift+q", "cmd+option+q", "cmd+option+shift+q",
+        "cmd+p", "cmd+shift+p", "cmd+option+p",
+    ].compactMap(Chord.parse)
+
+    public static func denies(_ chord: Chord) -> Bool { chords.contains(chord) }
 }

@@ -28,13 +28,15 @@ final class AgentRunTests: XCTestCase {
     func testRunHandsArgvToTheRunner() {
         let r = Harness().run(identify)
         XCTAssertEqual(r["ok"] as? Bool, true)
-        XCTAssertEqual(r["allowed"] as? Bool, true)
+        XCTAssertEqual((r["front"] as? [String: Any])?["drivable"] as? Bool, true)
         XCTAssertEqual(r["unsignedDev"] as? Bool, false)
     }
 
     func testTheRunnersOwnChecksStillApply() {
         let h = Harness()
-        XCTAssertEqual(code(h.run(["identify"])), "usage", "no --within")
+        XCTAssertEqual(h.run(["identify"])["ok"] as? Bool, true, "--within is optional (§2.2)")
+        XCTAssertEqual(code(h.run(["capture", "--bundle", "org.kicad.kicad", "--window", "7"])), "usage",
+                       "KiCad without --within")
         XCTAssertEqual(code(h.run(["identify", "--within", "/Users"])), "usage", "home ancestor")
         let act = ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990",
                    "click", "--x", "10", "--y", "40", "--within", "/work"]

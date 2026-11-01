@@ -111,6 +111,9 @@ public protocol SystemPort {
     /// The process's current working directory, resolved; nil when unreadable.
     /// KiCad works in its open project's folder.
     func workingDirectory(pid: Int) -> String?
+    /// The window's `AXDocument` as an absolute POSIX path (unresolved); nil when
+    /// the app exposes none or it is not a file URL (sol-drive.md §2.2 documentDir).
+    func documentPath(window: WindowInfo) -> String?
     /// `realpath`; nil when the path does not resolve.
     func resolvedPath(_ path: String) -> String?
     /// The helper's own code is valid and satisfies `requirement`.

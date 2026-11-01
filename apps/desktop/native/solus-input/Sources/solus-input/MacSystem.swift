@@ -117,6 +117,16 @@ struct MacSystem: SystemPort {
         }
     }
 
+    /// The matching AX window's `AXDocument` (a file URL string) as a POSIX path.
+    func documentPath(window: WindowInfo) -> String? {
+        guard let ax = axWindow(pid: window.ownerPid, bounds: window.bounds) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(ax, kAXDocumentAttribute as CFString, &value) == .success,
+              let text = value as? String, let url = URL(string: text), url.isFileURL else { return nil }
+        let path = url.path
+        return path.hasPrefix("/") ? path : nil
+    }
+
     /// From the window's real close button when AX can find it; else 28 pt.
     func titleBarHeight(window: WindowInfo) -> Double {
         guard let pid = windowList([.optionIncludingWindow], CGWindowID(window.id)).first?[kCGWindowOwnerPID as String]
@@ -298,6 +308,15 @@ struct MacSystem: SystemPort {
         guard AXValueGetValue(p as! AXValue, .cgPoint, &origin), // AX position/size are AXValues
               AXValueGetValue(s as! AXValue, .cgSize, &extent) else { return nil }
         return CGRect(origin: origin, size: extent)
+    }
+
+    /// The process's AX window whose origin matches `bounds` (CG and AX share global top-left points).
+    private func axWindow(pid: Int, bounds: Rect) -> AXUIElement? {
+        var windows: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid_t(pid)), kAXWindowsAttribute as CFString,
+                                            &windows) == .success,
+              let list = windows as? [AXUIElement] else { return nil }
+        return list.first { frame($0).map { near($0.origin, bounds) } == true }
     }
 
     private func near(_ origin: CGPoint, _ bounds: Rect) -> Bool {

@@ -1,4 +1,5 @@
-// sol-drive.md §2 check 5: chords parse strictly and the denylist is order-insensitive.
+// sol-drive.md §2 check 6 / §2.2: chords parse strictly; the allowlist and the denied
+// chords are order-insensitive.
 import XCTest
 @testable import SolusInputCore
 
@@ -33,7 +34,22 @@ final class ChordTests: XCTestCase {
         }
     }
 
-    func testDrivableAppsAreExactlyKiCadsSchematicHostsForNow() {
-        XCTAssertEqual(DrivableApps.bundleIds, ["org.kicad.kicad", "org.kicad.eeschema"])
+    func testProjectBoundAppsAreExactlyKiCadsSchematicHosts() {
+        XCTAssertEqual(ProjectBoundApps.bundleIds, ["org.kicad.kicad", "org.kicad.eeschema"])
+    }
+
+    // sol-drive.md §2.2: save/close/quit/print are pinned by `DeniedChords`, including
+    // the option and shift variants, independent of the allowlist.
+    func testDeniedChordsIncludeOptionAndShiftVariantsAndNeverPassTheAllowlist() {
+        for text in ["cmd+s", "shift+cmd+s", "option+cmd+s", "cmd+option+shift+s", "cmd+w", "cmd+shift+w",
+                     "alt+cmd+w", "cmd+q", "cmd+shift+q", "cmd+opt+q", "cmd+alt+shift+q", "cmd+p", "cmd+shift+p",
+                     "cmd+option+p"] {
+            let chord = Chord.parse(text)!
+            XCTAssertTrue(DeniedChords.denies(chord), text)
+            XCTAssertFalse(ChordPolicy.allows(chord), text)
+        }
+        for text in ["cmd+option+shift+w", "cmd+option+shift+p", "ctrl+cmd+q", "s", "w", "q", "p", "shift+p"] {
+            XCTAssertFalse(DeniedChords.denies(Chord.parse(text)!), text)
+        }
     }
 }

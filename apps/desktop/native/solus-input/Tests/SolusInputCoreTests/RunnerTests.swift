@@ -31,6 +31,8 @@ final class FakePort: SystemPort {
     var trustPrompts = 0
     /// The home directory from the user database (never $HOME); nil = unreadable.
     var home: String? = "/Users/me"
+    /// Each window's AXDocument path (unresolved); absent = the app exposes none.
+    var documents: [UInt32: String] = [:]
     static let team = "ABCDE12345"
 
     static let kicadWindow = WindowInfo(
@@ -58,6 +60,7 @@ final class FakePort: SystemPort {
     func topWindow(at point: Point) -> UInt32? { windowAt(point) ?? front?.window?.id }
     func workingDirectory(pid: Int) -> String? { cwd[pid] }
     func resolvedPath(_ path: String) -> String? { resolve(path) }
+    func documentPath(window: WindowInfo) -> String? { documents[window.id] }
     func ownCodeSatisfies(requirement: String) -> Bool { ownRequirements.contains(requirement) }
     func homeDirectory() -> String? { home }
     func requestTrust() { trustPrompts += 1 }
@@ -84,16 +87,19 @@ func act(_ port: FakePort, _ verb: [String], bundle: String = "org.kicad.kicad",
 
 func code(_ result: [String: Any]) -> String? { result["code"] as? String }
 
+/// `identify`'s `front.drivable` (sol-drive.md §2.2).
+func drivable(_ result: [String: Any]) -> Bool? { (result["front"] as? [String: Any])?["drivable"] as? Bool }
+
 final class IdentifyTests: XCTestCase {
     func testReportsTheFrontmostAppWindowTrustAndWhetherItIsDrivable() {
         let port = FakePort()
         let r = invoke(port, ["identify"])
         XCTAssertEqual(r["ok"] as? Bool, true)
-        XCTAssertEqual((r["app"] as? [String: Any])?["bundleId"] as? String, "org.kicad.kicad")
-        let window = r["window"] as? [String: Any]
-        XCTAssertEqual(window?["id"] as? Int, 7)
-        XCTAssertEqual((window?["bounds"] as? [String: Any])?["width"] as? Int, 800)
-        XCTAssertEqual(r["allowed"] as? Bool, true)
+        let front = r["front"] as? [String: Any]
+        XCTAssertEqual(front?["bundleId"] as? String, "org.kicad.kicad")
+        XCTAssertEqual(front?["windowId"] as? Int, 7)
+        XCTAssertEqual((front?["bounds"] as? [String: Any])?["width"] as? Int, 800)
+        XCTAssertEqual(front?["drivable"] as? Bool, true)
         XCTAssertEqual((r["trust"] as? [String: Any])?["accessibility"] as? Bool, true)
     }
 
@@ -105,9 +111,11 @@ final class IdentifyTests: XCTestCase {
                                    window: WindowInfo(id: 3, title: "Re: salary review", bounds: Rect(x: 0, y: 0, width: 9, height: 9),
                                                       ownerBundleId: "com.apple.mail", ownerPid: 9, onScreen: true))
         let r = invoke(port, ["identify"])
-        XCTAssertEqual(r["allowed"] as? Bool, false)
-        XCTAssertTrue(r["window"] is NSNull, "never another app's window title")
-        XCTAssertTrue(r["app"] is NSNull, "never another app's identity")
+        let front = r["front"] as? [String: Any]
+        XCTAssertEqual(front?["drivable"] as? Bool, false)
+        XCTAssertEqual(front?["reason"] as? String, "denied")
+        XCTAssertNil(front?["title"], "never a denied app's window title")
+        XCTAssertNil(front?["pid"], "never a denied app's pid")
         XCTAssertNotNil(r["trust"])
     }
 }
@@ -123,9 +131,9 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(r["bounds"] as? [String: Int], ["x": 100, "y": 50, "width": 800, "height": 600])
     }
 
-    func testRefusesAnAppOffTheDrivableList() {
+    func testRefusesADeniedApp() {
         XCTAssertEqual(code(invoke(FakePort(), ["capture", "--bundle", "com.apple.Terminal", "--window", "7"])),
-                       "app_not_allowed")
+                       "app_denied")
     }
 
     func testRefusesAMissingWindowOrOneOwnedByAnotherApp() {
@@ -309,12 +317,12 @@ final class ActGuardTests: XCTestCase {
         XCTAssertEqual(port.posted, [])
     }
 
-    func testAnAppOffTheListIsRefusedEvenWhenItIsFrontmost() {
+    func testADeniedAppIsRefusedEvenWhenItIsFrontmost() {
         let port = FakePort()
         port.front = FrontmostInfo(app: AppInfo(bundleId: "com.apple.Terminal", pid: 9, name: "Terminal"),
                                    window: FakePort.kicadWindow)
         XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40"], bundle: "com.apple.Terminal")),
-                       "app_not_allowed")
+                       "app_denied")
         XCTAssertEqual(port.posted, [])
     }
 
@@ -408,10 +416,14 @@ final class ActEventTests: XCTestCase {
 // ADR-041 amendment (M2): the bound process must be working inside the linked
 // workspace, checked on every command; no path ever appears in the output.
 final class WorkspaceBindingTests: XCTestCase {
-    func testEveryCommandNeedsAnAbsoluteWorkspaceThatIsNotTheRoot() {
+    // §2.2: --within is optional for identify and window-bound apps; KiCad still needs it.
+    func testKiCadNeedsAnAbsoluteWorkspaceThatIsNotTheRootAndAGivenOneIsAlwaysValidated() {
+        XCTAssertEqual(invoke(FakePort(), ["identify"], within: nil)["ok"] as? Bool, true)
         for argv in [["identify"], ["capture", "--bundle", "org.kicad.kicad", "--window", "7"],
                      ["act", "--bundle", "org.kicad.kicad", "--window", "7", "--since", "990", "wait", "--ms", "1"]] {
-            XCTAssertEqual(code(invoke(FakePort(), argv, within: nil)), "usage", "\(argv[0]) without --within")
+            if argv[0] != "identify" {
+                XCTAssertEqual(code(invoke(FakePort(), argv, within: nil)), "usage", "\(argv[0]) without --within")
+            }
             XCTAssertEqual(code(invoke(FakePort(), argv, within: "work")), "usage", "relative")
             XCTAssertEqual(code(invoke(FakePort(), argv, within: "/")), "usage", "the whole disk")
             let port = FakePort()
@@ -425,9 +437,11 @@ final class WorkspaceBindingTests: XCTestCase {
         port.cwd[42] = "/other-team/board"
         let r = invoke(port, ["identify"])
         XCTAssertEqual(r["ok"] as? Bool, true)
-        XCTAssertEqual(r["allowed"] as? Bool, false)
-        XCTAssertEqual(r["outsideWorkspace"] as? Bool, true)
-        XCTAssertTrue(r["app"] is NSNull && r["window"] is NSNull, "another project's title never leaves")
+        let front = r["front"] as? [String: Any]
+        XCTAssertEqual(front?["drivable"] as? Bool, false)
+        XCTAssertEqual(front?["reason"] as? String, "outside_workspace")
+        XCTAssertNil(front?["title"], "another project's title never leaves")
+        XCTAssertNil(front?["windowId"])
         XCTAssertNotNil(r["now"])
     }
 
@@ -436,27 +450,26 @@ final class WorkspaceBindingTests: XCTestCase {
             let port = FakePort()
             port.cwd[42] = dir
             let r = invoke(port, ["identify"])
-            XCTAssertEqual(r["allowed"] as? Bool, true, dir)
-            XCTAssertEqual(r["outsideWorkspace"] as? Bool, false, dir)
+            XCTAssertEqual(drivable(r), true, dir)
         }
     }
 
     func testAPrefixSiblingIsNotInside() {
         let port = FakePort()
         port.cwd[42] = "/work-other/board"
-        XCTAssertEqual(invoke(port, ["identify"])["allowed"] as? Bool, false)
+        XCTAssertEqual(drivable(invoke(port, ["identify"])), false)
     }
 
     func testTheWorkspaceIsComparedResolved() {
         let port = FakePort()
         port.resolve = { $0 == "/link" ? "/work" : $0 }
-        XCTAssertEqual(invoke(port, ["identify"], within: "/link")["allowed"] as? Bool, true)
+        XCTAssertEqual(drivable(invoke(port, ["identify"], within: "/link")), true)
     }
 
     func testAnUnreadableWorkingDirectoryFailsClosed() {
         let port = FakePort()
         port.cwd = [:]
-        XCTAssertEqual(invoke(port, ["identify"])["allowed"] as? Bool, false)
+        XCTAssertEqual(drivable(invoke(port, ["identify"])), false)
         XCTAssertEqual(code(invoke(port, ["capture", "--bundle", "org.kicad.kicad", "--window", "7"])),
                        "outside_workspace")
         XCTAssertEqual(code(act(port, ["click", "--x", "1", "--y", "40"])), "outside_workspace")
@@ -496,7 +509,7 @@ final class WorkspaceBindingTests: XCTestCase {
     func testPathsCompareByteForByte() {
         let port = FakePort()
         port.cwd[42] = "/work/Re\u{0301}sistance"  // NFD
-        XCTAssertEqual(invoke(port, ["identify"], within: "/work/R\u{00E9}sistance")["allowed"] as? Bool, false)
-        XCTAssertEqual(invoke(port, ["identify"], within: "/work/Re\u{0301}sistance")["allowed"] as? Bool, true)
+        XCTAssertEqual(drivable(invoke(port, ["identify"], within: "/work/R\u{00E9}sistance")), false)
+        XCTAssertEqual(drivable(invoke(port, ["identify"], within: "/work/Re\u{0301}sistance")), true)
     }
 }

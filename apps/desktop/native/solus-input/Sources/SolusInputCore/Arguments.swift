@@ -35,4 +35,11 @@ struct Arguments {
     func int(_ name: String) -> Int? { options[name].flatMap { Int($0) } }
     func double(_ name: String) -> Double? { options[name].flatMap { Double($0) } }
     func windowId(_ name: String) -> UInt32? { options[name].flatMap { UInt32($0) } }
+    /// Decimal digits only, 1...2^31-1 (no sign, no spaces).
+    func pid(_ name: String) -> Int? {
+        guard let raw = options[name], (1...10).contains(raw.utf8.count),
+              raw.utf8.allSatisfy({ (48...57).contains($0) }), let value = Int(raw), (1...Int(Int32.max)).contains(value)
+        else { return nil }
+        return value
+    }
 }

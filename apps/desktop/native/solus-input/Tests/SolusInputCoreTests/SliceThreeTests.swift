@@ -79,7 +79,7 @@ final class BoundsTests: XCTestCase {
 
     func testActFallsBackToTheCheckedBoundsWhenTheWindowCannotBeReRead() {
         let port = FakePort()
-        port.windows = [:]
+        port.afterPost = { $0.windows = [:] } // checked before posting, gone after
         let r = act(port, ["wait", "--ms", "1"])
         XCTAssertEqual(r["bounds"] as? [String: Int], ["x": 100, "y": 50, "width": 800, "height": 600])
     }
