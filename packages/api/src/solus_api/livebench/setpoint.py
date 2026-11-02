@@ -78,6 +78,17 @@ class SetpointNotFoundError(LookupError):
     """Unknown session (in this project) or joint."""
 
 
+class SetpointStopError(RuntimeError):
+    """One or more moves did not stop (e.g. a serial error); every other move WAS stopped.
+    A RuntimeError so a teleop release maps it to `release_failed` and never goes limp."""
+
+    def __init__(self, failed: list[_Move]) -> None:
+        super().__init__(
+            f"{len(failed)} setpoint move(s) did not confirm the stop; every other move stopped"
+        )
+        self.failed = failed
+
+
 @dataclass
 class _Preview:
     session_id: UUID
@@ -194,6 +205,14 @@ class SetpointManager:
 
     # ── preview / start ─────────────────────────────────────────────────────────
 
+    def _prune(self, now: float) -> None:
+        """Drop expired previews in every project, and any project left with none."""
+        for project_id, previews in list(self._previews.items()):
+            for stale in [k for k, p in previews.items() if p.expires < now]:
+                del previews[stale]
+            if not previews:
+                del self._previews[project_id]
+
     async def preview(
         self, project_id: UUID, session_id: UUID, joint: str, target: float
     ) -> dict[str, Any]:
@@ -209,10 +228,9 @@ class SetpointManager:
             )
         except NotActuatedError:
             raise SetpointRefusedError("uncalibrated") from None
-        previews = self._previews.setdefault(project_id, {})
         now = self.clock()
-        for stale in [k for k, p in previews.items() if p.expires < now]:
-            del previews[stale]
+        self._prune(now)
+        previews = self._previews.setdefault(project_id, {})
         while len(previews) >= MAX_PREVIEWS_PER_PROJECT:
             del previews[next(iter(previews))]
         preview_id = uuid.uuid4()
@@ -238,6 +256,7 @@ class SetpointManager:
         local = self._require_local()
         async with self._teleop.start_lock:  # decided atomically against teleop starts
             preview = self._previews.get(project_id, {}).pop(preview_id, None)
+            self._prune(self.clock())
             if preview is None or preview.expires < self.clock():
                 raise PreviewExpiredError(str(preview_id))
             out, conn = self._resolve(project_id, preview.session_id)
@@ -308,31 +327,59 @@ class SetpointManager:
         if move.state == "moving":
             await self._local().setpoint_stop(move.handle, reason)
 
+    async def _stop_all(self, moves: Iterable[_Move], reason: str) -> list[_Move]:
+        """Best effort: one move failing to stop never leaves the others moving. Returns the
+        moves that did not stop."""
+        failed: list[_Move] = []
+        for move in moves:
+            try:
+                await self._stop_move(move, reason)
+            except Exception:
+                logger.exception(
+                    "setpoint stop failed: project=%s move=%s robot=%s reason=%s",
+                    move.project_id,
+                    move.id,
+                    move.key,
+                    reason,
+                )
+                failed.append(move)
+        return failed
+
     async def stop(self, project_id: UUID, reason: str = "user") -> dict[str, Any] | None:
         """Stop and HOLD every move in the project (torque stays on). Idempotent; returns the
-        most recent move, None when the project has none."""
-        for move in self._live(project_id):
-            await self._stop_move(move, reason)
+        most recent move, None when the project has none. Raises SetpointStopError after
+        stopping every other move when one did not stop."""
+        failed = await self._stop_all(self._live(project_id), reason)
+        if failed:
+            raise SetpointStopError(failed)
         return self.current(project_id)
 
     async def stop_robots(self, keys: Iterable[str], reason: str) -> None:
-        """Stop any move on these physical robots (teleop start / release call this first)."""
-        for key in set(keys):
-            move = self._moves.get(key)
-            if move is not None:
-                await self._stop_move(move, reason)
+        """Stop any move on these physical robots (teleop start / release call this first).
+        Raises SetpointStopError, after trying every robot, so the caller aborts."""
+        moves = [m for m in (self._moves.get(k) for k in set(keys)) if m is not None]
+        failed = await self._stop_all(moves, reason)
+        if failed:
+            raise SetpointStopError(failed)
 
     async def _session_ended(self, project_id: UUID, session_id: UUID) -> None:
-        for move in self._live(project_id):
-            if move.session_id == session_id:
-                await self._stop_move(move, "session_ended")
+        """Stop the session's moves (failures are logged, the session still ends) and forget
+        whatever of it no longer moves, so nothing is kept for a session that is gone."""
+        ours = [m for m in self._moves.values() if m.session_id == session_id]
+        await self._stop_all([m for m in ours if m.state == "moving"], "session_ended")
+        for move in ours:
+            if move.state != "moving":
+                del self._moves[move.key]
+        recent = self._recent.get(project_id)
+        if recent is not None and recent.session_id == session_id and recent.state != "moving":
+            del self._recent[project_id]
+        previews = self._previews.get(project_id, {})
+        for stale in [k for k, p in previews.items() if p.session_id == session_id]:
+            del previews[stale]
+        self._prune(self.clock())
 
     async def aclose(self) -> None:
-        for move in self._live():
-            try:
-                await self._stop_move(move, "shutdown")
-            except Exception:
-                logger.exception("setpoint shutdown stop failed: %s", move.id)
+        await self._stop_all(self._live(), "shutdown")
 
 
 def emit_setpoint_event(
@@ -388,4 +435,13 @@ async def current_setpoint(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
 async def stop_setpoint(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
     """The safety control: member role, never rate-limited, idempotent."""
     require_role(ctx, Role.MEMBER)
-    return envelope(await _local_manager(request).stop(ctx.project.id))
+    try:
+        return envelope(await _local_manager(request).stop(ctx.project.id))
+    except SetpointStopError as exc:
+        # Every other move was stopped; say which did not, never claim this one holds.
+        logger.warning(
+            "setpoint stop incomplete: project=%s moves=%s",
+            ctx.project.id,
+            [str(m.id) for m in exc.failed],
+        )
+        raise APIError(503, "setpoint_stop_failed", str(exc)) from exc

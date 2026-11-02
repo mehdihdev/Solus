@@ -215,13 +215,52 @@ async def test_move_ends_within_two_ticks_of_the_goal() -> None:
     assert await _run(move) == "reached"
 
 
-async def test_move_is_bounded_in_time_and_holds_its_last_goal() -> None:
+async def test_a_stalled_joint_never_lets_the_goal_run_ahead_and_holds_where_it_is() -> None:
     actuator = FakeActuator({1: 100})
     actuator.follows = False  # a stalled joint never gets there
     move = SetpointMove(actuator, 1, 4000, (0, 4000), rate_hz=FAST_HZ, timeout_s=0.05)
     assert await _run(move) == "timed_out"
     assert actuator.released is False
-    assert all(w[1] <= 100 + DEFAULT_MAX_STEP_TICKS * len(actuator.writes) for w in actuator.writes)
+    assert all(abs(w[1] - 100) <= DEFAULT_MAX_STEP_TICKS for w in actuator.writes)
+    assert actuator.writes == [{1: 100 + DEFAULT_MAX_STEP_TICKS}, {1: 100}]  # holds the present
+
+
+async def test_a_partly_blocked_joint_keeps_the_goal_one_step_from_its_measured_position() -> None:
+    actuator = FakeActuator({1: 100})
+
+    def blocked(goals: Mapping[int, int]) -> None:  # an obstacle at 230 ticks
+        actuator.writes.append(dict(goals))
+        actuator.ticks[1] = min(goals[1], 230)
+
+    actuator.write_goals = blocked  # type: ignore[method-assign]
+    move = SetpointMove(actuator, 1, 4000, (0, 4000), rate_hz=FAST_HZ, timeout_s=0.05)
+    assert await _run(move) == "timed_out"
+    assert all(w[1] <= 230 + DEFAULT_MAX_STEP_TICKS for w in actuator.writes)
+    assert actuator.writes[-1] == {1: 230}
+
+
+async def test_a_timeout_before_any_write_writes_nothing() -> None:
+    actuator = FakeActuator({1: 100})
+    move = SetpointMove(actuator, 1, 4000, (0, 4000), rate_hz=FAST_HZ, timeout_s=1e-9)
+    assert await _run(move) == "timed_out"
+    assert actuator.writes == []
+
+
+async def test_a_guard_at_timeout_stops_without_the_hold_write() -> None:
+    actuator = FakeActuator({1: 100})
+    actuator.follows = False
+    preempt: list[str] = []
+
+    def guard() -> str | None:
+        return preempt[0] if preempt else None
+
+    move = SetpointMove(actuator, 1, 4000, (0, 4000), rate_hz=FAST_HZ, timeout_s=0.05, guard=guard)
+    move.start()
+    await asyncio.sleep(0.02)
+    preempt.append("teleop")
+    await asyncio.wait_for(move.wait(), timeout=1)
+    assert (move.state, move.reason) == ("stopped", "teleop")
+    assert actuator.writes == [{1: 100 + DEFAULT_MAX_STEP_TICKS}]
 
 
 async def test_move_from_a_rest_outside_the_span_never_writes_outside_it() -> None:

@@ -4,7 +4,9 @@ docs/api/bench-view.md §6.2, docs/architecture/bench-view.md §6. Runs in the p
 the robot's bus, over the driver `Actuator` seam. The goal is the actuator's own clamp of the
 target into the calibrated span (`to_goal`); each 30 Hz tick moves at most
 `DEFAULT_MAX_STEP_TICKS` toward it; the move ends within `REACHED_TICKS` of the goal or after
-`TIMEOUT_SECONDS`. It never touches torque: the joint holds its last goal however the move ends.
+`TIMEOUT_SECONDS`. Every goal stays within one step of the MEASURED position, and a timed-out
+move holds the measured position, so a stalled joint is never left straining toward a far goal.
+It never touches torque: the joint holds its last goal however the move ends.
 It is never a loop over targets and never a stream — one goal, then it is over.
 """
 
@@ -145,8 +147,8 @@ def preview(actuator: Actuator, signal: str, target: float) -> SetpointPreview:
 
 
 class SetpointMove:
-    """One move toward `goal`. `guard` is polled before every write: a non-None return is a stop
-    reason (a teleop starting, a release) and ends the move as `stopped` before it writes."""
+    """One move toward `goal`. `guard` is polled every tick, before any write: a non-None return
+    is a stop reason (a teleop starting, a release) and ends the move as `stopped` unwritten."""
 
     def __init__(
         self,
@@ -228,22 +230,34 @@ class SetpointMove:
         if abs(present - self.goal) <= REACHED_TICKS:
             self._finish("reached")
             return
+        preempt = self._guard() if self._guard is not None else None
+        if preempt is not None:  # polled every tick, so it also ends a stalled, idle move
+            self._finish("stopped", preempt)
+            return
         if time.monotonic() >= deadline:
-            self._finish("timed_out")
+            await self._hold(present)
             return
         last = present if self._last is None else self._last
         stepped = step_goals(
             {self.address: self.goal}, {self.address: last}, max_step=self._max_step
-        )
-        goal = min(self._span[1], max(self._span[0], stepped[self.address]))
+        )[self.address]
+        # Never more than one step from where the joint IS: a stalled joint must not let the
+        # commanded goal run ahead of it toward the target.
+        near = min(present + self._max_step, max(present - self._max_step, stepped))
+        goal = min(self._span[1], max(self._span[0], near))
         if goal == self._last:
             return
-        if abs(goal - last) > self._max_step:
+        if abs(goal - present) > self._max_step:
             self._finish("failed", "step_limit")  # never a jump, whatever the clamp did
-            return
-        preempt = self._guard() if self._guard is not None else None
-        if preempt is not None:
-            self._finish("stopped", preempt)
             return
         await self._io(self._actuator.write_goals, {self.address: goal})
         self._last = goal
+
+    async def _hold(self, present: int) -> None:
+        """Timed out: hold the measured position (one write), not a goal the joint never
+        reached. Nothing to write when the move never wrote, or the present is unreachable."""
+        hold = min(self._span[1], max(self._span[0], present))
+        if self._last not in (None, hold) and abs(hold - present) <= self._max_step:
+            await self._io(self._actuator.write_goals, {self.address: hold})
+            self._last = hold
+        self._finish("timed_out")
