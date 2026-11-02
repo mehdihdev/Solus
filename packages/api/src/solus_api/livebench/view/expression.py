@@ -479,53 +479,138 @@ class _FilterState:
         return 0
 
 
+# A window term below this magnitude cannot make a sum of MAX_FILTER_SAMPLES terms overflow.
+_SAFE_TERM: Final = 1.7976931348623157e308 / MAX_FILTER_SAMPLES
+
+
+class _WindowSum:
+    """Running sum of a FIFO of terms: amortised O(1) push/pop (Phase 4 H-1).
+
+    Neumaier-compensated so a term leaving the window does not take smaller terms'
+    precision with it, and recomputed oldest->newest once as many terms have left as
+    remain (amortised O(1)), so drift never accumulates past one window. A non-finite
+    partial sum makes the result NaN until no term that could overflow is left, when
+    the oldest->newest recomputation decides again."""
+
+    def __init__(self) -> None:
+        self.terms: deque[float] = deque()
+        self._sum = 0.0
+        self._comp = 0.0
+        self._unsafe = 0
+        self._removed = 0
+        self._overflow = False
+
+    def push(self, term: float) -> None:
+        self.terms.append(term)
+        if not abs(term) < _SAFE_TERM:
+            self._unsafe += 1
+        self._add(term)
+
+    def pop(self) -> None:
+        term = self.terms.popleft()
+        self._removed += 1
+        if not abs(term) < _SAFE_TERM:
+            self._unsafe -= 1
+        if self._removed >= len(self.terms) or (self._overflow and self._unsafe == 0):
+            self._recompute()
+        else:
+            self._add(-term)
+
+    def clear(self) -> None:
+        self.terms.clear()
+        self._recompute()
+
+    def value(self) -> float:
+        return math.nan if self._overflow else self._sum + self._comp
+
+    def _add(self, term: float) -> None:
+        if self._overflow:
+            return
+        total = self._sum + term
+        if not math.isfinite(total):
+            self._overflow = True
+            return
+        if abs(self._sum) >= abs(term):
+            self._comp += (self._sum - total) + term
+        else:
+            self._comp += (term - total) + self._sum
+        self._sum = total
+
+    def _recompute(self) -> None:
+        self._sum = self._comp = 0.0
+        self._removed = 0
+        self._overflow = False
+        for term in self.terms:
+            self._add(term)
+
+
 class _WindowedFilter(_FilterState):
-    """Finite samples in (t - w, t], newest MAX_FILTER_SAMPLES; recomputed per sample."""
+    """Finite samples in (t - w, t], newest MAX_FILTER_SAMPLES, reduced through a
+    running :class:`_WindowSum` of per-sample terms."""
 
     def __init__(self, window: float) -> None:
         self._window = window
         self._samples: deque[tuple[float, float]] = deque()
+        self._sum = _WindowSum()
         self._last_t: float | None = None
 
     def update(self, t: float, x: float) -> float:
         if self._last_t is not None and t - self._last_t > self._window:
             self._samples.clear()
+            self._sum.clear()
         self._last_t = t
         if math.isfinite(x):
-            self._samples.append((t, x))
+            self._push(t, x)
         cutoff = t - self._window
-        while self._samples and self._samples[0][0] <= cutoff:
+        while self._samples and (
+            self._samples[0][0] <= cutoff or len(self._samples) > MAX_FILTER_SAMPLES
+        ):
             self._samples.popleft()
-        while len(self._samples) > MAX_FILTER_SAMPLES:
-            self._samples.popleft()
+            self._evicted()
         return _finite(self._reduce())
 
     def size(self) -> int:
         return len(self._samples)
+
+    def _push(self, t: float, x: float) -> None:
+        raise NotImplementedError
+
+    def _evicted(self) -> None:
+        raise NotImplementedError
 
     def _reduce(self) -> float:
         raise NotImplementedError
 
 
 class _MovingAverage(_WindowedFilter):
+    """Term per sample: the sample's value."""
+
+    def _push(self, t: float, x: float) -> None:
+        self._samples.append((t, x))
+        self._sum.push(x)
+
+    def _evicted(self) -> None:
+        self._sum.pop()
+
     def _reduce(self) -> float:
-        if not self._samples:
-            return math.nan
-        total = 0.0
-        for _t, x in self._samples:
-            total += x
-        return total / len(self._samples)
+        return self._sum.value() / len(self._samples) if self._samples else math.nan
 
 
 class _Integral(_WindowedFilter):
+    """Term per consecutive sample pair: the trapezoid between them."""
+
+    def _push(self, t: float, x: float) -> None:
+        if self._samples:
+            previous_t, previous_x = self._samples[-1]
+            self._sum.push((t - previous_t) * (x + previous_x) / 2)
+        self._samples.append((t, x))
+
+    def _evicted(self) -> None:
+        if self._sum.terms:
+            self._sum.pop()
+
     def _reduce(self) -> float:
-        total = 0.0
-        previous: tuple[float, float] | None = None
-        for t, x in self._samples:
-            if previous is not None:
-                total += (t - previous[0]) * (x + previous[1]) / 2
-            previous = (t, x)
-        return total
+        return self._sum.value()
 
 
 class _LowPass(_FilterState):

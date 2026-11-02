@@ -23,6 +23,7 @@ from solus_api.livebench.view import expression as expression_module
 from solus_api.livebench.view.expression import (
     ERROR_MESSAGES,
     MAX_EXPRESSION_CHARS,
+    MAX_FILTER_SAMPLES,
     ExpressionError,
     IncrementalEvaluator,
     ParsedExpression,
@@ -233,6 +234,110 @@ def test_filter_state_is_bounded() -> None:
     stream.feed(SignalRef("d", "a"), [(i * 0.001, float(i)) for i in range(5000)])
     stream.drain()
     assert max(stream.filter_state_sizes()) <= 2000
+
+
+# ------------------------------------------- windowed filter cost (Phase 4 H-1)
+
+# 11 windowed filters over one 10 s window: the most a 64-node expression holds.
+_WORST_FILTERS = " + ".join(f'{"ma" if i % 2 else "integ"}(sig("d","a"), 10)' for i in range(11))
+# Twice the sample cap, so the second half runs on a full window evicting every sample.
+_WORST_SAMPLES = [(i * 0.001, math.sin(i) * 100.0) for i in range(2 * MAX_FILTER_SAMPLES)]
+
+
+def _naive_window(samples: Samples, t: float, window: float) -> list[tuple[float, float]]:
+    return [(st, x) for st, x in samples if t - window < st <= t][-MAX_FILTER_SAMPLES:]
+
+
+def _naive_filter(name: str, window: float, series: Samples) -> list[tuple[float, float]]:
+    """The pre-H-1 algorithm (recompute the window oldest->newest per sample), giving
+    (value, scale): scale is the sum of |terms|, which bounds the rounding error."""
+    kept: Samples = []
+    out: list[tuple[float, float]] = []
+    last: float | None = None
+    for t, x in series:
+        if last is not None and t - last > window:
+            kept = []
+        last = t
+        if math.isfinite(x):
+            kept.append((t, x))
+        kept = _naive_window(kept, t, window)
+        if name == "ma":
+            terms = [v for _t, v in kept]
+            total = sum(terms, 0.0)
+            value = total / len(kept) if kept else math.nan
+            scale = sum(map(abs, terms)) / max(len(kept), 1)
+        else:
+            pairs = zip(kept, kept[1:], strict=False)
+            terms = [(b[0] - a[0]) * (b[1] + a[1]) / 2 for a, b in pairs]
+            value = sum(terms, 0.0)
+            scale = sum(map(abs, terms))
+        out.append((value if math.isfinite(value) else math.nan, scale))
+    return out
+
+
+def _close(actual: float, expected: tuple[float, float]) -> bool:
+    value, scale = expected
+    if math.isnan(actual) or math.isnan(value):
+        return math.isnan(actual) and math.isnan(value)
+    return abs(actual - value) <= REL_TOL * max(abs(actual), abs(value)) + 1e-12 * scale
+
+
+def test_worst_case_filters_over_a_full_window_are_fast() -> None:
+    parsed = parse_expression(_WORST_FILTERS)
+    assert parsed.filter_count == 11
+    start = time.perf_counter()
+    out = evaluate(parsed, {SignalRef("d", "a"): _WORST_SAMPLES})
+    elapsed = time.perf_counter() - start
+    assert len(out) == len(_WORST_SAMPLES)
+    assert elapsed < 0.2, f"{elapsed:.3f}s for 11 filters x {len(_WORST_SAMPLES)} samples"
+
+
+def test_thirty_two_worst_case_derived_signals_stay_bounded() -> None:
+    parsed = parse_expression(_WORST_FILTERS)
+    series = {SignalRef("d", "a"): _WORST_SAMPLES}
+    start = time.perf_counter()
+    for _ in range(32):
+        evaluate(parsed, series)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 8.0, f"{elapsed:.3f}s for 32 derived x 11 filters x full windows"
+
+
+@pytest.mark.parametrize("name", ["ma", "integ"])
+def test_running_window_matches_recomputation(name: str) -> None:
+    """Seeded fuzz: mixed magnitudes, NaN holes, gaps, window wrap past 2000 samples."""
+    rng = random.Random(1_190_319)
+    for trial in range(12):
+        window = rng.choice([0.05, 0.5, 2.0, 10.0])
+        t = 0.0
+        series: Samples = []
+        for _ in range(rng.randint(500, 3000)):
+            t += rng.choice([0.001, 0.003, 0.01]) if rng.random() > 0.002 else window + 0.5
+            roll = rng.random()
+            x = math.nan if roll < 0.05 else rng.uniform(-1e3, 1e3)
+            series.append((t, x * 1e9 if 0.05 <= roll < 0.07 else x))
+        parsed = parse_expression(f'{name}(sig("d","a"), {window})')
+        got = [v for _t, v in evaluate(parsed, {SignalRef("d", "a"): series})]
+        expected = _naive_filter(name, window, series)
+        bad = [i for i, (a, b) in enumerate(zip(got, expected, strict=True)) if not _close(a, b)]
+        assert not bad, (trial, bad[:3], [(got[i], expected[i]) for i in bad[:3]])
+
+
+def test_small_values_survive_a_large_value_leaving_the_window() -> None:
+    parsed = parse_expression('ma(sig("d","a"), 1)')
+    series = [(0.0, 1e17), (0.5, 1e-3), (0.9, 3e-3), (1.2, 5e-3)]
+    [*_, (_t, last)] = evaluate(parsed, {SignalRef("d", "a"): series})
+    assert last == pytest.approx(3e-3, rel=1e-12)
+
+
+@pytest.mark.parametrize("name", ["ma", "integ"])
+def test_overflow_clears_once_huge_samples_leave_the_window(name: str) -> None:
+    parsed = parse_expression(f'{name}(sig("d","a"), 1)')
+    series = [(0.0, 1e308), (0.25, 1e308), (0.5, 1.0), (0.75, 1.0), (1.3, 1.0), (1.4, 3.0)]
+    out = [v for _t, v in evaluate(parsed, {SignalRef("d", "a"): series})]
+    assert math.isnan(out[1]) and math.isnan(out[2])
+    expected = [value for value, _scale in _naive_filter(name, 1.0, series)]
+    assert out[4:] == pytest.approx(expected[4:], rel=1e-12)
+    assert all(math.isfinite(v) for v in out[4:])
 
 
 def test_reference_buffers_are_trimmed_after_drain() -> None:

@@ -3,6 +3,7 @@
 // and a tree-walking evaluator. Mirrors packages/api/.../livebench/view/expression.py
 // rule for rule; both pass packages/shared-types/fixtures/bench-expression-vectors.json.
 // Pure module: no React, no store, no dynamic code path. The server's verdict wins.
+import { Integral, MovingAverage } from './expressionWindow'
 
 export const MAX_EXPRESSION_CHARS = 512
 export const MAX_NODES = 64
@@ -494,51 +495,6 @@ interface FilterState {
   size(): number
 }
 
-/** Finite samples in (t - w, t], newest MAX_FILTER_SAMPLES; recomputed per sample. */
-abstract class WindowedFilter implements FilterState {
-  protected samples: Sample[] = []
-  private lastT: number | null = null
-
-  constructor(private readonly window: number) {}
-
-  update(t: number, x: number): number {
-    if (this.lastT !== null && t - this.lastT > this.window) this.samples = []
-    this.lastT = t
-    const cutoff = t - this.window
-    const kept = Number.isFinite(x) ? [...this.samples, { t, value: x }] : this.samples
-    const inWindow = kept.filter((s) => s.t > cutoff)
-    this.samples = inWindow.slice(Math.max(0, inWindow.length - MAX_FILTER_SAMPLES))
-    return finite(this.reduce())
-  }
-
-  size(): number {
-    return this.samples.length
-  }
-
-  protected abstract reduce(): number
-}
-
-class MovingAverage extends WindowedFilter {
-  protected reduce(): number {
-    if (this.samples.length === 0) return Number.NaN
-    let total = 0
-    for (const s of this.samples) total += s.value
-    return total / this.samples.length
-  }
-}
-
-class Integral extends WindowedFilter {
-  protected reduce(): number {
-    let total = 0
-    for (let i = 1; i < this.samples.length; i++) {
-      const prev = this.samples[i - 1]
-      const cur = this.samples[i]
-      total += ((cur.t - prev.t) * (cur.value + prev.value)) / 2
-    }
-    return total
-  }
-}
-
 class LowPass implements FilterState {
   private readonly rc: number
   private readonly reset: number
@@ -593,7 +549,9 @@ function makeFilter(call: CallExpr): FilterState {
   if (call.name === 'deriv') return new Derivative()
   const parameter = constantValue(call.args[1]) ?? 1
   if (call.name === 'lowpass') return new LowPass(parameter)
-  return call.name === 'ma' ? new MovingAverage(parameter) : new Integral(parameter)
+  return call.name === 'ma'
+    ? new MovingAverage(parameter, MAX_FILTER_SAMPLES)
+    : new Integral(parameter, MAX_FILTER_SAMPLES)
 }
 
 function filterCalls(node: ExprNode): CallExpr[] {
