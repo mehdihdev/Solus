@@ -405,3 +405,20 @@ async def test_read_refuses_a_caller_without_membership(
         app, type(bench.scope)(bench.scope.project_id, bench.scope.team_id, other.scope.user_id)
     )
     error(await outsider.call("bench_view.read"), ToolErrorCode.UNAUTHORIZED)
+
+
+def test_a_cut_or_cleaned_card_value_carries_a_digest_of_the_full_value() -> None:
+    # Security review: two long driver_params sharing a 200-char prefix must not render
+    # the same card row, or the stale check could not tell them apart.
+    from solus_api.agent.tools.bench_session_tools import _shown
+
+    head = "x" * 300
+    first = _shown("driver_params", {"a": head, "b": 1})
+    second = _shown("driver_params", {"a": head, "b": 2})
+    assert first != second
+    assert "sha256 " in first
+    assert len(first) <= 200
+    # a short, clean value is shown as is, with no digest
+    assert _shown("driver_params", {"ids": "1-6"}) == '{"ids":"1-6"}'
+    # a value whose control characters were cleaned also carries a digest
+    assert "sha256 " in _shown("serial_number", "AB\nCD")

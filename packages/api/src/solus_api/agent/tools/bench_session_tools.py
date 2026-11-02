@@ -18,6 +18,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.tools.bench_tools_common import (
+    CELL_CAP,
     BenchScope,
     Caller,
     api_tool_error,
@@ -68,10 +69,22 @@ def _shown(name: str, value: Any) -> str:
     if isinstance(value, float):
         return f"{value:g} {_UNITS.get(name, '')}".strip()
     if isinstance(value, dict):
-        return cell(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
+        return _faithful(
+            json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        )
     if isinstance(value, list):
-        return cell(", ".join(str(v) for v in value))
-    return cell(value)
+        return _faithful(", ".join(str(v) for v in value))
+    return _faithful(str(value))
+
+
+def _faithful(text: str) -> str:
+    """The card row for `text`; when the cell cuts or cleans it, a digest of the full value
+    goes with it, so two values sharing a shown prefix never render the same row."""
+    shown = cell(text)
+    if shown == text:
+        return shown
+    digest = f" · sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]}"
+    return cell(text, CELL_CAP - len(digest)) + digest
 
 
 def config_rows(config: BaseModel) -> list[dict[str, Any]]:
