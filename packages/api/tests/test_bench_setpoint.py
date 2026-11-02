@@ -20,6 +20,7 @@ from solus_api.livebench.setpoint import (
     SetpointManager,
     SetpointNotFoundError,
     SetpointRefusedError,
+    SetpointStopError,
     emit_setpoint_event,
     router,
     setpoint_manager,
@@ -41,6 +42,7 @@ class FakeHandle:
         self.clamped = target > 95.0
         self.unit = "deg"
         self.on_ended = on_ended
+        self.stop_error: Exception | None = None  # a serial error while stopping
 
     def end(self, state: str, reason: str | None = None) -> None:
         if self.state == "moving":
@@ -93,6 +95,8 @@ class SetpointLocal(TeleopLocal):
         return handle
 
     async def setpoint_stop(self, handle: FakeHandle, reason: str = "user") -> None:
+        if handle.stop_error is not None:
+            raise handle.stop_error
         handle.end("stopped", reason)
 
 
@@ -494,6 +498,102 @@ async def test_aclose_stops_moving_moves(
     await manager.start(project, uuid.UUID(preview["preview_id"]))
     await manager.aclose()
     assert local.handles[0].reason == "shutdown"
+
+
+async def _three_moves(
+    client: AsyncClient, headers: dict[str, str], manager: SetpointManager
+) -> tuple[uuid.UUID, list[uuid.UUID]]:
+    project, first, _ = await _robot(client, headers)
+    sessions = [first]
+    sessions += [await _session(client, headers, project, f"ARM000000{n}") for n in (2, 3)]
+    for session in sessions:
+        preview = await manager.preview(project, session, PAN, 1.0)
+        await manager.start(project, uuid.UUID(preview["preview_id"]))
+    return project, sessions
+
+
+async def test_stop_is_best_effort_when_one_move_fails_to_stop(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, _ = await _three_moves(client, alice_headers, manager)
+    local.handles[0].stop_error = OSError("serial write failed")
+    with pytest.raises(SetpointStopError) as caught:
+        await manager.stop(project)
+    assert [h.state for h in local.handles] == ["moving", "stopped", "stopped"]
+    assert len(caught.value.failed) == 1 and caught.value.failed[0].key == "usb:ARM0000001"
+    assert isinstance(caught.value, RuntimeError)  # teleop release maps it to release_failed
+
+
+async def test_stop_robots_is_best_effort_and_still_raises(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    await _three_moves(client, alice_headers, manager)
+    local.handles[1].stop_error = OSError("serial write failed")
+    keys = {f"usb:ARM000000{n}" for n in (1, 2, 3)}
+    with pytest.raises(SetpointStopError):
+        await manager.stop_robots(keys, "teleop")
+    assert [h.state for h in local.handles] == ["stopped", "moving", "stopped"]
+
+
+async def test_session_end_stop_failure_is_logged_not_raised(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, sessions = await _three_moves(client, alice_headers, manager)
+    local.handles[0].stop_error = OSError("serial write failed")
+    await manager._session_ended(project, sessions[0])  # logged, never raised
+    assert local.handles[0].state == "moving"
+    await _refused("in_flight", manager.preview(project, sessions[0], PAN, 2.0))
+
+
+async def test_stop_route_reports_a_failed_stop_after_stopping_the_others(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    project, _ = await _three_moves(client, alice_headers, manager)
+    local.handles[2].stop_error = OSError("serial write failed")
+    resp = await client.post(
+        f"/api/v1/projects/{project}/bench/setpoint/stop", headers=alice_headers
+    )
+    assert resp.status_code == 503 and resp.json()["error"]["code"] == "setpoint_stop_failed"
+    assert [h.state for h in local.handles] == ["stopped", "stopped", "moving"]
+    local.handles[2].stop_error = None  # the retry stops the last one
+    retry = await client.post(
+        f"/api/v1/projects/{project}/bench/setpoint/stop", headers=alice_headers
+    )
+    assert retry.status_code == 200 and local.handles[2].state == "stopped"
+
+
+# ── bounded state ────────────────────────────────────────────────────────────────
+
+
+async def test_previews_and_recent_moves_do_not_grow_without_bound(
+    client: AsyncClient, alice_headers: dict[str, str], manager: SetpointManager, local: Any
+) -> None:
+    now = [1000.0]
+    manager.clock = lambda: now[0]
+    project, session, team = await _robot(client, alice_headers)
+
+    async def another(name: str, serial: str) -> tuple[uuid.UUID, uuid.UUID]:
+        proj = uuid.UUID((await create_project(client, alice_headers, team, name))["id"])
+        return proj, await _session(client, alice_headers, proj, serial)
+
+    used = await manager.preview(project, session, PAN, 1.0)
+    await manager.start(project, uuid.UUID(used["preview_id"]))
+    assert project not in manager._previews  # the last preview consumed: no empty dict left
+    local.handles[0].end("reached")
+    other, other_session = await another("Arm 9", "ARM0000009")
+    await manager.preview(other, other_session, PAN, 1.0)  # never started
+    now[0] += 31
+    third, third_session = await another("Arm 10", "ARM0000010")
+    await manager.preview(third, third_session, PAN, 1.0)
+    assert set(manager._previews) == {third}  # expired previews of every project swept
+    for proj, sess in ((project, session), (third, third_session)):
+        resp = await client.post(
+            f"/api/v1/projects/{proj}/bench/sessions/{sess}/stop", headers=alice_headers
+        )
+        assert resp.status_code == 200
+    assert manager._recent == {} and manager._previews == {}
+    assert manager.current(project) is None
+    assert manager._moves == {}  # ended moves of ended sessions are dropped too
 
 
 # ── routes ───────────────────────────────────────────────────────────────────────

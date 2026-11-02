@@ -37,6 +37,7 @@ async def test_start_parks_a_card_with_the_route_label_then_starts_on_approval(
         {"label": "Mode", "before": None, "after": "real"},
         {"label": "Device", "before": None, "after": "Serial ARM0000001"},
         {"label": "Window", "before": None, "after": "1 s"},
+        {"label": "Serial number", "before": None, "after": "ARM0000001"},
     ]
     assert fake_local.opened == []  # nothing opened before approval
     record = value(await bench.decide(parked.confirmation_id))
@@ -121,7 +122,8 @@ async def test_stop_parks_then_stops_on_approval(
         {"label": "Session", "before": "Serial ARM0000001", "after": "stopped"},
         {"label": "Provider", "before": "serial", "after": None},
     ]
-    assert fake_local.conns[0].closed is False
+    closed_at_park = fake_local.conns[0].closed
+    assert closed_at_park is False
     record = value(await bench.decide(parked.confirmation_id))
     assert record["status"] == "ended" and fake_local.conns[0].closed is True
     (event,) = await bench.events("bench.session_stopped")
