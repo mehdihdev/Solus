@@ -14,8 +14,16 @@ export interface FrontAppBody {
   readonly binding: 'project' | 'window' | null
 }
 
+/** A window-bound app with no window in front: nothing to bind (the API would
+ *  refuse `drivable: true, binding: "window"` without a window id). */
+const isWindowless = (front: SolFrontApp): boolean =>
+  front.drivable && front.binding === 'window' && !(front.windowId !== null && front.windowId >= 1)
+
 export function toFrontAppBody(front: SolFrontApp): FrontAppBody {
   const common = { bundle_id: front.bundleId, name: front.name, binding: front.binding }
+  if (isWindowless(front)) {
+    return { ...common, binding: null, title: null, pid: null, window_id: null, drivable: false }
+  }
   if (!front.drivable) {
     return { ...common, title: null, pid: null, window_id: null, drivable: false }
   }

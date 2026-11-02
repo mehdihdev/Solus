@@ -339,7 +339,17 @@ claiming SOL saved it.
   Build turn (`action_mode: "do"`), with the setting on and driving available, from main's snapshot
   (shape: `docs/api/API-implementation.md`, streaming turn). Never on resume or wake turns (422). A
   denied app is sent as `{bundle_id, name, drivable: false}`; no title, pid or window id ever leaves the
-  desktop for it.
+  desktop for it. A window-bound app with no ordinary window in front (`windowId` null — e.g. only
+  minimized windows — or 0) has nothing to bind: main's snapshot, the preload check and the renderer's
+  body all downgrade it to `{drivable: false, binding: null}` with no title, pid or window id, and the
+  API normalises a drivable window-bound `front_app` with a null or 0 `window_id` the same way instead
+  of refusing the turn (Phase 4 F3). A Guide turn's `front_app` is dropped by the API (never in the
+  prompt, never offers `front`, no `sol.front_app_attached`).
+- **Storage.** The turn's `front_app` itself is not written to the transcript, `sol.message` or any log.
+  But when SOL parks a `drive.step {app: "front"}`, the copied window binding — `bundle_id`, `name`,
+  **`title`**, `pid`, `window_id` — is stored in that card's `tool_confirmations.args` (it is what the
+  card shows and what the decide-time staleness re-check and the executor bind read), so the window
+  title of a parked step is persisted for the life of that confirmation row.
 - **Prompt.** The turn context carries one nonce-fenced `kind=front_app` data block: app name, bundle id,
   whether SOL can drive it and how it is bound; the title inside the fence as untrusted data. The
   Solus-authored framing orders the routes: **integration API tools first, then workspace file tools
@@ -376,9 +386,12 @@ claiming SOL saved it.
   intent avoids those words; mitigated by per-step approval, the loop's system prompt ("never upload,
   flash, deploy, send or print") and the live A3 strip.
 - New outcome codes: `relaunched`, `intent_refused` (plus the helper's `app_denied`, `pid_mismatch`).
-  Unfinished-step sentences name the app from the stored `window.name` (`{app}`), never the title:
-  `relaunched` → "stopped — {app} was restarted; summon SOL over the window again";
-  `window_mismatch` → "stopped — a different {app} window is in front"; `app_denied` → "stopped — SOL
+  Unfinished-step sentences for a window-bound step never carry the stored `window.name` or title —
+  both are untrusted machine text and the sentence is the `ToolException` message returned to the model
+  (Phase 4 F3); `{app}` is the fixed phrase "the window" (KiCad steps keep "KiCad"):
+  `not_in_front` → "nothing done — the window was not in front; bring it forward and ask again";
+  `relaunched` → "stopped — the app was restarted; summon SOL over its window again";
+  `window_mismatch` → "stopped — a different window is in front"; `app_denied` → "stopped — SOL
   can't use the mouse and keyboard in that app"; `saved` for a window-bound step → "stopped — a file in
   this project changed"; `intent_refused` (a parse-time `invalid_args`) → "drive.step can't upload, flash
   or deploy; use the integration's own tools for that".

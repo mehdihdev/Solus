@@ -1,8 +1,9 @@
 // SOLUSDEV-319 drive slice 3: the A3 strip (docs/architecture/sol-drive.md §5
 // "While a step runs") — `DRIVING <APP> · STEP k OF N`, a progress bar and
 // Stop, while an approved drive.step's output is incomplete. Every word here
-// is Solus-authored except the app name (slice 4: the step's, else the pill's
-// window-bound snapshot, else KiCad), rendered as plain text, upper-cased and
+// is Solus-authored except the app name (slice 4 / Phase 4 F3: an explicit name,
+// else the turn trace's drive.step `app` — kicad → KiCad, front → the pill's
+// window-bound snapshot — else the snapshot, else KiCad), rendered as plain text, upper-cased and
 // cut to 24 characters; the step's output only supplies k and N (driveProgress).
 // It tells main a step runs (amber outline, quiet gestures) and that it ended.
 // Stop needs no route: the helper's kill switch takes the click as physical
@@ -12,7 +13,8 @@
 import { useEffect, useState } from 'react'
 import { getDriveBridge, type DriveBridge } from '../../lib/driveBridge'
 import type { CommandRun } from './commandRuns'
-import { latestDriveProgress, type DriveProgress } from './driveProgress'
+import { isDriveTool, latestDriveProgress, type DriveProgress } from './driveProgress'
+import type { TraceEntry } from './solChatStore'
 import { useSolWindowStore } from './solWindowStore'
 import './DriveStrip.css'
 
@@ -21,17 +23,31 @@ export interface DriveStripProps {
   readonly bridge?: DriveBridge | null
   /** The driven app's name when the caller knows it from the step. */
   readonly appName?: string
+  /** The turn's tool trace: its drive.step call says which app the step drives. */
+  readonly trace?: readonly TraceEntry[]
 }
 
 const KICAD = 'KiCad'
+const THE_WINDOW = 'the window'
 const APP_LABEL_MAX = 24
 
-/** The app the strip names: the step's, else the window-bound app the pill
- *  was summoned over, else KiCad (project-bound steps). Untrusted text. */
-function useAppName(explicit: string | undefined): string {
+/** The `app` argument (kicad | front) of the turn's last drive.step call. */
+function tracedApp(trace: readonly TraceEntry[] | undefined): string | undefined {
+  const call = [...(trace ?? [])].reverse().find((t) => isDriveTool(t.tool) && t.args?.app)
+  return call?.args?.app
+}
+
+/** The app the strip names: the caller's, else the traced step's (KiCad, or the
+ *  window-bound app the pill was summoned over), else that snapshot, else KiCad
+ *  (project-bound steps). Untrusted text. */
+function useAppName(explicit: string | undefined, trace?: readonly TraceEntry[]): string {
   const front = useSolWindowStore((s) => s.frontApp)
   if (explicit) return explicit
-  return front?.drivable && front.binding === 'window' ? front.name : KICAD
+  const traced = tracedApp(trace)
+  if (traced === 'kicad') return KICAD
+  const windowName = front?.drivable && front.binding === 'window' ? front.name : undefined
+  if (traced === 'front') return windowName ?? THE_WINDOW
+  return windowName ?? KICAD
 }
 
 const appLabel = (name: string): string => [...name.toUpperCase()].slice(0, APP_LABEL_MAX).join('')
@@ -50,12 +66,13 @@ function labelOf(app: string, progress: DriveProgress | null, stopping: boolean)
 export function DriveStrip({
   run,
   bridge = getDriveBridge(),
-  appName
+  appName,
+  trace
 }: DriveStripProps): React.JSX.Element | null {
   // Stop freezes the progress shown at the click (undefined: not stopped).
   const [frozen, setFrozen] = useState<DriveProgress | null | undefined>(undefined)
   const active = run.status === null
-  const app = useAppName(appName)
+  const app = useAppName(appName, trace)
   useEffect(() => {
     if (!active) return
     tellMain(bridge, true)

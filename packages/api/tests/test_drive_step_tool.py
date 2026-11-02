@@ -602,21 +602,31 @@ def test_words_that_only_contain_the_refused_stems_still_pass(intent: str) -> No
 @pytest.mark.parametrize(
     ("kind", "code", "words"),
     [
-        ("refused", "relaunched", "stopped — PrusaSlicer was restarted; summon SOL over"),
-        ("refused", "window_mismatch", "stopped — a different PrusaSlicer window is in front"),
+        ("refused", "relaunched", "stopped — the app was restarted; summon SOL over"),
+        ("refused", "window_mismatch", "stopped — a different window is in front"),
         ("refused", "app_denied", "stopped — SOL can't use the mouse and keyboard in that app"),
         ("saved", "design_saved", "stopped — a file in this project changed"),
-        ("not_in_front", None, "PrusaSlicer was not in front"),
+        ("not_in_front", None, "the window was not in front"),
         ("refused", "intent_refused", "drive.step can't upload, flash or deploy"),
     ],
 )
-async def test_unfinished_front_steps_name_the_app_never_the_title(
+async def test_unfinished_front_steps_never_echo_the_app_name_or_title(
     kind: str, code: str | None, words: str
 ) -> None:
+    # The name and title are untrusted machine text: a ToolException goes back to
+    # the model, so a window-bound step says "the window", never `window.name`.
     with pytest.raises(ToolException) as caught:
         await front_tool(Runner(outcome(kind, code))).invoke(STORED)
     assert words in caught.value.message
     assert "benchy" not in caught.value.message
+    assert "PrusaSlicer" not in caught.value.message
+
+
+def test_the_consent_summary_names_no_app() -> None:
+    # One descriptor serves kicad and front steps: the card's App row names the app.
+    summary = tool(Runner(outcome())).descriptor.consent_summary
+    assert summary is not None and "KiCad" not in summary
+    assert "window shown below" in summary and "one step" in summary
 
 
 async def test_kicad_without_a_linked_folder_says_so() -> None:

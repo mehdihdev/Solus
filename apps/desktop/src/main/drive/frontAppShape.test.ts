@@ -37,9 +37,33 @@ describe('frontFromIdentify', () => {
     })
   })
 
-  it('a drivable front without a window keeps null windowId and title', () => {
-    const front = { ...WINDOW_FRONT, windowId: null, title: null, bounds: null }
-    expect(frontFromIdentify(front)).toMatchObject({ windowId: null, title: null })
+  it.each([null, 0])(
+    'a window-bound front with windowId %s has nothing to bind: not drivable, no pid or title',
+    (windowId) => {
+      const front = { ...WINDOW_FRONT, windowId, bounds: null }
+      expect(frontFromIdentify(front)).toEqual({
+        drivable: false,
+        binding: null,
+        bundleId: 'org.freecad.FreeCAD',
+        name: 'FreeCAD'
+      })
+    }
+  )
+
+  it('a project-bound front without a window keeps null windowId and title (0 means none)', () => {
+    const kicad = { ...WINDOW_FRONT, binding: 'project', bundleId: 'org.kicad.kicad' }
+    for (const windowId of [null, 0]) {
+      expect(frontFromIdentify({ ...kicad, windowId, title: null })).toMatchObject({
+        drivable: true,
+        binding: 'project',
+        windowId: null,
+        title: null
+      })
+    }
+  })
+
+  it.each([-1, 1.5, 2 ** 32, '7'])('a malformed windowId %s is unknown', (windowId) => {
+    expect(frontFromIdentify({ ...WINDOW_FRONT, windowId })).toBeUndefined()
   })
 
   it('a denied app keeps only bundleId, name and drivable:false — whatever else the reply carried', () => {
@@ -146,6 +170,7 @@ describe('isSolFrontApp (preload validator)', () => {
 
   it('accepts what main produces', () => {
     expect(isSolFrontApp(ok)).toBe(true)
+    expect(isSolFrontApp({ ...ok, binding: 'project', windowId: null, title: null })).toBe(true)
     expect(
       isSolFrontApp({ drivable: false, binding: null, bundleId: 'com.apple.mail', name: 'Mail' })
     ).toBe(true)
@@ -166,6 +191,11 @@ describe('isSolFrontApp (preload validator)', () => {
     ],
     ['title too long', { ...ok, title: 'x'.repeat(FRONT_TITLE_MAX + 1) }],
     ['title with a control char', { ...ok, title: 'a\u0000b' }],
+    ['title with an unassigned scalar', { ...ok, title: 'a\u0378b' }],
+    ['name with an unassigned scalar', { ...ok, name: 'Cu\u0378ra' }],
+    ['window-bound with a null windowId', { ...ok, windowId: null }],
+    ['window-bound with windowId 0', { ...ok, windowId: 0 }],
+    ['project-bound with windowId 0', { ...ok, binding: 'project', windowId: 0 }],
     ['name too long', { ...ok, name: 'x'.repeat(FRONT_NAME_MAX + 1) }],
     ['bounds leaked', { ...ok, bounds: { x: 0 } }],
     ['documentDir leaked', { ...ok, documentDir: 'cad' }],

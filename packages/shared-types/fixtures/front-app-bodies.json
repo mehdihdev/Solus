@@ -1,0 +1,267 @@
+{
+  "$comment": "SOLUSDEV-319 (sol-drive.md §2.2, API-implementation.md turn body front_app): the helper's identify.front -> the turn body's front_app the desktop sends. Consumed by apps/desktop frontAppBody.test.ts (frontFromIdentify + toFrontAppBody must equal `body`) and packages/api test_drive_front_app_bodies.py (every `body` validates through FrontAppBinding unchanged; every `api_normalises` input becomes its `body`).",
+  "cases": [
+    {
+      "name": "window-bound app with a window",
+      "identify": {
+        "drivable": true,
+        "binding": "window",
+        "bundleId": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "pid": 4321,
+        "windowId": 88,
+        "title": "benchy.3mf",
+        "bounds": { "x": 0, "y": 0, "width": 800, "height": 600 },
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": "benchy.3mf",
+        "pid": 4321,
+        "window_id": 88,
+        "drivable": true,
+        "binding": "window"
+      }
+    },
+    {
+      "name": "window-bound app with only minimized windows (windowId null) is not drivable",
+      "identify": {
+        "drivable": true,
+        "binding": "window",
+        "bundleId": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "pid": 4321,
+        "windowId": null,
+        "title": null,
+        "bounds": null,
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    },
+    {
+      "name": "window-bound app with windowId 0 is not drivable",
+      "identify": {
+        "drivable": true,
+        "binding": "window",
+        "bundleId": "org.blenderfoundation.blender",
+        "name": "Blender",
+        "pid": 77,
+        "windowId": 0,
+        "title": "scene.blend",
+        "bounds": null,
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "org.blenderfoundation.blender",
+        "name": "Blender",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    },
+    {
+      "name": "project-bound KiCad with a window",
+      "identify": {
+        "drivable": true,
+        "binding": "project",
+        "bundleId": "org.kicad.eeschema",
+        "name": "Schematic Editor",
+        "pid": 77,
+        "windowId": 5,
+        "title": "robot.kicad_sch",
+        "bounds": null,
+        "documentDir": ""
+      },
+      "body": {
+        "bundle_id": "org.kicad.eeschema",
+        "name": "Schematic Editor",
+        "title": "robot.kicad_sch",
+        "pid": 77,
+        "window_id": 5,
+        "drivable": true,
+        "binding": "project"
+      }
+    },
+    {
+      "name": "project-bound KiCad without a window stays drivable",
+      "identify": {
+        "drivable": true,
+        "binding": "project",
+        "bundleId": "org.kicad.kicad",
+        "name": "KiCad",
+        "pid": 78,
+        "windowId": null,
+        "title": null,
+        "bounds": null,
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "org.kicad.kicad",
+        "name": "KiCad",
+        "title": null,
+        "pid": 78,
+        "window_id": null,
+        "drivable": true,
+        "binding": "project"
+      }
+    },
+    {
+      "name": "project-bound KiCad with windowId 0 has no window",
+      "identify": {
+        "drivable": true,
+        "binding": "project",
+        "bundleId": "org.kicad.kicad",
+        "name": "KiCad",
+        "pid": 78,
+        "windowId": 0,
+        "title": null,
+        "bounds": null,
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "org.kicad.kicad",
+        "name": "KiCad",
+        "title": null,
+        "pid": 78,
+        "window_id": null,
+        "drivable": true,
+        "binding": "project"
+      }
+    },
+    {
+      "name": "denied app",
+      "identify": {
+        "drivable": false,
+        "binding": null,
+        "bundleId": "com.apple.Terminal",
+        "name": "Terminal",
+        "reason": "denied"
+      },
+      "body": {
+        "bundle_id": "com.apple.Terminal",
+        "name": "Terminal",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    },
+    {
+      "name": "KiCad without a workspace",
+      "identify": {
+        "drivable": false,
+        "binding": "project",
+        "bundleId": "org.kicad.kicad",
+        "name": "KiCad",
+        "reason": "no_workspace"
+      },
+      "body": {
+        "bundle_id": "org.kicad.kicad",
+        "name": "KiCad",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": "project"
+      }
+    },
+    {
+      "name": "hidden characters (control, format, unassigned, private use, separators) are stripped",
+      "identify": {
+        "drivable": true,
+        "binding": "window",
+        "bundleId": "com.ultimaker.cura",
+        "name": "Cu͸ra‮\u0007 5󰀀",
+        "pid": 4321,
+        "windowId": 88,
+        "title": "ben​chy .3mf͸",
+        "bounds": null,
+        "documentDir": null
+      },
+      "body": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "Cura 5",
+        "title": "benchy.3mf",
+        "pid": 4321,
+        "window_id": 88,
+        "drivable": true,
+        "binding": "window"
+      }
+    },
+    {
+      "name": "a name that is all hidden characters falls back to the bundle id",
+      "identify": {
+        "drivable": false,
+        "binding": null,
+        "bundleId": "com.example.ghost",
+        "name": "​͸",
+        "reason": "denied"
+      },
+      "body": {
+        "bundle_id": "com.example.ghost",
+        "name": "com.example.ghost",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    }
+  ],
+  "api_normalises": [
+    {
+      "name": "a drivable window-bound app with a null window_id is not drivable, not a 422",
+      "input": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": "benchy.3mf",
+        "pid": 4321,
+        "window_id": null,
+        "drivable": true,
+        "binding": "window"
+      },
+      "body": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    },
+    {
+      "name": "a drivable window-bound app with window_id 0 is not drivable, not a 422",
+      "input": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": null,
+        "pid": 4321,
+        "window_id": 0,
+        "drivable": true,
+        "binding": "window"
+      },
+      "body": {
+        "bundle_id": "com.ultimaker.cura",
+        "name": "UltiMaker Cura",
+        "title": null,
+        "pid": null,
+        "window_id": null,
+        "drivable": false,
+        "binding": null
+      }
+    }
+  ]
+}

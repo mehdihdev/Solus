@@ -454,8 +454,13 @@ public struct Runner {
         .union(.decimalDigits).union(.nonBaseCharacters).union(.punctuationCharacters).union(.symbols)
         .union(CharacterSet(charactersIn: " "))
         .union(CharacterSet(charactersIn: UnicodeScalar(0x2150)!...UnicodeScalar(0x218F)!)) // number forms
+    /// The API's hidden categories (binding.py `_HIDDEN`: Cc/Cf/Co/Cn/Cs/Zl/Zp),
+    /// refused by category so the rule matches by construction.
+    private static let hiddenCategories: Set<Unicode.GeneralCategory> = [
+        .control, .format, .privateUse, .unassigned, .surrogate, .lineSeparator, .paragraphSeparator,
+    ]
     static func isVisibleText(_ scalar: Unicode.Scalar) -> Bool {
-        visibleText.contains(scalar) && !(0xE000...0xF8FF).contains(scalar.value)
+        !hiddenCategories.contains(scalar.properties.generalCategory) && visibleText.contains(scalar)
     }
 
     private func encode(_ object: [String: Any]) -> String {

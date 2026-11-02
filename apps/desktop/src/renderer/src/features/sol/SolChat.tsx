@@ -338,7 +338,7 @@ const MessageRow = memo(function MessageRow({
       {/* SOLUSDEV-319: a drive.step shows the A3 strip instead, while it runs. */}
       {(item.commandRuns ?? []).map((run) =>
         isDriveTool(run.tool) ? (
-          <DriveStrip key={run.confirmationId} run={run} />
+          <DriveStrip key={run.confirmationId} run={run} trace={item.trace} />
         ) : (
           <CommandOutput key={run.confirmationId} run={run} />
         )

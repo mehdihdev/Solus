@@ -15,7 +15,8 @@ export interface SolFrontDrivable {
   /** The app's localized name, ≤ 64 scalars, visible text only. Untrusted. */
   name: string
   pid: number
-  /** Null when the app has no ordinary window in front (nothing to bind). */
+  /** ≥ 1. Null only for a project-bound app with no ordinary window in front; a
+   *  window-bound app without one is not drivable (nothing to bind). */
   windowId: number | null
   /** The window title, ≤ 256 scalars, visible text only. Untrusted. */
   title: string | null
@@ -37,8 +38,9 @@ export const FRONT_TITLE_MAX = 256
 const PID_MAX = 2 ** 31 - 1
 const WINDOW_ID_MAX = 2 ** 32 - 1
 const BUNDLE_ID = /^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$/
-/** Control, format, private-use, surrogate and line/paragraph separators. */
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/gu
+/** Control, format, private-use, unassigned, surrogate and line/paragraph
+ *  separators — the API's hidden set (binding.py `_HIDDEN`). */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}]/gu
 
 /** ProjectBoundApps (compiled into solus-input): byte-exact. */
 const PROJECT_BOUND: ReadonlySet<string> = new Set(['org.kicad.kicad', 'org.kicad.eeschema'])
@@ -63,8 +65,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const isPid = (v: unknown): v is number =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 && v <= PID_MAX
 
+/** A real window id (the API's 1 … 2³²−1; the helper's 0 means "none"). */
 const isWindowId = (v: unknown): v is number =>
-  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= WINDOW_ID_MAX
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 1 && v <= WINDOW_ID_MAX
 
 const isBundleId = (v: unknown): v is string => typeof v === 'string' && BUNDLE_ID.test(v)
 
@@ -75,16 +78,27 @@ function clean(raw: string, max: number): string {
 
 const isBinding = (v: unknown): v is FrontBinding => v === 'project' || v === 'window'
 
-/** A drivable front's fields, or undefined when any is malformed. */
+/** The helper's window id: a real id, null for none (0 also means none), or
+ *  undefined when malformed. */
+function windowIdFrom(v: unknown): number | null | undefined {
+  if (v === null || v === 0) return null
+  return isWindowId(v) ? v : undefined
+}
+
+/** A drivable front's fields, or undefined when any is malformed. A window-bound
+ *  app with no window in front has nothing to bind, so it is not drivable. */
 function drivableFrom(
   front: Record<string, unknown>,
   bundleId: string,
   name: string
-): SolFrontDrivable | undefined {
-  const { binding, pid, windowId, title } = front
-  if (!isBinding(binding) || !isPid(pid)) return undefined
-  if (windowId !== null && !isWindowId(windowId)) return undefined
+): SolFrontApp | undefined {
+  const { binding, pid, title } = front
+  const windowId = windowIdFrom(front.windowId)
+  if (!isBinding(binding) || !isPid(pid) || windowId === undefined) return undefined
   if (title !== null && typeof title !== 'string') return undefined
+  if (binding === 'window' && windowId === null) {
+    return { drivable: false, binding: null, bundleId, name }
+  }
   const cleanTitle = title === null ? null : clean(title, FRONT_TITLE_MAX)
   return { drivable: true, binding, bundleId, name, pid, windowId, title: cleanTitle }
 }
@@ -117,7 +131,7 @@ const isDrivablePayload = (raw: Record<string, unknown>): boolean =>
   hasOnlyKeys(raw, DRIVABLE_KEYS) &&
   isBinding(raw.binding) &&
   isPid(raw.pid) &&
-  (raw.windowId === null || isWindowId(raw.windowId)) &&
+  (isWindowId(raw.windowId) || (raw.windowId === null && raw.binding === 'project')) &&
   (raw.title === null || isCleanText(raw.title, FRONT_TITLE_MAX))
 
 const isNotDrivablePayload = (raw: Record<string, unknown>): boolean =>

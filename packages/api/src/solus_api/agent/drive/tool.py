@@ -121,7 +121,12 @@ def _description(budget: Budget) -> str:
     )
 
 
-_CONSENT: Final = "SOL will move your mouse and type in your KiCad window for this one step"
+#: One descriptor serves `kicad` and `front` steps, so it names no app: the
+#: card's App and Window rows say which window.
+_CONSENT: Final = "SOL will move your mouse and type in the window shown below for this one step"
+#: A window-bound step's sentences never carry `window.name`: the name is
+#: untrusted machine text and a ToolException's message goes back to the model.
+_WINDOW_LABEL: Final = "the window"
 
 #: What an unfinished step tells SOL and the person, by outcome.
 _UNFINISHED: Final = {
@@ -143,8 +148,8 @@ _BY_CODE: Final = {
     ),
     "no_workspace": "stopped — link a folder to this project to let SOL use KiCad",
     "agent_unavailable": "stopped — the input helper is not running; check Settings › SOL",
-    "relaunched": "stopped — {app} was restarted; summon SOL over the window again",
-    "window_mismatch": "stopped — a different {app} window is in front",
+    "relaunched": "stopped — the app was restarted; summon SOL over its window again",
+    "window_mismatch": "stopped — a different window is in front",
     "app_denied": "stopped — SOL can't use the mouse and keyboard in that app",
     "intent_refused": INTENT_REFUSED,
 }
@@ -291,7 +296,7 @@ class DriveStepTool:
         window = parsed.window
         target: Target = window if window is not None else DRIVABLE_APPS[parsed.app]
         binding = "project" if window is None else "window"
-        app_name = _APP_NAMES[parsed.app] if window is None else window.name
+        app_name = _APP_NAMES[parsed.app] if window is None else _WINDOW_LABEL
         trail: list[Progress] = []
         sink = current_output.get()
 

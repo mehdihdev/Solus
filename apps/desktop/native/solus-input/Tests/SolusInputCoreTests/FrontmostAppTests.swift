@@ -186,6 +186,17 @@ final class FrontIdentifyTests: XCTestCase {
         XCTAssertTrue(front(invoke(untitled, ["identify"], within: nil))?["title"] is NSNull)
     }
 
+    /// The API's visible-text rule is "no Cc/Cf/Co/Cn/Cs/Zl/Zp" (binding.py `_HIDDEN`):
+    /// unassigned and supplementary private-use scalars are dropped here too.
+    func testCleaningDropsUnassignedAndEveryPrivateUseScalar() {
+        for value: UInt32 in [0x0378, 0x0E0080, 0xE000, 0xF0000, 0x10FFFD, 0x2028, 0x2029, 0x200B, 0x7] {
+            let scalar = Unicode.Scalar(value)!
+            XCTAssertFalse(Runner.isVisibleText(scalar), String(value, radix: 16))
+        }
+        XCTAssertEqual(Runner.cleaned("Cu\u{0378}ra\u{F0000} 5\u{E0080}", max: 64), "Cura 5")
+        XCTAssertEqual(Runner.cleaned("R1 = 10k Ω, 5% é", max: 64), "R1 = 10k Ω, 5% é")
+    }
+
     func testNameAndTitleAreCleanedAndTruncated() throws {
         let port = blenderPort()
         let title = "a\u{0}b\u{7}c\u{200B}\u{2028}" + String(repeating: "t", count: 300)

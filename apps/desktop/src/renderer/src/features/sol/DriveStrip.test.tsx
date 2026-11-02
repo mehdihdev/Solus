@@ -6,6 +6,15 @@ import { newCommandRun, type CommandRun } from './commandRuns'
 import { fakeDriveBridge } from '../settings/drive.fixtures'
 import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
 import { useSolWindowStore } from './solWindowStore'
+import type { TraceEntry } from './solChatStore'
+
+const driveCall = (args: Record<string, string>, callId = 'c1'): TraceEntry => ({
+  callId,
+  tool: 'drive.step',
+  ok: null,
+  errorCode: null,
+  args
+})
 
 const running = (text = ''): CommandRun => ({ ...newCommandRun('cf1', 'drive.step'), text })
 
@@ -151,5 +160,52 @@ describe('DriveStrip app name (SOLUSDEV-319 slice 4)', () => {
     useSolWindowStore.setState({ frontApp: { ...freecad('t'), name: 'A'.repeat(40) } })
     render(<DriveStrip run={running()} bridge={fakeDriveBridge()} />)
     expect(screen.getByText(`DRIVING ${'A'.repeat(24)} · STARTING`)).toBeInTheDocument()
+  })
+
+  it('a KiCad step from the turn trace says KiCad even over a window-bound snapshot', () => {
+    // Phase 4 F3: the pill was summoned over FreeCAD, but SOL drove KiCad.
+    useSolWindowStore.setState({ frontApp: freecad('bracket_v3.FCStd') })
+    render(
+      <DriveStrip
+        run={running()}
+        trace={[driveCall({ app: 'kicad', intent: 'Move R1' })]}
+        bridge={fakeDriveBridge()}
+      />
+    )
+    expect(screen.getByText('DRIVING KICAD · STARTING')).toBeInTheDocument()
+  })
+
+  it('a front step from the trace names the snapshot window; the last drive call wins', () => {
+    useSolWindowStore.setState({ frontApp: freecad('bracket_v3.FCStd') })
+    const trace = [
+      driveCall({ app: 'kicad', intent: 'a' }, 'c1'),
+      { callId: 'c2', tool: 'repo.read', ok: true, errorCode: null, args: { app: 'kicad' } },
+      driveCall({ app: 'front', intent: 'b' }, 'c3')
+    ]
+    render(<DriveStrip run={running()} trace={trace} bridge={fakeDriveBridge()} />)
+    expect(screen.getByText('DRIVING FREECAD · STARTING')).toBeInTheDocument()
+  })
+
+  it('a front step without a window-bound snapshot never claims KiCad', () => {
+    render(
+      <DriveStrip
+        run={running()}
+        trace={[driveCall({ app: 'front', intent: 'b' })]}
+        bridge={fakeDriveBridge()}
+      />
+    )
+    expect(screen.getByText('DRIVING THE WINDOW · STARTING')).toBeInTheDocument()
+  })
+
+  it('an explicit app name still wins over the trace', () => {
+    render(
+      <DriveStrip
+        run={running()}
+        appName="Blender"
+        trace={[driveCall({ app: 'kicad', intent: 'a' })]}
+        bridge={fakeDriveBridge()}
+      />
+    )
+    expect(screen.getByText('DRIVING BLENDER · STARTING')).toBeInTheDocument()
   })
 })

@@ -345,8 +345,11 @@ class MessageCreate(StrictModel):
     #: turn only — the transcript keeps `{width, height, app}`.
     screenshot: ScreenshotIn | None = None
     #: SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the app the person summoned SOL over,
-    #: from desktop main's summon snapshot. This turn only — never logged or persisted,
+    #: from desktop main's summon snapshot. Build turns only (dropped on a Guide turn),
     #: refused on resume and wake turns, and a 422 never echoes it (`_front_app_opaque`).
+    #: Not in the transcript, `sol.message` or logs — but a parked `drive.step
+    #: {app: "front"}` stores its copied window binding (title included) in
+    #: `tool_confirmations.args`, which the card and its decide/execute re-checks read.
     front_app: FrontAppBinding | None = None
 
     @field_validator("front_app", mode="wrap")
@@ -385,6 +388,10 @@ class MessageCreate(StrictModel):
             self.content is not None or self.screenshot is not None
         ):
             raise ValueError("a resume carries no content or screenshot")
+        if self.front_app is not None and self.action_mode is not ActionMode.DO:
+            # Security L-5: only a Build turn may put the front app before the model
+            # or offer `drive.step {app: "front"}`; a Guide turn's copy is ignored.
+            self.front_app = None
         return self
 
 

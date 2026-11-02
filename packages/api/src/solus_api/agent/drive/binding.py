@@ -9,7 +9,7 @@ same five values. Titles and names are untrusted data from the machine.
 """
 
 import unicodedata
-from typing import Final, Literal, Self
+from typing import Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -33,6 +33,11 @@ def _visible(text: str | None) -> str | None:
     if text is not None and any(unicodedata.category(ch) in _HIDDEN for ch in text):
         raise ValueError("visible text only")
     return text
+
+
+def _no_window(window_id: object) -> bool:
+    """The helper's "no ordinary window in front": null, or the never-valid id 0."""
+    return window_id is None or (type(window_id) is int and window_id == 0)
 
 
 class WindowBinding(BaseModel):
@@ -64,6 +69,29 @@ class FrontAppBinding(BaseModel):
     binding: Literal["project", "window"] | None
 
     _visible_text = field_validator("name", "title")(_visible)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _windowless_is_not_drivable(cls, data: Any) -> Any:
+        """A window-bound app with no window in front (the helper's `windowId` null,
+        e.g. only minimized windows; or 0) has nothing to bind: it is sent on as not
+        drivable instead of refusing the whole turn. An absent key is still refused."""
+        if not (
+            isinstance(data, dict)
+            and data.get("drivable") is True
+            and data.get("binding") == "window"
+            and "window_id" in data
+            and _no_window(data["window_id"])
+        ):
+            return data
+        return {
+            **data,
+            "drivable": False,
+            "binding": None,
+            "title": None,
+            "pid": None,
+            "window_id": None,
+        }
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:

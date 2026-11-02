@@ -81,9 +81,17 @@ def _app_enum(tools: Any) -> list[str] | None:
 
 @pytest.mark.parametrize("front", [WINDOW, DENIED, KICAD])
 def test_valid_front_apps_are_accepted(front: dict[str, Any]) -> None:
-    body = MessageCreate.model_validate({"content": "hi", "front_app": front})
+    body = MessageCreate.model_validate({"content": "hi", "action_mode": "do", "front_app": front})
     assert body.front_app == FrontAppBinding.model_validate(front)
     assert MessageCreate.model_validate({"content": "hi"}).front_app is None
+
+
+@pytest.mark.parametrize("front", [WINDOW, DENIED, KICAD])
+def test_a_guide_turn_drops_its_front_app(front: dict[str, Any]) -> None:
+    # Security L-5: only a Build turn may carry the front app (sol-drive.md §2.2).
+    assert MessageCreate.model_validate({"content": "hi", "front_app": front}).front_app is None
+    guide = {"content": "hi", "action_mode": "guide", "front_app": front}
+    assert MessageCreate.model_validate(guide).front_app is None
 
 
 @pytest.mark.parametrize(
@@ -333,3 +341,32 @@ async def test_drive_step_offers_front_only_for_a_drivable_window_bound_app(
     assert await offered(None) == ["kicad"]
     assert await offered(DENIED) == ["kicad"]
     assert await offered(KICAD) == ["kicad"]
+
+
+async def test_a_guide_turn_never_shows_the_model_the_front_app(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    team, project = await _project(client, alice_headers)
+    await db.execute(update(User).values(data_collection_consent=True))
+    await db.commit()
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    user = await me(client, alice_headers)
+    sessions: InMemoryBridgeSessionRegistry = app.state.bridge_sessions
+    scope = (uuid.UUID(user["id"]), uuid.UUID(team["id"]), uuid.UUID(project["id"]))
+    sessions.bind(_drive_session(scope, []))
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+
+    resp = await client.post(
+        _url(project, convo),
+        json={"content": "what is this?", "action_mode": "guide", "front_app": WINDOW},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert runner.ctx.front_app is None
+    assert _app_enum(runner.ctx.tools) in (None, ["kicad"])
+    assert "benchy" not in repr(runner.ctx)
+    attached = (
+        await db.scalars(select(DataEvent).where(DataEvent.event_type == "sol.front_app_attached"))
+    ).all()
+    assert attached == []

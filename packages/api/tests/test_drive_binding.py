@@ -67,7 +67,6 @@ def test_a_non_drivable_app_carries_nothing_but_its_identity(changes: dict[str, 
     [
         {"binding": None},
         {"pid": None},
-        {"window_id": None},
         {"pid": 0},
         {"pid": 2**31},
         {"window_id": 2**32},
@@ -111,3 +110,18 @@ def test_the_stored_window_is_strict_and_closed() -> None:
 )
 def test_solus_itself_is_recognised_by_family(bundle: str, solus: bool) -> None:
     assert is_solus(bundle) is solus
+
+
+def test_a_missing_window_id_key_is_still_refused() -> None:
+    # Normalisation covers an explicit null (no window in front), never an absent key.
+    front = {k: v for k, v in WINDOW_BOUND.items() if k != "window_id"}
+    with pytest.raises(ValidationError):
+        FrontAppBinding.model_validate(front)
+
+
+@pytest.mark.parametrize("window_id", [None, 0])
+def test_a_windowless_window_bound_app_is_not_drivable(window_id: int | None) -> None:
+    binding = FrontAppBinding.model_validate({**WINDOW_BOUND, "window_id": window_id})
+    assert (binding.drivable, binding.binding) == (False, None)
+    assert (binding.title, binding.pid, binding.window_id) == (None, None, None)
+    assert binding.window() is None
