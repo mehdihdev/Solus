@@ -257,7 +257,7 @@ themselves contain filters (bounded by §4.4).
   by `ma` and `integ` (not counted); `lowpass` outputs NaN for a NaN sample and keeps its state;
   `deriv` uses the previous finite sample.
   - `ma(x, w)`: arithmetic mean of finite samples with timestamp in (t − w, t], newest 2000 at
-    most, summed oldest→newest; NaN when there are none.
+    most; NaN when there are none.
   - `lowpass(x, fc)`: RC = 1/(2π·fc); first sample y = x; then α = dt/(RC + dt),
     y = y_prev + α·(x − y_prev).
   - `deriv(x)`: (x − x_prev)/(t − t_prev); NaN on the first sample.
@@ -266,10 +266,13 @@ themselves contain filters (bounded by §4.4).
 - **Gaps.** When consecutive output timestamps are more than a filter's reset window apart, that
   filter's state is cleared and the sample is treated as its first. Reset window: `w` for `ma` and
   `integ`; min(10 s, 5·RC) for `lowpass`; 1.0 s for `deriv`.
-- **Determinism.** Windowed sums are recomputed per output sample in the stated order (no running
-  sums), so a batch evaluation and an incremental evaluation over the same samples give identical
-  results. The shared vectors (`packages/shared-types/fixtures/bench-expression-vectors.json`)
-  are compared with relative tolerance 1e-9; NaN must equal NaN.
+- **Determinism.** Windowed sums are kept as a running compensated (Neumaier) sum, recomputed
+  oldest→newest whenever as many samples have left the window as remain, so batch and incremental
+  evaluations give identical results and agree with a per-sample oldest→newest recomputation within
+  the vectors' tolerance. A non-finite partial sum gives NaN until no sample (`ma`) or trapezoid term
+  (`integ`) of magnitude ≥ DBL*MAX/2000 remains in the window, then the sum is recomputed
+  oldest→newest. The shared vectors (`packages/shared-types/fixtures/bench-expression-vectors.json`)
+  are compared with relative tolerance 1e-9; NaN must equal NaN. *(SOLUSDEV-319 Phase 4)\_
 - **Output** NaN renders as a gap, never as zero.
 
 ### 4.6 Constant derived signals (SOLUSDEV-319 amendment: constant derived signals)
@@ -301,10 +304,14 @@ Live Bench show it and stop it.
 
 - `GET /setpoint` (any role): `null`, or `{id, session_id, robot, joint, unit, target, state:
 "moving"|"reached"|"timed_out"|"stopped"|"failed", started_at, ended_at}` for the project's most
-  recent move. Live Bench polls it while a move is in flight.
+  recent move. Live Bench polls it while a move is in flight. `null` also once the move's session
+  has ended and the move has stopped (state evicted); a move whose stop failed stays visible as
+  `moving`. _(SOLUSDEV-319 Phase 4)_
 - `POST /setpoint/stop` (MEMBER, never rate-limited — it is a safety control): stops the in-flight
   move; the joint holds its last goal with torque on. Idempotent; returns the state. No local
-  bench on this server: 503 `source_unavailable`.
+  bench on this server: 503 `source_unavailable`. If a move cannot be stopped, every other move is
+  still stopped and the response is 503 `setpoint_stop_failed`; a retry stops again. _(SOLUSDEV-319
+  Phase 4)_
 
 ## 6. SOL tools
 
@@ -315,20 +322,30 @@ Results, names and expressions reach the model as fenced data. Guide action mode
 tool below except `bench_view.read` (the direct writes are not `requires_confirmation`, so the
 mode wrapper's mutating set must name them explicitly; see the architecture doc).
 
-| Tool                        | Args                                                  | Confirmation | Result                                                                                                                                  |
-| --------------------------- | ----------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `bench_view.read`           | `{include_values?: bool = true}`                      | no           | GET /view data; with values, each derived entry adds `latest: {value: float\|null, at}` evaluated server-side over the telemetry buffer |
-| `bench_view.update_display` | `{ops: SetDisplay[1..32]}`                            | no (direct)  | `{version, inverse_ops, summary}`                                                                                                       |
-| `bench_view.upsert_derived` | `{id?, name, expression, unit?}`                      | no (direct)  | `{version, id, node_count, inverse_ops, summary}`; `expression_error` → `invalid_args` with the codes and positions                     |
-| `bench_view.delete_derived` | `{id}`                                                | **yes**      | `{version, inverse_ops}`                                                                                                                |
-| `bench.session_start`       | `BenchSessionIn` (the exact body of `POST /sessions`) | **yes**      | the session record                                                                                                                      |
-| `bench.session_stop`        | `{session_id}`                                        | **yes**      | the session record                                                                                                                      |
-| `bench.setpoint`            | `{session_id, joint, target}`                         | **yes**      | `{id, state, target, clamped}`                                                                                                          |
+| Tool                        | Args                                                  | Confirmation | Result                                                                                                                                                                               |
+| --------------------------- | ----------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `bench_view.read`           | `{include_values?: bool = true}`                      | no           | GET /view data; with values, each derived entry adds `latest: {value: float\|null, at}` evaluated server-side over the telemetry buffer, or `latest: null` with `latest_reason` (§6) |
+| `bench_view.update_display` | `{ops: SetDisplay[1..32]}`                            | no (direct)  | `{version, inverse_ops, summary}`                                                                                                                                                    |
+| `bench_view.upsert_derived` | `{id?, name, expression, unit?}`                      | no (direct)  | `{version, id, node_count, inverse_ops, summary}`; `expression_error` → `invalid_args` with the codes and positions                                                                  |
+| `bench_view.delete_derived` | `{id}`                                                | **yes**      | `{version, inverse_ops}`                                                                                                                                                             |
+| `bench.session_start`       | `BenchSessionIn` (the exact body of `POST /sessions`) | **yes**      | the session record                                                                                                                                                                   |
+| `bench.session_stop`        | `{session_id}`                                        | **yes**      | the session record                                                                                                                                                                   |
+| `bench.setpoint`            | `{session_id, joint, target}`                         | **yes**      | `{id, state, target, clamped}`                                                                                                                                                       |
 
 Direct writes apply against the current version under the project lock (SOL does not pass a
 version), so they never 409; the returned `version` + `inverse_ops` are what the turn's change
 chip uses for Undo (§7). `summary` is a Solus-composed one-line description for the chip ("Pinned
 2 signals", "Created derived signal ‹name›").
+
+- `bench_view.read` values are evaluated off the event loop under a total work budget
+  `WORK_BUDGET` = 400 000 (Σ over derived signals of samples fed × (1 + filter count); the newest
+  2000 samples per device) and a `DEADLINE_SECONDS` = 2 s deadline. An entry that would exceed the
+  budget gets `latest: null, latest_reason: "budget"`; an entry not started by the deadline gets
+  `"deadline"`. A caller with no live membership gets `unauthorized`; a project outside the
+  caller's team gets `not_found`. _(SOLUSDEV-319 Phase 4)_
+- SOL direct writes (`update_display`, `upsert_derived`, and an approved `delete_derived`) count
+  against the same per-user 120 PATCH-a-minute limiter as REST; over it the tool returns retryable
+  `rate_limited`. _(SOLUSDEV-319 Phase 4)_
 
 ### 6.1 Card rows (`preview`, label → before / after)
 
@@ -337,7 +354,16 @@ chip uses for Undo (§7). `summary` is a Solus-composed one-line description for
 - `bench.session_start`: **Action** — → "Start session"; **Source** — → provider; **Mode** — →
   sim/real; **Robot** or **Device** or **Simulator** — → the same label `POST /sessions` would
   give; **Window** — → "‹n› s". Refused before parking with the route's own errors
-  (`source_unavailable`, `not_found`, `validation_error`, `too_many_sessions`).
+  (`source_unavailable`, `not_found`, `validation_error`, `too_many_sessions`). After these five
+  rows, one row per config field that is not at its default (a field with no default always has a
+  row): **Scene** (`scene_name`), **MJCF** (`mjcf_xml`, shown only as a `sha256` prefix and byte
+  size), **Sample rate** (`sample_hz`, Hz), **Duration** (`duration_seconds`, s), **Topics**,
+  **MCAP file** (`mcap_path`), **Serial number**, **Device path** (`confirmed_device_path`),
+  **Baud**, **Driver** (`driver_id`), **Driver params** (`driver_params`, JSON), **Robot id**
+  (`robot_entity_id`), **Hardware id** (`entity_id`), **Recording**, **Realtime** (`realtime`).
+  `provider` and `window_seconds` have their own rows and never repeat. A change to any row's value
+  between park and decision (the rows are re-rendered from the stored args and compared, §5) makes
+  the card stale. _(SOLUSDEV-319 Phase 4)_
 - `bench.session_stop`: **Action** — → "Stop session"; **Session** ‹label› → "stopped";
   **Provider** ‹provider› → —. Refused: `not_found`, `session_starting`.
 - `bench.setpoint`:
@@ -374,12 +400,17 @@ is `unavailable` (`invalid_args` for `uncalibrated`), and its message begins `se
 
 Unknown session or joint: `not_found`. The move itself: one bounded move from the present position
 toward the goal, at most `DEFAULT_MAX_STEP_TICKS` (68 ticks) per 30 Hz tick, ending when the
-present position is within 2 ticks of the goal (`reached`) or after 5 s (`timed_out`); the joint
-holds its last goal either way. A teleop start, a session stop, a release or `POST
+present position is within 2 ticks of the goal (`reached`) or after 5 s (`timed_out`). Each tick's
+goal stays within one step of the measured position, so a stalled joint never runs ahead. The joint
+holds its last goal on `reached`; on `timed_out` it holds its measured position (one hold write, none
+if the move never wrote a goal), not the far goal. _(SOLUSDEV-319 Phase 4)_ A teleop start, a session stop, a release or `POST
 /setpoint/stop` ends the move (`stopped`). There is no teleop tool, no loop tool and no tool that
 streams commands.
 
-Rate limit: 30 setpoint executions a minute per user (shared limiter with teleop drives).
+Rate limit: 30 setpoint executions a minute per user (`setpoint` limiter); each execution also counts
+once against the teleop drive limiter (shared with teleoperation). Card previews (park and
+decision-time re-render) count against the teleop preview limiter. Over either limit: retryable
+`rate_limited`. _(SOLUSDEV-319 Phase 4)_
 
 ## 7. Undo
 

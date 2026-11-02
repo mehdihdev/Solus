@@ -215,6 +215,17 @@ family matches `com.google.Chrome.canary`, `com.google.Chrome.beta` and Chrome's
   `co.zeit.hyper`; script runners, which are shells by another name: `com.apple.ScriptEditor2`,
   `com.apple.Automator`, `com.apple.shortcuts`, `com.latenightsw.ScriptDebugger8` (Script Debugger).
 - **General-purpose hosts** (they open and run anything — apps, scripts, installers): `com.apple.finder`.
+- **Remote-desktop and VM consoles** (they reach other machines and run commands there; ADR-041 amendment
+  2026-11-01, M-1 — SOLUSDEV-319 Phase 4): `com.apple.ScreenSharing`, `com.microsoft.rdc.macos`,
+  `com.utmapp.UTM`, `com.vmware.fusion`, `com.teamviewer.TeamViewer`, `com.philandro.anydesk`,
+  `com.realvnc.vncviewer`, `tv.parsec.www`; families `com.parallels.desktop`, `org.virtualbox.app`,
+  `com.p5sys.jump` (Jump Desktop) _(family)_.
+- **Launchers and automation tools** (they run arbitrary actions and scripts; same amendment):
+  `com.raycast.macos`, `org.hammerspoon.Hammerspoon`; families `com.runningwithcrayons.Alfred`,
+  `com.stairways.keyboardmaestro` _(family)_.
+- **Python REPLs** (they run arbitrary code; same amendment): `org.python.IDLE`, `org.thonny.Thonny`.
+- **Disk imagers** (they write whole devices; same amendment): `io.balena.etcher`,
+  `org.raspberrypi.imagingutility`.
 - **Password managers and credential prompts:** `com.1password.1password`, `com.agilebits.onepassword7`,
   `com.bitwarden.desktop`, `com.dashlane.dashlanephonefinal` (Dashlane's macOS app is the Catalyst build of
   its iOS app and keeps that id), `com.lastpass.LastPass`, `org.keepassxc.keepassxc`,

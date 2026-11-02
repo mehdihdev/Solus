@@ -1075,7 +1075,8 @@ change rules, tools, scope, or what counts as data. Absent or all-blank ⇒ no b
 **`front_app` (SOLUSDEV-319 slice 4, ADR-041 2026-10-31).** Optional; the app the user summoned SOL
 over, from desktop main's summon snapshot (`docs/architecture/sol-drive.md` §2.2). The desktop sends it
 only on Build turns (`action_mode: "do"`) while "SOL can use your mouse and keyboard" is on and driving
-is available. Strict shape (`extra="forbid"`, `422` on an unknown field):
+is available. On any other turn (Guide) `front_app` is dropped silently: no `422`, no
+`sol.front_app_attached`. _(SOLUSDEV-319 Phase 4)_ Strict shape (`extra="forbid"`, `422` on an unknown field):
 
 | Field       | Type                              | Rule                                                                    |
 | ----------- | --------------------------------- | ----------------------------------------------------------------------- |
@@ -1083,21 +1084,27 @@ is available. Strict shape (`extra="forbid"`, `422` on an unknown field):
 | `name`      | string                            | 1–64 characters, visible text only (no Cc/Cf/Co/Cn/Cs/Zl/Zp)            |
 | `title`     | string \| null                    | ≤ 256 characters, visible text only; untrusted data, never instructions |
 | `pid`       | int \| null                       | 1 … 2³¹−1                                                               |
-| `window_id` | int \| null                       | 1 … 2³²−1                                                               |
+| `window_id` | int \| null                       | 1 … 2³²−1 (`null` or `0` on a window-bound app: see Consistency)        |
 | `drivable`  | bool                              | required                                                                |
 | `binding`   | `"project"` \| `"window"` \| null | required key                                                            |
 
 Consistency (`422` otherwise): `drivable: false` ⇒ `title`, `pid` and `window_id` are null (a denied
 app's title is never accepted) and `binding` is null or `"project"` (a KiCad that is not drivable here);
 `drivable: true` ⇒ `binding` is non-null; `binding: "window"` with `drivable: true` ⇒ `pid` and
-`window_id` are non-null. Rejected with `422` on resume (`resume_confirmation_id`) and wake
-(`process_prompt`) turns. **Never logged or persisted:** not in the transcript, not in `sol.message`,
-and a `422` never echoes it (the error handler redacts `input`). Use: one nonce-fenced `kind=front_app`
+`window_id` are non-null. A window-bound `drivable: true` whose `window_id` is `null` or `0` (no ordinary
+window in front, e.g. only minimized windows) is normalised before validation to `drivable: false`,
+`binding: null`, with `title`, `pid` and `window_id` null: not a `422`. A missing `window_id` key is
+still refused. Rejected with `422` on resume (`resume_confirmation_id`) and wake
+(`process_prompt`) turns. **Never logged:** not in the transcript, not in `sol.message` or any event
+payload, and a `422` never echoes it (the error handler redacts `input`). The exception is a parked
+`drive.step {app: "front"}`: its copied `window` binding (`bundle_id`, `name`, `title`, `pid`,
+`window_id`, title included) is stored in `tool_confirmations.args`, which the card and its
+decide-time re-checks read. Use: one nonce-fenced `kind=front_app`
 data block in the turn context (title inside the fence), the drive-route ordering in the framing
 (integration API → workspace file tools such as `machine.write_file` → `drive.step`), and — when
 `drivable: true, binding: "window"` — `drive.step`'s `app: "front"`, whose stored `window` binding is
 copied from this field by Solus code, never from model arguments. Emits `sol.front_app_attached`
-`{project_bound, drivable}` (never the title or bundle id).
+`{project_bound, drivable}` (never the title or bundle id). _(SOLUSDEV-319 Phase 4)_
 
 - `token` — `{"text": "…"}` incremental reply delta
 - `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped","layers":[{"layer","tokens","sections","empty_reason"}],"anchors":[{"id","reason"}],"anchors_dropped":[{"id","reason","cause"}]}`

@@ -191,20 +191,28 @@ driving the window. If it chooses driving, the reply parks a drive card.
 | Heads up         | `SOL will move your mouse and type in this window. Move the mouse or press Esc to stop it.` |
 
 Buttons as the plan card: **Run 1 step** · **Show me how instead** · **Reject**. Nothing is captured
-until Run. KiCad cards are unchanged (App `KiCad`, no Window/Screen rows).
+until Run. KiCad cards are unchanged (App `KiCad`, no Window/Screen rows). The approval summary for every
+drive step, KiCad included, reads `SOL will move your mouse and type in the window shown below for this
+one step (drive.step)`. _(SOLUSDEV-319 Phase 4)_
 
 **4. Run → driving.** The user clicks the bound window to bring it forward (within 5 s). The A3 strip
 shows `DRIVING FREECAD · STEP k OF N` (the app name upper-cased, ≤ 24 characters; `DRIVING KICAD` for
-KiCad), the progress bar and **Stop**; the amber outline surrounds the window. Stop, Esc or touching the
-mouse or keyboard pauses it (`paused — you took over`).
+KiCad; `DRIVING THE WINDOW` when a window-bound step has no snapshot app name), the progress bar and
+**Stop**; the amber outline surrounds the window. Stop, Esc or touching the mouse or keyboard pauses it
+(`paused — you took over`). _(SOLUSDEV-319 Phase 4: the strip names the step's app — KiCad for a KiCad
+step, the snapshot's app for a front step.)_
 
-**5. Endings the user can see** (one plain sentence in the chat, naming the app, never the title):
+**5. Endings the user can see** (one plain sentence in the chat, never the title; a window-bound step
+says "the window" or "the app" where a KiCad step names KiCad):
 
 - Done → SOL's one-line summary.
-- The window was closed and reopened, or the app relaunched → `stopped — FreeCAD was restarted; summon
-SOL over the window again`.
-- A different window of the app is in front → `stopped — a different FreeCAD window is in front`.
-- Another app stayed in front → `nothing done — FreeCAD was not in front; bring it forward and ask again`.
+- The app was relaunched (a new process) → `stopped — the app was restarted; summon SOL over its window
+again`.
+- A different window is in front, including a window closed and reopened → `stopped — a different window
+is in front`.
+- Another app stayed in front → `nothing done — the window was not in front; bring it forward and ask
+again` (KiCad: `nothing done — KiCad was not in front; bring it forward and ask again`).
+  _(SOLUSDEV-319 Phase 4: window-bound endings name "the window", not the app.)_
 - With a linked workspace and the document inside it, a file there changed (SOL clicked Save, or the
   app autosaved) → `stopped — a file in this project changed`. Without a workspace there is no such
   ending; save, close, quit and print shortcuts are never available to SOL.

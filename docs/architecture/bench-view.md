@@ -15,15 +15,15 @@ ADR-037 live channels. Routes: [docs/api/bench-view.md](../api/bench-view.md). S
    viewStore.ts ◀── │      lock project row, version check, │    bench_view.py     │
    expression.ts    │      apply ops, inverse ops, events   │    (read / display / │
    (live eval)      │   expression.py  parse + bound + eval │     upsert / delete) │
-       ▲            │   ops.py         op + inverse logic   │                      │
+       ▲            │   schemas.py     op models, parse_ops │                      │
        │ SSE hint   │ models.BenchView ── ORM listener ──▶ LiveHub project:{id}    │
        └────────────┤                     bench.view_changed{project_id,version,at}│
                     │ livebench/setpoint.py  SetpointManager ◀── agent/tools/      │
-                    │   one move per robot, refusals          bench_control.py     │
+                    │   one move per robot, refusals          bench_setpoint_tool  │
                     │        │ (only when app.state.bench_local is not None)       │
                     └────────┼─────────────────────────────────────────────────────┘
                              ▼ optional import (livebench → solus-api arrow)
-                    livebench/local.py  setpoint_move(conn, joint, target)
+                    livebench/local.py  setpoint_preview / setpoint_apply / setpoint_stop
                       └─ Actuator.to_goal (clamp) · step_goals (per-tick limit) · write_goals
 ```
 
@@ -99,15 +99,19 @@ user's own auth, so SOL never undoes anything itself. An undo is evented as `ben
 - `agent/tools/bench_view.py` registers `bench_view.read`, `bench_view.update_display`,
   `bench_view.upsert_derived` (direct) and `bench_view.delete_derived`
   (`requires_confirmation=True`, preview rows per route doc §6.1).
-- `agent/tools/bench_control.py` registers `bench.session_start`, `bench.session_stop` and
-  `bench.setpoint`, all `requires_confirmation=True` with `requires_complete_preview` so a card is
-  never parked without its rows. `bench.session_start` validates its args with the same
-  `BenchSessionIn` model and opens through the same opener path as `POST /sessions` (the model and
-  opener move from `bench_router.py` into a shared module both import, so the two can never drift).
+- `agent/tools/bench_view.py` builds the descriptors and per-tool wiring. The operations live in
+  `bench_view_tools.py` (view), `bench_session_tools.py` (`bench.session_start` / `_stop`) and
+  `bench_setpoint_tool.py` (`bench.setpoint`); `bench_tools_common.py` holds the shared caller,
+  scope, card-row and error helpers. `bench.session_start`, `bench.session_stop` and `bench.setpoint`
+  are all `requires_confirmation=True` with `requires_complete_preview` so a card is never parked
+  without its rows. `bench.session_start` validates its args with the same `BenchSessionIn` model
+  and opens through the same opener path as `POST /sessions` (the model and opener live in
+  `livebench/sessions_shared.py`, which `bench_router.py` imports, so the two can never drift).
+  _(SOLUSDEV-319 Phase 4)_
 - **Guide mode.** `modes.build_mode_dispatch` refuses tools whose descriptor sets
-  `requires_confirmation`. The two direct view writes do not, so the bench-view module exports a
+  `requires_confirmation`. The two direct view writes do not, so `agent/modes.py` exports a
   Solus-owned `DIRECT_WRITE_TOOLS` frozenset that the mode wrapper adds to its refused set. No
-  model- or fork-supplied metadata can add to it.
+  model- or fork-supplied metadata can add to it. _(SOLUSDEV-319 Phase 4)_
 - **Stale key.** The confirmation gate compares card rows at park and at decision
   (`confirmations._diverged`). The setpoint's **Current value** row is informational and moves
   constantly; `_diverged` excludes it by exact label, beside the existing `Simulate first`
@@ -124,9 +128,12 @@ SOL proposes bench.setpoint{session_id, joint, target}
        → to_value(present) = Current value; to_goal(target) clamps → to_value(goal) = Target
   → parked card (rows) → user approves → decide re-runs preview (stale if Target changed)
   → SetpointManager.start: reserve the robot (in_flight), re-check refusals under the
-    teleop start lock, then local.setpoint_move(conn, address, goal_ticks) as one owned task
-  → livebench: each 30 Hz tick write_goals(step_goals({addr: goal}, last, max_step=68))
-       until |present − goal| ≤ 2 ticks or 5 s; then hold the last goal (torque stays on)
+    teleop start lock, then local.setpoint_apply(conn, address, goal_ticks) starts a
+    `SetpointMove` (livebench/setpoint.py) as one owned task
+  → livebench: each 30 Hz tick write_goals(step_goals({addr: goal}, last, max_step=68)), each goal
+       kept within one step of the measured position; ends when |present − goal| ≤ 2 ticks
+       (`reached`: hold the last goal) or after 5 s (`timed_out`: one hold write at the measured
+       position, none if no goal was written). Torque stays on either way. _(SOLUSDEV-319 Phase 4)_
   → state readable at GET /setpoint; POST /setpoint/stop cancels the task
 ```
 
