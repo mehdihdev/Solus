@@ -29,6 +29,11 @@ public enum DeniedApps {
         "com.apple.ScriptEditor2", "com.apple.Automator", "com.apple.shortcuts", "com.latenightsw.ScriptDebugger8",
         // General-purpose hosts that open and run anything
         "com.apple.finder",
+        // ADR-041 amendment 2026-11-01 (M-1): remote-desktop/VM consoles, launchers, REPLs, imagers.
+        "com.apple.ScreenSharing", "com.microsoft.rdc.macos", "com.utmapp.UTM", "com.vmware.fusion",
+        "com.teamviewer.TeamViewer", "com.philandro.anydesk", "com.realvnc.vncviewer", "tv.parsec.www",
+        "com.raycast.macos", "org.hammerspoon.Hammerspoon", "org.python.IDLE", "org.thonny.Thonny",
+        "io.balena.etcher", "org.raspberrypi.imagingutility",
         // Password managers, credential and consent prompts
         "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
         "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",
@@ -51,6 +56,8 @@ public enum DeniedApps {
         "com.apple.Passwords", "com.apple.systempreferences", "com.apple.settings",
         "com.google.Chrome", "com.microsoft.edgemac", "com.brave.Browser", "com.operasoftware.Opera",
         "com.vivaldi.Vivaldi",
+        "com.parallels.desktop", "org.virtualbox.app", "com.p5sys.jump", "com.runningwithcrayons.Alfred",
+        "com.stairways.keyboardmaestro",
         // Solus itself (app, Electron helpers, drive agent, companion) and the unpackaged dev shell
         "com.solusforge.solus", "com.github.Electron",
     ]

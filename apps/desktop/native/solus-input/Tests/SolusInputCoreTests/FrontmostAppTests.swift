@@ -81,6 +81,19 @@ final class AppPolicyTests: XCTestCase {
         XCTAssertEqual(AppPolicy.classify("com.apple.finder.Open-iCloudDrive"), .windowBound)
     }
 
+    func testRemoteDesktopLauncherReplAndImagerClassesAreDenied() {
+        // ADR-041 amendment 2026-11-01 (M-1): terminals by another name.
+        for id in ["com.apple.ScreenSharing", "com.microsoft.rdc.macos", "com.utmapp.UTM", "com.vmware.fusion",
+                   "com.teamviewer.TeamViewer", "com.philandro.anydesk", "com.realvnc.vncviewer", "tv.parsec.www",
+                   "com.raycast.macos", "org.hammerspoon.Hammerspoon", "org.python.IDLE", "org.thonny.Thonny",
+                   "io.balena.etcher", "org.raspberrypi.imagingutility",
+                   "com.parallels.desktop.console", "org.virtualbox.app.VirtualBox", "com.p5sys.jump.mac.viewer",
+                   "com.runningwithcrayons.Alfred", "com.stairways.keyboardmaestro.editor"] {
+            XCTAssertTrue(DeniedApps.denies(id), id)
+            XCTAssertEqual(AppPolicy.classify(id), .denied, id)
+        }
+    }
+
     func testExactEntriesAreByteExactAndNotFamilies() {
         for id in ["com.apple.Terminal.helper", "com.apple.mail.extension", "com.apple.terminal", "COM.APPLE.MAIL",
                    "com.apple.Safari2"] {
