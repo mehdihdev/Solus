@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Vector3 } from 'three'
-import { buildModel, applyJoints, jointValue, disposeModel, compactSkeleton } from './kinematics'
+import { buildModel, applyJoints, jointValue, disposeModel } from './kinematics'
 
 const model = {
   links: [
@@ -98,22 +98,6 @@ describe('client kinematics', () => {
       )
     ).toBeNull()
   })
-  it('scales a percent signal into degrees', () => {
-    const gripper = {
-      joint: 'hinge',
-      part_entity_id: 'part',
-      device_id: 'device',
-      signal: 'gripper.position',
-      unit: '%' as const,
-      scale: 0.45,
-      offset: 0
-    }
-    const at = (value: number, unit: string): number | null =>
-      jointValue(gripper, { value, unit, timestamp: new Date(1000).toISOString() }, true, 2000)
-    expect(at(100, '%')).toBeCloseTo(Math.PI / 4)
-    expect(at(0, '%')).toBe(0)
-    expect(at(100, 'deg')).toBeNull()
-  })
   it('supports prismatic displacement and clamps to declared limits', () => {
     const sliding = {
       ...model,
@@ -164,12 +148,4 @@ it('draws joint markers and segments only at declared model transforms', () => {
   expect(marker?.getWorldPosition(new Vector3()).toArray()).toEqual([1, 0, 0])
   expect(scene.root.getObjectByName('joint-segment:hinge')).toBeDefined()
   disposeModel(scene)
-})
-
-it('keeps imported mesh geometry visible in the compact bench view', () => {
-  const meshed = { ...model, meshes: { mesh: { vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0] } } }
-  expect(compactSkeleton(meshed, true)).toBe(false) // the user imported geometry to see it
-  expect(compactSkeleton(model, true)).toBe(true) // primitive-only arm: skeleton stays legible
-  expect(compactSkeleton(model, false)).toBe(false)
-  expect(compactSkeleton({ ...model, joints: [] }, true)).toBe(false) // static model: geometry
 })

@@ -8,7 +8,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { getSignalAnomalies } from './signalAnomalies'
 import type { ObserverEventOut } from '../../widgets/livebench/telemetry'
 import { partitionSignals } from './primarySignals'
-import { ViewSignalGrid, type ViewSignalGridProps } from './view/ViewSignalGrid'
+import { SignalWidget } from './SignalWidget'
 import { retainedDevices } from './retainedSignals'
 import { useBenchRealtimeData } from './BenchRealtime'
 import { getBenchDeviceRecent, type BenchDeviceRecent } from '../../lib/api/resources'
@@ -186,10 +186,6 @@ interface Props {
   onStreamChange?: (live: boolean) => void
   onConfirmBoard?: () => void
   robotCount?: number
-  /** Per-robot panels hide the project-wide reasoning section (shown once below). */
-  showReasoning?: boolean
-  /** Only the reasoning section, over these devices: the once-below copy for robot panels. */
-  reasoningOnly?: boolean
   /** A signal marker that names a finding opens it (SOLUSDEV-321 P2-T7). */
   onOpenFinding?: (findingId: string) => void
   /** Rendered under LIVE REASONING: the Live Bench mounts its Findings pane here. */
@@ -203,8 +199,6 @@ export function DeviceBenchView({
   onStreamChange,
   onConfirmBoard,
   robotCount,
-  showReasoning,
-  reasoningOnly,
   onOpenFinding,
   children
 }: Props): React.JSX.Element {
@@ -237,25 +231,6 @@ export function DeviceBenchView({
     onScope: (key: string) => setSelection({ scope, key }),
     onOpenFinding
   }
-  const reasoning = (
-    <>
-      <ReasoningSection
-        hidden={showReasoning === false}
-        failed={failedScope === scope}
-        current={current}
-        events={grid.events}
-        count={rows.filter((row) => !row.stale).length}
-        robotCount={robotCount}
-      />
-      {children}
-    </>
-  )
-  if (reasoningOnly)
-    return (
-      <section className="bench-signals bench-reasoning-only" aria-label="Live reasoning">
-        {reasoning}
-      </section>
-    )
   return (
     <section className="bench-signals" aria-label="Live signals">
       <div className="bench-section-heading">
@@ -275,10 +250,17 @@ export function DeviceBenchView({
           Show all signals
         </button>
       )}
-      <ViewSignalGrid rows={displayed} {...grid} />
+      <SignalGrid rows={displayed} {...grid} />
       <Diagnostics scope={scope} selected={selected} rows={diagnostics} {...grid} />
       <PlaceholderBanner visible={placeholders} onConfirmBoard={onConfirmBoard} />
-      {reasoning}
+      <Reasoning
+        failed={failedScope === scope}
+        current={current}
+        events={grid.events}
+        count={rows.filter((row) => !row.stale).length}
+        robotCount={robotCount}
+      />
+      {children}
     </section>
   )
 }
@@ -326,7 +308,7 @@ function Diagnostics({
   scope,
   selected,
   ...grid
-}: ViewSignalGridProps & {
+}: React.ComponentProps<typeof SignalGrid> & {
   scope: string
   selected: string | null
 }): React.JSX.Element | null {
@@ -342,7 +324,45 @@ function Diagnostics({
       >
         Diagnostics · {grid.rows.length} signals
       </button>
-      {open && <ViewSignalGrid {...grid} />}
+      {open && <SignalGrid {...grid} />}
+    </div>
+  )
+}
+
+function SignalGrid({
+  rows,
+  userId,
+  projectId,
+  windowEndMs,
+  events,
+  onScope,
+  onOpenFinding
+}: {
+  rows: SignalRow[]
+  userId: string | null
+  projectId: string
+  windowEndMs?: number
+  events: ObserverEventOut[]
+  onScope: (key: string) => void
+  onOpenFinding?: (findingId: string) => void
+}): React.JSX.Element {
+  return (
+    <div className="bench-signal-grid">
+      {rows.map((row) => (
+        <div key={row.key}>
+          {row.stale && <p role="status">{row.series.signal} · STALE — waiting for telemetry</p>}
+          <SignalWidget
+            userId={userId}
+            projectId={projectId}
+            deviceId={row.deviceId}
+            series={row.series}
+            windowEndMs={windowEndMs}
+            events={events}
+            onScope={() => onScope(row.key)}
+            onOpenFinding={onOpenFinding}
+          />
+        </div>
+      ))}
     </div>
   )
 }
@@ -429,12 +449,6 @@ function DeviceStatus({
       )}
     </>
   )
-}
-function ReasoningSection({
-  hidden,
-  ...props
-}: { hidden: boolean } & React.ComponentProps<typeof Reasoning>): React.JSX.Element | null {
-  return hidden ? null : <Reasoning {...props} />
 }
 function Reasoning({
   failed,

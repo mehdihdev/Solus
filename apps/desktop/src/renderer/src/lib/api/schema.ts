@@ -6710,7 +6710,7 @@ export interface components {
        * Unit
        * @enum {string}
        */
-      unit: 'rad' | 'deg' | 'm' | '%'
+      unit: 'rad' | 'deg' | 'm'
       /** Scale */
       scale: number
       /** Offset */

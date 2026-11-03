@@ -227,25 +227,3 @@ it.each([
     'graph.changed'
   ])
 })
-
-// SOLUSDEV-319: the shared bench view hint carries only the new version.
-const benchViewChanged = {
-  type: 'bench.view_changed',
-  project_id: PROJECT_ID,
-  version: 4,
-  at: '2026-10-31T21:04:11Z'
-}
-it('decodes bench.view_changed into a version hint', async () => {
-  expect(await collectFor([sse('bench.view_changed', benchViewChanged)])).toEqual([
-    { type: 'bench.view_changed', version: 4 }
-  ])
-})
-it.each([
-  ['foreign project', { ...benchViewChanged, project_id: 'other' }],
-  ['negative version', { ...benchViewChanged, version: -1 }],
-  ['extra field', { ...benchViewChanged, view: { display: [] } }]
-])('drops a bench.view_changed with %s', async (_name, data) => {
-  expect(
-    await collectFor([sse('bench.view_changed', data), sse('graph.changed', graphChanged)])
-  ).toEqual(['graph.changed'])
-})

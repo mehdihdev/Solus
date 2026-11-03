@@ -2,7 +2,6 @@
 // endpoint. This typed transport never calls a provider or requests a sync.
 import type {
   AccessRevoked,
-  BenchViewChanged,
   FindingRaised,
   FindingResolved,
   FindingStatusName,
@@ -38,7 +37,6 @@ export type ProjectEvent =
   | 'graph.changed'
   | { type: 'hardware.devices_changed'; devices: DetectedDeviceOut[] }
   | { type: 'layout.changed'; version: number }
-  | { type: 'bench.view_changed'; version: number }
   | { type: 'sources.changed' }
   | { type: 'project.updated' }
   | { type: 'job.updated'; jobId: string; status: JobStatusName }
@@ -106,12 +104,6 @@ const SHAPES = {
     version: isNonNegativeInt,
     at: isString
   } satisfies Shape<LayoutChanged>,
-  'bench.view_changed': {
-    type: literal('bench.view_changed'),
-    project_id: isString,
-    version: isNonNegativeInt,
-    at: isString
-  } satisfies Shape<BenchViewChanged>,
   'sources.changed': {
     type: literal('sources.changed'),
     project_id: isString,
@@ -153,7 +145,6 @@ function isRevokeForProject(data: Record<string, unknown>, projectId: string): b
 function decodeKnown(type: keyof typeof SHAPES, data: Record<string, unknown>): ProjectEvent {
   switch (type) {
     case 'layout.changed':
-    case 'bench.view_changed':
       return { type, version: data.version as number }
     case 'job.updated':
       return { type, jobId: data.job_id as string, status: data.status as JobStatusName }

@@ -1,18 +1,14 @@
-# Cowork QA — SOLUSDEV-319: SOL drives the app in front + SOL changes Live Bench
+# Cowork QA — SOLUSDEV-319: SOL drives the app in front
 
 You have the running Solus desktop app (dev build) and this file. Nothing else is assumed. Each flow is
 a numbered walkthrough; tick **Pass** or **Fail** per step and write what you saw in the result table at
 the end. Words in `code` are exact on-screen text unless marked "e.g.".
 
-Two features are covered:
+This covers one feature:
 
 - **A — Frontmost-app driving.** When you summon the SOL pill over an app, SOL may (in Build mode, with
   the drive setting on) use your mouse and keyboard in that app's window, one approved step at a time.
   Some apps are always refused (a fixed denylist). KiCad keeps its older "project-bound" rules.
-- **B — SOL changes Live Bench.** Each project has one team-shared bench view (pins, hidden signals,
-  units, axis ranges, plot groups, order) and **derived signals** (formulas over signals). Members and
-  SOL can edit it; viewers can only look. SOL can also start/stop bench sessions and send a single
-  setpoint to a robot joint, each behind a confirmation card.
 
 ---
 
@@ -63,15 +59,6 @@ Tick each before starting.
 - [ ] As many denylisted apps as you can open (the more the better): Terminal, Safari or Chrome,
       Passwords or 1Password, Mail or Messages or Slack, System Settings, Finder, Screen Sharing or UTM,
       Raycast, IDLE (from python.org) or Thonny, balenaEtcher or Raspberry Pi Imager.
-
-### 0.4 Live Bench hardware (Part B, setpoint flows)
-
-- [ ] A **LeRobot SO-101** follower arm connected over USB, calibrated, configured as a robot in P1 —
-      **or** the project's fake/simulated robot configured the same way (a robot session with an
-      actuator and calibrated joints). With a LeRobot SO-101, also have the **leader** arm for the
-      teleoperation-refusal flow.
-- [ ] Live Bench (left rail) for P1 shows at least one streaming device signal (start a session from
-      **Manage connections** if needed).
 
 ---
 
@@ -225,167 +212,6 @@ tools for that` (or a paraphrase) and suggests the integration route (e.g. Deplo
 
 ---
 
-## Part B — SOL changes Live Bench
-
-All in **P1** unless stated. Open Live Bench (left rail) with at least one signal streaming.
-
-### B1. The exact prompt — constant derived signal
-
-1. [ ] In the pill (Build mode), send exactly:
-       `add a simple measurement in live bench with the name mehdi_test which just contains the constant measurement 10`
-       Expected: no confirmation card (direct change). Under SOL's message a **change chip** appears:
-       `⚙ Bench view · Created derived signal "mehdi_test"` with **Undo**.
-2. [ ] In Live Bench, the **Derived** panel shows **mehdi_test** with value **10** and a flat line.
-3. [ ] Click **Undo** on the chip. Expected: the chip reads `Undone` (with ✓); mehdi_test disappears
-       from Live Bench.
-4. [ ] Re-send the prompt so mehdi_test exists for later flows.
-
-### B2. Unit change via SOL + Undo
-
-1. [ ] Ask SOL: "show `<a streaming signal with a unit, e.g. shoulder_lift.position>` in degrees".
-       Expected: chip `Bench view · Changed the unit of 1 signal` with **Undo**; the card's unit changes in
-       Live Bench.
-2. [ ] Click **Undo**. Expected: `Undone ✓`; the unit returns to its previous value.
-
-### B3. Teammate sees the change live
-
-1. [ ] User T opens Live Bench for P1 on their machine.
-2. [ ] User M pins a signal (card **⋯ → Pin**). Expected on T's screen within a few seconds, without
-       reload: the **Pinned** strip shows that signal; no toast, no scroll jump.
-3. [ ] User M creates a derived signal through the editor (B5). Expected: it appears on T's screen.
-
-### B4. 409 conflict
-
-1. [ ] User M and User T both open **⋯ → Edit** on `mehdi_test`. T changes the expression to `20` and
-       saves first. Expected on M: banner `Changed by a teammate — Reload / Keep editing`.
-2. [ ] M clicks **Keep editing**, changes it to `30`, clicks **Save**.
-       Expected: the sheet stays open with M's text and reads `A teammate changed the bench view. Reload to
-see it, then save again.` with **Reload**. Nothing written (T's `20` stands).
-3. [ ] M makes a chip Undo after T has edited the view (SOL change, then T edits, then M clicks Undo).
-       Expected: chip reads `View changed since — Undo unavailable`; button disabled; nothing written.
-4. [ ] Display gestures (pin/hide/unit) during a teammate's edit: the gesture retries once silently; on a
-       second conflict the card reverts and shows `Bench view changed — try again`.
-
-### B5. Derived editor parse errors
-
-Open **+ Derived signal**. Name `qa_expr`. Try each expression; expected: the bad span is underlined
-and a fixed sentence shows; Save still sends, and the server's error keeps the sheet open with the text
-intact.
-
-1. [ ] `foo(1)` → "Unknown function".
-2. [ ] `sig("dev", "sig"` → syntax error at the end.
-3. [ ] 13 nested parentheses around `1` → "Too deep — at most 12 levels".
-4. [ ] A 600-character expression → too long.
-5. [ ] `1e999` → non-finite literal.
-6. [ ] `ma(sig("<dev>", "<sig>"), 60)` → filter window out of range (≤ 10 s).
-7. [ ] **Insert signal ▾** inserts a correctly quoted `sig("…", "…")`; a valid expression shows a live
-       preview and Save creates it.
-8. [ ] A name equal to an existing derived signal (`mehdi_test`) → the Name field is marked (duplicate).
-9. [ ] A misspelled but valid-looking signal name shows `⚠ No data yet for this signal (it may not be
-streaming)` and saves; the panel shows `— (no data)`.
-
-### B6. Delete a derived signal via SOL (confirmation card)
-
-1. [ ] Ask SOL: "delete the derived signal qa_expr".
-       Expected: a **confirmation card** with rows **Derived signal** (name), **Expression** (single line),
-       **Shown in** (`n display settings` → `removed`); **Approve** / **Reject**.
-2. [ ] Click **Reject**. Expected: nothing deleted.
-3. [ ] Ask again, **Approve**. Expected: qa_expr is gone from Live Bench (and from T's screen).
-4. [ ] Delete via the UI (**⋯ → Delete**): prompt `Delete ‹name›? Charts that use it lose it.`; the Undo
-       toast restores it with the same settings.
-
-### B7. SOL start / stop session cards
-
-1. [ ] Ask SOL: "start a real session on the follower robot with a 30 second window" (or any non-default
-       config, e.g. a specific sample rate or baud).
-       Expected: a confirmation card with rows **Action** `Start session`, **Source** (provider), **Mode**
-       `real`, **Robot** (robot label), **Window** `30 s`, **plus a row for each non-default config field**
-       (e.g. `Sample rate … Hz`, `Baud`, `Device path`, `Driver`, `Robot id`). Nothing starts before Approve.
-2. [ ] **Approve**. Expected: the session starts exactly as **Manage connections** would; the robot panel
-       appears.
-3. [ ] Ask SOL to stop that session. Expected: card **Action** `Stop session`, **Session** label →
-       `stopped`, **Provider**. Approve → the session stops.
-
-### B8. Setpoint card
-
-Requires a connected, calibrated robot session with torque on and no teleoperation running.
-
-1. [ ] Ask SOL: "move shoulder_lift to 40 degrees" (use a joint your robot has).
-       Expected: card titled e.g. `SOL wants to move one joint` with rows **Robot**, **Joint**
-       (`shoulder_lift.position`), **Current value** (e.g. `12.4 deg`), **Target** `40.0 deg`, **Motion**
-       `One move, at most ‹step› per tick; ends at the target or after 5 s`.
-2. [ ] **Approve**. Expected: the robot panel shows `Moving shoulder_lift.position → 40.0 deg` with
-       **Stop**; the joint moves smoothly and ends `Reached` (or `Timed out after 5 s — holding`). The joint
-       never goes limp.
-3. [ ] Ask for a target outside the calibrated range (e.g. 500 degrees). Expected: Target row reads
-       `‹max› deg (requested 500.0 deg, clamped to calibrated range)`.
-4. [ ] Approve a move and click **Stop** mid-move. Expected: `Stopped — holding`; joint holds with torque.
-5. [ ] Start **Teleoperate…** (leader arm), then ask for a setpoint.
-       Expected: refused, `Teleoperation is running — stop it first`. No card. Also: starting teleoperation
-       while a setpoint move is running stops the move first.
-6. [ ] Stop teleop, **Release** the robot (torque off), ask for a setpoint.
-       Expected: `Torque is off on this robot — hold it first`.
-7. [ ] Ask for a setpoint on an uncalibrated joint (or a robot without calibration).
-       Expected: `This joint is not calibrated`.
-8. [ ] Ask for a setpoint on the **follower** while teleop is running from another project.
-       Expected: `This robot is a teleop follower`.
-9. [ ] Approve a move and, before it ends, ask for another on the same robot.
-       Expected: `A move is already running on this robot`.
-
-### B9. Budget on heavy derived signals
-
-1. [ ] Create several derived signals with heavy filters over busy streams (e.g. 8 copies of
-       `integ(ma(sig("<dev>", "<sig>"), 10), 10)` named heavy1…heavy8) while the robot streams at full rate.
-2. [ ] Ask SOL: "what are the current values of my derived signals?".
-       Expected: SOL answers without the app or API freezing (other UI keeps responding). Signals that did
-       not fit the work budget are reported with no value; SOL says so. Developer check (optional, DevTools
-       or API log): those entries carry `latest: null` and `latest_reason: "budget"` (or `"deadline"`), while
-       `mehdi_test` still reports `10`.
-
-### B10. Viewer is read-only (UI and SOL)
-
-Sign in as **User V** (viewer) on P1.
-
-1. [ ] Live Bench shows the same pins, groups, units, ranges and derived signals (mehdi_test = 10).
-2. [ ] Every card's **⋯** shows only **Copy expression** (derived); no Unit/Range/Group/Pin items; drag
-       is off; **+ Derived signal**, Edit, Delete and Undo are hidden.
-3. [ ] In the pill, ask SOL to add a derived signal / pin a signal / delete mehdi_test / start a session /
-       move a joint. Expected: each refused (SOL says it lacks permission); **no chip, no card**.
-
-### B11. Cross-team access
-
-1. [ ] As User M, in DevTools Network pick a request to `/api/v1/projects/<P1 id>/bench/view`,
-       **Copy as cURL**, replace the P1 id with **PX**'s id (another team), run it in a terminal.
-       Expected: `404` `not_found` (no hint that the project exists).
-2. [ ] Same for a `PATCH /bench/view`, `GET /bench/setpoint` and `POST /bench/setpoint/stop` against PX.
-       Expected: `404` each; nothing changes in PX.
-3. [ ] Remove the `Authorization` header and repeat against P1. Expected: `401`.
-4. [ ] As User V (viewer) send a `PATCH /bench/view` on P1. Expected: `403` `forbidden`.
-
-### B12. No local bench (`bench_local` unavailable)
-
-Only if you can run an API without the `livebench` package installed (e.g. a hosted/staging API, or an
-environment where `livebench` is not importable). Otherwise mark N/A.
-
-1. [ ] Ask SOL for a setpoint. Expected: `Robot control is only available in the desktop app's local
-bench`; no card.
-2. [ ] `POST /bench/setpoint/stop`. Expected: `503` `source_unavailable`.
-3. [ ] Bench view editing (pins, derived signals) still works.
-
----
-
-## Cross-feature checks
-
-- [ ] A drive card and a bench chip in the same SOL thread both render correctly; approving one does not
-      affect the other.
-- [ ] After a stream reconnect (stop and restart `pnpm dev:all`'s API, or toggle network), Live Bench
-      refetches the view; pins and derived signals come back.
-- [ ] The teleoperation bar's **Teleoperate…** stays usable after setpoint moves.
-- [ ] Watch the `pnpm dev:all` terminal through Part B: note if the dev watchdog shuts the stack down
-      (a known open concern: the `readyz` probe failing 3× while the API is busy). Record it in Notes.
-
----
-
 ## Result
 
 | Flow                        | Pass/Fail | Notes |
@@ -401,16 +227,6 @@ bench`; no card.
 | A9 Hostile title            |           |       |
 | A10 Guide no front_app      |           |       |
 | A11 Drive off               |           |       |
-| B1 Exact prompt mehdi_test  |           |       |
-| B2 Unit + Undo              |           |       |
-| B3 Teammate live            |           |       |
-| B4 409 conflict             |           |       |
-| B5 Editor parse errors      |           |       |
-| B6 Delete derived card      |           |       |
-| B7 Session cards            |           |       |
-| B8 Setpoint card + refusals |           |       |
-| B9 Budget                   |           |       |
-| B10 Viewer read-only        |           |       |
-| B11 Cross-team              |           |       |
-| B12 No bench_local          |           |       |
-| Cross-feature               |           |       |
+
+SOL changing Live Bench (bench view, derived signals, setpoints) moved to SOLUSDEV-322; its QA is
+`docs/qa/COWORK_QA_solusdev322_sol_bench_control.md` on that branch.

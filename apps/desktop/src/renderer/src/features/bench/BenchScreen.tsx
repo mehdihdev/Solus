@@ -1,25 +1,28 @@
 // Live Bench discovers sessions independently of focus and narrows device panels
 // through confirmed topology. Empty projects open Workspace Add Hardware.
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import type { Focus } from '@solus/shared-types'
 import { Icons } from '../../components/ui/icons.constants'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
 import { useSharedFocus } from '../workspace/useSharedFocus'
-import type { MainScreen } from '../workspace/shellStore'
+import { useShellStore, type MainScreen } from '../workspace/shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Button } from '../../components/ui/Button'
 import { ConnectDeviceModal } from './ConnectDeviceModal'
 import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { BenchCanvasHost } from './BenchCanvasHost'
-import { BenchPanels } from './BenchPanels'
+import { DeviceBenchView } from './DeviceBenchView'
+import { FindingsPane } from './findings/FindingsPane'
+import type { BenchSession } from '../../lib/api/resources'
 import { activeDeviceIds, useActiveBenchSessions } from './useActiveBenchSessions'
 import { useExternalBenchDevices } from './useExternalBenchDevices'
 import './bench.css'
 import { BenchRealtimeContext, useBenchRealtime } from './BenchRealtime'
-import { BenchViewContext } from './view/BenchViewContext'
-import { BenchViewBottom, BenchViewTop } from './view/BenchViewPanels'
-import { useBenchViewContextValue } from './view/useBenchViewContextValue'
+
+const ScenePanel = lazy(() =>
+  import('./scene/ScenePanel').then((module) => ({ default: module.ScenePanel }))
+)
 
 const RunsView = lazy(() =>
   import('./runs/RunsView').then((module) => ({ default: module.RunsView }))
@@ -44,14 +47,6 @@ function NoProject(): React.JSX.Element {
   )
 }
 
-/** Project- and workspace-level nodes (the .solus root the workspace opens on,
- *  its sections, the Live Bench node itself) map to no hardware: focusing one
- *  means the whole project, not "no devices". */
-const WHOLE_PROJECT_DOMAINS: ReadonlySet<string> = new Set(['project', 'workspace'])
-function benchFocusId(focus: Focus | null): string | undefined {
-  return focus && !WHOLE_PROJECT_DOMAINS.has(focus.domain) ? focus.entity.entityId : undefined
-}
-
 export function BenchScreen({
   onNavigate,
   onAddHardware
@@ -71,16 +66,8 @@ export function BenchScreen({
   const projectId = project?.id ?? null
   const sessions = useActiveBenchSessions(projectId, true)
   const externalDevices = useExternalBenchDevices(projectId, true)
-  const focusEntityId = benchFocusId(focus)
+  const focusEntityId = focus?.entity.entityId
   const realtime = useBenchRealtime(projectId, sessions, focusEntityId)
-  // The team-shared view (pins, hidden, order, units, ranges, groups, derived signals).
-  const activeTeamId = useWorkspaceStore((s) => s.teamId)
-  const benchView = useBenchViewContextValue(
-    projectId,
-    project?.teamId ?? activeTeamId,
-    realtime.devices,
-    realtime.receivedAt
-  )
   const onFocusChange = useCallback((next: Focus | null): void => {
     if (next) void useFocusStore.getState().focus(next.entity.entityId)
   }, [])
@@ -90,63 +77,102 @@ export function BenchScreen({
   const deviceIds = [...new Set([...activeDeviceIds(sessions), ...externalDevices])]
   return (
     <BenchRealtimeContext.Provider value={realtime}>
-      <BenchViewContext.Provider value={benchView}>
-        <div className="bench-workspace">
-          <BenchHeader
-            paused={paused}
-            live={stream?.generation === generation && stream.live}
-            empty={deviceIds.length === 0}
-            onAddHardware={onAddHardware}
-            onConnections={() => setConnectionGeneration(generation)}
-            onPause={() => {
-              if (paused) setStream(null)
-              setPausedAt(paused ? null : generation)
-            }}
+      <div className="bench-workspace">
+        <BenchHeader
+          paused={paused}
+          live={stream?.generation === generation && stream.live}
+          empty={deviceIds.length === 0}
+          onAddHardware={onAddHardware}
+          onConnections={() => setConnectionGeneration(generation)}
+          onPause={() => {
+            if (paused) setStream(null)
+            setPausedAt(paused ? null : generation)
+          }}
+        />
+        {paused && (
+          <p className="bench-device-chips">
+            Scene and signal panes paused. Hardware sessions and recording continue.
+          </p>
+        )}
+        {connectionGeneration === generation && (
+          <ConnectDeviceModal
+            projectId={project.id}
+            onClose={() => setConnectionGeneration(null)}
           />
-          {paused && (
-            <p className="bench-device-chips">
-              Scene and signal panes paused. Hardware sessions and recording continue.
+        )}
+        <SessionChips sessions={sessions} />
+        <ConnectionStatus sessions={sessions} paused={paused} realtime={realtime} />
+        <div className="bench-panes">
+          <aside className="bench-left">
+            <Suspense fallback={<p role="status">Loading scene…</p>}>
+              <ScenePanel projectId={project.id} paused={paused} compact />
+            </Suspense>
+            <div className="bench-sensor-empty">
+              No camera stream available. Recorded video is time-aligned in Runs below.
+            </div>
+            <div className="bench-sensor-empty">
+              No LiDAR or depth stream available. Recorded point clouds appear in Runs below.
+            </div>
+            <p className="bench-scene-caption">
+              Recorded sensor frames remain time-aligned in the Runs pane below.
             </p>
-          )}
-          {connectionGeneration === generation && (
-            <ConnectDeviceModal
-              projectId={project.id}
-              onClose={() => setConnectionGeneration(null)}
-            />
-          )}
-          <SessionChips sessions={sessions} />
-          <ConnectionStatus sessions={sessions} paused={paused} realtime={realtime} />
-          <BenchViewTop />
-          <BenchPanels
+          </aside>
+          <BenchSignals
             projectId={project.id}
             sessions={sessions}
-            externalDevices={externalDevices}
-            allDeviceIds={deviceIds}
-            paused={paused}
+            deviceIds={deviceIds}
             focusEntityId={focusEntityId}
+            paused={paused}
             onStreamChange={onStreamChange}
             onConfirmBoard={onAddHardware}
           />
-          <BenchViewBottom />
-          <section className="bench-secondary" aria-label="Runs and capture">
-            <Suspense fallback={<p role="status">Loading runs…</p>}>
-              <RunsView projectId={project.id} sessions={sessions} />
-            </Suspense>
-          </section>
-          <section className="bench-secondary" aria-label="Workspace widgets">
-            <BenchCanvasHost
-              projectId={project.id}
-              focus={focus}
-              onFocusChange={onFocusChange}
-              sessions={sessions}
-              onNavigate={onNavigate}
-              onAddHardware={onAddHardware}
-              embedded
-            />
-          </section>
         </div>
-      </BenchViewContext.Provider>
+        <section className="bench-secondary" aria-label="Runs and capture">
+          <Suspense fallback={<p role="status">Loading runs…</p>}>
+            <RunsView projectId={project.id} sessions={sessions} />
+          </Suspense>
+        </section>
+        <section className="bench-secondary" aria-label="Workspace widgets">
+          <BenchCanvasHost
+            projectId={project.id}
+            focus={focus}
+            onFocusChange={onFocusChange}
+            sessions={sessions}
+            onNavigate={onNavigate}
+            onAddHardware={onAddHardware}
+            embedded
+          />
+        </section>
+      </div>
     </BenchRealtimeContext.Provider>
+  )
+}
+
+/** The right column: live signals, then the Findings pane under LIVE REASONING (SOLUSDEV-321
+ *  P2-T7). A signal marker that names a finding opens it in the pane, for this session only. */
+function BenchSignals({
+  sessions,
+  ...view
+}: React.ComponentProps<typeof DeviceBenchView> & {
+  sessions: BenchSession[] | null
+}): React.JSX.Element {
+  const generation = useWorkspaceSessionGeneration()
+  // SOLUSDEV-321 P7: the finding a SOL citation pill asked for opens here. Read in the initializer
+  // and cleared in an effect, so a StrictMode double render still sees it (HomeScreen's homeView).
+  const [opened, setOpened] = useState<{ generation: number; id: string } | null>(() => {
+    const id = useShellStore.getState().benchFinding
+    return id ? { generation, id } : null
+  })
+  useEffect(() => useShellStore.getState().clearBenchFinding(), [])
+  return (
+    <DeviceBenchView {...view} onOpenFinding={(id) => setOpened({ generation, id })}>
+      <FindingsPane
+        projectId={view.projectId}
+        sessions={sessions}
+        selectedFindingId={opened?.generation === generation ? opened.id : null}
+        onCloseSelected={() => setOpened(null)}
+      />
+    </DeviceBenchView>
   )
 }
 

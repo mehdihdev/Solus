@@ -41,7 +41,6 @@ response when access is gone.
 | `graph.changed`            | `project_id, source_id, sync_id, counts, at` | graph snapshot                          |
 | `hardware.devices_changed` | `project_id, devices, at`                    | none (full list)                        |
 | `layout.changed`           | `project_id, version, at`                    | workspace layout, if `version` is newer |
-| `bench.view_changed`       | `project_id, version, at`                    | bench view, if `version` is newer (ADR-014 2026-10-31) |
 | `sources.changed`          | `project_id, source_id, at`                  | project sources                         |
 | `project.updated`          | `project_id, team_id, at`                    | project detail                          |
 | `job.updated`              | `project_id, job_id, status, at`             | the job / anything waiting on it        |

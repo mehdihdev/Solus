@@ -39,11 +39,6 @@ function buildVisual(visual: SceneVisual, model: KinematicModel): Mesh | null {
   origin(mesh, visual.xyz, visual.rpy)
   return mesh
 }
-/** The compact bench pane draws a jointed primitive model as a skeleton to stay legible, but a
- *  model with supplied mesh geometry renders as itself — that geometry is why it was imported. */
-export function compactSkeleton(model: KinematicModel, compact: boolean): boolean {
-  return compact && model.joints.length > 0 && !Object.keys(model.meshes ?? {}).length
-}
 export function buildModel(model: KinematicModel, skeleton = false): BuiltModel {
   const root = new Group(),
     links = new Map<string, Group>(),
@@ -115,14 +110,7 @@ export function jointValue(
   if (!Number.isFinite(age) || age < -1000 || age > 10000) return null
   const value = point.value * binding.scale + binding.offset
   if (!Number.isFinite(value)) return null
-  return value * TO_SCENE_UNIT[binding.unit]
-}
-/** Scaled binding values become the scene's rad (or m); `%` is scaled into degrees. */
-const TO_SCENE_UNIT: Record<JointBinding['unit'], number> = {
-  deg: Math.PI / 180,
-  '%': Math.PI / 180,
-  rad: 1,
-  m: 1
+  return binding.unit === 'deg' ? (value * Math.PI) / 180 : value
 }
 export function disposeModel(scene: BuiltModel): void {
   scene.root.traverse((object) => {

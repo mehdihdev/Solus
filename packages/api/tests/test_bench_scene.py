@@ -122,19 +122,10 @@ async def test_mapping_is_confirmed_config_scoped_and_becomes_stale(client, alic
                 json={"expected_version": model["version"], "bindings": [bad]},
             )
         ).status_code == 422
-    # A calibrated-range signal (a gripper's %) drives a revolute joint through scale and offset.
-    percent = {**binding, "unit": "%", "scale": 0.45}
-    by_percent = await client.put(
-        url,
-        headers=alice_headers,
-        json={"expected_version": model["version"], "bindings": [percent]},
-    )
-    assert by_percent.status_code == 200, by_percent.text
-    assert by_percent.json()["data"]["bindings"] == [percent]
     mapped = await client.put(
         url,
         headers=alice_headers,
-        json={"expected_version": by_percent.json()["data"]["version"], "bindings": [binding]},
+        json={"expected_version": model["version"], "bindings": [binding]},
     )
     assert mapped.status_code == 200, mapped.text
     assert mapped.json()["data"]["bindings"] == [binding]
@@ -334,31 +325,3 @@ async def test_oversized_metadata_rejects_before_read(
     )
     assert response.status_code == 413, response.text
     assert all(call.args[0] != oversized for call in get.call_args_list)
-
-
-async def test_listing_digest_lets_pollers_skip_unchanged_geometry(client, alice_headers, db):
-    project, _, robot = await setup(client, alice_headers, db)
-    base = f"/api/v1/projects/{project}/bench/scene/models"
-    empty = (await client.get(f"{base}/digest", headers=alice_headers)).json()["data"]["digest"]
-    assert empty == (await client.get(base, headers=alice_headers)).json()["data"]["digest"]
-    artifact = await upload(client, alice_headers, project)
-    body = {"robot_id": robot, "artifact_id": artifact, "name": "Local robot", "format": "urdf"}
-    assert (await client.post(base, headers=alice_headers, json=body)).status_code == 201
-    probe = await client.get(f"{base}/digest", headers=alice_headers)
-    assert probe.status_code == 200 and set(probe.json()["data"]) == {"digest"}
-    changed = probe.json()["data"]["digest"]
-    listing = (await client.get(base, headers=alice_headers)).json()["data"]
-    assert changed != empty and listing["digest"] == changed
-    again = (await client.get(f"{base}/digest", headers=alice_headers)).json()["data"]["digest"]
-    assert again == changed
-
-
-@pytest.mark.parametrize("role,status", [("foreign", 404), ("viewer", 403), ("member", 200)])
-async def test_listing_digest_access(client, alice_headers, bob_headers, db, role, status):
-    project, team, _ = await setup(client, alice_headers, db)
-    await me(client, bob_headers)
-    if role != "foreign":
-        await add_member(client, alice_headers, bob_headers, BOB, team, role=role)
-    url = f"/api/v1/projects/{project}/bench/scene/models/digest"
-    assert (await client.get(url, headers=bob_headers)).status_code == status
-    assert (await client.get(url)).status_code == 401

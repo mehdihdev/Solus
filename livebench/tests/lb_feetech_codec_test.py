@@ -19,7 +19,7 @@ from livebench.plugins.feetech.feetech_definitions import (
 )
 from solus_api.hardware.config import TransportBinding, TransportKind
 
-_PING, _READ, _WRITE = 0x01, 0x02, 0x03
+_PING, _READ = 0x01, 0x02
 _REG_MODEL, _REG_POSITION, _REG_LOAD, _REG_TEMPERATURE = 0x03, 0x38, 0x3C, 0x3F
 _REG_HOMING = 0x1F
 
@@ -62,8 +62,6 @@ class FeetechFakeChannel:
         self.flushes = 0
         self.closed = False
         self.fail = False
-        self.writes: list[tuple[int, int, int]] = []  # (id, register address, value) acked
-        self.silent_writes: set[int] = set()  # ids that drop write acks
 
     def _registers(self, address: int) -> dict[int, int] | None:
         return {
@@ -89,10 +87,6 @@ class FeetechFakeChannel:
             if registers is not None and servo_id in registers:
                 value = registers[servo_id].to_bytes(data[6], self.byteorder)  # type: ignore[arg-type]
                 self._pending += _feetech_status(servo_id, value)
-        elif instruction == _WRITE and servo_id not in self.silent_writes:
-            written = int.from_bytes(data[6:-1], "big" if self.byteorder == "big" else "little")
-            self.writes.append((servo_id, data[5], written))
-            self._pending += _feetech_status(servo_id, b"")
 
     def recv(self, max_bytes: int = 4096) -> Frame | None:
         out, self._pending = self._pending[:max_bytes], self._pending[max_bytes:]
@@ -249,20 +243,6 @@ def test_read_register_tolerates_garbage_and_short_replies() -> None:
     assert bus.read_register(1, "Present_Load") is None  # servo answers nothing for this register
 
 
-def test_sts_present_position_is_sign_magnitude_like_lerobot() -> None:
-    """Below its burned Homing_Offset an STS servo reports bit 15 + magnitude; lerobot decodes
-    that as negative. Read raw it is a ~32k spike every time a joint crosses the offset."""
-    bus = FeetechBus(as_bus_port(FeetechFakeChannel({1: 0x8000 | 37, 2: 2047})))
-    assert bus.read_register(1, "Present_Position") == -37
-    assert bus.read_register(2, "Present_Position") == 2047
-
-
-def test_scs_registers_carry_no_sign_magnitude_encoding() -> None:
-    channel = FeetechFakeChannel({1: 0x8000 | 37}, byteorder="big")
-    bus = FeetechBus(as_bus_port(channel), FeetechCodec(protocol_version=1))
-    assert bus.read_register(1, "Present_Position") == 0x8000 | 37
-
-
 # ── vendor hygiene ratchet ───────────────────────────────────────────────────────
 
 
@@ -277,24 +257,3 @@ def test_vendor_strings_live_only_under_plugins_and_definitions() -> None:
         if not {"plugins", "definitions"} & set(path.parts) and vendor.search(path.read_text())
     )
     assert offenders == []
-
-
-def test_write_register_waits_for_the_servo_ack() -> None:
-    channel = FeetechFakeChannel({1: 2047, 2: 2047})
-    channel.silent_writes.add(2)
-    bus = FeetechBus(as_bus_port(channel))
-    assert bus.write_register(1, "Goal_Position", 2100) is True
-    assert channel.writes == [(1, STS_CONTROL_TABLE["Goal_Position"].address, 2100)]
-    assert bus.write_register(2, "Goal_Position", 2100) is False  # no ack is a failed write
-
-
-def test_write_register_refuses_values_the_register_cannot_hold() -> None:
-    # Goal_Position is sign-magnitude on the wire; a negative or oversized goal must never be
-    # encoded as a wrapped two's-complement word.
-    bus = FeetechBus(as_bus_port(FeetechFakeChannel({1: 2047})))
-    for bad in (-1, 0x8000):
-        try:
-            bus.write_register(1, "Goal_Position", bad)
-        except ValueError:
-            continue
-        raise AssertionError(f"{bad} was written")

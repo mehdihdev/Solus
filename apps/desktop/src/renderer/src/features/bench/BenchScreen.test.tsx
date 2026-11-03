@@ -376,26 +376,6 @@ it('opens runs independently of the streaming signal canvas', async () => {
   expect(await screen.findByRole('heading', { name: /Runs/ })).toBeInTheDocument()
 })
 
-it.each([
-  ['solus_config', 'project', '.solus'],
-  ['solus:live_bench', 'workspace', 'Live Bench']
-])('treats a %s focus (%s level) as the whole project', async (type, domain, name) => {
-  seedProject()
-  const root: Entity = { id: 'root', type, domain, name, source_key: null } as unknown as Entity
-  useFocusStore.setState({
-    focusedEntityId: 'root',
-    status: 'ready',
-    cache: { 'p1:root@1': { entities: [root], edges: [], truncated: false } }
-  })
-  routeApi({ sessions: [SESSION] })
-  render(<BenchScreen />)
-  expect(await screen.findByText('demo/rod')).toBeInTheDocument()
-  await waitFor(() =>
-    expect(requestMock).toHaveBeenCalledWith('/projects/p1/bench/device-recent?device_id=demo%2Frod&limit=512')
-  )
-  expect(requestMock).not.toHaveBeenCalledWith(expect.stringContaining('focus_entity_id=root'))
-})
-
 it('mounts the Findings pane under LIVE REASONING and opens a marker’s finding there', async () => {
   const findingId = '0b5f8a3e-8c1d-4c6e-9a1f-2d3e4f5a6b7c'
   const at = new Date().toISOString()
@@ -444,8 +424,7 @@ it('mounts the Findings pane under LIVE REASONING and opens a marker’s finding
   vi.mocked(api.requestPage).mockResolvedValue({ data: [], meta: { has_next: false } } as never)
   render(<BenchScreen />)
   const pane = await screen.findByRole('region', { name: 'Findings for Fake arm' })
-  // A robot session gets its own panel; the pane sits once, under the shared reasoning copy.
-  expect(screen.getByRole('region', { name: 'Live reasoning' })).toContainElement(pane)
+  expect(screen.getByRole('region', { name: 'Live signals' })).toContainElement(pane)
   expect(await within(pane).findByText('✓ Nothing out of range')).toBeInTheDocument()
   expect(api.requestPage).toHaveBeenCalledWith(
     '/projects/p1/findings?status=open&robot=r1&limit=500'

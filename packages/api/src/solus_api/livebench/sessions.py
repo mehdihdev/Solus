@@ -259,23 +259,7 @@ class SessionManager:
         self._starting: set[asyncio.Task[Any]] = set()
         self._closing = False
         self.on_ended: Callable[[UUID, UUID], Awaitable[None]] | None = None
-        self._end_listeners: list[Callable[[UUID, UUID], Awaitable[None]]] = []
         self._ending: dict[UUID, asyncio.Task[None]] = {}
-
-    def add_end_listener(self, listener: Callable[[UUID, UUID], Awaitable[None]]) -> None:
-        """Called with (project, session) as a session ends, BEFORE its link closes — so a
-        teleop loop stops writing before the bus it writes to goes away."""
-        self._end_listeners.append(listener)
-
-    def connection(self, project_id: UUID, session_id: UUID) -> tuple[BenchSessionOut, Any]:
-        """An ACTIVE session of this project and its live connection (teleop's only door to a
-        robot's actuator). Ended or foreign sessions are not found."""
-        session = self._active.get(project_id, {}).get(session_id)
-        if session is None:
-            raise SessionNotFoundError(str(session_id))
-        if session.conn is None:
-            raise SessionStillStartingError(str(session_id))
-        return session.out(device_ids_kept=self._device_ids_kept), session.conn
 
     async def start(
         self,
@@ -492,11 +476,6 @@ class SessionManager:
         self._active.get(session.project_id, {}).pop(session.id, None)
         self._ended.setdefault(session.project_id, deque(maxlen=self._ended_kept)).append(session)
         await _stop_evaluator(session)  # cancelled before any await: judging stops with the stop
-        for listener in self._end_listeners:
-            try:
-                await listener(session.project_id, session.id)
-            except Exception:
-                logger.exception("bench session end listener failed: session=%s", session.id)
         if conn is not None:
             try:
                 # aclose only — it cancels the pump and flushes the pending partial

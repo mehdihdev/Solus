@@ -59,13 +59,6 @@ export interface LayoutChanged {
   at: string;
 }
 
-export interface BenchViewChanged {
-  type: "bench.view_changed";
-  project_id: string;
-  version: number;
-  at: string;
-}
-
 export interface SourcesChanged {
   type: "sources.changed";
   project_id: string;
@@ -191,7 +184,6 @@ export type ProjectFrame =
   | GraphChanged
   | HardwareDevicesChanged
   | LayoutChanged
-  | BenchViewChanged
   | SourcesChanged
   | ProjectUpdated
   | JobUpdated
@@ -214,7 +206,6 @@ export const PROJECT_EVENT_TYPES = [
   "graph.changed",
   "hardware.devices_changed",
   "layout.changed",
-  "bench.view_changed",
   "sources.changed",
   "project.updated",
   "job.updated",
@@ -265,10 +256,6 @@ export const HARDWARE_DEVICES_CHANGED_FIELDS: CompleteKeysOf<
 const LC = ["type", "project_id", "version", "at"] as const;
 export const LAYOUT_CHANGED_FIELDS: CompleteKeysOf<LayoutChanged, typeof LC> =
   LC;
-export const BENCH_VIEW_CHANGED_FIELDS: CompleteKeysOf<
-  BenchViewChanged,
-  typeof LC
-> = LC;
 const SC = ["type", "project_id", "source_id", "at"] as const;
 export const SOURCES_CHANGED_FIELDS: CompleteKeysOf<SourcesChanged, typeof SC> =
   SC;

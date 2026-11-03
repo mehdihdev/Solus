@@ -10,7 +10,7 @@ import {
   WebGLRenderer
 } from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
-import { applyJoints, buildModel, compactSkeleton, disposeModel } from './kinematics'
+import { applyJoints, buildModel, disposeModel } from './kinematics'
 import { ZERO_POSE, type DisplayPose } from './displayPose'
 import type { SceneModel } from './types'
 
@@ -53,7 +53,7 @@ export function SceneViewer(props: Props): React.JSX.Element {
     renderer.domElement.setAttribute('aria-label', 'Robot kinematic scene')
     const built = props.models.map((model) => ({
       model,
-      scene: buildModel(model.model, compactSkeleton(model.model, Boolean(props.compact)))
+      scene: buildModel(model.model, props.compact && model.model.joints.length > 0)
     }))
     for (const item of built) {
       const pose = latest.current.poses[item.model.id] ?? ZERO_POSE

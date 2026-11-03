@@ -2,12 +2,11 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as workspaceSession from '../../graph/workspaceSession'
 import { ScenePanel } from './ScenePanel'
-import { listSharedSceneModels, importSceneModel } from './sceneApi'
+import { listSceneModels, importSceneModel } from './sceneApi'
 import { listEntities, uploadArtifact } from '../../../lib/api/resources'
 vi.mock('./SceneViewer', () => ({ SceneViewer: () => <div>3D scene</div> }))
-vi.mock('./sceneApi', async (actual) => ({
-  sameSceneModels: (await actual<typeof import('./sceneApi')>()).sameSceneModels,
-  listSharedSceneModels: vi.fn(),
+vi.mock('./sceneApi', () => ({
+  listSceneModels: vi.fn(),
   importSceneModel: vi.fn(),
   confirmSceneMapping: vi.fn()
 }))
@@ -25,7 +24,7 @@ const robot = {
   source_key: null
 }
 beforeEach(() => {
-  vi.mocked(listSharedSceneModels).mockResolvedValue([])
+  vi.mocked(listSceneModels).mockResolvedValue([])
   vi.mocked(listEntities).mockResolvedValue([robot])
 })
 describe('scene import', () => {
@@ -52,13 +51,9 @@ describe('scene import', () => {
         undefined
       )
     )
-    expect(listSharedSceneModels).toHaveBeenCalledWith('p', { fresh: false })
-    await waitFor(() =>
-      expect(listSharedSceneModels).toHaveBeenLastCalledWith('p', { fresh: true })
-    )
   })
   it('renders jointless models with an explicit reason', async () => {
-    vi.mocked(listSharedSceneModels).mockResolvedValue([
+    vi.mocked(listSceneModels).mockResolvedValue([
       {
         id: 'model',
         robot_id: 'robot',
@@ -75,7 +70,7 @@ describe('scene import', () => {
 })
 
 it('uploads only explicitly selected STL assets with reviewed references', async () => {
-  vi.mocked(listSharedSceneModels).mockResolvedValue([])
+  vi.mocked(listSceneModels).mockResolvedValue([])
   vi.mocked(uploadArtifact).mockResolvedValue({ artifact_id: 'selected' } as never)
   vi.mocked(importSceneModel).mockResolvedValue({ id: 'model' } as never)
   render(<ScenePanel projectId="p" />)
@@ -103,7 +98,7 @@ it('uploads only explicitly selected STL assets with reviewed references', async
 })
 
 it('keeps compact scene management in a closed inline disclosure', async () => {
-  vi.mocked(listSharedSceneModels).mockResolvedValue([
+  vi.mocked(listSceneModels).mockResolvedValue([
     {
       id: 'model',
       robot_id: 'robot',
@@ -157,41 +152,4 @@ it('refuses an import when the account changes across the empty mesh-upload awai
   } finally {
     generationRead.mockRestore()
   }
-})
-
-describe('per-robot scene (robotId)', () => {
-  const model = (id: string, robot: string, name: string): never =>
-    ({
-      id,
-      robot_id: robot,
-      name,
-      version: 1,
-      source_current: true,
-      bindings: [],
-      model: { links: [], joints: [], warnings: [] }
-    }) as never
-  it('shows only the models of the given robot', async () => {
-    vi.mocked(listSharedSceneModels).mockResolvedValue([
-      model('m1', 'r1', 'Leader arm'),
-      model('m2', 'r2', 'Follower arm')
-    ])
-    render(<ScenePanel projectId="p" robotId="r2" />)
-    expect(await screen.findByRole('article', { name: 'Follower arm' })).toBeInTheDocument()
-    expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
-  })
-  it('leaves out robots that have their own panel (excludeRobotIds)', async () => {
-    vi.mocked(listSharedSceneModels).mockResolvedValue([
-      model('m1', 'r1', 'Leader arm'),
-      model('m3', 'r9', 'Unpanelled arm')
-    ])
-    render(<ScenePanel projectId="p" excludeRobotIds={['r1']} />)
-    expect(await screen.findByRole('article', { name: 'Unpanelled arm' })).toBeInTheDocument()
-    expect(screen.queryByRole('article', { name: 'Leader arm' })).not.toBeInTheDocument()
-  })
-  it('defaults the import robot select to that robot', async () => {
-    vi.mocked(listEntities).mockResolvedValue([robot, { ...robot, id: 'r2', name: 'Other' }])
-    render(<ScenePanel projectId="p" robotId="r2" />)
-    await screen.findByRole('option', { name: 'Other' })
-    expect((screen.getByLabelText('Robot for model') as HTMLSelectElement).value).toBe('r2')
-  })
 })

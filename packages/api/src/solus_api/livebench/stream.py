@@ -7,9 +7,8 @@ import json
 import math
 import time
 import uuid
-from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -26,7 +25,6 @@ from solus_api.livebench.sessions import SessionManager, SessionNotFoundError
 from solus_api.models import GraphEntity, User
 
 router = APIRouter()
-WINDOW = timedelta(seconds=8)
 INTERVAL = 0.1
 REAUTHORIZE_SECONDS = 5.0
 AUTH_TIMEOUT = 5.0
@@ -102,7 +100,7 @@ async def snapshot(
     if session.status == "ended":
         raise StreamClosedError(1000)
     now = datetime.now(UTC)
-    cutoff = now - WINDOW
+    cutoff = now - timedelta(seconds=8)
     devices = []
     for device_id in session.device_ids[:64]:
         view = await plumbing.snapshot_device(project, device_id)
@@ -112,10 +110,12 @@ async def snapshot(
         device = view.model_dump(mode="json")
         roles = manager.channel_roles(project, device_id)
         for series, original in zip(device["signals"], view.signals, strict=True):
-            window = [point for point in original.points if cutoff <= point.timestamp <= now]
-            series["points"] = [
-                point.model_dump(mode="json") for point in decimate_window(window, 128, WINDOW)
+            points = [
+                point.model_dump(mode="json")
+                for point in original.points
+                if cutoff <= point.timestamp <= now
             ]
+            series["points"] = downsample(points, 128)
             if series["signal"] in roles:
                 series["display_role"] = roles[series["signal"]]
         devices.append(device)
@@ -125,22 +125,6 @@ async def snapshot(
         "session_id": str(identity),
         "devices": devices,
     }
-
-
-class _Timestamped(Protocol):
-    timestamp: datetime
-
-
-def decimate_window[T: _Timestamped](samples: Sequence[T], limit: int, span: timedelta) -> list[T]:
-    """At most `limit` samples: the last one in each absolute-time slot of `span / limit`.
-    Slots are fixed to the clock, not to the window's length, so a frame 100 ms later keeps the
-    same picks (an index stride re-picks every frame and the trace shimmers). The newest sample
-    always survives — it closes the open slot."""
-    if len(samples) <= limit:
-        return list(samples)
-    slot_us = max(1, int(span.total_seconds() * 1_000_000) // limit)
-    picks = {int(s.timestamp.timestamp() * 1_000_000) // slot_us: s for s in samples}
-    return list(picks.values())[-limit:]
 
 
 def downsample(points: list[Any], limit: int) -> list[Any]:

@@ -22,7 +22,6 @@ MODELS: list[type[BaseModel]] = [
     le.GraphChanged,
     le.HardwareDevicesChanged,
     le.LayoutChanged,
-    le.BenchViewChanged,
     le.SourcesChanged,
     le.ProjectUpdated,
     le.JobUpdated,

@@ -1,8 +1,5 @@
 """Verified-member scene imports and confirmed mapping; no hardware operations."""
 
-import asyncio
-import hashlib
-import json
 import uuid
 from typing import Any
 
@@ -57,35 +54,13 @@ async def finish(
     return envelope(result)
 
 
-async def _listing(ctx: ProjectCtx, session: SessionDep) -> tuple[list[dict[str, Any]], str]:
-    """The project's models and a digest of exactly that output: pollers compare
-    the digest and download the listing (megabytes of mesh vertices) only on change."""
-    require_role(ctx, Role.MEMBER)
-    service = SceneService(session, ctx.project.id, ctx.user.id)
-    models = [await service.output(entity) for entity in await service.all()]
-    return models, await asyncio.to_thread(_digest, models)
-
-
-def _digest(models: list[dict[str, Any]]) -> str:
-    """Megabytes of vertices: serialised and hashed off the event loop."""
-    canonical = json.dumps(models, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
 @router.get("/models")
 async def list_models(
     ctx: ProjectCtx, session: SessionDep, _verified: RequireVerified
 ) -> dict[str, Any]:
-    models, digest = await _listing(ctx, session)
-    return envelope({"models": models, "digest": digest})
-
-
-@router.get("/models/digest")
-async def models_digest(
-    ctx: ProjectCtx, session: SessionDep, _verified: RequireVerified
-) -> dict[str, Any]:
-    _, digest = await _listing(ctx, session)
-    return envelope({"digest": digest})
+    require_role(ctx, Role.MEMBER)
+    service = SceneService(session, ctx.project.id, ctx.user.id)
+    return envelope({"models": [await service.output(entity) for entity in await service.all()]})
 
 
 @router.post("/models", status_code=201)

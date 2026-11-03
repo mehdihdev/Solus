@@ -9,7 +9,7 @@ import {
 } from '../../graph/workspaceSession'
 import { SceneViewer } from './SceneViewer'
 import { loadPose, poseKey, savePose, ZERO_POSE, type DisplayPose } from './displayPose'
-import { importSceneModel, listSharedSceneModels, sameSceneModels } from './sceneApi'
+import { importSceneModel, listSceneModels } from './sceneApi'
 import { useSceneValues } from './useSceneValues'
 import { MappingReview } from './MappingReview'
 import type { SceneModel } from './types'
@@ -17,27 +17,18 @@ import type { SceneModel } from './types'
 export function ScenePanel({
   projectId,
   paused = false,
-  compact = false,
-  robotId,
-  excludeRobotIds
+  compact = false
 }: {
   projectId: string
   paused?: boolean
   compact?: boolean
-  /** Show only this saved robot's models (Live Bench per-robot panel). */
-  robotId?: string
-  /** Leave out these robots' models (they have their own panels). */
-  excludeRobotIds?: readonly string[]
 }): React.JSX.Element {
   const generation = useWorkspaceSessionGeneration()
   const user = useAuthStore((state) => state.user?.email ?? null)
   return (
     <ScopedScenePanel
-      key={JSON.stringify([user, projectId, generation, robotId ?? null])}
+      key={JSON.stringify([user, projectId, generation])}
       projectId={projectId}
-      onlyRobotId={robotId}
-      excluded={(excludeRobotIds ?? []).join(',')}
-      initialRobotId={robotId ?? ''}
       paused={paused}
       compact={compact}
       generation={generation}
@@ -50,15 +41,8 @@ function ScopedScenePanel({
   generation,
   user,
   paused,
-  compact,
-  onlyRobotId,
-  excluded,
-  initialRobotId
+  compact
 }: {
-  onlyRobotId?: string
-  /** Comma-joined robot ids to leave out (a string keeps the load effect's deps stable). */
-  excluded: string
-  initialRobotId: string
   projectId: string
   generation: number
   user: string | null
@@ -68,7 +52,7 @@ function ScopedScenePanel({
   const [spawning, setSpawning] = useState(!compact)
   const [models, setModels] = useState<SceneModel[]>([])
   const [robots, setRobots] = useState<Entity[]>([])
-  const [robotId, setRobotId] = useState(initialRobotId)
+  const [robotId, setRobotId] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [meshes, setMeshes] = useState<{ file: File; reference: string }[]>([])
   const [format, setFormat] = useState<'urdf' | 'mjcf'>('urdf')
@@ -83,17 +67,16 @@ function ScopedScenePanel({
     if (paused) return
     let live = true,
       inFlight = false
-    async function load(fresh = false): Promise<void> {
+    async function load(): Promise<void> {
       if (inFlight) return
       inFlight = true
       try {
-        const [listed, entities] = await Promise.all([
-          listSharedSceneModels(projectId, { fresh }),
+        const [next, entities] = await Promise.all([
+          listSceneModels(projectId),
           listEntities(projectId, { type: 'physical_robot', limit: 100 })
         ])
         if (!live || workspaceSessionGeneration() !== generation) return
-        const next = scopeModels(listed, onlyRobotId, excluded)
-        setModels((old) => (sameSceneModels(old, next) ? old : next))
+        setModels((old) => (JSON.stringify(old) === JSON.stringify(next) ? old : next))
         setRobots(
           entities.filter(
             (robot) => robot.project_id === projectId && robot.type === 'physical_robot'
@@ -113,14 +96,13 @@ function ScopedScenePanel({
         inFlight = false
       }
     }
-    // After an import or mapping edit (refresh > 0) this panel must not reuse a shared listing.
-    void load(refresh > 0)
+    void load()
     const timer = setInterval(() => void load(), 10000)
     return () => {
       live = false
       clearInterval(timer)
     }
-  }, [projectId, generation, user, refresh, paused, onlyRobotId, excluded])
+  }, [projectId, generation, user, refresh, paused])
   async function importFile(): Promise<void> {
     if (!file || !robotId || busy) return
     const validationError = validateImport(file, meshes)
@@ -358,17 +340,6 @@ function ScopedScenePanel({
       </SceneSettings>
     </section>
   )
-}
-
-/** Per-robot panels see only that robot's models; undefined keeps every model. */
-function scopeModels(
-  models: SceneModel[],
-  robotId: string | undefined,
-  excluded: string
-): SceneModel[] {
-  const skip = new Set(excluded.split(',').filter(Boolean))
-  const kept = models.filter((model) => !skip.has(model.robot_id))
-  return robotId ? kept.filter((model) => model.robot_id === robotId) : kept
 }
 
 function SceneSettings({

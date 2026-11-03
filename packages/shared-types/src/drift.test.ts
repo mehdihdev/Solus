@@ -34,7 +34,6 @@ import {
   FINDING_UPDATED_FIELDS,
   JOB_UPDATED_FIELDS,
   LAYOUT_CHANGED_FIELDS,
-  BENCH_VIEW_CHANGED_FIELDS,
   MEMBERSHIP_CHANGED_FIELDS,
   NOTIFICATION_CREATED_FIELDS,
   PROJECT_STREAM_READY_FIELDS,
@@ -87,11 +86,6 @@ const PAIRS: readonly (readonly [
     liveEventFields.HardwareDevicesChanged,
   ],
   ["LayoutChanged", LAYOUT_CHANGED_FIELDS, liveEventFields.LayoutChanged],
-  [
-    "BenchViewChanged",
-    BENCH_VIEW_CHANGED_FIELDS,
-    liveEventFields.BenchViewChanged,
-  ],
   ["SourcesChanged", SOURCES_CHANGED_FIELDS, liveEventFields.SourcesChanged],
   ["ProjectUpdated", PROJECT_UPDATED_FIELDS, liveEventFields.ProjectUpdated],
   ["JobUpdated", JOB_UPDATED_FIELDS, liveEventFields.JobUpdated],
@@ -144,6 +138,6 @@ describe("the TypeScript and Pydantic definitions declare the same fields", () =
   });
 
   test("every paired contract is covered — a new one must be added here", () => {
-    expect(PAIRS).toHaveLength(31);
+    expect(PAIRS).toHaveLength(30);
   });
 });

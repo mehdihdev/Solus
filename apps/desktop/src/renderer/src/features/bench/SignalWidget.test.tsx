@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SignalWidget } from './SignalWidget'
-import { convertUnit, displayPoints, formatValue, unitOptions, valueDomain } from './signalUnits'
+import { convertUnit, displayPoints, unitOptions } from './signalUnits'
 
 beforeEach(() => localStorage.clear())
 
@@ -64,13 +64,16 @@ describe('signal widget preferences', () => {
       }
     }
     const first = render(<SignalWidget {...props} />)
-    expect(screen.getByLabelText('position value')).toHaveTextContent(/3\.142\s*rad/)
+    fireEvent.change(screen.getByLabelText('Display unit for position'), {
+      target: { value: 'deg' }
+    })
+    expect(screen.getByLabelText('position value')).toHaveTextContent(/180\s*deg/)
     fireEvent.click(screen.getByRole('button', { name: 'Rename position' }))
     fireEvent.change(screen.getByLabelText('Signal name'), { target: { value: 'Wrist angle' } })
     fireEvent.keyDown(screen.getByLabelText('Signal name'), { key: 'Enter' })
     first.unmount()
     const second = render(<SignalWidget {...props} />)
-    expect(screen.getByLabelText('Wrist angle value')).toBeInTheDocument()
+    expect(screen.getByLabelText('Wrist angle value')).toHaveTextContent(/180\s*deg/)
     second.unmount()
     const third = render(<SignalWidget {...props} projectId="p2" />)
     expect(screen.getByLabelText('position value')).toBeInTheDocument()
@@ -78,25 +81,7 @@ describe('signal widget preferences', () => {
     third.rerender(<SignalWidget {...props} userId="u2" />)
     expect(screen.getByLabelText('position value')).toBeInTheDocument()
     expect(screen.queryByText(/Wrist angle/)).not.toBeInTheDocument()
-  })
-
-  it('ignores a per-user unit saved before the shared view (the team unit replaces it)', () => {
-    localStorage.setItem(
-      `solus.signal.v1:${JSON.stringify(['u9', 'p9', 'd9', 'position'])}`,
-      JSON.stringify({ unit: 'deg' })
-    )
-    render(
-      <SignalWidget
-        userId="u9"
-        projectId="p9"
-        deviceId="d9"
-        series={{
-          signal: 'position',
-          points: [{ timestamp: '2026-09-14T12:00:00Z', value: Math.PI, unit: 'rad' }]
-        }}
-      />
-    )
-    expect(screen.getByLabelText('position value')).toHaveTextContent(/3\.142\s*rad/)
+    expect(screen.getByRole('combobox')).toHaveValue('rad')
   })
 
   it('does not offer conversion for unitless packets', () => {
@@ -138,38 +123,8 @@ it('places evidence markers on time without converting unknown event values', ()
     />
   )
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
-})
-
-describe('chart value domain', () => {
-  it('keeps hand tremor small instead of stretching it to full height', () => {
-    // Two degrees of wobble on a held joint must not fill the chart like a 90-degree swing.
-    expect(valueDomain([10, 12, 11], 'deg')).toEqual({ vMin: 6, vMax: 16 })
-    expect(valueDomain([2000, 2010], 'tick')).toEqual({ vMin: 1955, vMax: 2055 })
-  })
-
-  it('uses the data range once motion exceeds the floor', () => {
-    expect(valueDomain([-40, 50], 'deg')).toEqual({ vMin: -40, vMax: 50 })
-  })
-
-  it('leaves unknown units on their own range', () => {
-    expect(valueDomain([1, 1.001], null)).toEqual({ vMin: 1, vMax: 1.001 })
-  })
-})
-
-describe('displayed value', () => {
-  it('rounds to the sensor resolution with fixed decimals, so digits do not churn', () => {
-    // One STS3215 tick is 0.088 deg; six significant digits flicker on every sample.
-    expect(formatValue(-3.0769231, 'deg')).toBe('-3.1')
-    expect(formatValue(17, 'deg')).toBe('17.0')
-    expect(formatValue(1.02249, '%')).toBe('1.0')
-    expect(formatValue(2047.6, 'tick')).toBe('2048')
-    expect(formatValue(0.0536993, 'rad')).toBe('0.054')
-  })
-
-  it('keeps six significant digits for units without a known resolution', () => {
-    expect(formatValue(3.14159265, 'V')).toBe('3.14159')
-    expect(formatValue(3.14159265, null)).toBe('3.14159')
-  })
+  fireEvent.change(screen.getByRole('combobox'), { target: { value: 'deg' } })
+  expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
 })
 
 it('marker click opens finding', () => {

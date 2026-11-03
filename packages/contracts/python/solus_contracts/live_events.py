@@ -85,14 +85,6 @@ class LayoutChanged(_Frame):
     version: int = Field(ge=0)
 
 
-class BenchViewChanged(_Frame):
-    """The shared Live Bench view (ADR-014 2026-10-31) was saved at ``version``."""
-
-    type: Literal["bench.view_changed"] = "bench.view_changed"
-    project_id: uuid.UUID
-    version: int = Field(ge=0)
-
-
 class SourcesChanged(_Frame):
     """A source was added, removed, or changed status / sync state."""
 
@@ -252,7 +244,6 @@ ProjectFrame = (
     GraphChanged
     | HardwareDevicesChanged
     | LayoutChanged
-    | BenchViewChanged
     | SourcesChanged
     | ProjectUpdated
     | JobUpdated
@@ -266,7 +257,6 @@ PROJECT_EVENT_TYPES: tuple[str, ...] = (
     "graph.changed",
     "hardware.devices_changed",
     "layout.changed",
-    "bench.view_changed",
     "sources.changed",
     "project.updated",
     "job.updated",

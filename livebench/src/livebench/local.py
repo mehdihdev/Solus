@@ -40,7 +40,6 @@ from solus_api.hardware.config import (
     TransportKind,
 )
 from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
-from solus_api.livebench.teleop import NotActuatedError, TeleopNotReadyError
 
 from livebench.recognition.passive import (
     PORT_BINDING_PREFIX,
@@ -51,11 +50,8 @@ from livebench.recognition.passive import (
 from livebench.telemetry.stream_live import PacketStreamLiveConnection
 
 if TYPE_CHECKING:
-    from livebench.hardware.actuation import Actuator
     from livebench.hardware.connection import RobotConnection
     from livebench.hardware.replay import Recording
-    from livebench.setpoint import SetpointMove, SetpointPreview
-    from livebench.teleop import TeleopLoop, TeleopPreview
 
 __all__ = [
     "AmbiguousDeviceError",
@@ -71,13 +67,6 @@ __all__ = [
     "open_serial",
     "detect_devices",
     "propose_device",
-    "teleop_preview",
-    "teleop_start",
-    "robot_release",
-    "setpoint_preview",
-    "setpoint_apply",
-    "setpoint_status",
-    "setpoint_stop",
 ]
 
 logger = logging.getLogger(__name__)
@@ -580,195 +569,3 @@ def session_observers() -> Any:
     from livebench.anomaly.session import SessionObservers
 
     return SessionObservers()
-
-
-# ── teleoperation (SOLUSDEV-319, ADR-014 amendment 2026-10-30) ──────────────────
-
-
-def _actuator(conn: Any) -> "Actuator":
-    actuator = getattr(conn, "actuator", None)
-    if actuator is None:
-        raise NotActuatedError("this robot's driver can be read but not driven")
-    return actuator  # type: ignore[no-any-return]
-
-
-def _preview_wire(result: "TeleopPreview") -> dict[str, Any]:
-    from livebench.teleop import TOLERANCE
-
-    return {
-        "ready": result.ready,
-        "blockers": [
-            {"code": b.code, "message": b.message, "address": b.address} for b in result.blockers
-        ],
-        "pairs": [
-            {
-                "address": r.pair.address,
-                "leader_signal": r.pair.leader_signal,
-                "follower_signal": r.pair.follower_signal,
-                "unit": r.pair.unit,
-                "leader_value": r.leader_value,
-                "follower_value": r.follower_value,
-                "delta": r.delta,
-                "within_tolerance": r.within_tolerance,
-            }
-            for r in result.pairs
-        ],
-        "tolerance": dict(TOLERANCE),
-    }
-
-
-def teleop_preview(leader_conn: Any, follower_conn: Any) -> dict[str, Any]:
-    """Where both robots are now, joint by joint. BLOCKING (reads both buses)."""
-    from livebench.hardware.actuation import ActuatorUnavailableError
-    from livebench.teleop import Blocker, TeleopPreview, preview
-
-    leader, follower = _actuator(leader_conn), _actuator(follower_conn)
-    try:
-        return _preview_wire(preview(leader, follower))
-    except (ActuatorUnavailableError, OSError):
-        gap = Blocker("link_unavailable", "A robot's link is reconnecting; try again in a moment.")
-        return _preview_wire(TeleopPreview((), (gap,)))
-
-
-class _TeleopHandle:
-    """The running loop as the API sees it: wire-shaped pairs, no livebench types."""
-
-    def __init__(self, loop: "TeleopLoop") -> None:
-        self._loop = loop
-        self.rate_hz = loop.rate_hz
-        self.pairs = [
-            {
-                "address": p.address,
-                "leader_signal": p.leader_signal,
-                "follower_signal": p.follower_signal,
-            }
-            for p in loop.pairs
-        ]
-
-    @property
-    def running(self) -> bool:
-        return self._loop.running
-
-    async def stop(self, reason: str = "user") -> None:
-        await self._loop.stop(reason)  # type: ignore[arg-type]
-
-
-async def teleop_start(
-    leader_conn: Any, follower_conn: Any, *, on_stopped: Callable[[str], object]
-) -> _TeleopHandle:
-    """Re-check the gate on fresh readings, hold the follower, start tracking."""
-    from livebench.hardware.actuation import ActuatorUnavailableError, ActuatorWriteError
-    from livebench.teleop import TeleopNotReadyError as GateFailed
-    from livebench.teleop import start_teleop
-
-    leader, follower = _actuator(leader_conn), _actuator(follower_conn)
-    try:
-        loop = await start_teleop(leader, follower, on_stopped=on_stopped)
-    except GateFailed as exc:
-        raise TeleopNotReadyError(_preview_wire(exc.preview)) from None
-    except (ActuatorUnavailableError, ActuatorWriteError, OSError) as exc:
-        # Hold may have torqued some joints before the bus failed: say so, never imply limp.
-        raise ActuatorWriteError(
-            f"Teleoperation could not start ({exc}); the follower may be holding some joints."
-        ) from exc
-    return _TeleopHandle(loop)
-
-
-def robot_release(conn: Any) -> None:
-    """Torque off on the robot's calibrated joints. BLOCKING."""
-    _actuator(conn).release()
-
-
-# ── SOL setpoint (SOLUSDEV-319, ADR-014 amendment 2026-10-31) ───────────────────
-
-
-def _setpoint_read(conn: Any, joint: str, target: float) -> "SetpointPreview":
-    """Fresh refusal checks + clamp on the robot's bus, with livebench errors translated into
-    the API's (the legal dependency direction, as for teleop). BLOCKING."""
-    from solus_api.livebench.setpoint import SetpointNotFoundError, SetpointRefusedError
-
-    from livebench.setpoint import JointNotFoundError, SetpointRefusalError, preview
-
-    actuator = _actuator(conn)
-    try:
-        return preview(actuator, joint, target)
-    except SetpointRefusalError as exc:
-        raise SetpointRefusedError(exc.code, unit=exc.unit) from None
-    except JointNotFoundError:
-        raise SetpointNotFoundError("joint") from None
-
-
-def setpoint_preview(conn: Any, joint: str, target: float) -> dict[str, Any]:
-    """The joint's present value and the clamped target, wire-shaped. BLOCKING."""
-    from livebench.setpoint import DEFAULT_MAX_STEP_TICKS
-
-    result = _setpoint_read(conn, joint, target)
-    return {
-        "address": result.address,
-        "joint": result.signal,
-        "unit": result.unit,
-        "current": result.current_value,
-        "target": result.target_value,
-        "requested": result.requested,
-        "clamped": result.clamped,
-        "goal_ticks": result.goal_ticks,
-        "max_step_ticks": DEFAULT_MAX_STEP_TICKS,
-        "max_step": result.max_step_value,
-    }
-
-
-class _SetpointHandle:
-    """One running move as the API sees it: no livebench types cross."""
-
-    def __init__(self, move: "SetpointMove", result: "SetpointPreview") -> None:
-        self._move = move
-        self.goal_ticks = result.goal_ticks
-        self.target = result.target_value
-        self.unit = result.unit
-        self.clamped = result.clamped
-
-    @property
-    def state(self) -> str:
-        return self._move.state
-
-    @property
-    def reason(self) -> str | None:
-        return self._move.reason
-
-    async def stop(self, reason: str = "user") -> None:
-        await self._move.stop(reason)
-
-
-async def setpoint_apply(
-    conn: Any,
-    joint: str,
-    target: float,
-    *,
-    on_ended: Callable[[str], object],
-    guard: Callable[[], str | None] | None = None,
-    rate_hz: float | None = None,
-) -> _SetpointHandle:
-    """Re-check every bus refusal on fresh readings, then start ONE bounded move."""
-    from livebench.setpoint import DEFAULT_RATE_HZ, SetpointMove
-
-    result = await asyncio.to_thread(_setpoint_read, conn, joint, target)
-    move = SetpointMove(
-        _actuator(conn),
-        result.address,
-        result.goal_ticks,
-        result.span,
-        rate_hz=rate_hz or DEFAULT_RATE_HZ,
-        guard=guard,
-        on_ended=on_ended,
-    )
-    move.start()
-    return _SetpointHandle(move, result)
-
-
-def setpoint_status(handle: _SetpointHandle) -> dict[str, Any]:
-    return {"state": handle.state, "reason": handle.reason}
-
-
-async def setpoint_stop(handle: _SetpointHandle, reason: str = "user") -> None:
-    """End the move; the joint holds its last goal with torque on."""
-    await handle.stop(reason)

@@ -113,9 +113,6 @@ export type SolStreamEvent =
       errorCode: string | null
       /** SOLUSDEV-317 §10.1: present only for a Build-mode auto-run code.exec. */
       autoRun?: AutoRun
-      /** SOLUSDEV-319 B8: only a bench-view change's {summary, version, inverse_ops},
-       *  picked here and validated whole in solChatItems (toBenchViewChange). */
-      value?: unknown
     }
   | { type: 'tool_confirmation'; pending: PendingConfirmation }
   | { type: 'artifact'; artifact: SolArtifact }
@@ -299,15 +296,6 @@ function toReasoning(d: Fields): ReasoningInfo | null {
   return { considered, ruledOut, proposing: d.proposing }
 }
 
-/** SOLUSDEV-319 B8: tool values are otherwise dropped; keep only the three fields
- * a bench-view direct write returns, so no other tool value is held in memory. */
-function benchViewValue(d: Fields): { value?: unknown } {
-  const v = d.ok === true ? (d.value as Fields | undefined) : undefined
-  if (!v || typeof v !== 'object' || !Array.isArray(v.inverse_ops) || typeof v.summary !== 'string')
-    return {}
-  return { value: { summary: v.summary, version: v.version, inverse_ops: v.inverse_ops } }
-}
-
 const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
   token: (d) => (str(d.text) ? { type: 'token', text: d.text } : null),
   // SOLUSDEV-233: the turn's context manifest — kind/citation/tokens labels
@@ -345,8 +333,7 @@ const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
       callId: d.call_id,
       ok: d.ok,
       errorCode,
-      ...(autoRun ? { autoRun } : {}),
-      ...benchViewValue(d)
+      ...(autoRun ? { autoRun } : {})
     }
   },
   // CTR-03: the parked destructive action. Shape-validated by the SAME reader

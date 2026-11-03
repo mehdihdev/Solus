@@ -10,12 +10,6 @@
     "team_ids",
     "user_id"
   ],
-  "BenchViewChanged": [
-    "at",
-    "project_id",
-    "type",
-    "version"
-  ],
   "FindingRaised": [
     "at",
     "finding_id",

@@ -12,7 +12,6 @@ from typing import Any, ClassVar, Protocol
 from pydantic import BaseModel
 from solus_api.hardware.config import HardwareConfig, ProtocolBinding, TransportKind
 
-from livebench.hardware.actuation import Actuator
 from livebench.hardware.channel import TRANSPORT_ONLY_PARAM_KEYS, Channel
 from livebench.telemetry.stream_live import PacketSource
 
@@ -89,13 +88,6 @@ class DriverRegistry:
             for name, role in roles.items()
             if isinstance(name, str) and 0 < len(name) <= 128 and role in ("primary", "diagnostic")
         }
-
-    def actuator(self, config: HardwareConfig) -> Actuator | None:
-        """The driver's optional actuation handle for this robot; None when it has none."""
-        if config.protocol is None:
-            return None
-        declaration = getattr(self.get(config.protocol.driver_id), "actuator", None)
-        return declaration(config) if callable(declaration) else None
 
     def open_source(self, config: HardwareConfig, channel: Channel) -> PacketSource:
         params = self.validate_params(config.protocol)
