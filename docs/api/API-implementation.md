@@ -482,7 +482,54 @@ to the invitee):
 ```
 
 - wrong email on the accepting account → `403`
-- revoked → `409 invite_revoked` · already used → `409 invite_already_accepted` · expired (7-day TTL) → `410 invite_expired`
+- revoked → `409 invite_revoked` · declined → `409 invite_declined` · already used → `409 invite_already_accepted` · expired (7-day TTL) → `410 invite_expired`
+
+### Invitations to me (SOLUSDEV-319, multi-team Home) — authed, verified email
+
+The rail on Home lists the invites waiting for the caller, so joining a team no longer needs a
+pasted token. All three routes require a **verified email** (`403 email_not_verified`, the
+`RequireVerified` gate, ADR-009): matching an invite by an address the caller has not proven
+would let anyone who signs up with someone else's email see, and join, their teams. Only EMAIL
+invites are matched (lower-cased, exact); GitHub-identity invites (ADR-039) keep their token flow.
+An invite that is not addressed to the caller is `404 not_found` on every route: no existence leak.
+
+#### GET /api/v1/users/me/invites
+
+`200` — pending invites whose `email` is the caller's, not expired, for teams the caller is not
+already a live member of; newest first, at most 50 (no cursor: a person has few):
+
+```json
+{
+  "data": [
+    {
+      "id": "019ebe61-ae9e-776e-b01e-4a8f2af10bf5",
+      "team": { "id": "019ebe61-ae57-75e5-bfa9-6ebc83df6b68", "name": "Bracket Labs" },
+      "role": "member",
+      "invited_by": { "name": "Lena V" },
+      "created_at": "2026-11-05T10:00:00Z",
+      "expires_at": "2026-11-12T10:00:00Z"
+    }
+  ]
+}
+```
+
+`invited_by.name` is the inviter's display name (or the local part of their email when they have
+none); `null` when the inviter's account is gone. Never the token, never the invitee email.
+
+#### POST /api/v1/users/me/invites/{invite_id}/accept
+
+`200` `{ "data": { "team_id": "…", "role": "member" } }` — exactly the token route's effects
+(membership, project shares for existing team projects, `invite.accepted` activity, event and the
+inviter's notification) and errors: `409 invite_revoked` / `invite_declined` /
+`invite_already_accepted`, `410 invite_expired`, `409 already_member`, and the plan limit
+(ADR-032, `check_can_accept_team_invite`). Both routes share one implementation.
+
+#### POST /api/v1/users/me/invites/{invite_id}/decline
+
+`204` — the invite becomes `declined` (a new `InviteStatus`; migration widens the CHECK). It drops
+out of the team's pending list. Records `invite.declined` activity on the team, emits the
+`invite.declined` data event, and notifies the inviter ("<email> declined your invite"). Errors:
+`409 invite_revoked` / `invite_declined` / `invite_already_accepted`, `410 invite_expired`.
 
 ### GET /api/v1/teams/{team_id}/activity?limit=3&type=&domain=&actor=
 

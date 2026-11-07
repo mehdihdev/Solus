@@ -104,6 +104,8 @@ class InviteStatus(enum.StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REVOKED = "revoked"
+    # SOLUSDEV-319: the invitee turned it down from Home's "Invitations" list.
+    DECLINED = "declined"
 
 
 class InstallationStatus(enum.StrEnum):
@@ -155,6 +157,8 @@ class NotificationType(enum.StrEnum):
     MEMBER_LEFT = "member.left"
     # SOLUSDEV-216 (ADR-039): a member was removed from the linked GitHub organization.
     GITHUB_ORG_MEMBER_REMOVED = "github_org.member_removed"
+    # SOLUSDEV-319: the invitee declined an invite the recipient sent.
+    INVITE_DECLINED = "invite.declined"
 
 
 class Domain(enum.StrEnum):

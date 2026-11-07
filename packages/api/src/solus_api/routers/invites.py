@@ -270,30 +270,23 @@ async def revoke_invite(invite_id: uuid.UUID, ctx: TeamCtx, session: SessionDep)
     return Response(status_code=204)
 
 
-@accept_router.post("/{invite_token}/accept")
-async def accept_invite(
-    invite_token: str, user: CurrentUser, session: SessionDep, admin: SupabaseAdminDep
-) -> dict[str, Any]:
-    invite = await session.scalar(select(Invite).where(Invite.token == invite_token))
-    if invite is None:
-        raise APIError(404, "not_found", "Invite not found")
+def ensure_open(invite: Invite) -> None:
+    """Refuse an invite that can no longer be used, with the shared error codes."""
     if invite.status is InviteStatus.REVOKED:
         raise APIError(409, "invite_revoked", "This invite has been revoked")
+    if invite.status is InviteStatus.DECLINED:
+        raise APIError(409, "invite_declined", "This invite was declined")
     if invite.status is InviteStatus.ACCEPTED:
         raise APIError(409, "invite_already_accepted", "This invite was already used")
     if ensure_utc(invite.expires_at) < utcnow():
         raise APIError(410, "invite_expired", "This invite has expired")
-    if invite.github_user_id is not None:
-        # The invitee must PROVE the GitHub id: a connected GitHub account or the Supabase
-        # admin identity. Never a JWT claim, never the login or the email address.
-        if await verified_github_id(session, user, admin=admin) != invite.github_user_id:
-            raise APIError(
-                403,
-                "github_identity_mismatch",
-                "This invite was issued to a different GitHub account. Connect that account first.",
-            )
-    elif invite.email is None or user.email.lower() != invite.email:
-        raise APIError(403, "forbidden", "This invite was issued to a different email")
+
+
+async def join_via_invite(session: AsyncSession, user: User, invite: Invite) -> dict[str, Any]:
+    """Join `invite`'s team as `user`, whose identity the caller has ALREADY matched to it.
+
+    Shared by the token route and SOLUSDEV-319's accept-by-id (routers/my_invites.py)."""
+    ensure_open(invite)
     if await live_membership(session, invite.team_id, user.id) is not None:
         raise APIError(409, "already_member", "You are already on this team")
     # Cross-plan block (ADR-032): the INVITEE's own collaborative-team count vs their limit.
@@ -345,4 +338,26 @@ async def accept_invite(
             attrs={"team_id": str(invite.team_id), **_invite_payload(invite)},
         )
     await session.commit()
-    return envelope({"team_id": invite.team_id, "role": invite.role.value})
+    return {"team_id": invite.team_id, "role": invite.role.value}
+
+
+@accept_router.post("/{invite_token}/accept")
+async def accept_invite(
+    invite_token: str, user: CurrentUser, session: SessionDep, admin: SupabaseAdminDep
+) -> dict[str, Any]:
+    invite = await session.scalar(select(Invite).where(Invite.token == invite_token))
+    if invite is None:
+        raise APIError(404, "not_found", "Invite not found")
+    ensure_open(invite)
+    if invite.github_user_id is not None:
+        # The invitee must PROVE the GitHub id: a connected GitHub account or the Supabase
+        # admin identity. Never a JWT claim, never the login or the email address.
+        if await verified_github_id(session, user, admin=admin) != invite.github_user_id:
+            raise APIError(
+                403,
+                "github_identity_mismatch",
+                "This invite was issued to a different GitHub account. Connect that account first.",
+            )
+    elif invite.email is None or user.email.lower() != invite.email:
+        raise APIError(403, "forbidden", "This invite was issued to a different email")
+    return envelope(await join_via_invite(session, user, invite))

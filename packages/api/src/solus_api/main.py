@@ -94,6 +94,7 @@ from solus_api.routers import (
     machines,
     members,
     meta,
+    my_invites,
     notifications,
     orchestration,
     panel,
@@ -621,6 +622,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(members.router)
     app.include_router(invites.team_router)
     app.include_router(invites.accept_router)
+    app.include_router(my_invites.router)
     app.include_router(activity.router)
     app.include_router(projects.team_router)
     app.include_router(projects.project_router)
