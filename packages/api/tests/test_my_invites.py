@@ -255,7 +255,10 @@ async def test_an_invite_to_a_team_i_already_joined_is_not_listed(
 
 
 async def test_matching_uses_the_tokens_verified_email_not_the_stored_one(
-    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
 ) -> None:
     """`users.email` is set once at sign-up and never refreshed, so it can name an address the
     caller no longer proves (sign up as someone, then switch the account to your own address).
@@ -269,7 +272,9 @@ async def test_matching_uses_the_tokens_verified_email_not_the_stored_one(
     invite = await _invite(client, alice_headers, team["id"], CAROL["email"])
 
     assert (await client.get(MINE, headers=bob_headers)).json()["data"] == []
-    assert (await client.post(f"{MINE}/{invite['id']}/accept", headers=bob_headers)).status_code == 404
+    assert (
+        await client.post(f"{MINE}/{invite['id']}/accept", headers=bob_headers)
+    ).status_code == 404
     by_token = await client.post(f"/api/v1/invites/{invite['token']}/accept", headers=bob_headers)
     assert by_token.status_code == 403
 
@@ -343,7 +348,10 @@ async def test_a_mixed_case_sign_in_email_matches(
 
 
 async def test_a_github_invite_cannot_be_declined_by_id(
-    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
 ) -> None:
     _, invite = await _bracket_invites_bob(client, alice_headers, bob_headers)
     await db.execute(
@@ -369,7 +377,10 @@ async def test_invite_notifications_never_carry_the_token(
 
 
 async def test_racing_answers_settle_on_one_outcome(
-    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
 ) -> None:
     """Accept-by-token racing decline-by-id, then two accepts: the invite row is locked on both
     paths, so exactly one answer wins and the invite's status agrees with membership."""
@@ -388,7 +399,8 @@ async def test_racing_answers_settle_on_one_outcome(
     status = await db.scalar(select(Invite.status).where(Invite.id == invite["id"]))
     joined = await db.scalar(
         select(Membership.id).where(
-            Membership.team_id == team["id"], Membership.deleted_at.is_(None),
+            Membership.team_id == team["id"],
+            Membership.deleted_at.is_(None),
             Membership.role != "owner",
         )
     )
