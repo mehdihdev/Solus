@@ -254,6 +254,21 @@ def require_verified(claims: ClaimsDep) -> None:
 RequireVerified = Annotated[None, Depends(require_verified)]
 
 
+def require_verified_email(claims: ClaimsDep) -> str:
+    """The caller's email as the TOKEN proves it, verified and lower-cased (SOLUSDEV-319).
+
+    Match anything addressed to an email (invites) against this, never `users.email`: that
+    column is set once at sign-up and never refreshed, so it can name an address the caller no
+    longer proves (sign up as someone, then switch the account to your own verified address)."""
+    require_verified(claims)
+    if not claims.email:
+        raise APIError(403, "email_not_verified", "Your sign-in carries no email address")
+    return claims.email.lower()
+
+
+VerifiedEmail = Annotated[str, Depends(require_verified_email)]
+
+
 def require_staff(user: CurrentUser, settings: SettingsDep) -> None:
     """Gate for Solus-staff administration (SOLUSDEV-235 / ADR-035 §5 — the
     `verified` badge). Staff = the ids in `SOLUS_STAFF_USER_IDS`; everyone else

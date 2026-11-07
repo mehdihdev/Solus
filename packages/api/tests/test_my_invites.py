@@ -252,3 +252,29 @@ async def test_an_invite_to_a_team_i_already_joined_is_not_listed(
     await db.commit()
 
     assert (await client.get(MINE, headers=bob_headers)).json()["data"] == []
+
+
+async def test_matching_uses_the_tokens_verified_email_not_the_stored_one(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """`users.email` is set once at sign-up and never refreshed, so it can name an address the
+    caller no longer proves (sign up as someone, then switch the account to your own address).
+    Only the verified email in the token may match an invite."""
+    from solus_api.models import User
+
+    await me(client, bob_headers)
+    await db.execute(update(User).where(User.email == BOB["email"]).values(email=CAROL["email"]))
+    await db.commit()
+    team = await create_team(client, alice_headers, "Carol's invite")
+    invite = await _invite(client, alice_headers, team["id"], CAROL["email"])
+
+    assert (await client.get(MINE, headers=bob_headers)).json()["data"] == []
+    assert (await client.post(f"{MINE}/{invite['id']}/accept", headers=bob_headers)).status_code == 404
+    by_token = await client.post(f"/api/v1/invites/{invite['token']}/accept", headers=bob_headers)
+    assert by_token.status_code == 403
+
+
+async def test_a_token_without_an_email_cannot_reach_invites(client: AsyncClient) -> None:
+    no_email = {"Authorization": "Bearer " + __import__("conftest").make_token("no-email-sub", "")}
+    resp = await client.get(MINE, headers=no_email)
+    assert resp.status_code in (401, 403)

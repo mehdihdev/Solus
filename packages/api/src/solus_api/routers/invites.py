@@ -18,6 +18,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import (
+    ClaimsDep,
     CurrentUser,
     IntegrationCacheDep,
     RequireVerified,
@@ -343,7 +344,11 @@ async def join_via_invite(session: AsyncSession, user: User, invite: Invite) -> 
 
 @accept_router.post("/{invite_token}/accept")
 async def accept_invite(
-    invite_token: str, user: CurrentUser, session: SessionDep, admin: SupabaseAdminDep
+    invite_token: str,
+    user: CurrentUser,
+    claims: ClaimsDep,
+    session: SessionDep,
+    admin: SupabaseAdminDep,
 ) -> dict[str, Any]:
     invite = await session.scalar(select(Invite).where(Invite.token == invite_token))
     if invite is None:
@@ -358,6 +363,7 @@ async def accept_invite(
                 "github_identity_mismatch",
                 "This invite was issued to a different GitHub account. Connect that account first.",
             )
-    elif invite.email is None or user.email.lower() != invite.email:
+    # The email the token carries now, never the stored `users.email` (set once at sign-up).
+    elif invite.email is None or (claims.email or "").lower() != invite.email:
         raise APIError(403, "forbidden", "This invite was issued to a different email")
     return envelope(await join_via_invite(session, user, invite))
