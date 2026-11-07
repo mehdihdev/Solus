@@ -1,6 +1,7 @@
 // SOLUSDEV-319 (multi-team Home): each of my teams' member count for the team rail,
 // read once per team id; a team whose detail fails simply shows no count.
 import { renderHook, waitFor } from '@testing-library/react'
+import { StrictMode, createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as resources from '../../lib/api/resources'
 import { useTeamSizes } from './useTeamSizes'
@@ -61,5 +62,11 @@ describe('useTeamSizes', () => {
   it('can refresh one team after its roster changed', async () => {
     const { result } = renderHook(() => useTeamSizes(['a'], { a: 5 }))
     await waitFor(() => expect(result.current.a).toBe(5))
+  })
+  it('fills sizes under StrictMode, whose first effect run is thrown away', async () => {
+    const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
+      createElement(StrictMode, null, children)
+    const { result } = renderHook(() => useTeamSizes(['a', 'b']), { wrapper })
+    await waitFor(() => expect(result.current).toEqual({ a: 4, b: 12 }))
   })
 })

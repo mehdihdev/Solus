@@ -10,7 +10,7 @@ import type { TeamLimitPosition } from '../../lib/api/planLimit'
 import type { MyInvite, MyInviteRefusal } from '../../lib/api/resources.myInvites'
 import { PlanLimitNotice } from './PlanLimitNotice'
 import { TeamLimitLine } from './TeamMenu'
-import { AT_LIMIT_MESSAGE, railOrder, roleLabel, teamInitials } from './teamLabels'
+import { AT_LIMIT_MESSAGE, railOrder, roleLabel, teamInitials, withArticle } from './teamLabels'
 import type { TeamSizes } from './useTeamSizes'
 import type { MyInvites } from './useMyInvites'
 
@@ -265,7 +265,7 @@ function InvitationRow({
     <div style={{ display: 'grid', gap: 6 }}>
       <span style={{ fontSize: 12.5, fontWeight: 600 }}>{invite.team.name}</span>
       <span style={{ fontSize: 11.5, color: 'var(--mut)' }}>
-        {by} as a {roleLabel(invite.role)}
+        {by} as {withArticle(roleLabel(invite.role))}
       </span>
       <div style={{ display: 'flex', gap: 6 }}>
         <Button

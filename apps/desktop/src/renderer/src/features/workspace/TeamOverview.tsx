@@ -143,7 +143,7 @@ function MembersPreview({ homeTeam, onManageMembers }: TeamOverviewProps): React
         {homeTeam.status === 'ready' && (
           <div style={{ padding: '8px 14px' }}>
             <button type="button" className="interactive" onClick={onManageMembers} style={LINK}>
-              All {members.length} members and invites
+              All {members.length} {members.length === 1 ? 'member' : 'members'} and invites
             </button>
           </div>
         )}

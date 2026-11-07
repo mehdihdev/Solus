@@ -1,7 +1,7 @@
 // SOLUSDEV-319: the words and order Home's team rail and overview share.
 import { describe, expect, it } from 'vitest'
 import type { TeamSummary } from '../../lib/api/resources'
-import { railOrder, roleLabel, teamInitials, teamLimitText } from './teamLabels'
+import { railOrder, roleLabel, teamInitials, teamLimitText, withArticle } from './teamLabels'
 
 const team = (id: string, personal = false): TeamSummary => ({
   team_id: id,
@@ -24,6 +24,13 @@ describe('teamLabels', () => {
   it('capitalises a role', () => {
     expect(roleLabel('owner')).toBe('Owner')
     expect(roleLabel('viewer')).toBe('Viewer')
+  })
+
+  it('picks the article a role needs', () => {
+    expect(withArticle('Member')).toBe('a Member')
+    expect(withArticle('Admin')).toBe('an Admin')
+    expect(withArticle('Owner')).toBe('an Owner')
+    expect(withArticle('Viewer')).toBe('a Viewer')
   })
 
   it('takes two initials from a team name', () => {

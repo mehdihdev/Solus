@@ -9,24 +9,24 @@ export type TeamSizes = Readonly<Record<string, number>>
 
 export function useTeamSizes(teamIds: readonly string[], known: TeamSizes = {}): TeamSizes {
   const [sizes, setSizes] = useState<Record<string, number>>({})
-  const [asked] = useState(() => new Set<string>())
   const key = teamIds.join(',')
+  // Only a team whose count has LANDED is skipped: a run whose reply was thrown away (a
+  // StrictMode re-run, a remount) asks again rather than leaving the team without a size.
+  const missing = (key ? key.split(',') : []).filter((id) => !(id in sizes)).join(',')
 
   useEffect(() => {
     let live = true
-    for (const id of key ? key.split(',') : []) {
-      if (asked.has(id)) continue
-      asked.add(id)
+    for (const id of missing ? missing.split(',') : []) {
       getTeamDetail(id)
         .then((detail) => {
           if (live) setSizes((s) => ({ ...s, [id]: detail.member_count }))
         })
-        .catch(() => asked.delete(id))
+        .catch(() => undefined)
     }
     return () => {
       live = false
     }
-  }, [key, asked])
+  }, [missing])
 
   return { ...sizes, ...known }
 }

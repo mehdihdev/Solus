@@ -11,6 +11,11 @@ export function roleLabel(role: string): string {
   return role.charAt(0).toUpperCase() + role.slice(1)
 }
 
+/** "a Member", "an Admin", "an Owner". */
+export function withArticle(word: string): string {
+  return `${/^[aeiou]/i.test(word) ? 'an' : 'a'} ${word}`
+}
+
 export function teamInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return '?'
