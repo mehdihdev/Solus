@@ -278,3 +278,119 @@ async def test_a_token_without_an_email_cannot_reach_invites(client: AsyncClient
     no_email = {"Authorization": "Bearer " + __import__("conftest").make_token("no-email-sub", "")}
     resp = await client.get(MINE, headers=no_email)
     assert resp.status_code in (401, 403)
+
+
+class _Admin:
+    """A configured Supabase admin whose auth user has `confirmed` (None = not confirmed)."""
+
+    configured = True
+
+    def __init__(self, confirmed: str | None) -> None:
+        self.confirmed = confirmed
+
+    async def confirmed_email(self, _user_supabase_id: str) -> str | None:
+        return self.confirmed
+
+
+async def test_with_an_admin_the_address_must_be_confirmed_in_supabase(
+    client: AsyncClient,
+    app: Any,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """Supabase tokens rarely carry `email_verified`, and an absent claim reads as verified —
+    so with a service-role key the auth user's `email_confirmed_at` is the proof."""
+    _, invite = await _bracket_invites_bob(client, alice_headers, bob_headers)
+
+    app.state.supabase_admin = _Admin(BOB["email"])
+    assert (await client.get(MINE, headers=bob_headers)).status_code == 200
+
+    for refused in (_Admin(None), _Admin(CAROL["email"])):
+        app.state.supabase_admin = refused
+        for resp in (
+            await client.get(MINE, headers=bob_headers),
+            await client.post(f"{MINE}/{invite['id']}/accept", headers=bob_headers),
+            await client.post(f"{MINE}/{invite['id']}/decline", headers=bob_headers),
+        ):
+            assert resp.status_code == 403, resp.text
+            assert resp.json()["error"]["code"] == "email_not_verified"
+
+
+async def test_outside_dev_no_admin_means_no_invitations_by_email(
+    client: AsyncClient, app: Any, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    await _bracket_invites_bob(client, alice_headers, bob_headers)
+    app.state.settings = app.state.settings.model_copy(update={"app_env": "production"})
+
+    resp = await client.get(MINE, headers=bob_headers)
+
+    assert resp.status_code == 403
+    assert resp.json()["error"]["code"] == "email_not_verified"
+
+
+async def test_a_mixed_case_sign_in_email_matches(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    shouty = bearer(BOB["sub"], "Bob@Example.COM")
+    await me(client, shouty)
+    team = await create_team(client, alice_headers, "Case")
+    invite = await _invite(client, alice_headers, team["id"], BOB["email"])
+
+    assert [r["id"] for r in (await client.get(MINE, headers=shouty)).json()["data"]] == [
+        invite["id"]
+    ]
+    assert (await client.post(f"{MINE}/{invite['id']}/accept", headers=shouty)).status_code == 200
+
+
+async def test_a_github_invite_cannot_be_declined_by_id(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    _, invite = await _bracket_invites_bob(client, alice_headers, bob_headers)
+    await db.execute(
+        update(Invite)
+        .where(Invite.id == invite["id"])
+        .values(email=None, github_user_id=4242, github_login="bob")
+    )
+    await db.commit()
+    resp = await client.post(f"{MINE}/{invite['id']}/decline", headers=bob_headers)
+    assert resp.status_code == 404
+
+
+async def test_invite_notifications_never_carry_the_token(
+    client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    _, invite = await _bracket_invites_bob(client, alice_headers, bob_headers)
+    await client.post(f"{MINE}/{invite['id']}/decline", headers=bob_headers)
+
+    for headers in (bob_headers, alice_headers):
+        notes = (await client.get("/api/v1/users/me/notifications", headers=headers)).json()
+        for note in notes["data"]:
+            assert "token" not in (note.get("attrs") or {}), note
+
+
+async def test_racing_answers_settle_on_one_outcome(
+    client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str], bob_headers: dict[str, str]
+) -> None:
+    """Accept-by-token racing decline-by-id, then two accepts: the invite row is locked on both
+    paths, so exactly one answer wins and the invite's status agrees with membership."""
+    import asyncio
+
+    from solus_api.models import Membership
+
+    team, invite = await _bracket_invites_bob(client, alice_headers, bob_headers)
+    by_token, by_id = await asyncio.gather(
+        client.post(f"/api/v1/invites/{invite['token']}/accept", headers=bob_headers),
+        client.post(f"{MINE}/{invite['id']}/decline", headers=bob_headers),
+    )
+    codes = sorted([by_token.status_code, by_id.status_code])
+    assert codes in ([200, 409], [204, 409]), (by_token.text, by_id.text)
+
+    status = await db.scalar(select(Invite.status).where(Invite.id == invite["id"]))
+    joined = await db.scalar(
+        select(Membership.id).where(
+            Membership.team_id == team["id"], Membership.deleted_at.is_(None),
+            Membership.role != "owner",
+        )
+    )
+    assert status is not None
+    assert (status.value == "accepted") == (joined is not None)

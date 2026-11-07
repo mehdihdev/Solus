@@ -8,6 +8,7 @@ their teams. Anyone else's invite — and a GitHub-identity invite (ADR-039), wh
 token flow — is `404 not_found`, never a hint that it exists.
 """
 
+import logging
 import uuid
 from typing import Any
 
@@ -25,6 +26,7 @@ from solus_api.services.events import emit_event
 from solus_api.services.notifications import notify_user
 
 router = APIRouter(prefix="/api/v1/users/me/invites")
+logger = logging.getLogger("solus.invites")
 
 #: A person has few pending invites; past this the list is cut, newest first.
 MAX_LISTED = 50
@@ -36,14 +38,17 @@ def _inviter_name(inviter: User | None) -> dict[str, str] | None:
     return {"name": inviter.display_name or inviter.email.split("@")[0]}
 
 
-async def _mine(session: AsyncSession, email: str, invite_id: uuid.UUID) -> Invite:
-    """The caller's own email invite, else 404 (no existence leak). Row-locked for the update."""
+async def _mine(session: AsyncSession, user: User, email: str, invite_id: uuid.UUID) -> Invite:
+    """The caller's own email invite to a live team, else 404 (no existence leak).
+    Row-locked for the update."""
     invite = await session.scalar(
         select(Invite)
-        .where(Invite.id == invite_id, Invite.email == email)
-        .with_for_update()
+        .join(Team, Team.id == Invite.team_id)
+        .where(Invite.id == invite_id, Invite.email == email, Team.deleted_at.is_(None))
+        .with_for_update(of=Invite)
     )
     if invite is None:
+        logger.info("invite not found for caller: invite=%s user=%s", invite_id, user.id)
         raise APIError(404, "not_found", "Invite not found")
     return invite
 
@@ -90,7 +95,7 @@ async def list_my_invites(
 async def accept_my_invite(
     invite_id: uuid.UUID, user: CurrentUser, session: SessionDep, email: VerifiedEmail
 ) -> dict[str, Any]:
-    invite = await _mine(session, email, invite_id)
+    invite = await _mine(session, user, email, invite_id)
     return envelope(await join_via_invite(session, user, invite))
 
 
@@ -98,7 +103,7 @@ async def accept_my_invite(
 async def decline_my_invite(
     invite_id: uuid.UUID, user: CurrentUser, session: SessionDep, email: VerifiedEmail
 ) -> Response:
-    invite = await _mine(session, email, invite_id)
+    invite = await _mine(session, user, email, invite_id)
     ensure_open(invite)
     invite.status = InviteStatus.DECLINED
     record_activity(

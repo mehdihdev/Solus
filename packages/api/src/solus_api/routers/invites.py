@@ -10,6 +10,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.connectors.integration_cache import IntegrationCache
@@ -176,11 +177,12 @@ async def create_invite(
             user_id=invitee.id,
             notification_type="team.invite",
             title=f'You\'ve been invited to join "{target_team.name}"',
+            # No token: the invitee accepts by id from Home's rail (SOLUSDEV-319), and a
+            # notification reaches `users.email`, which can go stale.
             attrs={
                 "team_id": str(target_team.id),
                 "invite_id": str(invite.id),
                 "role": body.role,
-                "token": invite.token,
             },
         )
     await session.commit()
@@ -338,7 +340,12 @@ async def join_via_invite(session: AsyncSession, user: User, invite: Invite) -> 
             title=f"{_invitee_label(invite)} accepted your invite",
             attrs={"team_id": str(invite.team_id), **_invite_payload(invite)},
         )
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # A concurrent accept won the membership's live-unique index first.
+        await session.rollback()
+        raise APIError(409, "already_member", "You are already on this team") from None
     return {"team_id": invite.team_id, "role": invite.role.value}
 
 
@@ -350,7 +357,9 @@ async def accept_invite(
     session: SessionDep,
     admin: SupabaseAdminDep,
 ) -> dict[str, Any]:
-    invite = await session.scalar(select(Invite).where(Invite.token == invite_token))
+    invite = await session.scalar(
+        select(Invite).where(Invite.token == invite_token).with_for_update()
+    )
     if invite is None:
         raise APIError(404, "not_found", "Invite not found")
     ensure_open(invite)

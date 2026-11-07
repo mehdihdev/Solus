@@ -254,16 +254,32 @@ def require_verified(claims: ClaimsDep) -> None:
 RequireVerified = Annotated[None, Depends(require_verified)]
 
 
-def require_verified_email(claims: ClaimsDep) -> str:
-    """The caller's email as the TOKEN proves it, verified and lower-cased (SOLUSDEV-319).
+async def require_verified_email(
+    claims: ClaimsDep, admin: SupabaseAdminDep, settings: SettingsDep
+) -> str:
+    """The caller's email as proven verified, lower-cased (SOLUSDEV-319).
 
     Match anything addressed to an email (invites) against this, never `users.email`: that
-    column is set once at sign-up and never refreshed, so it can name an address the caller no
-    longer proves (sign up as someone, then switch the account to your own verified address)."""
+    column is set once at sign-up and never refreshed. Supabase access tokens rarely carry
+    `email_verified`, and an absent claim reads as verified (core/security.py), so the proof
+    is the auth user's `email_confirmed_at` through the admin API, which must name the same
+    address as the token. Without a service-role key this fails CLOSED outside `app_env=dev`;
+    in dev it falls back to the token's email, logged."""
     require_verified(claims)
     if not claims.email:
         raise APIError(403, "email_not_verified", "Your sign-in carries no email address")
-    return claims.email.lower()
+    email = claims.email.lower()
+    if admin.configured:
+        if await admin.confirmed_email(claims.sub) != email:
+            raise APIError(403, "email_not_verified", "Verify your email address first")
+        return email
+    if settings.app_env != "dev":
+        logger.error("email verification unavailable: SUPABASE_SERVICE_ROLE_KEY unset")
+        raise APIError(
+            403, "email_not_verified", "Email verification is unavailable on this server"
+        )
+    logger.warning("dev: invitations matched on the token's email (no Supabase admin key)")
+    return email
 
 
 VerifiedEmail = Annotated[str, Depends(require_verified_email)]

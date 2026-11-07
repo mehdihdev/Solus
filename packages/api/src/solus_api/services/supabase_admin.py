@@ -64,12 +64,21 @@ class SupabaseAdmin:
             return False
         return True
 
-    async def github_identity(self, user_supabase_id: str) -> int | None:
-        """The numeric GitHub user id linked to this Supabase auth user, read through the
-        admin API (`identities[provider == "github"].id`), or None.
+    async def confirmed_email(self, user_supabase_id: str) -> str | None:
+        """The auth user's email, lower-cased, only once Supabase has CONFIRMED it
+        (`email_confirmed_at` set), read through the admin API (SOLUSDEV-319).
 
-        Server-side proof only: never read from a JWT. Returns None when unconfigured, the id
-        is not a plain auth-user id, or anything goes wrong; it never raises to the caller."""
+        Server-side proof of a verified address — access tokens rarely carry `email_verified`.
+        None when unconfigured, unconfirmed, the id is not a plain auth-user id, or anything
+        goes wrong; it never raises to the caller."""
+        body = await self._get_user(user_supabase_id, "confirmed_email")
+        if not isinstance(body, dict) or not body.get("email_confirmed_at"):
+            return None
+        email = body.get("email")
+        return email.lower() if isinstance(email, str) and email else None
+
+    async def _get_user(self, user_supabase_id: str, purpose: str) -> Any:
+        """GET one auth user, or None when unconfigured, refused or failed (logged by status)."""
         if not self.configured or _SAFE_USER_ID.fullmatch(user_supabase_id) is None:
             return None
         url = f"{self._base_url}/auth/v1/admin/users/{user_supabase_id}"
@@ -81,12 +90,21 @@ class SupabaseAdmin:
             async with httpx.AsyncClient(timeout=_TIMEOUT_SECONDS) as client:
                 resp = await client.get(url, headers=headers)
             if resp.status_code != httpx.codes.OK:
-                logger.warning("Supabase admin github_identity returned %s", resp.status_code)
+                logger.warning("Supabase admin %s returned %s", purpose, resp.status_code)
                 return None
-            return _github_id_from(resp.json())
+            return resp.json()
         except (httpx.HTTPError, ValueError):
-            logger.warning("Supabase admin github_identity request failed")
+            logger.warning("Supabase admin %s request failed", purpose)
             return None
+
+    async def github_identity(self, user_supabase_id: str) -> int | None:
+        """The numeric GitHub user id linked to this Supabase auth user, read through the
+        admin API (`identities[provider == "github"].id`), or None.
+
+        Server-side proof only: never read from a JWT. Returns None when unconfigured, the id
+        is not a plain auth-user id, or anything goes wrong; it never raises to the caller."""
+        body = await self._get_user(user_supabase_id, "github_identity")
+        return _github_id_from(body) if body is not None else None
 
 
 def _github_id_from(body: Any) -> int | None:

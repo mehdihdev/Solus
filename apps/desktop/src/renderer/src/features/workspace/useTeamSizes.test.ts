@@ -69,4 +69,17 @@ describe('useTeamSizes', () => {
     const { result } = renderHook(() => useTeamSizes(['a', 'b']), { wrapper })
     await waitFor(() => expect(result.current).toEqual({ a: 4, b: 12 }))
   })
+  it('never asks twice for a team, even while another one lands or after a failure', async () => {
+    let releaseB: (d: resources.TeamDetail) => void = () => undefined
+    vi.mocked(resources.getTeamDetail).mockImplementation(async (id: string) => {
+      if (id === 'b') return new Promise((resolve) => (releaseB = resolve))
+      if (id === 'broken') throw new Error('offline')
+      return detail(id, 4)
+    })
+    const { result } = renderHook(() => useTeamSizes(['a', 'b', 'broken']))
+    await waitFor(() => expect(result.current).toEqual({ a: 4 }))
+    releaseB(detail('b', 12))
+    await waitFor(() => expect(result.current).toEqual({ a: 4, b: 12 }))
+    expect(resources.getTeamDetail).toHaveBeenCalledTimes(3)
+  })
 })
