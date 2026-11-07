@@ -11,6 +11,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   protocol,
   screen,
   systemPreferences,
@@ -77,6 +78,7 @@ import {
 } from './platform/capabilities'
 import { enableShortcutPortal } from './hotkeys/globalHotkeys'
 import { startHotkeys, type HotkeysHandle, type HotkeyStatus, type KeyHookLoad } from './hotkeys'
+import { watchHotkeyRecovery } from './hotkeys/recovery'
 import { realExtensionFs } from './extensions/extensionFs'
 import {
   createExtProtocolHandler,
@@ -476,6 +478,41 @@ function startSol(): void {
 
   runHotkeys()
   publish()
+
+  watchSolHotkeys(
+    state,
+    publish,
+    runHotkeys,
+    () => settings.get().hotkeys && hotkeyStatus?.hook.status === 'needs-permission'
+  )
+}
+
+/** A late Accessibility grant or a sleep must not leave double-Ctrl dead until a
+ *  relaunch; a grant made in System Settings also clears its status line. */
+function watchSolHotkeys(
+  state: () => SolState,
+  publish: () => void,
+  restart: () => void,
+  hookMissingPermission: () => boolean
+): void {
+  let published = JSON.stringify(state())
+  watchHotkeyRecovery({
+    platform: process.platform,
+    isTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
+    hookMissingPermission,
+    restart,
+    refresh: () => {
+      const next = JSON.stringify(state())
+      if (next !== published) publish()
+      published = next
+    },
+    onWake: (cb) => {
+      powerMonitor.on('resume', cb)
+      powerMonitor.on('unlock-screen', cb)
+    },
+    setInterval,
+    clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
+  })
 }
 
 /** Preferred main-window size, clamped to the primary display's work area so a
