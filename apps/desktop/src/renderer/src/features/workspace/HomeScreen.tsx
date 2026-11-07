@@ -1,14 +1,12 @@
-// Home (SOLUSDEV-242 / HOME H1 → H5; SOLUSDEV-317 layout, concept B): the
-// cross-project AND cross-team surface. The active team is always visible
-// (the strip), with the switcher only when the user belongs to more than one
-// team. Beneath it, two columns: the team's projects as a list (selecting one
-// makes it current) with the ACCOUNT nav, and ONE pane showing the current
-// project (folder, sources, activity, .solus), the members view (roster,
-// invites, GitHub org, team feed) or connected accounts. Offline (dev bypass /
-// unreachable API) shows an honest sign-in state — never a demo project
-// (SOLUSDEV-152); a team that is gone says so — never "restart the backend".
+// Home (SOLUSDEV-242 / HOME H1 → H5; SOLUSDEV-317 layout; SOLUSDEV-319 multi-team, design
+// D): the cross-project AND cross-team surface. A team rail lists every team I belong to
+// (switch in one click, create, join, answer invitations) above the ACCOUNT nav; the pane
+// shows the active team's overview (projects, members, me in it) by default, one of its
+// projects when picked, the members view (roster, invites, GitHub org, team feed) or
+// connected accounts. Offline (dev bypass / unreachable API) shows an honest sign-in state —
+// never a demo project (SOLUSDEV-152); a team that is gone says so.
 import './home.css'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -31,10 +29,13 @@ import { HomeAccountNav, type AccountsPosition, type HomePaneView } from './Home
 import { useAccountConnections } from './useAccountConnections'
 import { linkedRepos, useProjectRepos, type ReposByProject } from './useProjectRepos'
 import { useProjectSources } from '../project/useProjectSources'
-import { HomeProjectList } from './HomeProjectList'
 import { HomeProjectPane } from './HomeProjectPane'
 import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
-import { TeamStrip } from './TeamStrip'
+import { TeamOverview } from './TeamOverview'
+import { TeamProjectsTable } from './TeamProjectsTable'
+import { TeamRail } from './TeamRail'
+import { useMyInvites, type MyInvites } from './useMyInvites'
+import { useTeamSizes, type TeamSizes } from './useTeamSizes'
 
 export interface HomeScreenProps {
   onOpenProject: (project: WorkspaceProject) => void
@@ -48,21 +49,6 @@ const HOME_MAX_WIDTH = 1480
 /** The pane's content stops growing here, so wide windows don't stretch
  *  three cards into thin strips of text. */
 const PANE_MAX_WIDTH = 1180
-
-/** Concept B's sidebar: full height, its own scroll, the ACCOUNT card at its foot. */
-const SIDEBAR_STYLE: React.CSSProperties = {
-  flex: '0 0 300px',
-  width: 300,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 22,
-  padding: '26px 20px 20px',
-  borderRight: '1px solid var(--bd)',
-  overflowY: 'auto',
-  // Never a sideways scrollbar: anything wider than the sidebar is a bug to fix.
-  overflowX: 'hidden',
-  minHeight: 0
-}
 
 /** Selecting a project row makes it current and stays on Home — the same
  *  choke point as every other switch (SOLUSDEV-242), no navigation. */
@@ -139,64 +125,41 @@ interface LiveProps {
   /** Open Connected accounts from the project, with a way back. */
   onAddSources: () => void
   onNewProject: () => void
+  invites: MyInvites
+  sizes: TeamSizes
 }
 
 function Sidebar(props: LiveProps): React.JSX.Element {
-  const { home, team, currentProject, view, onShow, openModal, onNewProject } = props
+  const { home, team, view, onShow, openModal } = props
   const accounts = useAccountsPosition(view)
-  const { repos } = props
   return (
-    <aside aria-label="Projects" style={SIDEBAR_STYLE}>
-      <div style={{ display: 'grid', gap: 12 }}>
-        <Greeting text={props.greeting} />
-        <TeamStrip
-          team={home.team}
-          teams={home.teams}
-          memberCount={memberCount(team)}
-          myRole={team.myRole}
-          teamLimit={team.teamLimit}
-          onSwitch={home.actions.switchTeam}
-          onJoin={() => openModal('join')}
-          onNewTeam={() => openModal('newTeam')}
-          onInvite={() => openModal('invite')}
-          onRename={() => openModal('rename')}
-          onLeave={() => openModal('leave')}
-          onDelete={() => openModal('delete')}
-          onUpgrade={props.onUpgrade}
+    <TeamRail
+      greeting={props.greeting}
+      teams={home.teams}
+      activeTeamId={home.team?.team_id ?? null}
+      sizes={props.sizes}
+      invites={props.invites}
+      teamLimit={team.teamLimit}
+      onSwitch={(teamId) => {
+        if (teamId !== home.team?.team_id) home.actions.switchTeam(teamId)
+        onShow('team')
+      }}
+      onNewTeam={() => openModal('newTeam')}
+      onJoin={() => openModal('join')}
+      onUpgrade={props.onUpgrade}
+      footer={
+        <HomeAccountNav
+          view={view}
+          team={
+            team.status === 'ready'
+              ? { members: team.members.length, pending: team.invites.length }
+              : null
+          }
+          accounts={accounts}
+          onShow={onShow}
         />
-      </div>
-      {home.team ? (
-        <HomeProjectList
-          team={home.team}
-          projects={home.projects}
-          activityByProject={home.activityByProject}
-          reposByProject={repos}
-          currentProjectId={currentProject?.id ?? null}
-          actions={home.actions}
-          onSelect={(p) => {
-            switchHomeProject(p)
-            onShow('project')
-          }}
-          onNewProject={onNewProject}
-          onActionFailed={toastActionFailed}
-        />
-      ) : (
-        <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-          You&apos;re not on any teams yet. Create one, or join with an invite token.
-        </div>
-      )}
-      <div style={{ flex: 1 }} />
-      <HomeAccountNav
-        view={view}
-        team={
-          team.status === 'ready'
-            ? { members: team.members.length, pending: team.invites.length }
-            : null
-        }
-        accounts={accounts}
-        onShow={onShow}
-      />
-    </aside>
+      }
+    />
   )
 }
 
@@ -271,6 +234,7 @@ function Pane(props: LiveProps): React.JSX.Element {
         className="home-pane-in"
         style={{ maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }}
       >
+        {props.view === 'team' && <TeamView {...props} />}
         {props.view === 'members' && <MembersView {...props} />}
         {props.view === 'accounts' && (
           <>
@@ -288,7 +252,17 @@ function Pane(props: LiveProps): React.JSX.Element {
             />
           </>
         )}
-        {props.view === 'project' && <ProjectView {...props} />}
+        {props.view === 'project' && (
+          <>
+            {props.home.team && (
+              <BackToProject
+                name={teamName(props.home.team)}
+                onClick={() => props.onShow('team')}
+              />
+            )}
+            <ProjectView {...props} />
+          </>
+        )}
       </div>
     </main>
   )
@@ -306,7 +280,7 @@ function ProjectView({
     return (
       <Card pad={24}>
         <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-          Select a project on the left to see its folder, sources and .solus.
+          Pick a project from the team overview to see its folder, sources and .solus.
         </div>
       </Card>
     )
@@ -321,6 +295,59 @@ function ProjectView({
       onOpen={() => onOpenProject(currentProject)}
       onBench={() => onNavigate?.('bench')}
       onManageSources={onAddSources}
+    />
+  )
+}
+
+function teamName(team: { name: string; is_personal: boolean }): string {
+  return team.is_personal ? 'Personal workspace' : team.name
+}
+
+/** SOLUSDEV-319 (design D): the active team's overview, Home's default pane. */
+function TeamView(props: LiveProps): React.JSX.Element {
+  const { home, team, repos, openModal, onShow } = props
+  if (home.team === null)
+    return (
+      <Card pad={24}>
+        <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
+          You&apos;re not on any teams yet. Create one, or join with an invite code.
+        </div>
+      </Card>
+    )
+  const projects = (
+    <TeamProjectsTable
+      team={home.team}
+      projects={home.projects}
+      activityByProject={home.activityByProject}
+      reposByProject={repos}
+      actions={home.actions}
+      onSelect={(p) => {
+        switchHomeProject(p)
+        onShow('project')
+      }}
+      onNewProject={props.onNewProject}
+      onActionFailed={toastActionFailed}
+    />
+  )
+  return (
+    <TeamOverview
+      key={home.team.team_id}
+      team={home.team}
+      homeTeam={team}
+      meId={home.me?.id ?? null}
+      projectCount={home.projects.filter((p) => !p.archived_at).length}
+      projects={projects}
+      menu={{
+        onJoin: () => openModal('join'),
+        onNewTeam: () => openModal('newTeam'),
+        onInvite: () => openModal('invite'),
+        onRename: () => openModal('rename'),
+        onLeave: () => openModal('leave'),
+        onDelete: () => openModal('delete')
+      }}
+      onInvite={() => openModal('invite')}
+      onJoin={() => openModal('join')}
+      onManageMembers={() => onShow('members')}
     />
   )
 }
@@ -348,13 +375,6 @@ function MembersView({ home, team, onUpgrade, openModal }: LiveProps): React.JSX
   )
 }
 
-/** The strip's member count: the live roster once loaded (a removal updates
- *  it at once); the detail's count only until then. */
-function memberCount(team: HomeTeam): number | null {
-  if (team.status === 'ready') return team.members.length
-  return team.detail?.member_count ?? null
-}
-
 function LiveHome({
   home,
   greeting,
@@ -372,9 +392,7 @@ function LiveHome({
   const [modal, setModal] = useState<HomeTeamModal>(null)
   // A Settings deep link (SOLUSDEV-318) picks the first pane; read here, cleared
   // in an effect so a StrictMode double-render still sees it.
-  const [view, setView] = useState<HomePaneView>(
-    () => useShellStore.getState().homeView ?? 'project'
-  )
+  const [view, setView] = useState<HomePaneView>(() => useShellStore.getState().homeView ?? 'team')
   useEffect(() => useShellStore.getState().clearHomeView(), [])
   const [backToProject, setBackToProject] = useState(false)
   // Any navigation clears the way back; only "Add additional sources" sets it.
@@ -383,6 +401,21 @@ function LiveHome({
     setView(next)
   }
   const repos = useReposByProject(home, currentProject?.id ?? null)
+  const switchTeam = home.actions.switchTeam
+  // An accepted invitation lands me on the team I joined.
+  const onJoined = useCallback(
+    (teamId: string) => {
+      switchTeam(teamId)
+      setBackToProject(false)
+      setView('team')
+    },
+    [switchTeam]
+  )
+  const invites = useMyInvites(onJoined)
+  const sizes = useTeamSizes(
+    home.teams.map((t) => t.team_id),
+    home.team && team.status === 'ready' ? { [home.team.team_id]: team.members.length } : {}
+  )
   const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
   const live: LiveProps = {
     home,
@@ -401,7 +434,9 @@ function LiveHome({
     openModal: setModal,
     onUpgrade,
     repos,
-    onNewProject: () => setCreatingProject(true)
+    onNewProject: () => setCreatingProject(true),
+    invites,
+    sizes
   }
 
   return (

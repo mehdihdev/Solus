@@ -4,8 +4,9 @@
 // is left out — never invented.
 import { Mono } from '../../components/ui/Mono'
 
-/** What Home's right pane shows: the current project, or an account-level card. */
-export type HomePaneView = 'project' | 'members' | 'accounts'
+/** What Home's right pane shows: the active team's overview (SOLUSDEV-319, the default),
+ *  one of its projects, or an account-level card. */
+export type HomePaneView = 'team' | 'project' | 'members' | 'accounts'
 
 /** The active team's roster position. */
 export interface TeamPosition {
