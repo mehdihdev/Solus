@@ -1238,6 +1238,116 @@
         }
       }
     },
+    "/api/v1/users/me/invites": {
+      "get": {
+        "summary": "List My Invites",
+        "operationId": "list_my_invites_api_v1_users_me_invites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List My Invites Api V1 Users Me Invites Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/accept": {
+      "post": {
+        "summary": "Accept My Invite",
+        "operationId": "accept_my_invite_api_v1_users_me_invites__invite_id__accept_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Accept My Invite Api V1 Users Me Invites  Invite Id  Accept Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/decline": {
+      "post": {
+        "summary": "Decline My Invite",
+        "operationId": "decline_my_invite_api_v1_users_me_invites__invite_id__decline_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teams/{team_id}/activity": {
       "get": {
         "summary": "List Activity",
@@ -17326,6 +17436,91 @@
         "title": "FocusIn",
         "description": "The workspace focus a page send carries: the entity the person is looking at and the\ntrail they came through (oldest first, the focus itself excluded). It rides every page\nsend, so ids in it that went stale are dropped rather than refused \u2014 see\n`turn_scope.plan_scope`."
       },
+      "FrontAppBinding": {
+        "properties": {
+          "bundle_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$",
+            "title": "Bundle Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2147483647.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4294967295.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Id"
+          },
+          "drivable": {
+            "type": "boolean",
+            "title": "Drivable"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "window"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bundle_id",
+          "name",
+          "title",
+          "pid",
+          "window_id",
+          "drivable",
+          "binding"
+        ],
+        "title": "FrontAppBinding",
+        "description": "The turn's `front_app`, with the API doc's shape and consistency rules \u2014\nusable directly as the request-body field type."
+      },
       "GazeboSimConfig": {
         "properties": {
           "provider": {
@@ -18737,6 +18932,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/ScreenshotIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "front_app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrontAppBinding"
               },
               {
                 "type": "null"
