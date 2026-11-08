@@ -134,7 +134,7 @@ One row per user (unique `user_id`, `ON DELETE CASCADE`).
 
 ### Table `academic_code_sends`
 
-Append-only send log behind the per-address hourly cap (3 sends to one address per hour, across all accounts). Columns: `id`, `address` (canonical, see below), `user_id` (FK users, `SET NULL`), `created_at`; index (`address`, `created_at`). Sends to one address are serialized with a transaction-scoped advisory lock on the address. The daily academic sweep deletes rows older than one day.
+Append-only send log behind the per-address hourly caps: 3 sends per account per address, and 3 distinct accounts per address (an account already sending is not blocked by later ones, so one account cannot lock the owner out). Columns: `id`, `address` (canonical, see below), `user_id` (FK users, `SET NULL`), `created_at`; index (`address`, `created_at`). Sends to one address are serialized with a transaction-scoped advisory lock on the address. The daily academic sweep deletes rows older than one day.
 
 Addresses are stored in **canonical form**: lower-cased, a plain addr-spec only (no quotes, spaces, comments or brackets), with any `+tag` removed from the local part. `ada+lab@MIT.edu` and `ada@mit.edu` are one address for the one-account rule and the send cap, and the code is sent to the canonical form.
 

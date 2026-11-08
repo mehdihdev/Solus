@@ -537,3 +537,19 @@ async def test_address_cap_counts_every_send_not_accounts(
     )
     await db.commit()
     assert (await _send(aclient, headers, "victim+x@mit.edu")).status_code == 429
+
+
+async def test_one_account_cannot_lock_the_owner_out(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    attacker = bearer(BOB["sub"], BOB["email"])
+    await me(aclient, attacker)
+    for _ in range(3):
+        await db.execute(
+            update(AcademicVerification).values(last_sent_at=utcnow() - timedelta(minutes=2))
+        )
+        await db.commit()
+        assert (await _send(aclient, attacker, "ada@mit.edu")).status_code == 202
+    owner = await _alice(aclient, db)
+    assert (await _send(aclient, owner, "ada@mit.edu")).status_code == 202
+    assert (await _verify(aclient, owner, mailer.last_code())).status_code == 200

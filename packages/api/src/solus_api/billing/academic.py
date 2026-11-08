@@ -6,8 +6,9 @@ Rules (ADR-042):
   `.ac.uk`, …), with at least one label in front of it.
 - A 6-digit code is emailed; only an HMAC of (user, address, code) is stored. Codes
   expire after 15 minutes and allow 5 wrong tries. Sending is limited per user (60 s
-  cooldown, 5 per hour) and per address (3 per hour), counted in the database so the
-  limits hold across API processes.
+  cooldown, 5 per hour), per account and address (3 per hour), and per address (3
+  distinct accounts per hour), counted from a send log so the limits hold across API
+  processes and one account cannot lock an address's owner out.
 - One address backs one account at a time; a holder whose plan has expired is released.
 - Verifying makes the subscription `academic` / `active` with BASIC limits for
   `academic_validity_days`, and applies this month's grant.
@@ -61,7 +62,9 @@ MAX_ATTEMPTS = 5
 RESEND_COOLDOWN = timedelta(seconds=60)
 SEND_WINDOW = timedelta(hours=1)
 SENDS_PER_USER_PER_WINDOW = 5
+# Per (account, address) and distinct accounts per address, each per hour.
 SENDS_PER_ADDRESS_PER_WINDOW = 3
+ACCOUNTS_PER_ADDRESS_PER_WINDOW = 3
 SEND_LOG_RETENTION = timedelta(days=1)
 # A Stripe subscription in one of these states is still billing: claiming Academic would
 # leave the user paying for a plan they no longer have (ADR-042 §6).
@@ -244,15 +247,25 @@ class AcademicPlanService:
         # Serialize sends to one address across accounts for this transaction, then count
         # real sends in the append-only log (changing a pending address never lowers it).
         await self._session.execute(select(func.pg_advisory_xact_lock(func.hashtext(email))))
-        recent = await self._session.scalar(
+        window = (
+            AcademicCodeSend.address == email,
+            AcademicCodeSend.created_at > now - SEND_WINDOW,
+        )
+        own = await self._session.scalar(
             select(func.count())
             .select_from(AcademicCodeSend)
-            .where(
-                AcademicCodeSend.address == email,
-                AcademicCodeSend.created_at > now - SEND_WINDOW,
+            .where(*window, AcademicCodeSend.user_id == row.user_id)
+        )
+        if (own or 0) >= SENDS_PER_ADDRESS_PER_WINDOW:
+            raise _rate_limited(SEND_WINDOW, "Too many codes sent to that address; try later")
+        # Other accounts count once each, so one account cannot lock the owner out; an
+        # account already sending to this address is not blocked by later arrivals.
+        others = await self._session.scalar(
+            select(func.count(func.distinct(AcademicCodeSend.user_id))).where(
+                *window, AcademicCodeSend.user_id != row.user_id
             )
         )
-        if (recent or 0) >= SENDS_PER_ADDRESS_PER_WINDOW:
+        if not own and (others or 0) >= ACCOUNTS_PER_ADDRESS_PER_WINDOW:
             raise _rate_limited(SEND_WINDOW, "Too many codes sent to that address; try later")
 
     # ---------------------------------------------------------------- verify
