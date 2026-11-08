@@ -323,7 +323,8 @@ flowchart TD
   a1 -->|Verify| ver["POST academic/verify"]
   ver -->|200| a2["A2 active + refetch subscription, summary, credits"]
   ver -->|400 invalid_code| a1e["inline: wrong code, N tries left"]
-  ver -->|410 code_expired or 429 too_many_attempts| a1x["inline: request a new code"]
+  ver -->|410 code_expired| a1x["inline: request a new code"]
+  ver -->|429 too_many_attempts| a1w["inline: wait, then request a new code"]
   ver -->|409 academic_email_in_use| a0u["inline: address already in use"]
   a1 -->|Use a different email| a0
 ```
@@ -339,7 +340,8 @@ flowchart TD
 | Not academic                | That address isn't on our list of academic domains. Use your school email.                             |
 | Code sent                   | We sent a 6-digit code to {email}. It expires in 15 minutes.                                           |
 | Wrong code                  | That code didn't match — {N} tries left.                                                               |
-| Code expired / too many     | That code can't be used anymore. Send a new one.                                                       |
+| Code expired / no code      | That code can't be used anymore. Send a new one.                                                       |
+| Too many wrong codes        | Too many wrong codes. Wait a while, then send a new one.                                               |
 | Address in use              | That address is already verified on another Solus account.                                             |
 | Rate limited                | Too many codes requested. Try again in a minute.                                                       |
 | Email unconfigured          | We can't send verification emails right now. Try again later.                                          |

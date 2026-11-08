@@ -553,3 +553,79 @@ async def test_one_account_cannot_lock_the_owner_out(
     owner = await _alice(aclient, db)
     assert (await _send(aclient, owner, "ada@mit.edu")).status_code == 202
     assert (await _verify(aclient, owner, mailer.last_code())).status_code == 200
+
+
+# ------------------------------------------------------------------ Phase 4 review fixes
+
+
+async def test_wrong_guesses_are_capped_per_day_across_resends(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    headers = await _alice(aclient, db)
+    statuses: list[int] = []
+    for i in range(3):
+        await db.execute(
+            update(AcademicVerification).values(
+                last_sent_at=utcnow() - timedelta(minutes=2), send_count=0
+            )
+        )
+        await db.commit()
+        assert (await _send(aclient, headers, f"x{i}@mit.edu")).status_code == 202
+        wrong = "000000" if mailer.last_code() != "000000" else "111111"
+        for _ in range(4):
+            statuses.append((await _verify(aclient, headers, wrong)).status_code)
+    # 10 wrong guesses a day, however many codes: the 11th is refused and kills the code.
+    assert statuses.count(400) == 10 and statuses[10:] == [429, 409]
+    # A fresh code does not reset the daily budget, even with the right digits.
+    await db.execute(
+        update(AcademicVerification).values(
+            last_sent_at=utcnow() - timedelta(minutes=2), send_count=0
+        )
+    )
+    await db.commit()
+    assert (await _send(aclient, headers, "fresh@mit.edu")).status_code == 202
+    assert (await _verify(aclient, headers, mailer.last_code())).status_code == 429
+
+
+async def test_lockout_is_recorded_once_not_on_every_call(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    headers = await _alice(aclient, db, consent=True)
+    await _send(aclient, headers)
+    wrong = "000000" if mailer.last_code() != "000000" else "111111"
+    for _ in range(5):
+        await _verify(aclient, headers, wrong)
+    for _ in range(5):
+        await _verify(aclient, headers, wrong)
+    failed = [e.payload["reason"] for e in await _events(db, "billing.academic.failed")]
+    assert failed.count("too_many_attempts") == 1
+
+
+async def test_delete_and_sign_up_again_gives_no_new_grant_or_year(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    from sqlalchemy import delete
+
+    assert (await _verify_as(aclient, mailer, ALICE, "ada@mit.edu")).status_code == 200
+    first_end = (await _sub(db, ALICE["email"])).expires_at
+    await db.execute(delete(User).where(User.email == ALICE["email"]))
+    await db.commit()
+    assert (await _verify_as(aclient, mailer, BOB, "ada@mit.edu")).status_code == 200
+    bob = await _sub(db, BOB["email"])
+    assert bob.plan == PlanType.ACADEMIC and bob.expires_at == first_end
+    grants = (
+        await db.scalars(
+            select(CreditLedger).where(CreditLedger.type == CreditTxnType.ACADEMIC_GRANT)
+        )
+    ).all()
+    assert len(grants) == 1 and grants[0].user_id is None
+
+
+async def test_address_is_released_when_the_holder_moves_to_a_paid_plan(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    assert (await _verify_as(aclient, mailer, ALICE, "ada@mit.edu")).status_code == 200
+    alice = await _sub(db, ALICE["email"])
+    alice.plan, alice.stripe_subscription_id = PlanType.PRO, "sub_pro"
+    await db.commit()
+    assert (await _verify_as(aclient, mailer, BOB, "ada@mit.edu")).status_code == 200

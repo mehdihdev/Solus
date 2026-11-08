@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from sqlalchemy import select
 
 from solus_api.billing.development import session_development_unlimited
-from solus_api.billing.entitlements import is_academic_expired, is_local_trial_expired
+from solus_api.billing.entitlements import is_academic_expired, is_local_access_expired
 from solus_api.models import (
     CreditLedger,
     CreditTxnType,
@@ -325,10 +325,9 @@ async def assert_can_spend(
             Subscription.user_id == user_id, Subscription.deleted_at.is_(None)
         )
     )
-    if sub is not None and is_academic_expired(sub):
+    if sub is not None:
         await _assert_trial_not_expired(sub, user_id, session)
     if sub is not None and sub.status == SubscriptionStatus.TRIALING:
-        await _assert_trial_not_expired(sub, user_id, session)
         spend = await account_spend(user_id, session=session)
         if spend >= limits.trial_credit_cap:
             logger.info(
@@ -358,9 +357,9 @@ async def _assert_trial_not_expired(
     user's own ledger holds a PURCHASE and the balance covers one credit (the
     proposed purchased-credit unlock). A purchase with an empty balance is still
     `trial_expired`, not `insufficient_credits`: the account remains an expired trial."""
-    academic = is_academic_expired(sub)
-    if not academic and not is_local_trial_expired(sub):
+    if not is_local_access_expired(sub):
         return
+    academic = is_academic_expired(sub)
     purchased = await session.scalar(
         select(CreditLedger.id)
         .where(CreditLedger.user_id == user_id, CreditLedger.type == CreditTxnType.PURCHASE)

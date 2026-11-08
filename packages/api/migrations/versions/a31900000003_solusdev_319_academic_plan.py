@@ -3,8 +3,10 @@
 - The `plantype` CHECK (`subscriptions.plan`) and `subscription_comp_plan` CHECK admit
   `academic`.
 - The `credittxntype` CHECK admits `academic_grant`.
-- New tables `academic_verifications` (one row per user) and `academic_code_sends` (the
-  append-only send log behind the per-address cap); see docs/schemas/subscriptions.md.
+- New tables `academic_verifications` (one row per user), `academic_code_sends` (the
+  append-only send log behind the per-address caps) and `academic_address_claims` (who
+  holds an address until when; survives account deletion); see
+  docs/schemas/subscriptions.md.
 
 Downgrade moves academic subscriptions back to `basic` (same limits), reclassifies
 academic grants as `adjustment` (the ledger is append-only, ADR-024), and drops the table.
@@ -59,6 +61,8 @@ def upgrade() -> None:
         sa.Column("last_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("send_window_start", sa.DateTime(timezone=True), nullable=True),
         sa.Column("send_count", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("failed_window_start", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("failed_count", sa.Integer(), server_default="0", nullable=False),
         sa.Column("verified_email", sa.String(length=320), nullable=True),
         sa.Column("verified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
@@ -74,6 +78,19 @@ def upgrade() -> None:
     op.create_index(
         "ix_academic_verifications_pending_email", "academic_verifications", ["pending_email"]
     )
+    op.create_table(
+        "academic_address_claims",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("address_hash", sa.String(length=64), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("address_hash"),
+    )
+    op.create_index("ix_academic_address_claims_user_id", "academic_address_claims", ["user_id"])
     op.create_table(
         "academic_code_sends",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -98,6 +115,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("academic_address_claims")
     op.drop_table("academic_code_sends")
     op.drop_table("academic_verifications")
     op.execute("UPDATE subscriptions SET plan = 'basic' WHERE plan = 'academic'")

@@ -127,10 +127,15 @@ One row per user (unique `user_id`, `ON DELETE CASCADE`).
 | `attempts`           | int           | wrong codes for the current code (max 5)                                                               |
 | `last_sent_at`       | timestamptz   | 60 s resend cooldown                                                                                   |
 | `send_window_start`, `send_count` | timestamptz, int | per-user hourly send cap (5)                                                       |
+| `failed_window_start`, `failed_count` | timestamptz, int | wrong codes per account per 24 h across all codes (max 10)                  |
 | `verified_email`     | varchar(320)  | partial unique index (`WHERE verified_email IS NOT NULL`): one account per address                     |
 | `verified_at`        | timestamptz   |                                                                                                        |
 | `expires_at`         | timestamptz   | academic access end; mirrors `subscriptions.expires_at` at verification                                |
 | `expiry_notified_at` | timestamptz   | set by the daily sweep the first time it sees the expiry, so the event and notification fire once      |
+
+### Table `academic_address_claims`
+
+Who holds an academic address and until when. Columns: `id`, `address_hash` (unique; HMAC-SHA256 of the canonical address with a purpose-derived key, never the address), `user_id` (FK users, `SET NULL`, indexed), `expires_at`, `created_at`, `updated_at`. It survives account deletion: an account that verifies an address whose claim has no user and has not expired inherits that `expires_at` rather than starting a new year. The monthly grant's ledger idempotency key is derived from the same hash, so deleting an account and verifying the address again grants nothing more that month.
 
 ### Table `academic_code_sends`
 

@@ -29,6 +29,7 @@ from typing import Literal
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.billing import credits
@@ -36,6 +37,7 @@ from solus_api.billing.entitlements import is_academic_expired
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.models import (
+    AcademicAddressClaim,
     AcademicCodeSend,
     AcademicVerification,
     CreditLedger,
@@ -59,6 +61,10 @@ AcademicState = Literal["none", "pending", "active", "expired"]
 
 CODE_TTL = timedelta(minutes=15)
 MAX_ATTEMPTS = 5
+# Wrong codes per account per day across every code it asks for, so re-sending cannot
+# reset the guess budget (security review H1): about 10 guesses in 10^6 per account-day.
+MAX_FAILED_PER_DAY = 10
+FAILED_WINDOW = timedelta(days=1)
 RESEND_COOLDOWN = timedelta(seconds=60)
 SEND_WINDOW = timedelta(hours=1)
 SENDS_PER_USER_PER_WINDOW = 5
@@ -125,8 +131,8 @@ def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def _grant_key(user_id: uuid.UUID, month: str) -> str:
-    return f"academic-grant:{user_id}:{month}"
+def _grant_key(address_hash: str, month: str) -> str:
+    return f"academic-grant:{address_hash[:32]}:{month}"
 
 
 def _expire_key(user_id: uuid.UUID, month: str) -> str:
@@ -275,36 +281,67 @@ class AcademicPlanService:
         row = await self._locked_row(user.id)
         if row is None or row.code_hash is None or row.pending_email is None:
             raise APIError(409, "no_pending_code", "Ask for a code first")
-        if row.attempts >= MAX_ATTEMPTS:
-            await self._fail(user, "too_many_attempts")
-            raise APIError(429, "too_many_attempts", "Too many wrong codes; send a new one")
-        if row.code_expires_at is None or _aware(row.code_expires_at) <= now:
-            await self._fail(user, "code_expired")
-            raise APIError(410, "code_expired", "That code has expired; send a new one")
+        await self._check_code(user, row, code, now)
         email = row.pending_email
-        if not hmac.compare_digest(row.code_hash, self._hash(user.id, email, code)):
-            row.attempts += 1
-            left = MAX_ATTEMPTS - row.attempts
-            await self._fail(user, "invalid_code")
-            raise APIError(
-                400, "invalid_code", "That code didn't match", details=[{"attempts_left": left}]
-            )
         sub = await self._require_subscription(user.id, lock=True)
         self._assert_eligible(sub)
-        await self._claim_address(user, email, now)
-        self._activate(row, sub, email, now)
+        ends = await self._claim_address(user, email, now)
+        self._activate(row, sub, email, now, ends)
         emit_event(
             self._session,
             user=user,
             event_type="billing.academic.verified",
             payload={"domain": academic_domain(email)},
         )
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            # A concurrent verify of the same address by another account won the unique
+            # index (fail closed); report it like any held address, not as a 500.
+            await self._session.rollback()
+            raise APIError(
+                409, "academic_email_in_use", "That address is verified on another account"
+            ) from exc
         logger.info("academic verified user_id=%s domain=%s", user.id, academic_domain(email))
         await self.apply_monthly_grant(user.id, now)
         return await self.status(user.id, now)
 
-    async def _claim_address(self, user: User, email: str, now: datetime) -> None:
+    async def _check_code(
+        self, user: User, row: AcademicVerification, code: str, now: datetime
+    ) -> None:
+        """Raise unless `code` matches the live code. Each refusal is recorded at most once
+        per code (the code is cleared when it dies), and wrong guesses also count against
+        a daily per-account budget that re-sending does not reset."""
+        assert row.code_hash is not None and row.pending_email is not None
+        if row.failed_window_start is None or now - _aware(row.failed_window_start) >= (
+            FAILED_WINDOW
+        ):
+            row.failed_window_start, row.failed_count = now, 0
+        if row.attempts >= MAX_ATTEMPTS or row.failed_count >= MAX_FAILED_PER_DAY:
+            row.code_hash = None
+            await self._fail(user, "too_many_attempts")
+            raise APIError(429, "too_many_attempts", "Too many wrong codes; try again later")
+        if row.code_expires_at is None or _aware(row.code_expires_at) <= now:
+            row.code_hash = None
+            await self._fail(user, "code_expired")
+            raise APIError(410, "code_expired", "That code has expired; send a new one")
+        expected = self._hash(user.id, row.pending_email, code)
+        if not hmac.compare_digest(row.code_hash, expected):
+            row.attempts += 1
+            row.failed_count += 1
+            left = max(0, min(MAX_ATTEMPTS - row.attempts, MAX_FAILED_PER_DAY - row.failed_count))
+            await self._fail(user, "invalid_code")
+            raise APIError(
+                400, "invalid_code", "That code didn't match", details=[{"attempts_left": left}]
+            )
+
+    async def _claim_address(self, user: User, email: str, now: datetime) -> datetime:
+        """Take `email` for this account and return when its Academic plan ends.
+
+        A live holder (another account still on an unexpired Academic plan) refuses with
+        409. A holder that expired or moved to a paid plan is released. The address claim
+        outlives account deletion, so deleting and signing up again keeps the original
+        end date instead of starting a new year (security review H2)."""
         holder = await self._session.scalar(
             select(AcademicVerification)
             .where(
@@ -313,20 +350,54 @@ class AcademicPlanService:
             )
             .with_for_update()
         )
-        if holder is None:
-            return
-        if holder.expires_at is not None and _aware(holder.expires_at) > now:
-            await self._fail(user, "email_in_use")
-            raise APIError(
-                409, "academic_email_in_use", "That address is verified on another account"
+        if holder is not None:
+            if await self._holds_live_plan(holder, now):
+                await self._fail(user, "email_in_use")
+                raise APIError(
+                    409, "academic_email_in_use", "That address is verified on another account"
+                )
+            holder.verified_email = None
+            await self._session.flush()
+        return await self._upsert_claim(user.id, email, now)
+
+    async def _holds_live_plan(self, holder: AcademicVerification, now: datetime) -> bool:
+        if holder.expires_at is None or _aware(holder.expires_at) <= now:
+            return False
+        sub = await self._subscription(holder.user_id)
+        return sub is not None and sub.plan == PlanType.ACADEMIC
+
+    async def _upsert_claim(self, user_id: uuid.UUID, email: str, now: datetime) -> datetime:
+        fresh = now + timedelta(days=self._settings.academic_validity_days)
+        digest = self._address_hash(email)
+        claim = await self._session.scalar(
+            select(AcademicAddressClaim)
+            .where(AcademicAddressClaim.address_hash == digest)
+            .with_for_update()
+        )
+        if claim is None:
+            self._session.add(
+                AcademicAddressClaim(address_hash=digest, user_id=user_id, expires_at=fresh)
             )
-        holder.verified_email = None
-        await self._session.flush()
+            return fresh
+        inherited = (
+            claim.user_id is None
+            and claim.expires_at is not None
+            and _aware(claim.expires_at) > now
+        )
+        claim.user_id = user_id
+        if not inherited or claim.expires_at is None:
+            claim.expires_at = fresh
+            return fresh
+        return _aware(claim.expires_at)
 
     def _activate(
-        self, row: AcademicVerification, sub: Subscription, email: str, now: datetime
+        self,
+        row: AcademicVerification,
+        sub: Subscription,
+        email: str,
+        now: datetime,
+        ends: datetime,
     ) -> None:
-        ends = now + timedelta(days=self._settings.academic_validity_days)
         row.verified_email, row.verified_at, row.expires_at = email, now, ends
         row.expiry_notified_at = None
         row.pending_email = row.code_hash = None
@@ -366,8 +437,15 @@ class AcademicPlanService:
             or is_academic_expired(sub, now)
         ):
             return False
+        row = await self._row(user_id)
+        if row is None or row.verified_email is None:
+            return False
         month = month_key(now)
-        if await self._ledger_has(_grant_key(user_id, month)):
+        # Keyed on the ADDRESS, whose ledger rows survive account deletion: a new account
+        # verifying the same address gets nothing more this month. The per-user check stops
+        # a second grant for switching addresses mid-month.
+        key = _grant_key(self._address_hash(row.verified_email), month)
+        if await self._ledger_has(key) or await self._granted_this_month(user_id, month):
             return False
         await self._expire_previous_grant(user_id)
         result = await credits.add_credits(
@@ -375,10 +453,24 @@ class AcademicPlanService:
             user_id,
             self._settings.academic_monthly_credits,
             CreditTxnType.ACADEMIC_GRANT,
-            idempotency_key=_grant_key(user_id, month),
+            idempotency_key=key,
             attrs={"reason": "academic_grant", "month": month},
         )
         return result.applied
+
+    async def _granted_this_month(self, user_id: uuid.UUID, month: str) -> bool:
+        found = await self._session.scalar(
+            select(CreditLedger.id).where(
+                CreditLedger.user_id == user_id,
+                CreditLedger.type == CreditTxnType.ACADEMIC_GRANT,
+                CreditLedger.attrs["month"].astext == month,
+            )
+        )
+        return found is not None
+
+    async def expire_unspent(self, user_id: uuid.UUID) -> None:
+        """Remove the latest grant's unspent credits (plan ended; ADR-042: no rollover)."""
+        await self._expire_previous_grant(user_id)
 
     async def _expire_previous_grant(self, user_id: uuid.UUID) -> None:
         previous = await self._session.scalar(
@@ -416,9 +508,17 @@ class AcademicPlanService:
 
     # ---------------------------------------------------------------- helpers
 
+    def _key(self, label: str) -> bytes:
+        """A purpose-bound key derived from the server secret (domain separation)."""
+        secret = self._settings.supabase_jwt_secret.encode()
+        return hmac.new(secret, f"solus-academic:{label}".encode(), hashlib.sha256).digest()
+
     def _hash(self, user_id: uuid.UUID, email: str, code: str) -> str:
-        key = self._settings.supabase_jwt_secret.encode()
-        return hmac.new(key, f"{user_id}:{email}:{code}".encode(), hashlib.sha256).hexdigest()
+        message = f"{user_id}:{email}:{code}".encode()
+        return hmac.new(self._key("code"), message, hashlib.sha256).hexdigest()
+
+    def _address_hash(self, email: str) -> str:
+        return hmac.new(self._key("address"), email.encode(), hashlib.sha256).hexdigest()
 
     @staticmethod
     def _assert_eligible(sub: Subscription) -> None:
@@ -510,7 +610,10 @@ async def sweep_academic(
     for user_id in live:
         if await service.apply_monthly_grant(user_id, now):
             granted += 1
-    expired = await _record_expiries(session, now)
+    ended = await _record_expiries(session, now)
+    for user_id in ended:
+        await service.expire_unspent(user_id)
+    expired = len(ended)
     await session.execute(
         delete(AcademicCodeSend).where(AcademicCodeSend.created_at < now - SEND_LOG_RETENTION)
     )
@@ -520,7 +623,7 @@ async def sweep_academic(
     return AcademicSweepSummary(granted=granted, expired=expired)
 
 
-async def _record_expiries(session: AsyncSession, now: datetime) -> int:
+async def _record_expiries(session: AsyncSession, now: datetime) -> list[uuid.UUID]:
     rows = (
         await session.execute(
             select(AcademicVerification, User)
@@ -536,7 +639,9 @@ async def _record_expiries(session: AsyncSession, now: datetime) -> int:
             .with_for_update(of=AcademicVerification, skip_locked=True)
         )
     ).all()
+    ended: list[uuid.UUID] = []
     for row, user in rows:
+        ended.append(user.id)
         row.expiry_notified_at = now
         emit_event(session, user=user, event_type="billing.academic.expired", payload={})
         notify_user(
@@ -548,4 +653,4 @@ async def _record_expiries(session: AsyncSession, now: datetime) -> int:
             attrs={"plan": PlanType.ACADEMIC.value},
         )
     await session.commit()
-    return len(rows)
+    return ended

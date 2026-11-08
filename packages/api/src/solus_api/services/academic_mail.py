@@ -2,8 +2,8 @@
 
 `AcademicMailer` is the seam: the route depends on it and tests inject a fake.
 Production uses AWS SES with the task's IAM role (no key in config). With no sender
-configured, `app_env=dev` falls back to a logging mailer so the flow can be exercised
-locally; every other environment gets no mailer and the route answers 503.
+configured, `app_env=dev` with no AWS region falls back to a logging mailer so the flow
+can be exercised locally; every other environment gets no mailer and the route answers 503.
 
 The message body is Solus-authored only: the code and fixed copy. The recipient address
 is the only user-influenced value and goes in the SES Destination, never into the text.
@@ -44,8 +44,11 @@ class SesAcademicMailer:
     def _ses(self) -> Any:
         if self._client is None:
             import boto3
+            from botocore.config import Config
 
-            self._client = boto3.client("sesv2", region_name=self._region)
+            # Short timeouts: the send runs while the caller's row lock is held.
+            config = Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2})
+            self._client = boto3.client("sesv2", region_name=self._region, config=config)
         return self._client
 
     def _send(self, to: str, code: str) -> None:
@@ -75,6 +78,9 @@ def build_academic_mailer(settings: Settings) -> AcademicMailer | None:
     """The mailer for these settings, or None when sending is not configured."""
     if settings.academic_email_sender:
         return SesAcademicMailer(settings.academic_email_sender, settings.aws_region)
-    if settings.app_env == "dev":
+    # Logging the code is only for a local machine: `app_env` defaults to "dev", so also
+    # require that no AWS region is set (every deployed environment sets one for Secrets
+    # Manager). A deployment that forgets APP_ENV still gets no mailer, never a log of codes.
+    if settings.app_env == "dev" and not settings.aws_region:
         return DevLogMailer()
     return None

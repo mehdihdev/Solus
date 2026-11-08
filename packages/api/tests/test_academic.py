@@ -310,3 +310,96 @@ async def test_sweep_prunes_the_send_log(db: AsyncSession) -> None:
     db.expire_all()
     left = (await db.scalars(select(AcademicCodeSend.address))).all()
     assert left == ["new@mit.edu"]
+
+
+# ------------------------------------------------------------------ Phase 4 review fixes
+
+
+async def test_expiry_removes_the_last_months_unspent_credits(db: AsyncSession) -> None:
+    uid = await _user(db, expires=DEC + timedelta(days=200))
+    service = AcademicPlanService(db, _settings())
+    await service.apply_monthly_grant(uid, NOV)
+    await credits.debit_credits(db, uid, 100, idempotency_key=f"use-{uid}")
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uid))
+    assert sub is not None
+    sub.expires_at = DEC - timedelta(hours=1)
+    await db.commit()
+    await sweep_academic(db, _settings(), now=DEC)
+    assert await credits.get_balance(db, uid) == 0
+
+
+def test_dev_mailer_is_never_built_where_aws_is_configured() -> None:
+    from solus_api.services.academic_mail import build_academic_mailer
+
+    assert build_academic_mailer(_settings(app_env="dev", aws_region="us-east-1")) is None
+
+
+def _evt(etype: str, *, sub_id: str, status: str, created: int = 2_000_000_000) -> dict:
+    return {
+        "id": f"evt_{uuid.uuid4().hex}",
+        "type": etype,
+        "created": created,
+        "data": {"object": {"id": sub_id, "customer": "cus_old", "status": status}},
+    }
+
+
+async def _academic_with_customer(db: AsyncSession) -> uuid.UUID:
+    uid = await _user(db, expires=utcnow() + timedelta(days=300))
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uid))
+    assert sub is not None
+    sub.stripe_customer_id = "cus_old"
+    await db.commit()
+    return uid
+
+
+@pytest.mark.parametrize(
+    ("etype", "status"),
+    [
+        ("customer.subscription.deleted", "canceled"),
+        ("customer.subscription.updated", "canceled"),
+        ("customer.subscription.updated", "past_due"),
+    ],
+)
+async def test_late_events_for_the_old_subscription_leave_academic_alone(
+    db: AsyncSession, etype: str, status: str
+) -> None:
+    from solus_api.billing.stripe_events import process_event
+
+    uid = await _academic_with_customer(db)
+    await process_event(db, _evt(etype, sub_id="sub_old", status=status), pack_credits={})
+    db.expire_all()
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uid))
+    assert sub is not None
+    assert sub.plan == PlanType.ACADEMIC and sub.status == SubscriptionStatus.ACTIVE
+    assert sub.stripe_subscription_id is None
+
+
+async def test_old_invoice_failure_does_not_make_academic_past_due(db: AsyncSession) -> None:
+    from solus_api.billing.stripe_events import process_event
+
+    uid = await _academic_with_customer(db)
+    event = {
+        "id": f"evt_{uuid.uuid4().hex}",
+        "type": "invoice.payment_failed",
+        "created": 2_000_000_000,
+        "data": {"object": {"id": "in_1", "customer": "cus_old"}},
+    }
+    await process_event(db, event, pack_credits={})
+    db.expire_all()
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uid))
+    assert sub is not None and sub.status == SubscriptionStatus.ACTIVE
+
+
+async def test_a_new_paid_subscription_still_upgrades_an_academic_row(db: AsyncSession) -> None:
+    from solus_api.billing.stripe_events import process_event
+
+    uid = await _academic_with_customer(db)
+    await process_event(
+        db,
+        _evt("customer.subscription.created", sub_id="sub_new", status="active"),
+        pack_credits={},
+        plan_prices={},
+    )
+    db.expire_all()
+    sub = await db.scalar(select(Subscription).where(Subscription.user_id == uid))
+    assert sub is not None and sub.stripe_subscription_id == "sub_new"

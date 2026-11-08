@@ -643,12 +643,33 @@ class AcademicVerification(UuidPkMixin, TimestampMixin, Base):
         DateTime(timezone=True), default=None
     )
     send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Wrong codes in the current 24 h window, across every code (security review H1).
+    failed_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     verified_email: Mapped[str | None] = mapped_column(String(320), default=None)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     expiry_notified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+
+
+class AcademicAddressClaim(UuidPkMixin, TimestampMixin, Base):
+    """Who holds an academic address, and until when (ADR-042, security review H2).
+
+    Keyed by an HMAC of the canonical address, never the address itself, and it outlives
+    account deletion (`user_id` SET NULL): an account that verifies an address a deleted
+    account held inherits the original end date instead of starting a fresh year."""
+
+    __tablename__ = "academic_address_claims"
+
+    address_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class AcademicCodeSend(UuidPkMixin, Base):

@@ -137,7 +137,6 @@ describe('AcademicPlanCard', () => {
 
   it.each([
     ['code_expired', 410],
-    ['too_many_attempts', 429],
     ['no_pending_code', 409]
   ])('asks for a new code on %s', async (code, status) => {
     onVerify.mockRejectedValue(new ApiError(status, code, 'x'))
@@ -194,5 +193,27 @@ describe('AcademicPlanCard', () => {
     setup(null)
     expect(screen.getByText('Academic verification is unavailable right now.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Send code' })).not.toBeInTheDocument()
+  })
+
+  it('a lockout says to wait before asking again', async () => {
+    onVerify.mockRejectedValue(new ApiError(429, 'too_many_attempts', 'x'))
+    setup(PENDING)
+    await userEvent.type(screen.getByLabelText('Verification code'), '000000')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Too many wrong codes. Wait a while, then send a new one.'
+    )
+  })
+
+  it('keeps the confirmation when the refreshed status arrives as active', async () => {
+    const props = { eligible: true, onSend, onVerify, onVerified }
+    const { rerender } = render(<AcademicPlanCard academic={PENDING} {...props} />)
+    await userEvent.type(screen.getByLabelText('Verification code'), '123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    rerender(<AcademicPlanCard academic={ACTIVE} {...props} />)
+    expect(
+      screen.getByText("You're on the Academic plan — 1,000 credits are in your account.")
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Verified ada@mit.edu/)).toBeInTheDocument()
   })
 })

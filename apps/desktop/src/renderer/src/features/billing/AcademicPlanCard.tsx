@@ -35,7 +35,7 @@ const ERROR_COPY: Record<string, string> = {
   plan_not_eligible: 'Enterprise plans can’t switch to Academic.',
   academic_email_in_use: 'That address is already verified on another Solus account.',
   code_expired: DEAD_CODE,
-  too_many_attempts: DEAD_CODE,
+  too_many_attempts: 'Too many wrong codes. Wait a while, then send a new one.',
   no_pending_code: DEAD_CODE
 }
 
@@ -60,8 +60,16 @@ function suffixHint(suffixes: string[]): string {
 }
 
 export function AcademicPlanCard(props: AcademicPlanCardProps): React.JSX.Element {
-  const { academic } = props
+  const { academic, onVerify } = props
   const active = academic?.state === 'active'
+  // Kept here, not in the flow: the page refetch right after a verify swaps the flow for
+  // the "Verified …" line, and the confirmation must survive that swap.
+  const [justVerified, setJustVerified] = useState(false)
+  const verify = async (code: string): Promise<AcademicStatus> => {
+    const status = await onVerify(code)
+    setJustVerified(true)
+    return status
+  }
   return (
     <Card
       pad={16}
@@ -90,18 +98,21 @@ export function AcademicPlanCard(props: AcademicPlanCardProps): React.JSX.Elemen
           {`Basic limits · ${academic.monthly_credits.toLocaleString()} credits every month · verify once a year`}
         </div>
       )}
-      <StepArea {...props} />
+      <StepArea {...props} onVerify={verify} justVerified={justVerified} />
     </Card>
   )
 }
 
-function StepArea(props: AcademicPlanCardProps): React.JSX.Element {
-  const { academic, eligible } = props
+function StepArea(props: AcademicPlanCardProps & { justVerified: boolean }): React.JSX.Element {
+  const { academic, eligible, justVerified } = props
   let body: React.JSX.Element
   if (!academic) body = <Note>Academic verification is unavailable right now.</Note>
   else if (academic.state === 'active') {
     body = (
-      <Note>{`Verified ${academic.email} · free until ${formatDate(academic.expires_at)}`}</Note>
+      <>
+        {justVerified && <VerifiedNotice credits={academic.monthly_credits} />}
+        <Note>{`Verified ${academic.email} · free until ${formatDate(academic.expires_at)}`}</Note>
+      </>
     )
   } else if (!eligible) body = <Note>{NOT_ELIGIBLE}</Note>
   else body = <AcademicFlow {...props} academic={academic} />
@@ -112,6 +123,14 @@ function StepArea(props: AcademicPlanCardProps): React.JSX.Element {
       style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--bd)' }}
     >
       {body}
+    </div>
+  )
+}
+
+function VerifiedNotice({ credits }: { credits: number }): React.JSX.Element {
+  return (
+    <div role="status" style={{ fontSize: 12.5, marginBottom: 6 }}>
+      {`You're on the Academic plan — ${credits.toLocaleString()} credits are in your account.`}
     </div>
   )
 }
@@ -193,13 +212,7 @@ function AcademicFlow({ academic, onSend, onVerify, onVerified }: FlowProps): Re
       onVerified()
     })
 
-  if (step === 'done') {
-    return (
-      <div role="status" style={{ fontSize: 12.5 }}>
-        {`You're on the Academic plan — ${academic.monthly_credits.toLocaleString()} credits are in your account.`}
-      </div>
-    )
-  }
+  if (step === 'done') return <VerifiedNotice credits={academic.monthly_credits} />
   if (step === 'code') {
     return (
       <CodeStep
