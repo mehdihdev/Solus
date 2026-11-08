@@ -111,6 +111,7 @@ from solus_api.models import (
 from solus_api.orchestration.config import load_orchestration_config
 from solus_api.orchestration.cost import has_sufficient_credits
 from solus_api.orchestration.gates import (
+    AcademicExpiredError,
     FrequencyCapExceededError,
     InsufficientCreditsError,
     TrialCapReachedError,
@@ -149,6 +150,8 @@ _LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now.
 #: SOLUSDEV-236: wireflow billing.md Expert copy (the policy table is static; the date
 #: and the Guide variant are rendered by the client from `trial_expired`).
 _TRIAL_EXPIRED_MESSAGE = "Trial ended. Model features paused — choose a plan in Billing."
+#: ADR-042: the Academic plan's equivalent (Expert copy; the client renders Guide).
+_ACADEMIC_EXPIRED_MESSAGE = "Academic plan ended. Model features paused — verify again in Billing."
 #: SOLUSDEV-252, live: a turn that parked a gated call then hit the account's own
 #: 10k-TPM window ("Please try again in 39.456s") reported `internal` — an outage,
 #: as far as the person could tell, from a limit no retry inside the request can
@@ -159,6 +162,7 @@ _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
     FrequencyCapExceededError: ("frequency_cap", _LIMIT_MESSAGE),
     TrialCapReachedError: ("trial_cap", _LIMIT_MESSAGE),
     TrialExpiredError: ("trial_expired", _TRIAL_EXPIRED_MESSAGE),
+    AcademicExpiredError: ("academic_expired", _ACADEMIC_EXPIRED_MESSAGE),
     InsufficientCreditsError: ("insufficient_credits", _LIMIT_MESSAGE),
     ProviderTransientError: (
         "provider_unavailable",

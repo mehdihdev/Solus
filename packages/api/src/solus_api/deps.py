@@ -51,6 +51,7 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.services.academic_mail import AcademicMailer, build_academic_mailer
 from solus_api.services.supabase_admin import SupabaseAdmin
 
 if TYPE_CHECKING:
@@ -130,6 +131,12 @@ def get_stripe_gateway(request: Request) -> "StripeGateway":
     return StripeGateway(get_secret_store(request))
 
 
+def get_academic_mailer(request: Request) -> AcademicMailer | None:
+    """The Academic verification mailer (ADR-042), or None when sending is not configured.
+    Overridable in tests via app.dependency_overrides."""
+    return build_academic_mailer(get_settings(request))
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -142,6 +149,7 @@ JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 StripeGatewayDep = Annotated[StripeGateway, Depends(get_stripe_gateway)]
+AcademicMailerDep = Annotated[AcademicMailer | None, Depends(get_academic_mailer)]
 
 
 async def _provision_user(

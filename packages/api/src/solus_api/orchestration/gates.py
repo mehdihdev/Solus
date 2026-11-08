@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 from sqlalchemy import select
 
 from solus_api.billing.development import session_development_unlimited
-from solus_api.billing.entitlements import is_local_trial_expired
+from solus_api.billing.entitlements import is_academic_expired, is_local_trial_expired
 from solus_api.models import (
     CreditLedger,
     CreditTxnType,
@@ -131,6 +131,18 @@ class TrialExpiredError(RuntimeError):
         self.ends_at = ends_at
         self.upgrade_url = UPGRADE_URL
         super().__init__(f"Free trial ended — choose a plan to continue: {UPGRADE_URL}")
+
+
+class AcademicExpiredError(TrialExpiredError):
+    """An Academic plan ran past its end date (ADR-042) — verifying again (or choosing a
+    plan) is the way forward. A TrialExpiredError so every existing 402 path handles it;
+    the SOL route maps it to its own `academic_expired` code."""
+
+    def __init__(self, ends_at: datetime | None) -> None:
+        super().__init__(ends_at)
+        self.args = (
+            f"Academic plan ended — verify your academic email again in Billing: {UPGRADE_URL}",
+        )
 
 
 class InsufficientCreditsError(RuntimeError):
@@ -313,6 +325,8 @@ async def assert_can_spend(
             Subscription.user_id == user_id, Subscription.deleted_at.is_(None)
         )
     )
+    if sub is not None and is_academic_expired(sub):
+        await _assert_trial_not_expired(sub, user_id, session)
     if sub is not None and sub.status == SubscriptionStatus.TRIALING:
         await _assert_trial_not_expired(sub, user_id, session)
         spend = await account_spend(user_id, session=session)
@@ -344,7 +358,8 @@ async def _assert_trial_not_expired(
     user's own ledger holds a PURCHASE and the balance covers one credit (the
     proposed purchased-credit unlock). A purchase with an empty balance is still
     `trial_expired`, not `insufficient_credits`: the account remains an expired trial."""
-    if not is_local_trial_expired(sub):
+    academic = is_academic_expired(sub)
+    if not academic and not is_local_trial_expired(sub):
         return
     purchased = await session.scalar(
         select(CreditLedger.id)
@@ -354,14 +369,15 @@ async def _assert_trial_not_expired(
     if purchased is not None and await has_sufficient_credits(user_id, 1, session=session):
         return
     ends_at = sub.expires_at
-    logger.info("trial expired blocked user_id=%s ends_at=%s", user_id, ends_at)
+    reason = "academic_expired" if academic else "trial_expired"
+    logger.info("%s blocked user_id=%s ends_at=%s", reason, user_id, ends_at)
     await _emit_block_event(
         session,
         user_id,
-        reason="trial_expired",
+        reason=reason,
         detail={"ends_at": ends_at.isoformat() if ends_at else None},
     )
-    raise TrialExpiredError(ends_at)
+    raise AcademicExpiredError(ends_at) if academic else TrialExpiredError(ends_at)
 
 
 async def _emit_block_event(

@@ -118,6 +118,8 @@ class PlanType(enum.StrEnum):
     BASIC = "basic"
     PRO = "pro"
     ENTERPRISE = "enterprise"
+    # ADR-042: free, unlocked by a proven academic email; BASIC limits, monthly credits.
+    ACADEMIC = "academic"
 
 
 class SubscriptionStatus(enum.StrEnum):
@@ -134,6 +136,8 @@ class CreditTxnType(enum.StrEnum):
     # One-time starting credits when a paid plan first activates (ADR-023/024,
     # amended 2026-08-08). Distinct from PURCHASE for ledger auditability.
     PLAN_GRANT = "plan_grant"
+    # ADR-042: the Academic plan's monthly grant (idempotent per user and month).
+    ACADEMIC_GRANT = "academic_grant"
     REFUND = "refund"
     ADJUSTMENT = "adjustment"
 
@@ -610,6 +614,43 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
 
 
+class AcademicVerification(UuidPkMixin, TimestampMixin, Base):
+    """Academic-email proof for the Academic plan (ADR-042, SOLUSDEV-319). One row per
+    user. Only an HMAC of the emailed code is stored. `verified_email` is unique across
+    accounts so one address backs one account; an expired holder is released on reuse.
+    See docs/schemas/subscriptions.md §Academic plan."""
+
+    __tablename__ = "academic_verifications"
+    __table_args__ = (
+        Index(
+            "uq_academic_verifications_verified_email",
+            "verified_email",
+            unique=True,
+            postgresql_where=text("verified_email IS NOT NULL"),
+        ),
+        Index("ix_academic_verifications_pending_email", "pending_email"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    pending_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    code_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    send_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    verified_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expiry_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
     """Cached per-user balance (no pooling). The ledger is the source of truth.
     `spent_total` is a rolling all-time USAGE total maintained atomically with
@@ -803,6 +844,8 @@ PLAN_LIMITS: dict[PlanType, dict[str, int | None]] = {
     },
     PlanType.ENTERPRISE: {},  # custom per deal; set explicitly at creation.
 }
+# ADR-042: Academic carries BASIC's limits (kept as data, never branched on by name).
+PLAN_LIMITS[PlanType.ACADEMIC] = dict(PLAN_LIMITS[PlanType.BASIC])
 
 
 def default_limits(plan: PlanType) -> dict[str, int | None]:

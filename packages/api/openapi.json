@@ -2851,6 +2851,127 @@
         ]
       }
     },
+    "/api/v1/billing/academic": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get Academic",
+        "description": "The caller's academic status (none / pending / active / expired).",
+        "operationId": "get_academic_api_v1_billing_academic_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Academic Api V1 Billing Academic Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/code": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Send Academic Code",
+        "description": "Email a 6-digit code to an academic address (rate-limited; see the service).",
+        "operationId": "send_academic_code_api_v1_billing_academic_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicCodeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Academic Code Api V1 Billing Academic Code Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/verify": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Verify Academic Code",
+        "description": "Check the code; on a match the caller's plan becomes Academic.",
+        "operationId": "verify_academic_code_api_v1_billing_academic_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicVerifyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Verify Academic Code Api V1 Billing Academic Verify Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/sources/{source_id}/revisions": {
       "get": {
         "summary": "Revisions",
@@ -15712,6 +15833,39 @@
   },
   "components": {
     "schemas": {
+      "AcademicCodeCreate": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "AcademicCodeCreate",
+        "description": "POST /billing/academic/code (ADR-042). The domain rule is checked by the service so\nthe error code is specific (`not_academic_email`), not a generic validation error."
+      },
+      "AcademicVerifyCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "AcademicVerifyCreate",
+        "description": "POST /billing/academic/verify: exactly six ASCII digits."
+      },
       "AcceptWiring": {
         "properties": {
           "digest": {
@@ -19727,7 +19881,8 @@
         "enum": [
           "basic",
           "pro",
-          "enterprise"
+          "enterprise",
+          "academic"
         ],
         "title": "PlanType"
       },

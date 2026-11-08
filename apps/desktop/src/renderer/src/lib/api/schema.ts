@@ -993,6 +993,66 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/billing/academic': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Get Academic
+     * @description The caller's academic status (none / pending / active / expired).
+     */
+    get: operations['get_academic_api_v1_billing_academic_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/billing/academic/code': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Send Academic Code
+     * @description Email a 6-digit code to an academic address (rate-limited; see the service).
+     */
+    post: operations['send_academic_code_api_v1_billing_academic_code_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/billing/academic/verify': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Verify Academic Code
+     * @description Check the code; on a match the caller's plan becomes Academic.
+     */
+    post: operations['verify_academic_code_api_v1_billing_academic_verify_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/projects/{project_id}/sources/{source_id}/revisions': {
     parameters: {
       query?: never
@@ -4075,6 +4135,23 @@ export interface paths {
 export type webhooks = Record<string, never>
 export interface components {
   schemas: {
+    /**
+     * AcademicCodeCreate
+     * @description POST /billing/academic/code (ADR-042). The domain rule is checked by the service so
+     *     the error code is specific (`not_academic_email`), not a generic validation error.
+     */
+    AcademicCodeCreate: {
+      /** Email */
+      email: string
+    }
+    /**
+     * AcademicVerifyCreate
+     * @description POST /billing/academic/verify: exactly six ASCII digits.
+     */
+    AcademicVerifyCreate: {
+      /** Code */
+      code: string
+    }
     /** AcceptWiring */
     AcceptWiring: {
       /** Digest */
@@ -5624,7 +5701,7 @@ export interface components {
      * PlanType
      * @enum {string}
      */
-    PlanType: 'basic' | 'pro' | 'enterprise'
+    PlanType: 'basic' | 'pro' | 'enterprise' | 'academic'
     /** PlatformImportIn */
     PlatformImportIn: {
       /** Name */
@@ -8692,6 +8769,92 @@ export interface operations {
     requestBody?: {
       content: {
         'application/json': components['schemas']['PortalSessionCreate'] | null
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  get_academic_api_v1_billing_academic_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+    }
+  }
+  send_academic_code_api_v1_billing_academic_code_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcademicCodeCreate']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  verify_academic_code_api_v1_billing_academic_verify_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcademicVerifyCreate']
       }
     }
     responses: {

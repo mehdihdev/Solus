@@ -71,6 +71,7 @@ from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.orchestration.gateway import complete, default_orchestration_config
 from solus_api.routers import (
+    academic,
     account_hosted,
     activity,
     artifacts,
@@ -631,6 +632,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(connections.router)
     app.include_router(billing.router)
     app.include_router(billing.actions_router)
+    app.include_router(academic.router)
     from solus_api.routers import source_revisions
 
     app.include_router(source_revisions.router)
