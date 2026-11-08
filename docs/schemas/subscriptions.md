@@ -109,6 +109,31 @@ Do not confuse this with `billing/reconciliation.py`, which reconciles credit de
 - Alembic is in use (`packages/api/migrations/versions`). The revision id is a
   placeholder until the revision is generated.
 
+## Academic plan (SOLUSDEV-319, ADR-042)
+
+`subscriptions.plan` may be `academic` (and so may `comp_plan`; the CHECK constraints are widened). An academic row is `status = active` with no Stripe subscription, BASIC default limits and `expires_at` = verification + `SOLUS_ACADEMIC_VALIDITY_DAYS` (365). `credit_ledger.type` gains `academic_grant`.
+
+### Table `academic_verifications`
+
+One row per user (unique `user_id`, `ON DELETE CASCADE`).
+
+| Column               | Type          | Notes                                                                                                  |
+| -------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `id`, `created_at`, `updated_at` | standard |                                                                                                |
+| `user_id`            | uuid FK users | unique                                                                                                 |
+| `pending_email`      | varchar(320)  | lower-cased address the last code was sent to; null once verified                                      |
+| `code_hash`          | varchar(64)   | HMAC-SHA256 of (user id, address, code); never the code itself                                         |
+| `code_expires_at`    | timestamptz   | send + 15 min                                                                                          |
+| `attempts`           | int           | wrong codes for the current code (max 5)                                                               |
+| `last_sent_at`       | timestamptz   | 60 s resend cooldown; per-address hourly cap counts rows by `pending_email` and this column            |
+| `send_window_start`, `send_count` | timestamptz, int | per-user hourly send cap (5)                                                       |
+| `verified_email`     | varchar(320)  | partial unique index (`WHERE verified_email IS NOT NULL`): one account per address                     |
+| `verified_at`        | timestamptz   |                                                                                                        |
+| `expires_at`         | timestamptz   | academic access end; mirrors `subscriptions.expires_at` at verification                                |
+| `expiry_notified_at` | timestamptz   | set by the daily sweep the first time it sees the expiry, so the event and notification fire once      |
+
+An address held by an account whose academic plan has expired is released (its `verified_email` cleared) when another account verifies it.
+
 ## Related
 
 - `docs/api/API-implementation.md` §10 — endpoints, trial expiry block, summary shape.
