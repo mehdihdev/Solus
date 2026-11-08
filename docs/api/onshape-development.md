@@ -620,3 +620,90 @@ whole-page size limit still applies.
   (even on failure), so the next read re-probes.
 - Measured (tests): a Guide turn of four reads on one synced document costs 5
   requests cold and 1 warm (was 8); a two-write Build turn costs 10 (was 20).
+
+
+## Removal, rename, move and part metadata — SOLUSDEV-319 (tier-1 amendment)
+
+Additive operations in the same W0-04 registry; no new HTTP route, request schema
+or approval mechanism. Every write here keeps the ADR-038 write properties: live
+pre-write read, mandatory readback, `mutation_unverified` on doubt with no replay,
+`agent_write` metering, one target per confirmation card (SOLUSDEV-168), and the
+document's memoised probe retired after the attempt. Design decisions approved
+in-chat 2026-11-08: suppress before delete; warn-and-report downstream breakage,
+never auto-revert; one item per card; live evidence before move/metadata schemas.
+
+`element_type` below is `"partstudio" | "assembly"` and selects
+`/partstudios/...` or `/assemblies/...`. All ids use the existing path-safe
+grammars; `feature_id` and `instance_id` are URL-encoded when placed in a path.
+
+### Suppress and unsuppress — `onshape.suppress_feature`
+
+Params: document_id, element_id, workspace_id?, element_type, feature_id,
+suppressed (bool). Reads the live feature, then POSTs
+`/{type}/d/{d}/w/{w}/e/{e}/features/featureid/{fid}` (Part Studio
+`updatePartStudioFeature`, assembly `updateFeature`) with the complete live
+feature and only `suppressed` changed, carrying `sourceMicroversion` and
+`rejectMicroversionSkew: true`. Refuses without a write when the feature's
+suppression is configured (`suppressionConfigured: true`) or already in the
+requested state. Preview rows: feature identity, source microversion, feature
+state fingerprint, `Suppressed: <before> → <after>`, and up to 10 "May depend on
+it" rows (see Dependents). Readback: the feature's `suppressed` equals the
+request. This is the operation SOL uses for "remove"; descriptions say so.
+
+### Rename — `onshape.rename_feature`
+
+Params as above with `name` instead of `suppressed`: 1–64 characters, printable,
+no control, bidi or zero-width characters (the strict visible-text rule). Same
+guarded POST with only `name` changed. Readback: `name` equals the request.
+
+### Delete a feature — `onshape.delete_feature`
+
+Params: document_id, element_id, workspace_id?, element_type, feature_id. Only
+when the person explicitly asks to delete; the card says the deletion cannot be
+undone from Solus (Onshape's own document history still holds it).
+`DELETE /{type}/d/{d}/w/{w}/e/{e}/features/featureid/{fid}`
+(`deletePartStudioFeature` / `deleteFeature`). The vendor offers no microversion
+guard on DELETE, so a one-use binding of the source microversion and feature
+state fingerprint is reread and compared immediately before the DELETE; any
+change refuses without a write. Accepted residual: the window between that reread
+and the DELETE, as for insertion. Readback: the feature is absent.
+
+### Delete an assembly instance — `onshape.delete_instance`
+
+Params: document_id, element_id, workspace_id?, instance_id (a top-level
+instance id from `get_assembly_definition`). Explicit-delete only, same card
+wording and pre-DELETE rebinding as `delete_feature`.
+`DELETE /assemblies/d/{d}/w/{w}/e/{e}/instance/nodeid/{nid}` (`deleteInstance`).
+Preview names the instance, its part/document and the mates that reference it.
+Readback: the instance is absent from a fresh assembly definition.
+
+### Dependents and downstream report (all four operations above)
+
+Before the write, Solus scans the live tree for features or mates whose
+serialized parameters reference the target id (feature id, or instance id in a
+mate's occurrence paths). The scan is best-effort and labelled "may depend on";
+it never blocks. After the write, the readback compares feature/mate states
+before and after and returns `downstream_errors: [{feature_id, name, status}]`
+for anything that newly entered a non-OK state. A nonempty list is a successful
+write with a warning, never an automatic revert.
+
+### Move an assembly instance — `onshape.transform_instance` (PENDING EVIDENCE)
+
+Intended: params identify one occurrence path and take a relative translation in
+millimetres and rotation in degrees; Solus builds the vendor matrix itself (the
+model never supplies a raw matrix). Endpoint `POST
+/assemblies/d/{d}/w/{w}/e/{e}/occurrencetransforms` (`transformOccurrences`).
+Fixed occurrences refuse; mated occurrences warn that mates may override the
+pose. Readback compares the fresh occurrence transform within tolerance. The
+public spec does not state the matrix layout or units, so the schema is frozen
+only after a live capture against a scratch document; until then the operation
+is not registered.
+
+### Part metadata — `onshape.get_part_metadata`, `onshape.set_part_metadata` (PENDING EVIDENCE)
+
+Intended: GET/POST `/metadata/d/{d}/w/{w}/e/{e}/p/{pid}`. Writes may only name
+property ids present AND editable in a fresh read of that part; values are
+visible-text strings ≤ 256 characters; Material and appearance are excluded
+(structured, library-bound). The POST body is untyped in the public spec, so the
+schema is frozen only after a live capture; until then neither operation is
+registered.
