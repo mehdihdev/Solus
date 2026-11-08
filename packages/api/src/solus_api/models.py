@@ -651,6 +651,23 @@ class AcademicVerification(UuidPkMixin, TimestampMixin, Base):
     )
 
 
+class AcademicCodeSend(UuidPkMixin, Base):
+    """Append-only log of academic code emails (ADR-042): the per-address hourly cap counts
+    these rows, so it holds across accounts and is not lowered by changing a pending
+    address. Rows older than a day are pruned by the daily academic sweep."""
+
+    __tablename__ = "academic_code_sends"
+    __table_args__ = (Index("ix_academic_code_sends_address_created", "address", "created_at"),)
+
+    address: Mapped[str] = mapped_column(String(320))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
     """Cached per-user balance (no pooling). The ledger is the source of truth.
     `spent_total` is a rolling all-time USAGE total maintained atomically with

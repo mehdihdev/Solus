@@ -3,7 +3,8 @@
 - The `plantype` CHECK (`subscriptions.plan`) and `subscription_comp_plan` CHECK admit
   `academic`.
 - The `credittxntype` CHECK admits `academic_grant`.
-- New table `academic_verifications` (one row per user; see docs/schemas/subscriptions.md).
+- New tables `academic_verifications` (one row per user) and `academic_code_sends` (the
+  append-only send log behind the per-address cap); see docs/schemas/subscriptions.md.
 
 Downgrade moves academic subscriptions back to `basic` (same limits), reclassifies
 academic grants as `adjustment` (the ledger is append-only, ADR-024), and drops the table.
@@ -73,6 +74,20 @@ def upgrade() -> None:
     op.create_index(
         "ix_academic_verifications_pending_email", "academic_verifications", ["pending_email"]
     )
+    op.create_table(
+        "academic_code_sends",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("address", sa.String(length=320), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_academic_code_sends_address_created",
+        "academic_code_sends",
+        ["address", "created_at"],
+    )
     op.create_index(
         "uq_academic_verifications_verified_email",
         "academic_verifications",
@@ -83,6 +98,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_table("academic_code_sends")
     op.drop_table("academic_verifications")
     op.execute("UPDATE subscriptions SET plan = 'basic' WHERE plan = 'academic'")
     op.execute("UPDATE subscriptions SET comp_plan = NULL WHERE comp_plan = 'academic'")

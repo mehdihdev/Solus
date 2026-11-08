@@ -125,12 +125,18 @@ One row per user (unique `user_id`, `ON DELETE CASCADE`).
 | `code_hash`          | varchar(64)   | HMAC-SHA256 of (user id, address, code); never the code itself                                         |
 | `code_expires_at`    | timestamptz   | send + 15 min                                                                                          |
 | `attempts`           | int           | wrong codes for the current code (max 5)                                                               |
-| `last_sent_at`       | timestamptz   | 60 s resend cooldown; per-address hourly cap counts rows by `pending_email` and this column            |
+| `last_sent_at`       | timestamptz   | 60 s resend cooldown                                                                                   |
 | `send_window_start`, `send_count` | timestamptz, int | per-user hourly send cap (5)                                                       |
 | `verified_email`     | varchar(320)  | partial unique index (`WHERE verified_email IS NOT NULL`): one account per address                     |
 | `verified_at`        | timestamptz   |                                                                                                        |
 | `expires_at`         | timestamptz   | academic access end; mirrors `subscriptions.expires_at` at verification                                |
 | `expiry_notified_at` | timestamptz   | set by the daily sweep the first time it sees the expiry, so the event and notification fire once      |
+
+### Table `academic_code_sends`
+
+Append-only send log behind the per-address hourly cap (3 sends to one address per hour, across all accounts). Columns: `id`, `address` (canonical, see below), `user_id` (FK users, `SET NULL`), `created_at`; index (`address`, `created_at`). Sends to one address are serialized with a transaction-scoped advisory lock on the address. The daily academic sweep deletes rows older than one day.
+
+Addresses are stored in **canonical form**: lower-cased, a plain addr-spec only (no quotes, spaces, comments or brackets), with any `+tag` removed from the local part. `ada+lab@MIT.edu` and `ada@mit.edu` are one address for the one-account rule and the send cap, and the code is sent to the canonical form.
 
 An address held by an account whose academic plan has expired is released (its `verified_email` cleared) when another account verifies it.
 

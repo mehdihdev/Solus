@@ -19,13 +19,14 @@ Rules (ADR-042):
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,7 @@ from solus_api.billing.entitlements import is_academic_expired
 from solus_api.core.config import Settings
 from solus_api.core.errors import APIError
 from solus_api.models import (
+    AcademicCodeSend,
     AcademicVerification,
     CreditLedger,
     CreditTxnType,
@@ -60,6 +62,7 @@ RESEND_COOLDOWN = timedelta(seconds=60)
 SEND_WINDOW = timedelta(hours=1)
 SENDS_PER_USER_PER_WINDOW = 5
 SENDS_PER_ADDRESS_PER_WINDOW = 3
+SEND_LOG_RETENTION = timedelta(days=1)
 # A Stripe subscription in one of these states is still billing: claiming Academic would
 # leave the user paying for a plan they no longer have (ADR-042 §6).
 _BILLING_STATUSES = frozenset(
@@ -70,8 +73,31 @@ _BILLING_STATUSES = frozenset(
 # ------------------------------------------------------------------ pure rules
 
 
+# A plain addr-spec after lower-casing: no quotes, spaces, comments, brackets or commas,
+# so the address SES delivers to is exactly the one checked here (no parser differential).
+_ADDR_SPEC = re.compile(
+    r"^[a-z0-9._%+-]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$"
+)
+
+
 def normalize_email(raw: str) -> str:
     return raw.strip().lower()
+
+
+def canonical_email(raw: str) -> str | None:
+    """The mailbox an address delivers to, or None when it is not a plain address.
+
+    Lower-cased, and a `+tag` is dropped from the local part, so `ada+1@mit.edu` and
+    `ada@mit.edu` are one address for the one-account rule and the per-address send cap.
+    The code is sent to this canonical form."""
+    email = normalize_email(raw)
+    if not _ADDR_SPEC.fullmatch(email):
+        return None
+    local, domain = email.split("@")
+    local = local.split("+", 1)[0]
+    if not local or local.startswith(".") or local.endswith(".") or ".." in local:
+        return None
+    return f"{local}@{domain}"
 
 
 def academic_domain(email: str) -> str:
@@ -81,12 +107,10 @@ def academic_domain(email: str) -> str:
 def is_academic_email(raw: str, suffixes: list[str]) -> bool:
     """True when `raw` is one `local@domain` address whose domain ends in a suffix, with at
     least one label before it (so `ada@edu` and `ada@fakeedu` never match)."""
-    email = normalize_email(raw)
-    if email.count("@") != 1:
+    email = canonical_email(raw)
+    if email is None:
         return False
-    local, domain = email.split("@")
-    if not local or not domain or ".." in domain:
-        return False
+    domain = academic_domain(email)
     return any(domain.endswith("." + s.strip(".").lower()) for s in suffixes if s.strip("."))
 
 
@@ -166,7 +190,7 @@ class AcademicPlanService:
         self, user: User, raw_email: str, mailer: AcademicMailer | None
     ) -> AcademicRead:
         now = utcnow()
-        email = normalize_email(raw_email)
+        email = canonical_email(raw_email) or ""
         if not is_academic_email(email, self._settings.academic_email_suffixes):
             raise APIError(
                 422, "not_academic_email", "That address isn't on our list of academic domains"
@@ -183,6 +207,7 @@ class AcademicPlanService:
         row.attempts = 0
         row.last_sent_at = now
         row.send_count += 1
+        self._session.add(AcademicCodeSend(address=email, user_id=user.id, created_at=now))
         try:
             await mailer.send_code(email, code)
         except Exception as exc:  # noqa: BLE001 — any provider failure is one 502
@@ -216,12 +241,15 @@ class AcademicPlanService:
         if row.send_count >= SENDS_PER_USER_PER_WINDOW:
             wait = SEND_WINDOW - (now - _aware(row.send_window_start))
             raise _rate_limited(wait, "Too many codes requested; try again later")
+        # Serialize sends to one address across accounts for this transaction, then count
+        # real sends in the append-only log (changing a pending address never lowers it).
+        await self._session.execute(select(func.pg_advisory_xact_lock(func.hashtext(email))))
         recent = await self._session.scalar(
             select(func.count())
-            .select_from(AcademicVerification)
+            .select_from(AcademicCodeSend)
             .where(
-                AcademicVerification.pending_email == email,
-                AcademicVerification.last_sent_at > now - SEND_WINDOW,
+                AcademicCodeSend.address == email,
+                AcademicCodeSend.created_at > now - SEND_WINDOW,
             )
         )
         if (recent or 0) >= SENDS_PER_ADDRESS_PER_WINDOW:
@@ -470,6 +498,10 @@ async def sweep_academic(
         if await service.apply_monthly_grant(user_id, now):
             granted += 1
     expired = await _record_expiries(session, now)
+    await session.execute(
+        delete(AcademicCodeSend).where(AcademicCodeSend.created_at < now - SEND_LOG_RETENTION)
+    )
+    await session.commit()
     if granted or expired:
         logger.info("academic sweep granted=%d expired=%d", granted, expired)
     return AcademicSweepSummary(granted=granted, expired=expired)

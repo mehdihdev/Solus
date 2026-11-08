@@ -480,3 +480,60 @@ async def test_status_reports_expired_after_validity(
     await db.commit()
     data = (await aclient.get(BASE, headers=headers)).json()["data"]
     assert data["state"] == "expired" and data["email"] == "ada@mit.edu"
+
+
+# ------------------------------------------------------------------ security review fixes
+
+
+async def test_plus_tags_are_one_address_for_the_one_account_rule(
+    aclient: AsyncClient, mailer: FakeMailer
+) -> None:
+    assert (await _verify_as(aclient, mailer, ALICE, "ada+one@mit.edu")).status_code == 200
+    assert mailer.sent[-1][0] == "ada@mit.edu"
+    resp = await _verify_as(aclient, mailer, BOB, "Ada+two@MIT.edu")
+    assert resp.status_code == 409 and resp.json()["error"]["code"] == "academic_email_in_use"
+
+
+@pytest.mark.parametrize(
+    "email",
+    [
+        '"ada"@mit.edu',
+        "ada <x@mit.edu>",
+        "a,b@mit.edu",
+        "ada @mit.edu",
+        "ada@mit .edu",
+        "ada@-mit.edu",
+        "ada\n@mit.edu",
+        ".ada@mit.edu",
+        "+tag@mit.edu",
+    ],
+)
+async def test_only_plain_addresses_are_accepted(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer, email: str
+) -> None:
+    headers = await _alice(aclient, db)
+    resp = await _send(aclient, headers, email)
+    assert resp.status_code == 422 and mailer.sent == []
+
+
+async def test_address_cap_counts_every_send_not_accounts(
+    aclient: AsyncClient, db: AsyncSession
+) -> None:
+    headers = await _alice(aclient, db)
+    for _ in range(3):
+        await db.execute(
+            update(AcademicVerification).values(last_sent_at=utcnow() - timedelta(minutes=2))
+        )
+        await db.commit()
+        assert (await _send(aclient, headers, "victim@mit.edu")).status_code == 202
+    # Pointing the pending address elsewhere must not reset the victim's count.
+    await db.execute(
+        update(AcademicVerification).values(last_sent_at=utcnow() - timedelta(minutes=2))
+    )
+    await db.commit()
+    assert (await _send(aclient, headers, "other@mit.edu")).status_code == 202
+    await db.execute(
+        update(AcademicVerification).values(last_sent_at=utcnow() - timedelta(minutes=2))
+    )
+    await db.commit()
+    assert (await _send(aclient, headers, "victim+x@mit.edu")).status_code == 429

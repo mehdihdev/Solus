@@ -282,3 +282,31 @@ def test_academic_sweep_cron_is_registered_daily() -> None:
     crons = {job.coroutine.__name__: job for job in settings.cron_jobs}
     sweep = crons["academic_sweep"]
     assert sweep.hour == {0} and sweep.minute == {10} and sweep.run_at_startup is True
+
+
+@pytest.mark.parametrize(
+    ("raw", "canonical"),
+    [
+        ("Ada+Lab@MIT.edu", "ada@mit.edu"),
+        ("ada.lovelace@ox.ac.uk", "ada.lovelace@ox.ac.uk"),
+        ('"ada"@mit.edu', None),
+        ("ada@mit..edu", None),
+        ("ada..x@mit.edu", None),
+    ],
+)
+def test_canonical_email(raw: str, canonical: str | None) -> None:
+    from solus_api.billing.academic import canonical_email
+
+    assert canonical_email(raw) == canonical
+
+
+async def test_sweep_prunes_the_send_log(db: AsyncSession) -> None:
+    from solus_api.models import AcademicCodeSend
+
+    db.add(AcademicCodeSend(address="old@mit.edu", created_at=DEC - timedelta(days=2)))
+    db.add(AcademicCodeSend(address="new@mit.edu", created_at=DEC - timedelta(hours=1)))
+    await db.commit()
+    await sweep_academic(db, _settings(), now=DEC)
+    db.expire_all()
+    left = (await db.scalars(select(AcademicCodeSend.address))).all()
+    assert left == ["new@mit.edu"]
