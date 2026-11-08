@@ -135,7 +135,7 @@ One row per user (unique `user_id`, `ON DELETE CASCADE`).
 
 ### Table `academic_address_claims`
 
-Who holds an academic address and until when. Columns: `id`, `address_hash` (unique; HMAC-SHA256 of the canonical address with a purpose-derived key, never the address), `user_id` (FK users, `SET NULL`, indexed), `expires_at`, `created_at`, `updated_at`. It survives account deletion: an account that verifies an address whose claim has no user and has not expired inherits that `expires_at` rather than starting a new year. The monthly grant's ledger idempotency key is derived from the same hash, so deleting an account and verifying the address again grants nothing more that month.
+Who holds an academic address and until when. Columns: `id`, `address_hash` (unique; HMAC-SHA256 of the canonical address with a purpose-derived key, never the address), `user_id` (FK users, `SET NULL`, indexed), `expires_at`, `created_at`, `updated_at`. It survives account deletion: an account that verifies an address whose claim has no user and has not expired inherits that `expires_at` rather than starting a new year. Any other account's unexpired claim (deleted, or moved to a paid plan) is inherited with its remaining time. The hash key is derived from the server secret (`SOLUS_SUPABASE_JWT_SECRET`); rotating that secret resets every claim and grant key once. The monthly grant's ledger idempotency key is derived from the same hash, so deleting an account and verifying the address again grants nothing more that month.
 
 ### Table `academic_code_sends`
 

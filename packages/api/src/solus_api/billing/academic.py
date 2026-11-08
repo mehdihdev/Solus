@@ -379,8 +379,11 @@ class AcademicPlanService:
                 AcademicAddressClaim(address_hash=digest, user_id=user_id, expires_at=fresh)
             )
             return fresh
+        # Another (deleted, or since moved to a paid plan) holder's unexpired claim passes
+        # on its remaining time, never a fresh year. Rotating the server secret changes
+        # every address hash, which resets claims and grant keys once (documented).
         inherited = (
-            claim.user_id is None
+            claim.user_id != user_id
             and claim.expires_at is not None
             and _aware(claim.expires_at) > now
         )

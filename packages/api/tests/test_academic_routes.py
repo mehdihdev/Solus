@@ -629,3 +629,15 @@ async def test_address_is_released_when_the_holder_moves_to_a_paid_plan(
     alice.plan, alice.stripe_subscription_id = PlanType.PRO, "sub_pro"
     await db.commit()
     assert (await _verify_as(aclient, mailer, BOB, "ada@mit.edu")).status_code == 200
+
+
+async def test_a_released_address_keeps_its_remaining_time(
+    aclient: AsyncClient, db: AsyncSession, mailer: FakeMailer
+) -> None:
+    assert (await _verify_as(aclient, mailer, ALICE, "ada@mit.edu")).status_code == 200
+    alice = await _sub(db, ALICE["email"])
+    first_end = alice.expires_at
+    alice.plan, alice.stripe_subscription_id = PlanType.PRO, "sub_pro"
+    await db.commit()
+    assert (await _verify_as(aclient, mailer, BOB, "ada@mit.edu")).status_code == 200
+    assert (await _sub(db, BOB["email"])).expires_at == first_end
