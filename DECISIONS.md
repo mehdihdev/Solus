@@ -138,6 +138,7 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 **Rejected (historical):** Free-forever tier (support load, weak demand signal).
 **Amended (2026-07-03, SOLUSDEV-72):** Originally specified a _pooled_ team credit allowance and rejected per-member allowances (rationale: robotics usage is lumpy, pooling absorbs spikes). Superseded by per-user allowances: usage attribution is per-user (feeds ADR-011 cost-calibration and user history), credits/history stay portable across the individual→team upgrade (ADR-015 first-class flow), and one code path serves solo and team users (W0-01 keys `credit_balance`/`credit_ledger` by `user_id`). Spike-absorption is consciously traded away; per-team spending caps (ADR-018/019) still bound runaway cost, so tenant cost-safety is unaffected.
 **Revisit when:** Real usage data exists to tune plan limits, pack sizes, and prices (see ADR-023/024).
+**See also (2026-11-08, SOLUSDEV-319):** ADR-042 narrows the rejected free-forever tier with one exception: a free ACADEMIC plan that requires a proven academic email, expires, and caps cost.
 
 ## ADR-018: Metering in credits, not tokens; ambient checks unmetered
 
@@ -194,6 +195,7 @@ Concretely: outbound provider calls are counted per **provider account** (not pe
 **Clarified (2026-10-07, SOLUSDEV-313, founder-approved in-chat):** Limits remain stored as data. A subscription may carry a staff-set `limits_override`, merged per key over plan defaults (explicit `null` = unlimited; an absent key falls through to the plan default). Billing events never write or clear the override. Enforcement reads only the effective limits (override merged over plan defaults) and never plan names.
 **Rejected:** Individual/Team-seat pricing (ADR-017; conflated segment with plan); hardcoding plan names in enforcement branches (blocks Enterprise overrides and per-plan tuning); overflow-and-warn on invites (ambiguous billing, silent overage).
 **Revisit when:** Real usage data allows tuning limit values and prices; if a plan between BASIC and PRO proves needed.
+**Amended (2026-11-08, SOLUSDEV-319, approved in-chat):** a fourth plan, ACADEMIC, is added by ADR-042. Its limits are BASIC's defaults, stored as data like every plan's.
 
 ## ADR-024: Credits — per-user, packs, ledger + cached balance, cost-capped trial
 
@@ -1309,3 +1311,21 @@ verification), annual allowance 2,500, quiet period 90 s.
 **ADR-041 amendment (2026-10-31, SOLUSDEV-319 window-bound driving without a workspace; approved in-chat against the concrete text below):** M2's "No linked workspace means no driving" now applies only to project-bound apps (KiCad today). A window-bound app may be driven when the project has no linked workspace; the binding is the window the user confirmed (app identity, pid and window id from the summon snapshot, re-verified before every `drive.step`). Without a workspace, the companion's file-change watch is off and the step cannot report that SOL saved; the save, close, quit and print chords stay denied, so a drive step cannot write a file through a chord; and the executor still refuses steps whose intent mentions upload, flash or deploy. With a workspace, the watch covers the bound document's folder when it lies inside the workspace. Accepted residual: with no workspace nothing ties the window to the project, and a click inside it can still save or change a file outside any project; this is covered only by per-step approval and the live A3 strip.
 
 **ADR-041 amendment (2026-11-01, SOLUSDEV-319 Phase 4 security review M-1; approved in-chat against the concrete text below):** The frontmost-app denylist also covers apps that run commands or reach other machines under another name: remote-desktop and VM consoles (Screen Sharing, Microsoft Remote Desktop, UTM, Parallels, VMware Fusion, VirtualBox, TeamViewer, AnyDesk, RealVNC, Jump, Parsec), launchers and automation tools (Raycast, Alfred, Keyboard Maestro, Hammerspoon), Python REPLs (IDLE, Thonny), disk imagers (balenaEtcher, Raspberry Pi Imager), plus the earlier additions Finder, Script Editor, Automator, Shortcuts, Script Debugger, Activity Monitor, Disk Utility, Installer and credential prompts.
+
+## ADR-042: Academic plan — free, proven academic email
+
+**Status:** Accepted — 2026-11-08, SOLUSDEV-319 (approved in-chat per ADR-032 tier 2).
+Amends ADR-023 (adds a fourth plan) and narrows ADR-017's rejected free-forever tier: the plan is free, but conditional, expiring, and cost-capped.
+
+**Decision:**
+
+1. A new plan, **ACADEMIC** (`academic`). It is free and has no Stripe subscription. Its limits are the BASIC defaults, stored as data (ADR-023).
+2. **Credits:** a monthly grant (CONFIG, default 1,000) that does not roll over and is idempotent per (user, month). Credit packs can still be bought. There is no one-time starting grant.
+3. **Eligibility:** a proven address on an academic domain, meaning `.edu` plus a CONFIG suffix list (`ac.uk`, `edu.au`, …). Any account may add one, separate from its sign-in email.
+4. **Proof:** a 6-digit code emailed through AWS SES. The code is stored hashed, expires after 15 minutes and allows 5 attempts. Sending is rate-limited per user and per address. Each account has at most one academic address, and an address may back only one account at a time.
+5. **Expiry:** 12 months, then the user verifies again. An expired academic plan follows the trial-expired rules (ADR-024). Nothing is deleted.
+6. **Conflicts:** a claim is refused (`409`) while a live Stripe subscription exists, and the user cancels first. Upgrading from academic to Pro through Checkout is allowed and ends the academic plan.
+7. **Events:** `billing.academic.code_sent`, `billing.academic.verified`, `billing.academic.failed`, `billing.academic.expired`.
+
+**Rejected:** requiring the account email to be `.edu` (forces users to change their sign-in email); unlimited free credits (unbounded cost); manual document review (support load).
+**Revisit when:** abuse data or the cost per academic user is known.
