@@ -166,3 +166,29 @@ describe('classifyBilling states', () => {
     expect(view(null)).toMatchObject({ kind: 'no_subscription', isLive: false })
   })
 })
+
+describe('classifyBilling academic plan (ADR-042)', () => {
+  const ACADEMIC = { ...LOCAL, plan: 'academic', status: 'active' }
+
+  it('a live academic plan is its own kind with no banner and no Stripe actions', () => {
+    const v = view({ ...ACADEMIC, expires_at: '2027-10-19T00:00:00Z' }, { plan: 'academic' })
+    expect(v.kind).toBe('academic')
+    expect(v.banner).toBeNull()
+    expect(v.isLive).toBe(false)
+    expect(v.showPlanActions).toBe(false)
+  })
+
+  it('an expired academic plan warns with a way back', () => {
+    const v = view({ ...ACADEMIC, expires_at: '2026-10-01T00:00:00Z' }, { plan: 'academic' })
+    expect(v.kind).toBe('academic_expired')
+    expect(v.banner).toEqual({
+      level: 'warn',
+      text: 'Academic plan ended October 1, 2026 — verify your academic email again or choose a plan'
+    })
+  })
+
+  it('Stripe degradation still outranks the academic banner', () => {
+    const v = view({ ...ACADEMIC, expires_at: '2026-10-01T00:00:00Z' }, null)
+    expect(v.banner?.text).toMatch(/temporarily unavailable/)
+  })
+})

@@ -145,3 +145,28 @@ describe('CurrentPlanCard actions', () => {
     }
   })
 })
+
+describe('CurrentPlanCard academic plan (ADR-042)', () => {
+  const ACADEMIC: BillingSubscription = {
+    ...LOCAL_TRIAL_SUB,
+    plan: 'academic',
+    status: 'active',
+    expires_at: '2027-10-19T00:00:00Z'
+  }
+  const ACADEMIC_SUMMARY: BillingSummary = { ...SUMMARY, plan: 'academic', next_invoice: null }
+
+  it('shows the free plan with its end date and no Stripe plan actions', () => {
+    setup(ACADEMIC, ACADEMIC_SUMMARY)
+    expect(screen.getByText('Academic plan')).toBeInTheDocument()
+    expect(screen.getByText('ACTIVE')).toBeInTheDocument()
+    expect(row('Free until')).toContain('October 19, 2027')
+    expect(row('Next charge')).toContain('None — Academic is free')
+    expect(screen.queryByRole('button', { name: 'Change plan' })).not.toBeInTheDocument()
+  })
+
+  it('marks an ended academic plan', () => {
+    setup({ ...ACADEMIC, expires_at: '2026-10-01T00:00:00Z' }, ACADEMIC_SUMMARY)
+    expect(screen.getByText('EXPIRED')).toBeInTheDocument()
+    expect(row('Ended')).toContain('October 1, 2026')
+  })
+})

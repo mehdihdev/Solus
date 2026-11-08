@@ -9,6 +9,7 @@ import { useAuthStore } from '../../store/authStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 import * as billing from '../../lib/api/resources.billing'
+import * as academicApi from '../../lib/api/resources.academic'
 import { PRICES, SUMMARY } from './billingTestFixtures'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
@@ -21,6 +22,12 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     createPackCheckout: vi.fn()
   }
 })
+
+vi.mock('../../lib/api/resources.academic', () => ({
+  getAcademicStatus: vi.fn(),
+  sendAcademicCode: vi.fn(),
+  verifyAcademicCode: vi.fn()
+}))
 
 vi.mock('../../lib/api/resources.billing', () => ({
   getBillingSubscription: vi.fn(),
@@ -89,6 +96,7 @@ beforeEach(() => {
   vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
   vi.mocked(resources.createPackCheckout).mockResolvedValue({ url: 'https://checkout/pack' })
   vi.mocked(billing.createBillingPortalFlow).mockResolvedValue({ url: 'https://portal/x' })
+  vi.mocked(academicApi.getAcademicStatus).mockResolvedValue(ACADEMIC_NONE)
   ;(window as unknown as { solus?: unknown }).solus = {
     billing: { openExternal, contactSales }
   }
@@ -104,6 +112,16 @@ async function ready(): Promise<void> {
 
 function plan(name: string): HTMLElement {
   return screen.getByRole('group', { name })
+}
+
+const ACADEMIC_NONE: academicApi.AcademicStatus = {
+  state: 'none',
+  email: null,
+  pending_email: null,
+  code_expires_at: null,
+  expires_at: null,
+  monthly_credits: 1000,
+  suffixes: ['edu']
 }
 
 describe('BillingScreen', () => {
@@ -370,3 +388,59 @@ function billingCancellationAndPacksTests(): void {
     expect(screen.getByText("Credit packs aren't available right now.")).toBeInTheDocument()
   })
 }
+
+describe('BillingScreen academic plan (ADR-042)', () => {
+  it('renders Academic as its own card between the plan grid and Buy credits', async () => {
+    render(<BillingScreen />)
+    await ready()
+    const academic = plan('Academic')
+    const enterprise = plan('Enterprise')
+    const packs = screen.getByText('Buy credits')
+    expect(
+      enterprise.compareDocumentPosition(academic) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(academic.compareDocumentPosition(packs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(academic.parentElement).not.toBe(enterprise.parentElement)
+  })
+
+  it('verifying refetches the plan so the page shows Academic', async () => {
+    vi.mocked(academicApi.sendAcademicCode).mockResolvedValue({
+      ...ACADEMIC_NONE,
+      state: 'pending',
+      pending_email: 'ada@mit.edu'
+    })
+    vi.mocked(academicApi.verifyAcademicCode).mockResolvedValue({
+      ...ACADEMIC_NONE,
+      state: 'active',
+      email: 'ada@mit.edu'
+    })
+    render(<BillingScreen />)
+    await ready()
+    await userEvent.type(screen.getByLabelText('Academic email'), 'ada@mit.edu')
+    await userEvent.click(screen.getByRole('button', { name: 'Send code' }))
+    mockState(
+      { ...TRIAL_SUB, plan: 'academic', status: 'active' },
+      { ...SUMMARY, plan: 'academic' }
+    )
+    await userEvent.type(screen.getByLabelText('Verification code'), '123456')
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }))
+    expect(await screen.findByText('Academic plan')).toBeInTheDocument()
+  })
+
+  it('a live Stripe subscriber sees why they cannot switch yet', async () => {
+    mockState(LIVE, SUMMARY)
+    render(<BillingScreen />)
+    await ready()
+    expect(
+      within(plan('Academic')).getByText(/cancel your paid plan in Manage billing first/)
+    ).toBeInTheDocument()
+  })
+
+  it('a failed academic read leaves the rest of the page working', async () => {
+    vi.mocked(academicApi.getAcademicStatus).mockRejectedValue(new Error('down'))
+    render(<BillingScreen />)
+    await ready()
+    expect(screen.getByText('Academic verification is unavailable right now.')).toBeInTheDocument()
+    expect(screen.getByText('Basic plan')).toBeInTheDocument()
+  })
+})

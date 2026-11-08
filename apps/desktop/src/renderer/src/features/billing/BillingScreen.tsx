@@ -5,6 +5,7 @@
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { useOfflineReason } from '../workspace/workspaceOnline'
+import { AcademicPlanCard } from './AcademicPlanCard'
 import { ActionNotice, BillingBanner, CancellationBar } from './BillingBanner'
 import { classifyBilling, type BillingView } from './billingState'
 import { CreditPacks } from './CreditPacks'
@@ -81,6 +82,13 @@ function BillingLive({ data, view }: { data: BillingData; view: BillingView }): 
         busy={busy}
         onSubscribe={(plan, interval) => void data.startCheckout(plan, interval)}
         onPortal={(flow) => void data.openPortalFlow(flow)}
+      />
+      <AcademicPlanCard
+        academic={data.academic}
+        eligible={!view.isLive && subscription?.plan !== 'enterprise'}
+        onSend={data.sendAcademic}
+        onVerify={data.verifyAcademic}
+        onVerified={() => void data.refresh()}
       />
       <CreditPacks
         packs={data.packs}

@@ -46,6 +46,9 @@ function nextChargeText(
   summary: BillingSummary | null,
   view: BillingView
 ): string {
+  if (view.kind === 'academic' || view.kind === 'academic_expired') {
+    return 'None — Academic is free'
+  }
   if (view.degraded !== 'ok') return UNAVAILABLE
   if (view.cancelPending) return `None — plan ends ${formatDate(sub.cancel_at)}`
   const invoice = summary?.next_invoice
@@ -86,6 +89,18 @@ function TimelineRow({
       return (
         <Row label="Trial ended">
           <Value>{formatDate(view.trial.endsAt)}</Value>
+        </Row>
+      )
+    case 'academic':
+      return (
+        <Row label="Free until">
+          <Value>{formatDate(sub.expires_at)}</Value>
+        </Row>
+      )
+    case 'academic_expired':
+      return (
+        <Row label="Ended">
+          <Value>{formatDate(sub.expires_at)}</Value>
         </Row>
       )
     case 'stripe_trialing':
@@ -138,7 +153,7 @@ export function CurrentPlanCard(props: CurrentPlanCardProps): React.JSX.Element 
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 2 }}>
                 <span style={{ fontSize: 18, fontWeight: 600 }}>{planLabel(sub.plan)} plan</span>
                 <Mono size={9} color="var(--mut)">
-                  {statusChip(sub.status)}
+                  {view.kind === 'academic_expired' ? 'EXPIRED' : statusChip(sub.status)}
                 </Mono>
               </div>
             </>

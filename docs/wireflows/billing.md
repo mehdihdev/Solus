@@ -297,7 +297,7 @@ not static copy.
 | #   | Card state          | Detection                                                                   | Step area                                                                                                                                                       |
 | --- | ------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | A0  | Not verified        | `state` none                                                                | Email field (`type=email`, label "Academic email") + **Send code**. Hint: "Use your school address — .edu, .ac.uk, .edu.au and similar."                        |
-| A1  | Code sent           | `state` pending (or right after Send code)                                  | "We sent a 6-digit code to {email}. It expires in 15 minutes." Code field (`inputmode=numeric`, `autocomplete=one-time-code`, 6 digits) + **Verify**. Links: **Resend code** (disabled with a countdown for 60 s), **Use a different email** (back to A0). |
+| A1  | Code sent           | `state` pending (or right after Send code)                                  | "We sent a 6-digit code to {email}. It expires in 15 minutes." Code field (`inputmode=numeric`, `autocomplete=one-time-code`, 6 digits) + **Verify**. Buttons: **Resend code** (disabled with a countdown for 60 s), **Use a different email** (back to A0). |
 | A2  | Active              | `state` active                                                              | "Verified {email} · free until {date}". `CURRENT PLAN` badge on the card. Within 30 days of the end, a **Verify again** link opens A0 prefilled.               |
 | A3  | Expired             | `state` expired                                                             | "Your academic plan ended {date}." A0 form prefilled with the old address. The page banner (warn): "Academic plan ended {date} — verify your academic email again or choose a plan." |
 | A4  | Not eligible        | live Stripe subscription (`view.isLive`) or Enterprise                     | "To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends." No form.                                           |
@@ -341,7 +341,7 @@ flowchart TD
 | Wrong code                  | That code didn't match — {N} tries left.                                                               |
 | Code expired / too many     | That code can't be used anymore. Send a new one.                                                       |
 | Address in use              | That address is already verified on another Solus account.                                             |
-| Rate limited                | Too many codes requested. Try again in {N} s.                                                          |
+| Rate limited                | Too many codes requested. Try again in a minute.                                                       |
 | Email unconfigured          | We can't send verification emails right now. Try again later.                                          |
 | Success notice              | You're on the Academic plan — {N} credits are in your account.                                         |
 | Active line                 | Verified {email} · free until {date}                                                                   |
