@@ -30,6 +30,7 @@ from solus_api.agent.tools.machine_writes import (
     build_machine_write_tool,
     card_rows,
 )
+from solus_api.agent.tools.shapes import ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.turn_budget import TurnBudget
 from solus_api.agent.turn_context import PerceptionTurn, bind_perception, bind_turn_id
@@ -38,6 +39,7 @@ from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.graph.edges import retire_edge
 from solus_api.models import DataEvent, GraphEdge, Project, Team, User
 from solus_api.orchestration import gateway
+from solus_api.orchestration.providers import ProviderRefusalError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from test_machine_writes import Telling
@@ -274,3 +276,36 @@ async def test_another_projects_board_is_refused_as_no_board_and_nothing_is_read
         said.append((refused.value.message, refused.value.code))
     assert said == [("board_id names no board in this project.", "not_found")] * 2
     assert read == [] and calls == []
+
+
+@pytest.mark.parametrize(
+    ("failure", "retryable"),
+    [
+        (ProviderRefusalError("anthropic/claude-x refused the request", category="cyber"), False),
+        (RuntimeError("upstream hiccup"), True),
+    ],
+)
+async def test_a_refused_recipe_call_is_not_offered_as_retryable(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    retryable: bool,
+) -> None:
+    """SOLUSDEV-319: a refusal repeats for the same request, so the model is not invited to retry
+    it (and burn the turn's calls); any other failure stays retryable."""
+    held = await _arm(db, tmp_path)
+    writer = build_machine_write_tool(Telling(tmp_path))
+
+    async def complete(query: str, **kwargs: Any) -> Any:
+        raise failure
+
+    monkeypatch.setattr(gateway, "complete", complete)
+    with bind_turn_id(uuid.uuid4()), bind_perception(PerceptionTurn(_budget())):
+        with pytest.raises(ToolException) as raised:
+            await _recipe(engine, held, writer).prepare(
+                {"board_id": str(held.arm.brain), "path": CODE_PATH}
+            )
+    assert raised.value.code is ToolErrorCode.UNAVAILABLE
+    assert raised.value.retryable is retryable

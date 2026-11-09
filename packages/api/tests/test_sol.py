@@ -611,6 +611,46 @@ async def test_loop_guard_is_enforced_by_the_plumbing(
     assert getattr(app.state.agent_runner, "closed", False)
 
 
+class _RefusedAfterAToolRunner:
+    """Round 1 ran a tool; round 2's model refused (SOLUSDEV-319 refusal handling)."""
+
+    async def run(self, ctx: Any) -> Any:
+        from solus_api.agent.tools import ToolResult
+        from solus_api.orchestration.providers import ProviderRefusalError
+
+        call = ToolCall(tool="get_entity", args={"entity_id": str(uuid.uuid4())}, call_id="c1")
+        yield AgentEvent.tool_call(call)
+        yield AgentEvent.tool_result(ToolResult(call_id="c1", ok=True, value={"found": False}))
+        raise ProviderRefusalError("anthropic/claude-x refused the request", category="cyber")
+
+
+async def test_a_refusal_ends_the_turn_as_model_refused_and_keeps_the_tool_turns(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """A refusal is a bounded abort, not a hard failure: the tool call that already ran stays in
+    the conversation, the frame names `model_refused` with Solus-authored text, and `done`
+    follows."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _RefusedAfterAToolRunner()
+    base = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}"
+
+    resp = await client.post(
+        f"{base}/messages", json={"content": "go", "action_mode": "do"}, headers=alice_headers
+    )
+
+    events = _parse_sse(resp.text)
+    error = next(d for t, d in events if t == "error")
+    assert error == {
+        "code": "model_refused",
+        "message": "The model declined to answer this. Try rephrasing.",
+    }
+    assert [t for t, _ in events][-1] == "done"
+    turns = (await client.get(f"{base}/turns", headers=alice_headers)).json()["data"]
+    assert [t["role"] for t in turns] == ["assistant", "tool", "user"]  # newest first
+    assert turns[0]["attrs"]["aborted"] == "model_refused"
+
+
 class _SlowRunner:
     """A runner that never returns in time — used to prove the turn is time-bounded (§7)."""
 

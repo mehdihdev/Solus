@@ -261,6 +261,11 @@ class CompletionStream:
         self._closed = False
         self.completion: Completion | None = None
 
+    @property
+    def model(self) -> ModelChoice:
+        """The routed choice, known before the call starts (a refusal has no `completion`)."""
+        return self._model
+
     def __aiter__(self) -> CompletionStream:
         return self
 

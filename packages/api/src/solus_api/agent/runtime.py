@@ -68,7 +68,7 @@ from solus_api.agent.modes import ActionMode
 from solus_api.agent.project_card import CardInputs, project_card_section
 from solus_api.agent.research import ResearchStep, model_visible, withhold_server_driven
 from solus_api.agent.sol_anchors import resolve_anchor_inputs
-from solus_api.agent.stream import AgentEvent
+from solus_api.agent.stream import AgentEvent, AgentEventType
 from solus_api.agent.tools import (
     ToolCall,
     ToolDescriptor,
@@ -85,7 +85,12 @@ from solus_api.agent.turn_limits import GUIDE_MODEL_ROUNDS, GUIDE_TOOL_CALLS, tu
 from solus_api.models import SolMode
 from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
-from solus_api.orchestration.providers import ToolConversation, ToolOutcome, Turn
+from solus_api.orchestration.providers import (
+    ProviderRefusalError,
+    ToolConversation,
+    ToolOutcome,
+    Turn,
+)
 from solus_api.orchestration.router import derive_complexity
 from solus_api.orchestration.type_estimator import (
     estimate_tokens,
@@ -1285,6 +1290,91 @@ async def _close_unfinished(stream: gateway.CompletionStream) -> None:
         await stream.aclose()
 
 
+@dataclass
+class _RoundState:
+    """A turn's routing, owned by the round loop: round 1's choice, pinned for later rounds and
+    re-pointed at GENERAL at most once (`rerouted`); `completion` is the last round's answer."""
+
+    complexity: Complexity | None
+    route_type: RouteType | None
+    rerouted: bool = False
+    completion: gateway.Completion | None = None
+
+
+async def _routed_round(
+    query: str,
+    conversation: ToolConversation,
+    adapters: Mapping[str, Any] | None,
+    state: _RoundState,
+    hit: BudgetHit | None,
+    ctx: AgentRunContext,
+    turn_budget: TurnBudget,
+    *,
+    first: bool,
+    round_tokens: int,
+) -> AsyncIterator[AgentEvent]:
+    """One round's model call and its events; the answer lands on `state.completion`.
+
+    SOLUSDEV-319 (model-orchestration contract, Refusals): round 1 refused before anything reached
+    the person is asked once more on the same tier's GENERAL cell, which later rounds then stay
+    pinned to. Any other refusal propagates (`model_refused`). The refused call is not debited."""
+    if ctx.sessionmaker is None or ctx.secret_store is None:  # run() already failed closed
+        raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
+    state.completion = None
+    while True:
+        streamed = False
+        async with ctx.sessionmaker() as session:
+            stream = gateway.stream(
+                query,
+                secret_store=ctx.secret_store,
+                context=ctx.interaction_context,
+                estimate_from=ctx.prompt,
+                complexity=state.complexity,
+                type=state.route_type,
+                conversation=conversation,
+                user_id=ctx.user_id,
+                session=session,
+                redis=ctx.redis,
+                enqueue=ctx.enqueue,
+                adapters=adapters,
+                max_tokens=SOL_MAX_TOKENS,
+                extension_id=ctx.extension_id,
+                purpose="answer",
+                turn_id=ctx.turn_id,
+                project_id=ctx.project_id,
+            )
+            try:
+                async for event in _round_events(stream, hit, ctx):
+                    streamed |= event.type is not AgentEventType.BUDGET_REACHED
+                    yield event
+            except ProviderRefusalError:
+                general = stream.model.route_type is RouteType.GENERAL
+                if not first or state.rerouted or streamed or general:
+                    raise
+            else:
+                state.completion = stream.completion
+                return
+            finally:
+                # The transport breaks out of `async for event in runner.run()` when it trips its
+                # own guard, which throws GeneratorExit here. Without this the provider
+                # connection is abandoned open.
+                await _close_unfinished(stream)
+        state.complexity, state.route_type, state.rerouted = (
+            stream.model.complexity,
+            RouteType.GENERAL,
+            True,
+        )
+        hit = None  # already announced
+        turn_budget.note_model_call()  # the re-asked request counts like any other
+        turn_budget.note_input_tokens(round_tokens)
+        logger.warning(
+            "round 1 refused; re-routing to general turn_id=%s project_id=%s role=%s",
+            ctx.turn_id,
+            ctx.project_id,
+            stream.model.role,
+        )
+
+
 async def _round_events(
     stream: gateway.CompletionStream, hit: BudgetHit | None, ctx: AgentRunContext
 ) -> AsyncIterator[AgentEvent]:
@@ -1537,7 +1627,8 @@ class LlmRunner:
             counting=scope.counting,
             code_style=code_style_of(ctx.engineering_preferences),
         )
-        for _ in range(limits.model_rounds):
+        state = _RoundState(complexity, route_type)
+        for round_index in range(limits.model_rounds):
             # P1-T3: this round and its model call counted (a call counts against its own cap),
             # its whole request measured, then the first ceiling the turn has reached. A hit makes
             # this the closing round (no tools) and is announced before it runs; the last round
@@ -1545,51 +1636,33 @@ class LlmRunner:
             query = prompt.flatten(turns)
             turn_budget.note_model_round()
             turn_budget.note_model_call()
-            turn_budget.note_input_tokens(fixed_tokens + estimate_tokens(query, config=estimator))
+            round_tokens = fixed_tokens + estimate_tokens(query, config=estimator)
+            turn_budget.note_input_tokens(round_tokens)
             hit = turn_budget.check()
             synthesis = hit is not None
-            completion = None
-            async with ctx.sessionmaker() as session:
-                stream = gateway.stream(
-                    query,
-                    secret_store=ctx.secret_store,
-                    # The context derives the route TYPE unless round 1 asked for CODE;
-                    # the tier comes from the estimator on the person's live message (S1),
-                    # never from the context's HARD default — unless "think harder" or a
-                    # finding made it explicit.
-                    # From round 2 on, BOTH axes are pinned to round 1's choice: the
-                    # growing conversation must not escalate the model mid-turn,
-                    # because `provider_items` (encrypted reasoning) are bound to
-                    # the model that produced them and would 400 on another.
-                    context=ctx.interaction_context,
-                    estimate_from=ctx.prompt,
-                    complexity=complexity,
-                    type=route_type,
-                    conversation=_round_conversation(system, turns, tools, synthesis),
-                    user_id=ctx.user_id,
-                    session=session,
-                    redis=ctx.redis,
-                    enqueue=ctx.enqueue,
-                    adapters=self._adapters,
-                    max_tokens=SOL_MAX_TOKENS,
-                    extension_id=ctx.extension_id,
-                    purpose="answer",
-                    turn_id=ctx.turn_id,
-                    project_id=ctx.project_id,
-                )
-                try:
-                    async for event in _round_events(stream, hit, ctx):
-                        yield event
-                finally:
-                    # The transport breaks out of `async for event in runner.run()`
-                    # when it trips its own guard, which throws GeneratorExit here.
-                    # Without this the provider connection is abandoned open.
-                    await _close_unfinished(stream)
-                completion = stream.completion
-
+            # The context derives the route TYPE unless round 1 asked for CODE; the tier comes
+            # from the estimator on the person's live message (S1), never from the context's HARD
+            # default — unless "think harder" or a finding made it explicit. From round 2 on, BOTH
+            # axes are pinned to round 1's choice (`state`): the growing conversation must not
+            # escalate the model mid-turn, because `provider_items` (encrypted reasoning) are
+            # bound to the model that produced them and would 400 on another.
+            async for event in _routed_round(
+                query,
+                _round_conversation(system, turns, tools, synthesis),
+                self._adapters,
+                state,
+                hit,
+                ctx,
+                turn_budget,
+                first=round_index == 0,
+                round_tokens=round_tokens,
+            ):
+                yield event
+            completion = state.completion
             if completion is None:
                 break
-            complexity, route_type = completion.model.complexity, completion.model.route_type
+            state.complexity = completion.model.complexity
+            state.route_type = completion.model.route_type
             terminal = _terminal_reply(
                 completion,
                 synthesis,

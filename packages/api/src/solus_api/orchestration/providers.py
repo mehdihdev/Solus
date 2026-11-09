@@ -29,6 +29,7 @@ import base64
 import json
 import logging
 import math
+import re
 import time
 from datetime import UTC
 from email.utils import parsedate_to_datetime
@@ -103,6 +104,29 @@ class ProviderTransientError(ProviderError):
     def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
         super().__init__(message)
         self.retry_after_seconds = retry_after_seconds
+
+
+#: A refusal category is provider output (untrusted): only a short snake_case word is kept.
+_REFUSAL_CATEGORY = re.compile(r"[a-z][a-z_]{0,31}")
+
+
+class ProviderRefusalError(ProviderError):
+    """The model declined the request (`stop_reason: refusal`) — no answer, and nothing is
+    debited (no Usage is yielded). Not transient: the same request to the same model refuses
+    again, so the SOL runtime re-routes round 1 once instead (model-orchestration contract
+    §Refusals). Carries only a validated category, never the provider's explanation text."""
+
+    def __init__(self, message: str, *, category: str | None = None) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+def refusal_category(details: object) -> str | None:
+    """The `stop_details.category` a provider reported, when it is a plain short word."""
+    category = getattr(details, "category", None)
+    if isinstance(category, str) and _REFUSAL_CATEGORY.fullmatch(category):
+        return category
+    return None
 
 
 def _retry_delay(error: Any, now: float) -> float | None:
@@ -647,6 +671,21 @@ class _BaseAdapter:
             ) from exc
 
 
+def _refusal(model_name: str, final: Any) -> ProviderRefusalError:
+    """A refused Anthropic message as the typed error. Solus is billed for the tokens but the
+    person is not (no Usage is yielded), so the operator log carries them — never any text."""
+    category = refusal_category(getattr(final, "stop_details", None))
+    usage = getattr(final, "usage", None)
+    logger.warning(
+        "model refused provider=anthropic model=%s category=%s tokens_in=%s tokens_out=%s",
+        model_name,
+        category,
+        getattr(usage, "input_tokens", None),
+        getattr(usage, "output_tokens", None),
+    )
+    return ProviderRefusalError(f"anthropic/{model_name} refused the request", category=category)
+
+
 class AnthropicAdapter(_BaseAdapter):
     provider = "anthropic"
     secret_name = ANTHROPIC_API_KEY_NAME
@@ -706,6 +745,8 @@ class AnthropicAdapter(_BaseAdapter):
                 async for text in stream.text_stream:
                     yield text
                 final = await stream.get_final_message()
+                if final.stop_reason == "refusal":
+                    raise _refusal(model_name, final)
                 # Tool calls arrive assembled: the SDK accumulates input_json_delta
                 # internally, so no second non-streaming path is needed. Partial
                 # args would be useless anyway — half an argument object cannot

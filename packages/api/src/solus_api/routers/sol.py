@@ -118,7 +118,7 @@ from solus_api.orchestration.gates import (
     TrialExpiredError,
     check_frequency_cap,
 )
-from solus_api.orchestration.providers import ProviderTransientError
+from solus_api.orchestration.providers import ProviderRefusalError, ProviderTransientError
 from solus_api.routers.sol_confirmations import sync_enqueuer
 from solus_api.routers.sol_resume import (
     ResumeTicket,
@@ -149,6 +149,9 @@ _ORCHESTRATION_LIMITS = load_orchestration_config().limits
 _LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now."
 #: SOLUSDEV-236: wireflow billing.md Expert copy (the policy table is static; the date
 #: and the Guide variant are rendered by the client from `trial_expired`).
+#: SOLUSDEV-319: the model declined and the one round-1 re-route did not apply or also declined.
+#: Solus-authored; the provider's category and wording stay in the operator log (§7).
+_MODEL_REFUSED_MESSAGE = "The model declined to answer this. Try rephrasing."
 _TRIAL_EXPIRED_MESSAGE = "Trial ended. Model features paused — choose a plan in Billing."
 #: ADR-042: the Academic plan's equivalent (Expert copy; the client renders Guide).
 _ACADEMIC_EXPIRED_MESSAGE = "Academic plan ended. Model features paused — verify again in Billing."
@@ -168,6 +171,9 @@ _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
         "provider_unavailable",
         "The reasoning service is busy right now. Try that again in a moment.",
     ),
+    # SOLUSDEV-319: a backstop — a turn's refusal is normally a bounded abort in
+    # `_run_and_persist`, which keeps the tool turns that already ran.
+    ProviderRefusalError: ("model_refused", _MODEL_REFUSED_MESSAGE),
 }
 
 
@@ -235,6 +241,7 @@ SCREENSHOT_EXTRA_CREDITS = 2
 _ABORT_MESSAGES = {
     "timeout": "The SOL turn timed out.",
     "loop_limit": "SOL stopped: too many tool calls in one turn.",
+    "model_refused": _MODEL_REFUSED_MESSAGE,
 }
 
 
@@ -816,6 +823,15 @@ async def _run_and_persist(
         except (TimeoutError, asyncio.CancelledError, GeneratorExit) as error:
             aborted = _abort_code(error)
             abort_error = error
+        except ProviderRefusalError as error:
+            # SOLUSDEV-319: deterministic, so a bounded abort — the tool turns that already ran
+            # are kept. Only the validated category is logged, never provider text.
+            logger.warning(
+                "SOL turn refused by the model conversation_id=%s category=%s",
+                conversation_id,
+                error.category,
+            )
+            aborted, abort_error = "model_refused", error
         finally:
             await _cleanup_turn(stream, turn_sync)
 

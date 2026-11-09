@@ -315,6 +315,35 @@ tool-capable provider. Repointing a SOL-reachable cell at a Gemini role fails **
 SOL turn rather than silently dropping the tools array and returning prose — which would look like
 the model simply choosing not to act.
 
+### Refusals (SOLUSDEV-319, approved in-chat 2026-11-09)
+
+A provider that answers with `stop_reason: refusal` has not answered. Live, the standard CODE cell
+(`claude-fable-5-1`) refused a benign "does the Makefile selftest pass?" turn as `cyber`, and the
+runtime turned it into a silent, billed, empty reply. The rules:
+
+- **The adapter raises `ProviderRefusalError`** (a `ProviderError`, never a
+  `ProviderTransientError`: the same request refuses again, so MO-03 backoff must not retry it).
+  It carries only the refusal `category`, and only when that is a short snake_case word. The
+  provider's explanation text never leaves the adapter. Implemented for anthropic, the only
+  provider that reports one today.
+- **A refused call is not debited.** The adapter yields no `Usage`, so no ledger row is written.
+  Solus is still billed for the input tokens. The adapter logs model, category and token counts at
+  warning so operators see the cost.
+- **SOL re-routes round 1 once.** When round 1 of a turn is refused before any event other than
+  `budget_reached` reached the person, and the refused call was not already on the GENERAL route,
+  the runtime asks that round again on the GENERAL cell of the same tier. Later rounds stay pinned
+  to that choice. This is still deterministic and config-driven (ADR-026): the fallback is a
+  matrix cell, never a model name.
+- **Every other refusal ends the turn** with the SSE error code `model_refused` ("The model
+  declined to answer this. Try rephrasing."). That covers a later round (its `provider_items` are
+  bound to the refused model), text already streamed, a refusal on GENERAL, and a second refusal.
+  It is a bounded abort like `timeout` and `loop_limit`: the tool turns that already ran are
+  persisted, the assistant turn carries `aborted: model_refused`, and `done` follows. The
+  re-asked request counts against the turn's model-call and input-token budgets and passes the
+  frequency and spend gates again.
+- **Tools that make their own model call** (`firmware_recipe`, `label_motifs`) report a refusal
+  as `UNAVAILABLE` with `retryable: false`, so SOL does not spend turn calls repeating it.
+
 ### The shipped matrix and `estimate_from` (SOLUSDEV-252)
 
 The matrix shipped today (human-decided; every cell is still a config edit): **hard** general and

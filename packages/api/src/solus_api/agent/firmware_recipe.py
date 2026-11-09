@@ -53,6 +53,7 @@ from solus_api.graph.read_scope import bind_scope, resolve_scope
 from solus_api.models import User
 from solus_api.orchestration import gateway
 from solus_api.orchestration.enums import Complexity, RouteType
+from solus_api.orchestration.providers import ProviderRefusalError
 from solus_api.services.events import emit_event
 
 if TYPE_CHECKING:
@@ -375,7 +376,8 @@ class FirmwareRecipe:
             raise ToolException(
                 f"the recipe's call failed ({type(exc).__name__})",
                 code=ToolErrorCode.UNAVAILABLE,
-                retryable=True,
+                # A refusal repeats for the same request; retrying only burns turn calls.
+                retryable=not isinstance(exc, ProviderRefusalError),
             ) from None
         return str(completion.text)
 
