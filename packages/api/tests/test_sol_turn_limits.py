@@ -14,10 +14,10 @@ from test_sol_reasoner import _ctx, _run
     "mode,expected",
     [
         # model_rounds, tool_calls, timeout_seconds, max_input_tokens (the standard tier's
-        # 24,000-token context budget + 13,000 fixed prompt + 1,000 per allowed tool call),
+        # 24,000-token context budget + 14,000 fixed prompt + 1,000 per allowed tool call),
         # max_model_calls, web_searches, web_fetches (SOLUSDEV-321 P1-T3; P5 fix 1, M3).
-        (ActionMode.GUIDE, (5, 8, 120, 45_000, 6, 1, 2)),
-        (ActionMode.DO, (16, 24, 300, 61_000, 18, 1, 2)),
+        (ActionMode.GUIDE, (5, 8, 120, 46_000, 6, 1, 2)),
+        (ActionMode.DO, (16, 24, 300, 62_000, 18, 1, 2)),
     ],
 )
 def test_server_owned_limits(mode: ActionMode, expected: tuple[int, ...]) -> None:
@@ -30,7 +30,7 @@ def test_server_owned_limits(mode: ActionMode, expected: tuple[int, ...]) -> Non
 
 def test_a_measured_fixed_part_replaces_the_default() -> None:
     """SOLUSDEV-321 P1-T3 F3: the runner measures the system prompt and tool specs it sends and
-    passes them in, so the cap follows the real inventory; the default (13,000) is only for a
+    passes them in, so the cap follows the real inventory; the default (14,000) is only for a
     caller that has not measured. Nothing but the input cap moves, and there is no floor."""
     from dataclasses import replace
 
@@ -38,7 +38,7 @@ def test_a_measured_fixed_part_replaces_the_default() -> None:
     from solus_api.orchestration.enums import Complexity
 
     default = turn_limits(ActionMode.GUIDE, Complexity.STANDARD)
-    assert default.max_input_tokens == 24_000 + 13_000 + 8 * 1_000
+    assert default.max_input_tokens == 24_000 + 14_000 + 8 * 1_000
     big = turn_limits(ActionMode.GUIDE, Complexity.STANDARD, fixed_tokens=20_000)
     assert big.max_input_tokens == 24_000 + 20_000 + 8 * 1_000
     assert big == replace(default, max_input_tokens=big.max_input_tokens)

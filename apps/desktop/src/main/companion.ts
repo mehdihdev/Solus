@@ -320,6 +320,34 @@ function apiBaseUrl(): string {
   return resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
 }
 
+/** Inherited PLUS the variables the companion cannot start without.
+ *
+ *  The integrations root is resolved only for a dev run: a packaged build
+ *  finds the tree beside its own binary, and passing a path derived from the
+ *  app directory would override that with something wrong. `null` when
+ *  nothing resolves, so the companion still reports the missing variable
+ *  itself instead of running with zero MCP servers. */
+function childEnv(workspace: string | null, driveOn: boolean): Record<string, string | undefined> {
+  return companionEnv(process.env, apiBaseUrl(), {
+    integrationsRoot: app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync),
+    projectId: activeProjectId,
+    workspace,
+    drive: driveOn,
+    // H-1: packaged builds never inherit SOLUS_COMPANION_* / PYTHON*.
+    packaged: app.isPackaged
+  })
+}
+
+/** spawn throws synchronously for a malformed argument (e.g. a NUL byte in an
+ *  env value). Do NOT leave the supervisor dead: schedule a backed-off retry on
+ *  the same path a crash would take (SOLUSDEV-166 review M4). */
+function retryFailedSpawn(cmd: { command: string; args: string[] }, error: unknown): void {
+  console.warn('[companion] spawn failed:', error instanceof Error ? error.message : error)
+  child = null
+  attempt = nextRestartAttempt(attempt, 0)
+  restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
+}
+
 function spawnChild(cmd: { command: string; args: string[] }): void {
   restartTimer = null
   if (stopped) return
@@ -329,8 +357,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   // so a folder-link change respawns only when the value actually changed.
   const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
   activeWorkspace = workspace
-  const driveOn = resolveDrive()
-  let env: Record<string, string | undefined>
+  const env = childEnv(workspace, resolveDrive())
   let c: ChildProcess
   try {
     c = spawn(cmd.command, cmd.args, {
@@ -341,32 +368,10 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
       // stdout carries only the drive server's geometry and relay lines
       // (sol-drive.md §3); it is read through a bounded, strictly-validating reader.
       stdio: ['pipe', 'pipe', 'pipe'],
-      // Inherited PLUS the variables the companion cannot start without.
-      //
-      // The integrations root is resolved only for a dev run: a packaged build
-      // finds the tree beside its own binary, and passing a path derived from the
-      // app directory would override that with something wrong. `null` when
-      // nothing resolves, so the companion still reports the missing variable
-      // itself instead of running with zero MCP servers.
-      env: (env = companionEnv(process.env, apiBaseUrl(), {
-        integrationsRoot: app.isPackaged
-          ? null
-          : findIntegrationsRoot(app.getAppPath(), existsSync),
-        projectId: activeProjectId,
-        workspace,
-        drive: driveOn,
-        // H-1: packaged builds never inherit SOLUS_COMPANION_* / PYTHON*.
-        packaged: app.isPackaged
-      }))
+      env
     })
   } catch (error) {
-    // spawn throws synchronously for a malformed argument (e.g. a NUL byte in
-    // an env value). Do NOT leave the supervisor dead: schedule a backed-off
-    // retry on the same path a crash would take (SOLUSDEV-166 review M4).
-    console.warn('[companion] spawn failed:', error instanceof Error ? error.message : error)
-    child = null
-    attempt = nextRestartAttempt(attempt, 0)
-    restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
+    retryFailedSpawn(cmd, error)
     return
   }
   c.stderr?.on('data', (chunk: Buffer) => {

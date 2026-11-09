@@ -68,18 +68,24 @@ function academicKind(sub: BillingSubscription, now: number): BillingStateKind {
   return !Number.isNaN(ends) && ends <= now ? 'academic_expired' : 'academic'
 }
 
+/** A live subscription with a scheduled end: cancelled, running out at `cancel_at`. */
+function isCancelPending(sub: BillingSubscription): boolean {
+  return Boolean(sub.cancel_at) && (sub.status === 'active' || sub.status === 'trialing')
+}
+
+/** A trialing subscription: Stripe's trial when it has a Stripe id, else the local one. */
+function trialingKind(sub: BillingSubscription, trial: TrialInfo): BillingStateKind {
+  if (sub.stripe_subscription_id) return 'stripe_trialing'
+  return trial.kind === 'ended' ? 'local_trial_expired' : 'local_trial_active'
+}
+
 function kindOf(sub: BillingSubscription | null, trial: TrialInfo, now: number): BillingStateKind {
   if (!sub) return 'no_subscription'
   if (sub.plan === 'academic' && sub.status === 'active') return academicKind(sub, now)
   if (sub.status === 'canceled') return 'canceled'
-  if (sub.cancel_at && (sub.status === 'active' || sub.status === 'trialing')) {
-    return 'cancel_pending'
-  }
+  if (isCancelPending(sub)) return 'cancel_pending'
   if (sub.status === 'past_due') return 'past_due'
-  if (sub.status === 'trialing') {
-    if (sub.stripe_subscription_id) return 'stripe_trialing'
-    return trial.kind === 'ended' ? 'local_trial_expired' : 'local_trial_active'
-  }
+  if (sub.status === 'trialing') return trialingKind(sub, trial)
   return 'active'
 }
 

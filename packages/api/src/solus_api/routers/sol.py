@@ -13,8 +13,8 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import replace
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
@@ -753,6 +753,52 @@ def _abort_event(code: str, error: BaseException | None) -> AgentEvent:
     return AgentEvent.error(code, _ABORT_MESSAGES[code])
 
 
+@dataclass
+class _TurnTranscript:
+    """What a turn's streamed events leave behind to persist: each tool call paired with
+    its result, and the final message text."""
+
+    pending: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=list)
+    final_text: str = ""
+    tool_calls: int = 0
+
+    def record(self, event: AgentEvent, max_tool_calls: int) -> bool:
+        """Note `event`; False when it is the tool call past the loop guard, which is
+        then NOT recorded (the turn aborts before it streams)."""
+        if event.type is AgentEventType.TOOL_CALL:
+            self.tool_calls += 1
+            # Loop guard enforced HERE, independent of the runner: a runaway
+            # (real, model-driven) runner is cut off by the plumbing, not by
+            # its own restraint.
+            if self.tool_calls > max_tool_calls:
+                return False
+            self.pending[event.data["call_id"]] = event.data
+        elif event.type is AgentEventType.TOOL_RESULT:
+            self.tool_turns.append((self.pending.get(event.data["call_id"], {}), event.data))
+        elif event.type is AgentEventType.MESSAGE:
+            self.final_text = event.data["content"]
+        return True
+
+
+def _drain_parked(parked: list[ParkedCall], parked_tools: set[str]) -> Iterator[str]:
+    """SOLUS-ONS-A5: a call the gate parked streams straight after its result, so the
+    client can show the concrete action and offer approve/reject inline. M184: each
+    card's tool is kept as the card is popped (the drained list names none)."""
+    parked_tools.update(p.tool for p in parked if p.confirmation_id is not None)
+    while parked:
+        request = parked.pop(0)
+        yield format_sse(
+            AgentEvent.tool_confirmation(
+                confirmation_id=str(request.confirmation_id),
+                tool=request.tool,
+                args=request.args,
+                summary=request.summary,
+                preview=request.preview,
+            )
+        )
+
+
 async def _run_and_persist(
     *,
     runner: AgentRunnerDep,
@@ -773,10 +819,7 @@ async def _run_and_persist(
     response body streams). The turn is bounded at the seam by a tool-call loop guard and
     a wall-clock timeout (§7). Any failure is logged server-side and surfaced only as a
     generic, author-safe `error` event — never a traceback (§7)."""
-    pending: dict[str, dict[str, Any]] = {}
-    tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    final_text = ""
-    tool_calls = 0
+    transcript = _TurnTranscript()
     aborted: str | None = None
     abort_error: BaseException | None = None
     #: SOLUSDEV-321: what the streamed frames say about the turn — a first-tier answer's envelope
@@ -791,35 +834,12 @@ async def _run_and_persist(
             async with asyncio.timeout(limits.timeout_seconds):
                 async for event in _bounded_events(stream, limits.timeout_seconds):
                     answered = {**answered, **persisted_answer(event)}
-                    if event.type is AgentEventType.TOOL_CALL:
-                        tool_calls += 1
-                        # Loop guard enforced HERE, independent of the runner: a runaway
-                        # (real, model-driven) runner is cut off by the plumbing, not by
-                        # its own restraint.
-                        if tool_calls > limits.tool_calls:
-                            aborted = "loop_limit"
-                            break
-                        pending[event.data["call_id"]] = event.data
-                    elif event.type is AgentEventType.TOOL_RESULT:
-                        tool_turns.append((pending.get(event.data["call_id"], {}), event.data))
-                    elif event.type is AgentEventType.MESSAGE:
-                        final_text = event.data["content"]
+                    if not transcript.record(event, limits.tool_calls):
+                        aborted = "loop_limit"
+                        break
                     yield format_sse(event)
-                    # SOLUS-ONS-A5: a call the gate parked streams straight after
-                    # its result, so the client can show the concrete action and
-                    # offer approve/reject inline.
-                    parked_tools.update(p.tool for p in parked if p.confirmation_id is not None)
-                    while parked:
-                        request = parked.pop(0)
-                        yield format_sse(
-                            AgentEvent.tool_confirmation(
-                                confirmation_id=str(request.confirmation_id),
-                                tool=request.tool,
-                                args=request.args,
-                                summary=request.summary,
-                                preview=request.preview,
-                            )
-                        )
+                    for frame in _drain_parked(parked, parked_tools):
+                        yield frame
         except (TimeoutError, asyncio.CancelledError, GeneratorExit) as error:
             aborted = _abort_code(error)
             abort_error = error
@@ -845,8 +865,8 @@ async def _run_and_persist(
             user_id=user_id,
             sol_mode=sol_mode,
             action_mode=action_mode,
-            tool_turns=tool_turns,
-            final_text=final_text,
+            tool_turns=transcript.tool_turns,
+            final_text=transcript.final_text,
             aborted=aborted,
             # the popped cards, and any an abort left unstreamed
             parked_tools=frozenset(

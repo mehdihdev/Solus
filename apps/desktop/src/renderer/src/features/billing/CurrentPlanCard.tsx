@@ -69,6 +69,37 @@ function nextInvoiceText(summary: BillingSummary | null): string {
     : '—'
 }
 
+interface TimelineSpec {
+  label: string
+  value: (sub: BillingSubscription, summary: BillingSummary | null, view: BillingView) => string
+}
+
+/** The one dated row each plan state shows (wireflow §Element rules); the
+ *  states left out show none. */
+const TIMELINE_ROWS: Partial<Record<BillingView['kind'], TimelineSpec>> = {
+  local_trial_active: {
+    label: 'Trial ends',
+    value: (_sub, _summary, view) => trialEndsLabel(view.trial.days)
+  },
+  local_trial_expired: {
+    label: 'Trial ended',
+    value: (_sub, _summary, view) => formatDate(view.trial.endsAt)
+  },
+  academic: { label: 'Free until', value: (sub) => formatDate(sub.expires_at) },
+  academic_expired: { label: 'Ended', value: (sub) => formatDate(sub.expires_at) },
+  stripe_trialing: {
+    label: 'Trial ends',
+    value: (_sub, summary, view) =>
+      `${formatDate(view.trial.endsAt)}, then ${nextInvoiceText(summary)}`
+  },
+  cancel_pending: { label: 'Ends', value: (sub) => formatDate(sub.cancel_at) },
+  active: {
+    label: 'Renews',
+    value: (sub, summary) =>
+      formatDate(sub.current_period_end ?? summary?.current_period_end ?? null)
+  }
+}
+
 function TimelineRow({
   sub,
   summary,
@@ -78,52 +109,13 @@ function TimelineRow({
   summary: BillingSummary | null
   view: BillingView
 }): React.JSX.Element | null {
-  switch (view.kind) {
-    case 'local_trial_active':
-      return (
-        <Row label="Trial ends">
-          <Value>{trialEndsLabel(view.trial.days)}</Value>
-        </Row>
-      )
-    case 'local_trial_expired':
-      return (
-        <Row label="Trial ended">
-          <Value>{formatDate(view.trial.endsAt)}</Value>
-        </Row>
-      )
-    case 'academic':
-      return (
-        <Row label="Free until">
-          <Value>{formatDate(sub.expires_at)}</Value>
-        </Row>
-      )
-    case 'academic_expired':
-      return (
-        <Row label="Ended">
-          <Value>{formatDate(sub.expires_at)}</Value>
-        </Row>
-      )
-    case 'stripe_trialing':
-      return (
-        <Row label="Trial ends">
-          <Value>{`${formatDate(view.trial.endsAt)}, then ${nextInvoiceText(summary)}`}</Value>
-        </Row>
-      )
-    case 'cancel_pending':
-      return (
-        <Row label="Ends">
-          <Value>{formatDate(sub.cancel_at)}</Value>
-        </Row>
-      )
-    case 'active':
-      return (
-        <Row label="Renews">
-          <Value>{formatDate(sub.current_period_end ?? summary?.current_period_end ?? null)}</Value>
-        </Row>
-      )
-    default:
-      return null
-  }
+  const row = TIMELINE_ROWS[view.kind]
+  if (!row) return null
+  return (
+    <Row label={row.label}>
+      <Value>{row.value(sub, summary, view)}</Value>
+    </Row>
+  )
 }
 
 export function CurrentPlanCard(props: CurrentPlanCardProps): React.JSX.Element {

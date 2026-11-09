@@ -375,6 +375,45 @@ function MembersView({ home, team, onUpgrade, openModal }: LiveProps): React.JSX
   )
 }
 
+/** A Settings deep link (SOLUSDEV-318) picks the first pane; read once,
+ *  cleared in an effect so a StrictMode double-render still sees it. */
+function useInitialHomeView(): [HomePaneView, (next: HomePaneView) => void] {
+  const [view, setView] = useState<HomePaneView>(() => useShellStore.getState().homeView ?? 'team')
+  useEffect(() => useShellStore.getState().clearHomeView(), [])
+  return [view, setView]
+}
+
+/** The member counts already known: the open team's, from its loaded roster. */
+function loadedSizes(home: HomeData, team: HomeTeam): Record<string, number> {
+  if (home.team === null || team.status !== 'ready') return {}
+  return { [home.team.team_id]: team.members.length }
+}
+
+function NewProjectModal({
+  home,
+  onOpenProject,
+  onClose
+}: {
+  home: HomeData
+  onOpenProject: HomeScreenProps['onOpenProject']
+  onClose: () => void
+}): React.JSX.Element {
+  return (
+    <NameModal
+      title="New project"
+      label="Project name"
+      submitLabel="Create"
+      errorText="Couldn't create the project. Check your access and try again."
+      onClose={onClose}
+      onSubmit={async (name) => {
+        const created = await home.actions.createProject(name)
+        if (created) onOpenProject({ id: created.id, name: created.name, teamId: created.team_id })
+        return created !== null
+      }}
+    />
+  )
+}
+
 function LiveHome({
   home,
   greeting,
@@ -390,10 +429,7 @@ function LiveHome({
   const team = useHomeTeam(home.team, home.me, home.actions.refresh)
   const [creatingProject, setCreatingProject] = useState(false)
   const [modal, setModal] = useState<HomeTeamModal>(null)
-  // A Settings deep link (SOLUSDEV-318) picks the first pane; read here, cleared
-  // in an effect so a StrictMode double-render still sees it.
-  const [view, setView] = useState<HomePaneView>(() => useShellStore.getState().homeView ?? 'team')
-  useEffect(() => useShellStore.getState().clearHomeView(), [])
+  const [view, setView] = useInitialHomeView()
   const [backToProject, setBackToProject] = useState(false)
   // Any navigation clears the way back; only "Add additional sources" sets it.
   const show = (next: HomePaneView): void => {
@@ -409,12 +445,12 @@ function LiveHome({
       setBackToProject(false)
       setView('team')
     },
-    [switchTeam]
+    [switchTeam, setView]
   )
   const invites = useMyInvites(onJoined)
   const sizes = useTeamSizes(
     home.teams.map((t) => t.team_id),
-    home.team && team.status === 'ready' ? { [home.team.team_id]: team.members.length } : {}
+    loadedSizes(home, team)
   )
   const onUpgrade = onNavigate ? () => onNavigate('billing') : undefined
   const live: LiveProps = {
@@ -444,18 +480,10 @@ function LiveHome({
       <Sidebar {...live} />
       <Pane {...live} />
       {creatingProject && (
-        <NameModal
-          title="New project"
-          label="Project name"
-          submitLabel="Create"
-          errorText="Couldn't create the project. Check your access and try again."
+        <NewProjectModal
+          home={home}
+          onOpenProject={onOpenProject}
           onClose={() => setCreatingProject(false)}
-          onSubmit={async (name) => {
-            const created = await home.actions.createProject(name)
-            if (created)
-              onOpenProject({ id: created.id, name: created.name, teamId: created.team_id })
-            return created !== null
-          }}
         />
       )}
       {/* Outlives the org members section (team switch, demotion): only Done discards it. */}

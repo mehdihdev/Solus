@@ -148,6 +148,17 @@ function allowlisted(
   )
 }
 
+/** Set `key` only when nothing was inherited and something resolved: an
+ *  explicit inherited value wins, and nothing resolved means ABSENT, never
+ *  empty. */
+function fillAbsent(
+  env: Record<string, string | undefined>,
+  key: string,
+  value: string | null | undefined
+): void {
+  if (!env[key] && value) env[key] = value
+}
+
 export function companionEnv(
   inherited: Record<string, string | undefined>,
   apiBaseUrl: string,
@@ -158,23 +169,17 @@ export function companionEnv(
   // companion refuses to invent a default because "that would turn a packaging
   // mistake into a silent zero-server run" (config.py), and a guessed path here
   // would replace its actionable error with exactly that.
-  if (!env.SOLUS_COMPANION_INTEGRATIONS_ROOT && options.integrationsRoot) {
-    env.SOLUS_COMPANION_INTEGRATIONS_ROOT = options.integrationsRoot
-  }
+  fillAbsent(env, 'SOLUS_COMPANION_INTEGRATIONS_ROOT', options.integrationsRoot)
+  // Derived only when needed: an insecure base URL throws, and an inherited
+  // URL must keep winning without that check.
   if (!env.SOLUS_COMPANION_URL) {
-    const url = companionWsUrl(apiBaseUrl, options.projectId ?? null)
-    if (url) env.SOLUS_COMPANION_URL = url
+    fillAbsent(env, 'SOLUS_COMPANION_URL', companionWsUrl(apiBaseUrl, options.projectId ?? null))
   }
   // Fourth of the same kind (see CAPABILITIES.md: "read in two places, written
-  // nowhere"). Same rules as its siblings: an explicit inherited value wins,
-  // and nothing resolved means ABSENT, never empty.
-  if (!env.SOLUS_COMPANION_WORKSPACE && options.workspace) {
-    env.SOLUS_COMPANION_WORKSPACE = options.workspace
-  }
+  // nowhere"). Same rules as its siblings.
+  fillAbsent(env, 'SOLUS_COMPANION_WORKSPACE', options.workspace)
   applyDrive(env, options)
-  if (!env.SOLUS_COMPANION_ALLOWED_HOSTS) {
-    env.SOLUS_COMPANION_ALLOWED_HOSTS = allowedHosts(env.SOLUS_COMPANION_URL)
-  }
+  fillAbsent(env, 'SOLUS_COMPANION_ALLOWED_HOSTS', allowedHosts(env.SOLUS_COMPANION_URL))
   return env
 }
 

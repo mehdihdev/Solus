@@ -218,6 +218,28 @@ function anchorFields(input: StreamSolMessageInput): Record<string, unknown> {
   }
 }
 
+/** A resume turn repeats its confirmation id and omits empty text; any other
+ *  turn sends its text. */
+function textFields(
+  input: StreamSolMessageInput,
+  resume: StreamSolMessageInput['resumeConfirmationId']
+): Record<string, unknown> {
+  return {
+    ...(resume && input.content === '' ? {} : { content: input.content }),
+    ...(resume ? { resume_confirmation_id: resume } : {})
+  }
+}
+
+/** The per-turn options, each sent only when set. */
+function optionFields(input: StreamSolMessageInput): Record<string, unknown> {
+  return {
+    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
+    ...(input.thinkHarder ? { think_harder: true } : {}),
+    ...(input.preferences ? { preferences: input.preferences } : {}),
+    ...(input.screenshot ? { screenshot: input.screenshot } : {})
+  }
+}
+
 /** The JSON body of a turn. `mentions` is always present, so the server sees
  *  one body shape whether or not the user picked anything. A resume turn omits
  *  `content` when it is empty. */
@@ -229,15 +251,11 @@ function turnBody(
   const resume = input.resumeConfirmationId
   const sendFront = !resume && input.actionMode === 'do' && frontApp !== null
   return {
-    ...(resume && input.content === '' ? {} : { content: input.content }),
-    ...(resume ? { resume_confirmation_id: resume } : {}),
+    ...textFields(input, resume),
     action_mode: input.actionMode,
     mentions: input.mentions ?? [],
     ...anchorFields(input),
-    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
-    ...(input.thinkHarder ? { think_harder: true } : {}),
-    ...(input.preferences ? { preferences: input.preferences } : {}),
-    ...(input.screenshot ? { screenshot: input.screenshot } : {}),
+    ...optionFields(input),
     ...(sendFront ? { front_app: toFrontAppBody(frontApp) } : {})
   }
 }

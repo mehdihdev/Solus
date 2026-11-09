@@ -22,13 +22,14 @@ GUIDE_TOOL_CALLS: Final = 8
 #: `build_sol_registry(async_sessionmaker(), project_id, user_id=…, team_id=…,
 #: secret_store=InMemorySecretStore(), connectors=ConnectorRegistry(), systems=<a SolSystems>,
 #: artifact_store, enqueue, presence_service, companion_deployment_service and scene_enqueue
-#: bound)` for the 60 in-process tools, then, as the runner counts them,
+#: bound)` for the in-process tools, then, as the runner counts them,
 #: `estimate_tokens(system_prompt(SolMode.GUIDE, None, None, with_screenshot=True,
-#: action_mode=ActionMode.DO, nonce=…))` = 1,482 plus
-#: `estimate_tokens(tools_text(tool_specs(model_visible(registry.list()), nonce=…)))` = 10,924:
-#: 12,406, rounded up to the next 1,000. `tests/test_sol_turn_limits.py` re-measures it and fails
-#: when the default no longer covers the measurement or sits more than 2,000 tokens above it.
-FIXED_PROMPT_TOKENS: Final = 13_000
+#: action_mode=ActionMode.DO, nonce=…))` plus
+#: `estimate_tokens(tools_text(tool_specs(model_visible(registry.list()), nonce=…)))`, rounded up
+#: to the next 1,000. Last re-measured for SOLUSDEV-319 (64 tools): 1,671 + 11,926 = 13,597.
+#: `tests/test_sol_turn_limits.py` re-measures it and fails when the default no longer covers
+#: the measurement or sits more than 2,000 tokens above it.
+FIXED_PROMPT_TOKENS: Final = 14_000
 
 
 @dataclass(frozen=True, slots=True)
