@@ -112,13 +112,18 @@ _REFUSAL_CATEGORY = re.compile(r"[a-z][a-z_]{0,31}")
 
 class ProviderRefusalError(ProviderError):
     """The model declined the request (`stop_reason: refusal`) — no answer, and nothing is
-    debited (no Usage is yielded). Not transient: the same request to the same model refuses
-    again, so the SOL runtime re-routes round 1 once instead (model-orchestration contract
-    §Refusals). Carries only a validated category, never the provider's explanation text."""
+    debited by the adapter (no Usage is yielded). Not transient: the same request to the same
+    model refuses again, so the SOL runtime re-routes round 1 once instead (model-orchestration
+    contract §Refusals). Carries only a validated category, never the provider's explanation
+    text, plus the usage the provider reported: the gateway debits it when text had already
+    streamed to the caller, and records it on the `model.refused` event either way."""
 
-    def __init__(self, message: str, *, category: str | None = None) -> None:
+    def __init__(
+        self, message: str, *, category: str | None = None, usage: Usage | None = None
+    ) -> None:
         super().__init__(message)
         self.category = category
+        self.usage = usage
 
 
 def refusal_category(details: object) -> str | None:
@@ -675,15 +680,33 @@ def _refusal(model_name: str, final: Any) -> ProviderRefusalError:
     """A refused Anthropic message as the typed error. Solus is billed for the tokens but the
     person is not (no Usage is yielded), so the operator log carries them — never any text."""
     category = refusal_category(getattr(final, "stop_details", None))
-    usage = getattr(final, "usage", None)
+    try:
+        usage: Usage | None = _anthropic_usage(final.usage)
+    except (AttributeError, TypeError):  # a malformed usage block must not hide the refusal
+        usage = None
     logger.warning(
         "model refused provider=anthropic model=%s category=%s tokens_in=%s tokens_out=%s",
         model_name,
         category,
-        getattr(usage, "input_tokens", None),
-        getattr(usage, "output_tokens", None),
+        usage.tokens_in if usage else None,
+        usage.tokens_out if usage else None,
     )
-    return ProviderRefusalError(f"anthropic/{model_name} refused the request", category=category)
+    return ProviderRefusalError(
+        f"anthropic/{model_name} refused the request", category=category, usage=usage
+    )
+
+
+def _anthropic_usage(usage: Any) -> Usage:
+    """input_tokens EXCLUDES cache reads and writes; tokens_in is the whole prompt,
+    tokens_cached_in its cached subset (price_cached_in).
+    ponytail: cache-creation premium not modeled"""
+    cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+    written = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    return Usage(
+        tokens_in=usage.input_tokens + cached + written,
+        tokens_out=usage.output_tokens,
+        tokens_cached_in=cached,
+    )
 
 
 class AnthropicAdapter(_BaseAdapter):
@@ -753,16 +776,7 @@ class AnthropicAdapter(_BaseAdapter):
                 # be dispatched.
                 for use in anthropic_tool_uses(final.content):
                     yield use
-                # input_tokens EXCLUDES cache reads and writes; tokens_in is the whole
-                # prompt, tokens_cached_in its cached subset (price_cached_in).
-                # ponytail: cache-creation premium not modeled
-                cached = getattr(final.usage, "cache_read_input_tokens", 0) or 0
-                written = getattr(final.usage, "cache_creation_input_tokens", 0) or 0
-                yield Usage(
-                    tokens_in=final.usage.input_tokens + cached + written,
-                    tokens_out=final.usage.output_tokens,
-                    tokens_cached_in=cached,
-                )
+                yield _anthropic_usage(final.usage)
         except anthropic.APIError as exc:
             raise normalize_provider_error(self.provider, model_name, exc) from None
 

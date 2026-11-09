@@ -326,9 +326,29 @@ runtime turned it into a silent, billed, empty reply. The rules:
   It carries only the refusal `category`, and only when that is a short snake_case word. The
   provider's explanation text never leaves the adapter. Implemented for anthropic, the only
   provider that reports one today.
-- **A refused call is not debited.** The adapter yields no `Usage`, so no ledger row is written.
-  Solus is still billed for the input tokens. The adapter logs model, category and token counts at
-  warning so operators see the cost.
+- **A refused call is not debited, unless text already reached the caller.** The adapter yields
+  no `Usage`; it puts the usage the provider reported on the error instead. The gateway debits
+  that usage only when the stream had already yielded text, so a refusal that delivered nothing
+  is free and a partial answer is never free. The adapter also logs model, category and token
+  counts at warning so operators see the cost.
+- **Refusals are throttled** (approved in-chat 2026-11-09, "Throttle + log event"). A refused call
+  still costs Solus its prompt, so the gateway records each refusal in a per-user sliding window
+  (`limits.max_refusals_per_window`, default 5, per `limits.refusal_window_seconds`, default 600).
+  `check_refusal_cap` runs pre-flight after the frequency cap: at the limit, the call is refused
+  before any provider work with `FrequencyCapExceededError` (the same transient 429 path, with a
+  `retry_after` until the oldest refusal leaves the window) and an `orchestration.blocked
+  {reason: "refusal_cap"}` event. The window fails closed exactly like the frequency cap: Redis
+  (`solus:refusals:<user>`), else the per-process window, and every refusal is also recorded
+  locally. Identity-less calls are neither recorded nor capped.
+- **Every refusal emits `model.refused`** (consent-gated, best effort, never breaks the call)
+  with `provider`, `model`, `role`, `category`, `purpose`, `streamed`, `debited`, `tokens_in`
+  and `tokens_out`. No prompt or provider text is in the payload. Refusal accounting (window,
+  debit, event) never replaces the refusal: a failure in it is logged and the
+  `ProviderRefusalError` still surfaces; a failed event commit is rolled back.
+- **Accepted residual risk:** the cap counts refusals, not their tokens, and is per user. A
+  user can still send up to 5 near-max-context refused prompts per window (two per SOL turn
+  with the re-route) unbilled, and a team multiplies that by its members. A token-weighted or
+  per-team refusal budget is the follow-up if `model.refused` shows abuse.
 - **SOL re-routes round 1 once.** When round 1 of a turn is refused before any event other than
   `budget_reached` reached the person, and the refused call was not already on the GENERAL route,
   the runtime asks that round again on the GENERAL cell of the same tier. Later rounds stay pinned
@@ -340,7 +360,7 @@ runtime turned it into a silent, billed, empty reply. The rules:
   It is a bounded abort like `timeout` and `loop_limit`: the tool turns that already ran are
   persisted, the assistant turn carries `aborted: model_refused`, and `done` follows. The
   re-asked request counts against the turn's model-call and input-token budgets and passes the
-  frequency and spend gates again.
+  frequency, refusal and spend gates again.
 - **Tools that make their own model call** (`firmware_recipe`, `label_motifs`) report a refusal
   as `UNAVAILABLE` with `retryable: false`, so SOL does not spend turn calls repeating it.
 

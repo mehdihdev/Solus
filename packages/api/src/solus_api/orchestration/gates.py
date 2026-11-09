@@ -196,13 +196,16 @@ _local_window = _LocalFrequencyWindow()
 _warned_causes: set[str] = set()
 
 
-def _warn_local_once(cause: str, user_id: uuid.UUID, *, exc_info: bool = False) -> None:
-    if cause in _warned_causes:
+def _warn_local_once(
+    cause: str, user_id: uuid.UUID, *, exc_info: bool = False, cap: str = "frequency cap"
+) -> None:
+    if f"{cap}:{cause}" in _warned_causes:
         return
-    _warned_causes.add(cause)
+    _warned_causes.add(f"{cap}:{cause}")
     logger.warning(
-        "frequency cap is running on the local per-process window (%s): the limit holds per "
+        "%s is running on the local per-process window (%s): the limit holds per "
         "API process, not fleet-wide, until redis answers again user_id=%s",
+        cap,
         cause,
         user_id,
         exc_info=exc_info,
@@ -309,6 +312,97 @@ async def check_frequency_cap(
     raise FrequencyCapExceededError(retry_after)
 
 
+# --- Refusal cap (SOLUSDEV-319, approved in-chat 2026-11-09) ---------------------------------
+# A refused call still costs Solus its prompt and is not debited, so refusals get a window of
+# their own: `record_refusal` after each one, `check_refusal_cap` pre-flight on every call. Same
+# fail-closed shape as the frequency cap (Redis, else the per-process window; every refusal is
+# also recorded locally, so an outage starting mid-window keeps the count).
+_REFUSAL_KEY_PREFIX = "solus:refusals:"
+_local_refusals = _LocalFrequencyWindow()
+
+
+async def _redis_refusals(
+    redis: RedisLike, key: str, ts: float, window: int
+) -> tuple[int, float | None]:
+    await redis.zremrangebyscore(key, 0, ts - window)
+    count = await redis.zcard(key)
+    return count, (await _redis_oldest(redis, key) if count else None)
+
+
+async def _redis_record_refusal(redis: RedisLike, key: str, ts: float, window: int) -> None:
+    await redis.zadd(key, {uuid.uuid4().hex: ts})
+    await redis.expire(key, window)
+
+
+async def _within_redis_timeout(redis: RedisLike | None, user_id: uuid.UUID, work: Any) -> Any:
+    """`work(redis)` inside REDIS_TIMEOUT_SECONDS; None (warned once) when Redis is absent,
+    slow or erroring, so the caller answers from the local window instead."""
+    if redis is None:
+        _warn_local_once("redis_missing", user_id, cap="refusal cap")
+        return None
+    try:
+        return await asyncio.wait_for(work(redis), timeout=REDIS_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _warn_local_once("redis_slow", user_id, cap="refusal cap")
+    except Exception:  # CancelledError is a BaseException: an outer cancel still propagates
+        _warn_local_once("redis_error", user_id, exc_info=True, cap="refusal cap")
+    return None
+
+
+async def record_refusal(
+    user_id: uuid.UUID, *, redis: RedisLike | None, limits: LimitsConfig, now: float | None = None
+) -> None:
+    """Count one refusal against `user_id` in the refusal window."""
+    ts = time.time() if now is None else now
+    window = limits.refusal_window_seconds
+    _local_refusals.count(user_id, ts, window)  # prunes expired refusals before recording
+    _local_refusals.record(user_id, ts)
+    key = f"{_REFUSAL_KEY_PREFIX}{user_id}"
+    await _within_redis_timeout(redis, user_id, lambda r: _redis_record_refusal(r, key, ts, window))
+
+
+async def check_refusal_cap(
+    user_id: uuid.UUID,
+    *,
+    redis: RedisLike | None,
+    limits: LimitsConfig,
+    now: float | None = None,
+    session: AsyncSession | None = None,
+) -> None:
+    """Refuse the call (FrequencyCapExceededError, a transient 429) once `user_id` has
+    `limits.max_refusals_per_window` refusals inside `limits.refusal_window_seconds`.
+    Never counts anything itself."""
+    ts = time.time() if now is None else now
+    window, limit = limits.refusal_window_seconds, limits.max_refusals_per_window
+    key = f"{_REFUSAL_KEY_PREFIX}{user_id}"
+    answer = await _within_redis_timeout(
+        redis, user_id, lambda r: _redis_refusals(r, key, ts, window)
+    )
+    limiter = "redis" if answer is not None else "local"
+    if answer is None:
+        answer = (_local_refusals.count(user_id, ts, window), _local_refusals.oldest(user_id))
+    count, oldest_ts = answer
+    if count < limit:
+        return
+    retry_after = max(1, math.ceil((ts if oldest_ts is None else oldest_ts) + window - ts))
+    logger.info(
+        "refusal cap blocked user_id=%s count=%d limit=%d retry_after=%ds limiter=%s",
+        user_id,
+        count,
+        limit,
+        retry_after,
+        limiter,
+    )
+    if session is not None:
+        await _emit_block_event(
+            session,
+            user_id,
+            reason="refusal_cap",
+            detail={"retry_after": retry_after, "limiter": limiter},
+        )
+    raise FrequencyCapExceededError(retry_after)
+
+
 async def assert_can_spend(
     user_id: uuid.UUID, *, session: AsyncSession, limits: LimitsConfig
 ) -> None:
@@ -390,16 +484,26 @@ async def _emit_block_event(
     OTHER pending work on the caller's session. Fine today (pre-flight runs
     before any caller writes; no route passes a dirty session); revisit if a
     future endpoint does session work before calling the gateway."""
+    await emit_best_effort(session, user_id, "orchestration.blocked", {"reason": reason, **detail})
+
+
+async def emit_best_effort(
+    session: AsyncSession, user_id: uuid.UUID, event_type: str, payload: dict[str, Any]
+) -> None:
+    """Emit and commit one consent-gated data event; a failure is logged, never raised, and
+    rolled back so a caller that carries on with the session is not left in a failed
+    transaction."""
     try:
         user = await session.get(User, user_id)
         if user is None:
             return
-        emit_event(
-            session,
-            user=user,
-            event_type="orchestration.blocked",
-            payload={"reason": reason, **detail},
-        )
+        emit_event(session, user=user, event_type=event_type, payload=payload)
         await session.commit()
-    except Exception:  # pragma: no cover - best-effort by design
-        logger.debug("block event emit failed (ignored) user_id=%s reason=%s", user_id, reason)
+    except Exception:
+        logger.warning(
+            "event emit failed (ignored) user_id=%s event=%s", user_id, event_type, exc_info=True
+        )
+        try:
+            await session.rollback()
+        except Exception:  # noqa: S110 - nothing actionable; the event is best effort
+            pass

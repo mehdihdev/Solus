@@ -52,6 +52,9 @@ from solus_api.orchestration.gates import (
     TrialExpiredError,
     assert_can_spend,
     check_frequency_cap,
+    check_refusal_cap,
+    emit_best_effort,
+    record_refusal,
 )
 from solus_api.orchestration.providers import (
     DEFAULT_MAX_TOKENS,
@@ -59,6 +62,7 @@ from solus_api.orchestration.providers import (
     ProviderAdapter,
     ProviderCredentialsMissingError,
     ProviderError,
+    ProviderRefusalError,
     ProviderTransientError,
     ToolCallingUnsupportedError,
     ToolConversation,
@@ -300,6 +304,10 @@ class CompletionStream:
                 f"{self._model.provider}/{self._model.model_name} stream ended "
                 "without reporting usage"
             ) from None
+        except ProviderRefusalError as exc:
+            self._closed = True
+            await self._on_refusal(exc)
+            raise
         except _PASSTHROUGH_ERRORS:
             self._closed = True
             raise
@@ -317,6 +325,12 @@ class CompletionStream:
         spend/trial gate → (retry-wrapped) provider call."""
         if self._user_id is not None and self._session is not None:
             await check_frequency_cap(
+                self._user_id,
+                redis=self._redis,
+                limits=self._config.limits,
+                session=self._session,
+            )
+            await check_refusal_cap(
                 self._user_id,
                 redis=self._redis,
                 limits=self._config.limits,
@@ -388,6 +402,9 @@ class CompletionStream:
             usage.tokens_out,
             int((time.monotonic() - self._started) * 1000),
         )
+        await self._debit(usage)
+
+    async def _debit(self, usage: Usage) -> None:
         await _fire_cost_hook(
             call_id=self._call_id,
             model=self._model,
@@ -400,6 +417,47 @@ class CompletionStream:
             purpose=self._purpose,
             turn_id=self._turn_id,
             project_id=self._project_id,
+        )
+
+    async def _on_refusal(self, exc: ProviderRefusalError) -> None:
+        """SOLUSDEV-319 refusal accounting (identity-gated, like the gates and the debit):
+        count it toward the refusal cap, debit it only when text already reached the caller,
+        and log a consent-gated `model.refused` event either way."""
+        if self._user_id is None or self._session is None:
+            return
+        try:
+            await self._account_refusal(exc, self._user_id, self._session)
+        except Exception:  # the refusal must always surface as itself, never as this
+            logger.exception("refusal accounting failed call_id=%s", self._call_id)
+
+    async def _account_refusal(
+        self, exc: ProviderRefusalError, user_id: uuid.UUID, session: AsyncSession
+    ) -> None:
+        await record_refusal(user_id, redis=self._redis, limits=self._config.limits)
+        streamed = bool(self._parts)
+        billable = exc.usage if streamed else None
+        if billable is not None:
+            await self._debit(billable)
+        elif streamed:
+            logger.warning(
+                "refusal after streamed text reported no usage; not debited call_id=%s",
+                self._call_id,
+            )
+        await emit_best_effort(
+            session,
+            user_id,
+            "model.refused",
+            {
+                "provider": self._model.provider,
+                "model": self._model.model_name,
+                "role": self._model.role,
+                "category": exc.category,
+                "purpose": self._purpose,
+                "streamed": streamed,
+                "debited": billable is not None,
+                "tokens_in": exc.usage.tokens_in if exc.usage else None,
+                "tokens_out": exc.usage.tokens_out if exc.usage else None,
+            },
         )
 
 

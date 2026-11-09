@@ -738,6 +738,8 @@ async def test_anthropic_refusal_raises_with_the_category_and_reports_no_usage(
             seen.append(event)
 
     assert raised.value.category == "cyber"
+    # The billed tokens ride on the error, so the gateway can debit a refusal that streamed.
+    assert raised.value.usage == Usage(tokens_in=7, tokens_out=9)
     assert isinstance(raised.value, ProviderError)
     assert not isinstance(raised.value, ProviderTransientError)  # never retried as-is
     assert _REFUSAL_TEXT not in str(raised.value)
@@ -746,6 +748,25 @@ async def test_anthropic_refusal_raises_with_the_category_and_reports_no_usage(
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "claude-x" in logged and "cyber" in logged and "tokens_in=7" in logged
     assert _REFUSAL_TEXT not in logged
+
+
+async def test_a_refusal_with_malformed_usage_is_still_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider output is untrusted: a broken usage block must not turn the refusal into a
+    generic failure (it would then skip the refusal cap and the re-route)."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    broken = SimpleNamespace(input_tokens=None, output_tokens=None)
+    fake = _fake_anthropic_cls(recorder, broken, stop_reason="refusal")
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.usage is None
 
 
 async def test_anthropic_refusal_without_details_has_no_category(

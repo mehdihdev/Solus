@@ -529,6 +529,10 @@ limits:
   trial_credit_cap: 1000 # PROVISIONAL — calibrate with pricing
   max_calls_per_minute: 20
   frequency_window_seconds: 60
+  # SOLUSDEV-319: a refused call still costs Solus its prompt. At this many refusals in the
+  # window the next call is refused pre-flight (transient 429, same as the frequency cap).
+  max_refusals_per_window: 5
+  refusal_window_seconds: 600
   retry_max_attempts: 3
   # Base delay, doubling per retry: 1s + 2s = 3s of waiting across 3 attempts.
   # Raised from 0.5 (SOLUSDEV-252, observed live): a token-per-minute limit

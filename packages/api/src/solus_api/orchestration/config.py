@@ -456,6 +456,9 @@ class LimitsConfig(BaseModel):
     # M25: capped — the gates' local window holds up to this many timestamps per remembered user.
     max_calls_per_minute: int = Field(default=20, gt=0, le=10_000)
     frequency_window_seconds: int = Field(default=60, gt=0)
+    # SOLUSDEV-319: refusals cost Solus the prompt, so they get their own, tighter window.
+    max_refusals_per_window: int = Field(default=5, gt=0, le=10_000)
+    refusal_window_seconds: int = Field(default=600, gt=0)
     retry_max_attempts: int = Field(default=3, ge=1)  # total tries incl. the first
     retry_backoff_seconds: float = Field(default=0.5, ge=0)  # base; doubles per retry
 
