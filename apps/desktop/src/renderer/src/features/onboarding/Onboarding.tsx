@@ -26,7 +26,13 @@ import {
   persistSolMode,
   stepIndexToName
 } from './onboardingSync'
-import { toOnboardingStep, useOnboardingStore, type OnboardingStep } from './onboardingStore'
+import {
+  toOnboardingStep,
+  useOnboardingStore,
+  type OnboardingState,
+  type OnboardingStep
+} from './onboardingStore'
+import { endOnboardingReplay, isOnboardingReplay } from './onboardingReplay'
 import { ensureWorkspace } from './provisioning'
 import { SolLines } from './SolLines'
 import { StepDots } from './StepDots'
@@ -40,10 +46,15 @@ const BUILD_STEP: OnboardingStep = 5
 function useHydrate(): boolean {
   const navigate = useNavigate()
   const completeOnboarding = useAuthStore((s) => s.completeOnboarding)
-  const [hydrated, setHydrated] = useState(false)
+  // `pnpm dev:onboarding` replays from Meet without asking the server.
+  const [hydrated, setHydrated] = useState(isOnboardingReplay)
   // No once-only ref: under StrictMode the first run is cancelled by cleanup,
   // so EVERY effect run starts its own hydrate (a duplicate GET is harmless).
   useEffect(() => {
+    if (isOnboardingReplay()) {
+      useOnboardingStore.getState().reset()
+      return
+    }
     let cancelled = false
     void hydrateOnboarding().then((result) => {
       if (cancelled) return
@@ -62,7 +73,14 @@ function useHydrate(): boolean {
   return hydrated
 }
 
-function useOnboardingFlow() {
+interface OnboardingFlow {
+  store: OnboardingState
+  goTo: (step: number) => void
+  beginBuild: () => void
+  finish: () => Promise<void>
+}
+
+function useOnboardingFlow(): OnboardingFlow {
   const navigate = useNavigate()
   const store = useOnboardingStore()
   const solMode = useSettingsStore((s) => s.solMode)
@@ -102,6 +120,7 @@ function useOnboardingFlow() {
       persistOnboardingStep('done'),
       new Promise((resolve) => setTimeout(resolve, DONE_PERSIST_TIMEOUT_MS))
     ])
+    endOnboardingReplay()
     completeOnboarding()
     store.setLandingHint(true)
     navigate('/')

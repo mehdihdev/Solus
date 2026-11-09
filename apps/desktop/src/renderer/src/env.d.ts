@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_SUPABASE_ANON_KEY?: string
   /** Solus REST API base URL. Defaults to http://localhost:8000 in dev. */
   readonly VITE_API_BASE_URL?: string
+  /** Dev only: '1' replays onboarding every launch (`pnpm dev:onboarding`). */
+  readonly VITE_FORCE_ONBOARDING?: string
 }
 
 interface ImportMeta {

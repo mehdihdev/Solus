@@ -11,6 +11,7 @@ import { SolWindow } from '../features/sol/SolWindow'
 import { ExtensionWindowRoot } from '../features/extensions/pageview/ExtensionWindowRoot'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
 import { SolLandingHint } from '../features/onboarding/SolLandingHint'
+import { isOnboardingReplay } from '../features/onboarding/onboardingReplay'
 import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
 
@@ -36,7 +37,7 @@ function RootRoute(): React.JSX.Element {
   const onboarded = useAuthStore((s) => s.onboarded)
   if (status === 'loading') return <Splash />
   if (status === 'unauthenticated') return <LandingPage />
-  if (!onboarded) return <Navigate to="/onboarding" replace />
+  if (!onboarded || isOnboardingReplay()) return <Navigate to="/onboarding" replace />
   return (
     <>
       <WorkspaceShell />
@@ -52,7 +53,7 @@ function RequireOnboarding({ children }: { children: ReactNode }): React.JSX.Ele
   const onboarded = useAuthStore((s) => s.onboarded)
   if (status === 'loading') return <Splash />
   if (status === 'unauthenticated') return <Navigate to="/login" replace />
-  if (onboarded) return <Navigate to="/" replace />
+  if (onboarded && !isOnboardingReplay()) return <Navigate to="/" replace />
   return <>{children}</>
 }
 

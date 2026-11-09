@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
@@ -11,6 +11,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import * as provisioning from './provisioning'
 import * as sync from './onboardingSync'
 import * as buildProgress from './buildProgress'
+import { endOnboardingReplay, isOnboardingReplay, startOnboardingReplay } from './onboardingReplay'
 
 // Keep provisioning deterministic and offline; its own unit tests cover the API.
 // ConnectStep also calls ensureWorkspace on mount, so both entry points are
@@ -278,5 +279,29 @@ describe('Onboarding flow — StrictMode', () => {
   it('hydrates past the splash under StrictMode double-mounting', async () => {
     await renderOnboarding(true)
     expect(await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
+  })
+})
+
+describe('Onboarding flow — dev replay (pnpm dev:onboarding)', () => {
+  beforeEach(setupOnboarding)
+  afterEach(endOnboardingReplay)
+
+  it('starts at Meet even when the server says onboarding is done', async () => {
+    startOnboardingReplay()
+    useOnboardingStore.getState().setStep(4)
+    vi.mocked(sync.hydrateOnboarding).mockResolvedValue({ status: 'done' })
+    await renderOnboarding()
+    expect(screen.getByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
+    expect(useOnboardingStore.getState().step).toBe(0)
+    expect(useAuthStore.getState().onboarded).toBe(false)
+  })
+
+  it('ends the replay when the flow finishes, so the workspace stays reachable', async () => {
+    startOnboardingReplay()
+    await renderOnboarding()
+    await walkTo('project')
+    await userEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
+    await vi.waitFor(() => expect(useAuthStore.getState().onboarded).toBe(true))
+    expect(isOnboardingReplay()).toBe(false)
   })
 })
