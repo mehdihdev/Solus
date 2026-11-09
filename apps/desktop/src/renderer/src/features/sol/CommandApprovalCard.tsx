@@ -106,7 +106,8 @@ function CommandSummary({
           )}
           {args !== null && args.length > 0 && <span> {args.join(' ')}</span>}
         </code>
-        {cwd !== null && (
+        {/* "." is the project root: nothing worth a label. */}
+        {cwd !== null && cwd !== '.' && (
           <span className="cmd-card__cwd" title={cwd}>
             {revealHidden(folderName(cwd))}
           </span>

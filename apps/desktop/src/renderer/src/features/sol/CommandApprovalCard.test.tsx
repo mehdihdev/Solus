@@ -94,6 +94,19 @@ describe('CommandCard', () => {
     expect(screen.getByText('hidden characters — check the rows below')).toBeInTheDocument()
   })
 
+  it('shows no folder label for the project root', () => {
+    renderCard({
+      pending: {
+        ...PENDING,
+        preview: [
+          { label: 'command', before: null, after: '["make","selftest"]' },
+          { label: 'cwd', before: null, after: '.' }
+        ]
+      }
+    })
+    expect(screen.queryByTitle('.')).toBeNull()
+  })
+
   it('carries its variant and state for styling and motion', () => {
     renderCard({ variant: 'pill', busy: true })
     const card = screen.getByRole('region', { name: 'Action needs your approval' })
