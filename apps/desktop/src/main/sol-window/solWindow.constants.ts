@@ -17,5 +17,8 @@ export const SOL_WINDOW_CHANNELS = {
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */
-  region: 'sol:region'
+  region: 'sol:region',
+  /** SOLUSDEV-323: main → the app windows only: a hotkey summon happened
+   *  (`{ at }`, epoch ms) — onboarding's "try it now" practice listens. */
+  summoned: 'sol:summoned'
 } as const

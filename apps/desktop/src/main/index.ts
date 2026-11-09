@@ -687,7 +687,10 @@ function restartSolHotkeys(
               systemPreferences.isTrustedAccessibilityClient(false)
           }
         : {}),
-      onSummon: () => windows.open(),
+      onSummon: () => {
+        windows.open()
+        windows.pushSummoned(Date.now())
+      },
       onToggleMode: () => void settings.toggleMode(),
       onRegion: (region) => void onRegion(region),
       onStatus,

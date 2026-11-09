@@ -29,6 +29,8 @@ export interface SolBridge {
   openCaptureSettings(): Promise<SolState | null>
   onState(handler: (state: SolState) => void): () => void
   onRegion(handler: (region: SolRegionPayload) => void): () => void
+  /** SOLUSDEV-323: a hotkey summon happened (epoch ms). */
+  onSummoned(handler: (at: number) => void): () => void
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -50,6 +52,9 @@ export function isSolState(raw: unknown): raw is SolState {
     (raw.hotkeys === null || isRecord(raw.hotkeys))
   )
 }
+
+const isSummoned = (raw: unknown): raw is { at: number } =>
+  isRecord(raw) && typeof raw.at === 'number' && Number.isFinite(raw.at)
 
 export function isSolRegion(raw: unknown): raw is SolRegionPayload {
   if (!isRecord(raw)) return false
@@ -106,7 +111,8 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     open: () => call(c.open),
     openCaptureSettings: () => call(c.openCaptureSettings),
     onState: (handler) => subscribe(c.state, isSolState, handler),
-    onRegion: (handler) => subscribe(c.region, isSolRegion, handler)
+    onRegion: (handler) => subscribe(c.region, isSolRegion, handler),
+    onSummoned: (handler) => subscribe(c.summoned, isSummoned, (m) => handler(m.at))
   }
 }
 

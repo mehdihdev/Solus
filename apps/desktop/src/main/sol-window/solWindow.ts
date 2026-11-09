@@ -136,6 +136,8 @@ export interface SolWindowManager {
   close(): void
   setAlwaysOnTop(flag: boolean): void
   pushState(state: SolState): void
+  /** SOLUSDEV-323: a hotkey summon happened — to the app windows only. */
+  pushSummoned(at: number): void
   /** False when no SOL window is open. Queued until the renderer is mounted. */
   pushRegion(payload: SolRegionPayload): boolean
   /** The SOL renderer's first state request proves it is mounted: flush a
@@ -224,6 +226,12 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       if (alive() && current !== null) targets.add(current)
       for (const w of targets) {
         if (!w.isDestroyed()) w.webContents.send(SOL_WINDOW_CHANNELS.state, state)
+      }
+    },
+    pushSummoned(at) {
+      for (const w of deps.allWindows()) {
+        if (w === current || w.isDestroyed()) continue
+        w.webContents.send(SOL_WINDOW_CHANNELS.summoned, { at })
       }
     },
     pushRegion(payload) {

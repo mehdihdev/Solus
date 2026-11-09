@@ -395,6 +395,15 @@ function registerWindowStateBroadcastsTests(): void {
     expect(h.others[0].sent).toHaveLength(1)
   })
 
+  it('pushSummoned tells the app windows a summon happened, never the SOL window (SOLUSDEV-323)', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.pushSummoned(42)
+    expect(h.others[0].sent).toEqual([{ channel: SOL_WINDOW_CHANNELS.summoned, payload: { at: 42 } }])
+    expect(h.windows[0].sent).toEqual([])
+  })
+
   it('pushState reaches the SOL window even when allWindows() is empty', () => {
     const h = harness()
     const m = createSolWindowManager({ ...h.deps, allWindows: () => [] })
