@@ -268,11 +268,14 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
     }
     # These owned wrappers invoke only their privately scoped native capabilities;
     # they are not allowed to invoke the public registry or expose raw fallbacks.
+    # agent/drive/port.py (ADR-041) invokes only the three INTERNAL drive.*
+    # BridgeTools that agent/drive/wiring.py binds for one approved drive.step.
     # SOLUSDEV-321 P6 (R131): `ros_live.py`'s wrapper is the registered tool itself and invokes
     # only the one unconfirmed bridge read it wraps, inside the dispatch the gate already made.
     adapters = {
         "agent/tools/isaac_tools.py",
         "agent/tools/machine_writes.py",
+        "agent/drive/port.py",
         "agent/tools/ros_live.py",
     }
 

@@ -264,3 +264,30 @@ async def test_busy_while_call_in_flight(supervisor: Supervisor) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await call
     assert supervisor.status_snapshot()[0]["state"] == "ready"  # busy cleared
+
+
+async def test_health_pass_never_restarts_a_server_busy_with_a_call(tmp_path: Path) -> None:
+    """SOLUSDEV-319: a long tool call (the ADR-040 KiCad save/Revert handshake)
+    blocks a sync server's pings. Restarting it mid-call killed the handshake
+    after the write and before the reload; the cloud owns call timeouts."""
+    pid_file = tmp_path / "pid"
+    sup = _make_supervisor(pid_file)
+    await sup.start_all()
+    try:
+        handle = sup.handles["mock"]
+        first_pid = int(pid_file.read_text())
+
+        async def unresponsive(_handle: object) -> bool:
+            return False
+
+        sup._ping = unresponsive  # type: ignore[method-assign,assignment]
+        handle.begin_call()
+        try:
+            await sup.ensure_healthy()
+        finally:
+            handle.end_call()
+
+        assert int(pid_file.read_text()) == first_pid
+        assert handle.state is ServerState.READY
+    finally:
+        await sup.stop_all()

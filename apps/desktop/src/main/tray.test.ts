@@ -8,7 +8,6 @@ const STATE: SolState = {
   actionMode: 'guide',
   screenIntelligence: false,
   hotkeysEnabled: true,
-  alwaysOnTop: false,
   capture: { mode: 'available', message: '' },
   hotkeys: null,
   lastRegionRefused: false

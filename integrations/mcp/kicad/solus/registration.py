@@ -14,10 +14,27 @@ from solus.development_registration import register_development_tools
 from solus.netlist_export import register_export_tools
 from solus.netlist_reads import register_netlist_reads
 from solus.pdf_export import register_pdf_export
+from solus.project_discovery import register_project_discovery
 from solus.roster import FULL_ROSTER
 from solus.spice_export import register_spice_export
 from solus.trimming import SupportsToolDecorator, TrimmingRegistrar
 from solus.write.set_symbol_property import register_write_tools
+
+
+class _Without:
+    """Pass upstream registrations through, dropping the named ones."""
+
+    def __init__(self, registrar: TrimmingRegistrar, *names: str) -> None:
+        self._registrar = registrar
+        self._names = frozenset(names)
+
+    def tool(self, *args: Any, **kwargs: Any) -> Any:
+        def decorator(fn: Any) -> Any:
+            if fn.__name__ in self._names:
+                return fn
+            return self._registrar.tool(*args, **kwargs)(fn)
+
+        return decorator
 
 
 def register_allowlisted_tools(mcp: SupportsToolDecorator) -> TrimmingRegistrar:
@@ -35,7 +52,10 @@ def register_allowlisted_tools(mcp: SupportsToolDecorator) -> TrimmingRegistrar:
     # duck-types (SupportsToolDecorator). The trim depends on NOT being a real
     # FastMCP, so the mismatch is intentional, not incidental.
     shim = cast(Any, registrar)
-    register_project_tools(shim)
+    # Upstream's list_projects walks paths outside the workspace; the
+    # workspace-scoped Solus implementation replaces it under the same name.
+    register_project_tools(_Without(registrar, "list_projects"))
+    register_project_discovery(registrar)
     register_netlist_reads(registrar)
     register_bom_tools(shim)
     register_export_tools(registrar)

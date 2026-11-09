@@ -11,14 +11,23 @@ resolvable project. The streaming turn (SSE) runs the reasoning loop behind the
 import asyncio
 import json
 import logging
+import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import replace
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from dataclasses import dataclass, field, replace
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import Field, StrictBool, ValidationError, field_validator, model_validator
+from pydantic import (
+    Field,
+    StrictBool,
+    ValidationError,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
+from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -34,8 +43,10 @@ from solus_api.agent.conversation import (
     serialize_turn,
 )
 from solus_api.agent.deterministic_facts import GraphFactSources
+from solus_api.agent.drive.binding import FrontAppBinding
 from solus_api.agent.execution_policy import BuildExecutionPolicy
 from solus_api.agent.expertise import turn_expertise
+from solus_api.agent.front_app import attached_event
 from solus_api.agent.history_evidence import enrich_history
 from solus_api.agent.modes import ActionMode, build_mode_dispatch
 from solus_api.agent.onshape_turn_sync import OnshapeTurnSync, create_turn_sync
@@ -47,6 +58,7 @@ from solus_api.agent.runtime import (
     AgentRunContext,
     TurnView,
     build_dispatch,
+    with_front_app,
 )
 from solus_api.agent.screen import (
     MAX_DIMENSION,
@@ -80,6 +92,7 @@ from solus_api.deps import (
     SettingsDep,
     SolRegistryDep,
     SolSystemsDep,
+    _drive_budget,
     require_role,
 )
 from solus_api.extensions.attribution import ExtensionAttribution
@@ -98,13 +111,14 @@ from solus_api.models import (
 from solus_api.orchestration.config import load_orchestration_config
 from solus_api.orchestration.cost import has_sufficient_credits
 from solus_api.orchestration.gates import (
+    AcademicExpiredError,
     FrequencyCapExceededError,
     InsufficientCreditsError,
     TrialCapReachedError,
     TrialExpiredError,
     check_frequency_cap,
 )
-from solus_api.orchestration.providers import ProviderTransientError
+from solus_api.orchestration.providers import ProviderRefusalError, ProviderTransientError
 from solus_api.routers.sol_confirmations import sync_enqueuer
 from solus_api.routers.sol_resume import (
     ResumeTicket,
@@ -135,7 +149,12 @@ _ORCHESTRATION_LIMITS = load_orchestration_config().limits
 _LIMIT_MESSAGE = "SOL is rate-limited or out of credits for your team right now."
 #: SOLUSDEV-236: wireflow billing.md Expert copy (the policy table is static; the date
 #: and the Guide variant are rendered by the client from `trial_expired`).
+#: SOLUSDEV-319: the model declined and the one round-1 re-route did not apply or also declined.
+#: Solus-authored; the provider's category and wording stay in the operator log (§7).
+_MODEL_REFUSED_MESSAGE = "The model declined to answer this. Try rephrasing."
 _TRIAL_EXPIRED_MESSAGE = "Trial ended. Model features paused — choose a plan in Billing."
+#: ADR-042: the Academic plan's equivalent (Expert copy; the client renders Guide).
+_ACADEMIC_EXPIRED_MESSAGE = "Academic plan ended. Model features paused — verify again in Billing."
 #: SOLUSDEV-252, live: a turn that parked a gated call then hit the account's own
 #: 10k-TPM window ("Please try again in 39.456s") reported `internal` — an outage,
 #: as far as the person could tell, from a limit no retry inside the request can
@@ -146,12 +165,37 @@ _POLICY_BLOCKS: dict[type[BaseException], tuple[str, str]] = {
     FrequencyCapExceededError: ("frequency_cap", _LIMIT_MESSAGE),
     TrialCapReachedError: ("trial_cap", _LIMIT_MESSAGE),
     TrialExpiredError: ("trial_expired", _TRIAL_EXPIRED_MESSAGE),
+    AcademicExpiredError: ("academic_expired", _ACADEMIC_EXPIRED_MESSAGE),
     InsufficientCreditsError: ("insufficient_credits", _LIMIT_MESSAGE),
     ProviderTransientError: (
         "provider_unavailable",
         "The reasoning service is busy right now. Try that again in a moment.",
     ),
+    # SOLUSDEV-319: a backstop — a turn's refusal is normally a bounded abort in
+    # `_run_and_persist`, which keeps the tool turns that already ran.
+    ProviderRefusalError: ("model_refused", _MODEL_REFUSED_MESSAGE),
 }
+
+
+#: A structured refusal's code prefix (`stale_plan: <explanation>`) — snake_case
+#: words only, and only in that `<code>: ` form, so a bare one-token message
+#: (which could be any value a tool echoed) is never recorded.
+_REASON_PREFIX = re.compile(r"([a-z]{1,24}(?:_[a-z]{1,24}){1,5}): ")
+
+
+def _failure_fields(result: dict[str, Any]) -> dict[str, Any]:
+    """`agent.tool_invoked` failure detail: the ToolErrorCode and, when the tool's
+    message leads with a stable reason code, that code — never the message text,
+    which can carry untrusted tool output (paths, design contents)."""
+    error = result.get("error")
+    if result.get("ok") is not False or not isinstance(error, dict):
+        return {}
+    fields: dict[str, Any] = {"error_code": error.get("code")}
+    message = error.get("message")
+    match = _REASON_PREFIX.match(message) if isinstance(message, str) else None
+    if match:
+        fields["reason"] = match.group(1)
+    return fields
 
 
 def _turn_failure_sse(exc: Exception, conversation_id: uuid.UUID) -> str:
@@ -197,6 +241,7 @@ SCREENSHOT_EXTRA_CREDITS = 2
 _ABORT_MESSAGES = {
     "timeout": "The SOL turn timed out.",
     "loop_limit": "SOL stopped: too many tool calls in one turn.",
+    "model_refused": _MODEL_REFUSED_MESSAGE,
 }
 
 
@@ -310,9 +355,31 @@ class MessageCreate(StrictModel):
     #: SOLUSDEV-252 S3: at most one screenshot per turn. Pixels live for this
     #: turn only — the transcript keeps `{width, height, app}`.
     screenshot: ScreenshotIn | None = None
+    #: SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the app the person summoned SOL over,
+    #: from desktop main's summon snapshot. Build turns only (dropped on a Guide turn),
+    #: refused on resume and wake turns, and a 422 never echoes it (`_front_app_opaque`).
+    #: Not in the transcript, `sol.message` or logs — but a parked `drive.step
+    #: {app: "front"}` stores its copied window binding (title included) in
+    #: `tool_confirmations.args`, which the card and its decide/execute re-checks read.
+    front_app: FrontAppBinding | None = None
+
+    @field_validator("front_app", mode="wrap")
+    @classmethod
+    def _front_app_opaque(cls, value: Any, handler: ValidatorFunctionWrapHandler) -> Any:
+        """One opaque error for any bad `front_app`: the nested errors would echo a
+        short title or name as their `input`, which the 422 handler only redacts when
+        it is long. The whole object is a dict, so the handler redacts it."""
+        try:
+            return handler(value)
+        except ValidationError:
+            raise PydanticCustomError("front_app", "front_app is not a valid snapshot") from None
 
     @model_validator(mode="after")
     def _content_or_resume(self) -> "MessageCreate":
+        if self.front_app is not None and (
+            self.process_prompt is not None or self.resume_confirmation_id is not None
+        ):
+            raise ValueError("a resume or wake carries no front_app")
         if self.process_prompt is not None:
             if (
                 self.content is not None
@@ -332,6 +399,10 @@ class MessageCreate(StrictModel):
             self.content is not None or self.screenshot is not None
         ):
             raise ValueError("a resume carries no content or screenshot")
+        if self.front_app is not None and self.action_mode is not ActionMode.DO:
+            # Security L-5: only a Build turn may put the front app before the model
+            # or offer `drive.step {app: "front"}`; a Guide turn's copy is ignored.
+            self.front_app = None
         return self
 
 
@@ -593,6 +664,7 @@ async def _persist_turn(
                         "call_id": call.get("call_id"),
                         "action_mode": action_mode,
                         "ok": result.get("ok"),
+                        **_failure_fields(result),
                     },
                 )
             emit_event(
@@ -681,6 +753,52 @@ def _abort_event(code: str, error: BaseException | None) -> AgentEvent:
     return AgentEvent.error(code, _ABORT_MESSAGES[code])
 
 
+@dataclass
+class _TurnTranscript:
+    """What a turn's streamed events leave behind to persist: each tool call paired with
+    its result, and the final message text."""
+
+    pending: dict[str, dict[str, Any]] = field(default_factory=dict)
+    tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=list)
+    final_text: str = ""
+    tool_calls: int = 0
+
+    def record(self, event: AgentEvent, max_tool_calls: int) -> bool:
+        """Note `event`; False when it is the tool call past the loop guard, which is
+        then NOT recorded (the turn aborts before it streams)."""
+        if event.type is AgentEventType.TOOL_CALL:
+            self.tool_calls += 1
+            # Loop guard enforced HERE, independent of the runner: a runaway
+            # (real, model-driven) runner is cut off by the plumbing, not by
+            # its own restraint.
+            if self.tool_calls > max_tool_calls:
+                return False
+            self.pending[event.data["call_id"]] = event.data
+        elif event.type is AgentEventType.TOOL_RESULT:
+            self.tool_turns.append((self.pending.get(event.data["call_id"], {}), event.data))
+        elif event.type is AgentEventType.MESSAGE:
+            self.final_text = event.data["content"]
+        return True
+
+
+def _drain_parked(parked: list[ParkedCall], parked_tools: set[str]) -> Iterator[str]:
+    """SOLUS-ONS-A5: a call the gate parked streams straight after its result, so the
+    client can show the concrete action and offer approve/reject inline. M184: each
+    card's tool is kept as the card is popped (the drained list names none)."""
+    parked_tools.update(p.tool for p in parked if p.confirmation_id is not None)
+    while parked:
+        request = parked.pop(0)
+        yield format_sse(
+            AgentEvent.tool_confirmation(
+                confirmation_id=str(request.confirmation_id),
+                tool=request.tool,
+                args=request.args,
+                summary=request.summary,
+                preview=request.preview,
+            )
+        )
+
+
 async def _run_and_persist(
     *,
     runner: AgentRunnerDep,
@@ -701,10 +819,7 @@ async def _run_and_persist(
     response body streams). The turn is bounded at the seam by a tool-call loop guard and
     a wall-clock timeout (§7). Any failure is logged server-side and surfaced only as a
     generic, author-safe `error` event — never a traceback (§7)."""
-    pending: dict[str, dict[str, Any]] = {}
-    tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = []
-    final_text = ""
-    tool_calls = 0
+    transcript = _TurnTranscript()
     aborted: str | None = None
     abort_error: BaseException | None = None
     #: SOLUSDEV-321: what the streamed frames say about the turn — a first-tier answer's envelope
@@ -719,38 +834,24 @@ async def _run_and_persist(
             async with asyncio.timeout(limits.timeout_seconds):
                 async for event in _bounded_events(stream, limits.timeout_seconds):
                     answered = {**answered, **persisted_answer(event)}
-                    if event.type is AgentEventType.TOOL_CALL:
-                        tool_calls += 1
-                        # Loop guard enforced HERE, independent of the runner: a runaway
-                        # (real, model-driven) runner is cut off by the plumbing, not by
-                        # its own restraint.
-                        if tool_calls > limits.tool_calls:
-                            aborted = "loop_limit"
-                            break
-                        pending[event.data["call_id"]] = event.data
-                    elif event.type is AgentEventType.TOOL_RESULT:
-                        tool_turns.append((pending.get(event.data["call_id"], {}), event.data))
-                    elif event.type is AgentEventType.MESSAGE:
-                        final_text = event.data["content"]
+                    if not transcript.record(event, limits.tool_calls):
+                        aborted = "loop_limit"
+                        break
                     yield format_sse(event)
-                    # SOLUS-ONS-A5: a call the gate parked streams straight after
-                    # its result, so the client can show the concrete action and
-                    # offer approve/reject inline.
-                    parked_tools.update(p.tool for p in parked if p.confirmation_id is not None)
-                    while parked:
-                        request = parked.pop(0)
-                        yield format_sse(
-                            AgentEvent.tool_confirmation(
-                                confirmation_id=str(request.confirmation_id),
-                                tool=request.tool,
-                                args=request.args,
-                                summary=request.summary,
-                                preview=request.preview,
-                            )
-                        )
+                    for frame in _drain_parked(parked, parked_tools):
+                        yield frame
         except (TimeoutError, asyncio.CancelledError, GeneratorExit) as error:
             aborted = _abort_code(error)
             abort_error = error
+        except ProviderRefusalError as error:
+            # SOLUSDEV-319: deterministic, so a bounded abort — the tool turns that already ran
+            # are kept. Only the validated category is logged, never provider text.
+            logger.warning(
+                "SOL turn refused by the model conversation_id=%s category=%s",
+                conversation_id,
+                error.category,
+            )
+            aborted, abort_error = "model_refused", error
         finally:
             await _cleanup_turn(stream, turn_sync)
 
@@ -764,8 +865,8 @@ async def _run_and_persist(
             user_id=user_id,
             sol_mode=sol_mode,
             action_mode=action_mode,
-            tool_turns=tool_turns,
-            final_text=final_text,
+            tool_turns=transcript.tool_turns,
+            final_text=transcript.final_text,
             aborted=aborted,
             # the popped cards, and any an abort left unstreamed
             parked_tools=frozenset(
@@ -984,6 +1085,16 @@ async def _record_user_message(
             "screenshot": screenshot is not None,
         },
     )
+    if body.front_app is not None:
+        # sol-drive.md §2.2: two booleans — never the title, name or bundle id.
+        emit_event(
+            session,
+            user=ctx.user,
+            event_type="sol.front_app_attached",
+            team_id=ctx.team.id,
+            project_id=ctx.project.id,
+            payload=attached_event(body.front_app),
+        )
 
 
 @router.post("/conversations/{conversation_id}/messages")
@@ -1066,9 +1177,26 @@ async def post_message(
             session, ctx, conversation_id, content, body, attribution, screenshot
         )
     await session.commit()
+    # sol-drive.md §2.2: `drive.step` offers `front` only for this turn's drivable,
+    # window-bound front app, rebuilt on the caller's own companion scope.
+    registry = with_front_app(
+        registry,
+        body.front_app,
+        sessionmaker,
+        ctx.project.id,
+        bridge=bridge,
+        user_id=ctx.user.id,
+        team_id=ctx.team.id,
+        call_cap_bytes=settings.bridge_tool_call_max_bytes,
+        secret_store=secret_store,
+        redis=getattr(request.app.state, "redis", None),
+        enqueue=getattr(request.app.state, "enqueue", None),
+        budget=_drive_budget(settings),
+    )
 
     # Scope is bound by Solus code, before the runner sees any user content (§7) —
-    # in `deps.get_sol_registry`, which is the ONE place a registry is built.
+    # in `deps.get_sol_registry`, which is the ONE place a registry is built (above, only
+    # `drive.step` is rebuilt for the turn's front app, on the same server-derived scope).
     parked_calls: list[ParkedCall] = []
     #: What this turn has already parked, keyed by the concrete action. The loop
     #: keeps running after a park, so a model that re-proposes would otherwise
@@ -1230,6 +1358,8 @@ async def post_message(
         extension_slug=attribution.slug if attribution else None,
         # S3: pixels for this turn only; the runner's extractor pass reads them.
         screenshot=screenshot,
+        # SOLUSDEV-319 slice 4: this turn's front app — never stored.
+        front_app=body.front_app,
     )
     stream = _run_and_persist(
         runner=runner,

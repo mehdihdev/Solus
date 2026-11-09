@@ -21,6 +21,7 @@ from __future__ import annotations
 import enum
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from typing import Final
 
 from solus_api.agent.tools.shapes import (
     ToolCall,
@@ -35,6 +36,12 @@ logger = logging.getLogger("solus.agent.modes")
 # Structurally identical to runtime.DispatchFn; declared here (not imported)
 # so the dependency stays one-directional: runtime imports modes, never back.
 DispatchFn = Callable[[ToolCall], Awaitable[ToolResult]]
+
+#: Tools that change shared state WITHOUT the confirmation gate (they apply at
+#: once and hand back inverse ops for Undo), so `requires_confirmation` does not
+#: mark them. Solus-owned and named explicitly: Guide refuses them too
+#: (docs/api/bench-view.md §6).
+DIRECT_WRITE_TOOLS: Final = frozenset({"bench_view.update_display", "bench_view.upsert_derived"})
 
 
 class ActionMode(enum.StrEnum):
@@ -69,17 +76,18 @@ def build_mode_dispatch(
     """Wrap an already-gated dispatcher with the action-mode policy.
 
     GUIDE: calls to tools whose descriptor declares `requires_confirmation`
-    (the CTR-03 mutation marker) are refused here — the wrapped dispatcher is
-    never invoked for them. Everything else flows through unchanged, including
-    unknown tool names (the registry answers NOT_FOUND; unknown is not treated
-    as read-only, it is treated as the dispatcher's problem).
+    (the CTR-03 mutation marker), and to `DIRECT_WRITE_TOOLS`, are refused
+    here — the wrapped dispatcher is never invoked for them. Everything else
+    flows through unchanged, including unknown tool names (the registry
+    answers NOT_FOUND; unknown is not treated as read-only, it is treated as
+    the dispatcher's problem).
 
     DO: every call flows through to the gated dispatcher; destructive tools
     still park or refuse there. The mode layer never grants anything.
 
     Either way the action is logged with its mode — explicit, per action.
     """
-    mutating = frozenset(d.name for d in descriptors if d.requires_confirmation)
+    mutating = DIRECT_WRITE_TOOLS | {d.name for d in descriptors if d.requires_confirmation}
 
     async def mode_dispatch(call: ToolCall) -> ToolResult:
         refused = mode is ActionMode.GUIDE and call.tool in mutating

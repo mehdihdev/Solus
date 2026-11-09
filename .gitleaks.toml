@@ -64,6 +64,12 @@ regexes = [
   # Identifiers, never credentials.
   '''"key": "b3254681-110f-4858-880b-2cff960971f9"''',
   '''d2e0a7e1651e24d272cbbb632ef52f9ef5da2a45''',
+  # SOLUSDEV-319: the made-up `token=` value in packages/api/tests/
+  # test_drive_step_tool.py, the fixture proving a drive step's summary is
+  # redacted before it is logged. It entered the branch at one line and every
+  # merge of main moved it (341 → 378 → 384), re-attributing the hit to each
+  # merge commit — a value rule covers all of them.
+  '''token=abcdef0123456789abcdef''',
 ]
 
 # You can also pin the exact findings by fingerprint (most surgical):

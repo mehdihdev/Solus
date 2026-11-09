@@ -594,3 +594,146 @@ admin/user-writable on some systems (same-user risk only; no privilege boundary 
 ### Sign-off
 
 No new sign-off line added here; the 2026-10-06 lines in PROVENANCE.md cite this section.
+
+## 2026-10-23 — Refusal explanations, embedded-symbol comparison, `open_in_editor` (SOLUSDEV-319)
+
+### What changed
+
+- **`add_symbol` embedded-definition check** (`solus/development/schematic.py`): the schematic's
+  embedded `lib_symbols` copy is compared to the installed library by decoded token stream
+  (`(kind, value)` pairs) instead of raw bytes. KiCad re-indents that copy on every save, so the
+  byte check refused every symbol already present in a KiCad-saved schematic. STRING vs ATOM stays
+  distinct and every token value must match; only whitespace is ignored. On a match the original
+  embedded bytes are kept as-is (never rewritten); on a mismatch the file is untouched.
+- **Refusal text** (`solus/refusals.py`): every strict refusal raised to FastMCP now reads
+  `<code>: <fixed explanation>`. Explanations are Solus-authored constants; no paths, argument
+  values or design contents. Unknown codes pass through bare. Applied at the development-tool
+  guard, the H2 confinement refusal (`trimming.py`), the strict-argument adapter
+  (`strict_tool.py`) and `set_symbol_property`.
+- **Editor-lock refusal split out:** a write while KiCad's `~<name>.lck` / `<name>.lck` editor
+  lock exists now refuses with `open_in_editor` (was `stale_plan`), whose explanation tells SOL to
+  ask the user to close that schematic window in KiCad. The guard itself is unchanged — same lock
+  names, same check point inside `commit_plan`, same no-write outcome. `stale_plan` remains the
+  refusal for a fingerprint mismatch.
+
+### Security assessment
+
+- Token comparison cannot let a crafted embedded definition through with different pins,
+  geometry or properties: any token-level difference still refuses. Residual (LOW, cosmetic):
+  `_decode_escapes` keeps unrecognized escapes literally, so two byte-different strings can decode
+  equal; affects displayed text only, never connectivity.
+- Refusal explanations are fixed strings and cannot carry attacker-controlled text into the model
+  context; the companion/API still cap and treat tool error text as untrusted.
+- `open_in_editor` narrows behaviour only (a more specific code for an existing refusal); no new
+  write path, no new tool, no allowlist or confirmation change.
+
+### What did NOT change (re-review triggers checked)
+
+`upstream/` and `vendor/` untouched (tree hashes recomputed equal to PROVENANCE: upstream
+`56f30452214d88aa6b84807d6df7a6e903c48e52`, vendor `844e1a1183e90a0a3b0c89dbcffe561b6fc9b944`).
+No `allowlist.yaml`, `bin/launch`, declared env-allowlist or lockfile change.
+
+### Evidence
+
+`tests/test_development_operations.py` (KiCad-reformatted embedded definition accepted; content
+or escape-variant mismatch refused; add refused with `open_in_editor` while the lock exists, file
+untouched), `tests/test_write_tool_open_in_kicad.py` (lock → `open_in_editor`, changed file →
+`stale_plan`), `tests/test_refusals.py` (code + explanation at the guard and confinement layers;
+every raised write-tool reason has an explanation). Real run on macOS/KiCad 10: `Device:R` and
+`Device:LED` placements in a KiCad-saved schematic now plan successfully; a write with the
+schematic open in Eeschema refuses as `open_in_editor`. Fork suite 462 passed. Phase 4 code and
+security reviews: PASS, no CRITICAL/HIGH.
+
+### Sign-off
+
+No new sign-off line added here; no re-review trigger was hit.
+
+## 2026-10-24 — ADR-040 live edits to an open sheet; workspace-scoped `list_projects` (SOLUSDEV-319)
+
+### What changed
+
+- **Synthetic input (new capability, ADR-040).** `solus/development/live_kicad.py` runs a
+  fixed AppleScript through `/usr/bin/osascript` (argv list; sheet stem and absolute path are
+  argv values, never interpolated). Verbs: `available` (read-only window lookup), `save`
+  (File → Save, then wait until the title loses `*`), `revert` (refuse if dirty, File →
+  Revert, click Yes only in a dialog whose text starts `Revert '<exact path>'`, else No).
+  Exactly one window titled `<stem> — Schematic Editor` must match; every click re-checks
+  that window is frontmost. Failure reasons are a closed set, logged without content.
+- **Approval binding.** The dry-run preview carries an `Approval required` row; the API's
+  Build policy defers such calls to the card (a tool can only make itself stricter). The
+  real write requires a single-use, 30-minute record that a preview of the same plan
+  showed the handshake (`live_preview_required` otherwise), so a lock appearing after
+  approval cannot trigger an unseen save/Revert.
+- **Write path.** `commit_plan(editor_saved=True)` skips only the editor-lock refusal and
+  accepts a re-save that is token-identical to the plan's original; any content change is
+  `stale_plan` with nothing written.
+- **`list_projects`** is Solus-authored (same name; no allowlist change): `os.walk` without
+  following symlinks, every hit re-resolved inside the workspace, depth 6, 50 results.
+- **SOL prompt** (packages/api): missing routine details are filled with stated defaults;
+  ingested-data containment and approval rules are unchanged.
+
+### Security assessment
+
+- Phase 4 security review FAILED the first cut (Build auto-ran the handshake without the
+  ADR-040 §5 approval; preview/commit live mismatch; unverified save; stem-only matching).
+  All four are fixed above and covered by tests.
+- Residuals: window identity is by title, not document path (the window's AXDocument
+  attribute was not evaluated); two open projects with the same root-sheet name are refused rather than
+  disambiguated. Sub-sheets whose window title is the root sheet do not match and keep
+  `open_in_editor`. Accessibility is granted per responsible app (in dev: the terminal's
+  host app); the packaged Solus app needs its own grant.
+
+### Re-review triggers — HIT
+
+- **Declared sandbox posture changed** (synthetic input + Accessibility). Per PROVENANCE
+  "Re-review triggers", the 2026-10-06 sign-offs are void for this capability until both
+  developers re-sign. `upstream/`, `vendor/`, `bin/launch`, `allowlist.yaml` and the
+  lockfile are unchanged (tree hashes as recorded).
+
+### Evidence
+
+`tests/test_live_kicad.py` (ordering, stale on real unsaved edits, token-equal re-save,
+failed Revert note, preview row, preview binding/expiry/single use, driver argv, reason
+codes, script guards), `tests/test_project_discovery.py`,
+`packages/api/tests/test_build_execution_policy.py::test_preview_declaring_approval_required_goes_to_the_card_never_auto_runs`.
+Live run on macOS / KiCad 10.0.1 (2026-10-24): "add a resistor on the current KiCad project
+I have open" placed R3 in the open Schematic Editor and KiCad reloaded it (pre-fix build,
+before the approval card was enforced). Fork suite 484 passed.
+
+### Sign-off
+
+None added — sign-off lines are human (integrations/mcp/CLAUDE.md rule 2).
+
+## 2026-10-24 (later) — ADR-040 amendment step (d), save confirmation, supervisor busy-skip (SOLUSDEV-319)
+
+### What changed
+
+- **Step (d)** (ADR-040 amendment, approved in-chat): after a successful Revert the reloaded,
+  clean sheet is saved once more so the file is in KiCad's canonical form; the tool returns the
+  fingerprint actually on disk. Without it every live edit after a SOL edit was refused once as
+  `stale_plan` (KiCad's save adds default fields, a token-level change).
+- **Save confirmation:** KiCad 10.0.1 rewrites the file on every Save (clean or not; measured),
+  so each Save must change the file's stamp (mtime/inode/size) within 3 s. A swallowed pre-save
+  refuses `open_in_editor` before anything is written; a swallowed re-save is retried once, then
+  reported (`kicad_resave: failed`). Revert waits until the editor, not the dialog, is front.
+- **Companion supervisor** (`packages/companion`): the health pass no longer restarts a server
+  with an in-flight call. A live run showed a sync server busy in the handshake missing the 5 s
+  ping; the restart aborted the call after the write and before the reload, leaving KiCad's
+  Revert dialog open. The cloud owns call timeouts (contract §5).
+
+### Security assessment
+
+No new input vocabulary (Save already in ADR-040 §2). The extra Save runs only after a confirmed
+Revert of the exact path, on a clean sheet. Skipping pings for busy servers cannot extend a call:
+the cloud's per-call timeout still bounds it.
+
+### Evidence
+
+Live, macOS / KiCad 10.0.1, Build mode, approval card shown with the `Approval required` row:
+"add a resistor on the current KiCad project I have open" → R6 applied and reloaded; "add one
+more resistor next to it" → R7 applied and reloaded back to back; both returned fingerprints
+equal the file on disk. Fork suite 489 passed; companion suite 373 passed.
+
+### Sign-off
+
+None added — the sandbox-posture re-review trigger recorded above still needs both developers.

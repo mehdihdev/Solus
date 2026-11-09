@@ -625,6 +625,17 @@ def test_guide_mode_never_proposes_execution() -> None:
     assert "never execute changes" in text
 
 
+def test_build_requests_missing_routine_details_proceed_with_stated_defaults() -> None:
+    """SOLUSDEV-319: "add a resistor" names the change; a missing value or position
+    is a routine detail SOL fills with stated defaults, not a reason to stall."""
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.GUIDE, action_mode=ActionMode.DO).lower()
+    assert "routine details" in text
+    assert "state the defaults" in text
+    assert "only when the goal itself is unclear" in text
+
+
 # ------------------------------------------- what a round's input is measured by (P1-T3)
 
 

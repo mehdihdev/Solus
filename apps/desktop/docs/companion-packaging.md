@@ -10,7 +10,9 @@ The main process resolves the companion via `resolveCompanionCommand`
 (`src/main/companion.ts`):
 
 - **Packaged app**: `<resources>/companion/solus-companion` (`.exe` on Windows),
-  no args.
+  no args. On macOS the binary is one level deeper,
+  `<resources>/companion/solus-companion/solus-companion` (onedir — see below);
+  `resolveCompanionCommand` must resolve that path on darwin.
 - **Dev** (`app.isPackaged === false`): the `SOLUS_COMPANION_DEV_CMD` env var,
   split on whitespace, e.g.
 
@@ -35,16 +37,36 @@ The latest token is remembered (in memory only) and replayed on respawn.
 ./scripts/build-companion.sh
 ```
 
-- Runs PyInstaller (`--onefile`) over
-  `packages/companion/src/solus_companion/__main__.py` with
-  `-p packages/companion/src`, producing repo-root `dist/companion/solus-companion`.
+- Runs PyInstaller over `packages/companion/src/solus_companion/__main__.py`
+  with `-p packages/companion/src`. The mode depends on the host:
+  - **Linux / Windows — `--onefile`**: repo-root `dist/companion/solus-companion`
+    (`.exe` on Windows), with the MCP tree at `dist/companion/mcp/`.
+  - **macOS — `--onedir`** (sol-drive.md §5, ADR-041 amendment 2026-10-27):
+    `dist/companion/solus-companion/solus-companion` plus PyInstaller's
+    `_internal/`, with the MCP tree at `dist/companion/solus-companion/mcp/`.
+    Packaged, that is `<resources>/companion/solus-companion/solus-companion`.
+- **Why macOS is onedir: signed in place.** A onefile binary is a bootloader
+  that unpacks the interpreter and its libraries into a temp dir at run time —
+  code that was never signed. Onedir ships every Mach-O on disk, each signed
+  (below), so the companion that runs is exactly the code that was signed and
+  notarised.
+- PyInstaller is pinned (`PYINSTALLER_VERSION` in the script, currently
+  6.22.3 — the latest 6.x on PyPI on 2026-10-28; it was not in the local uv
+  cache). The bootloader is part of the shipped binary, so bump it
+  deliberately.
+- The MCP tree always sits beside the binary because
+  `config.default_integrations_root` looks for `mcp/` next to `sys.executable`
+  (pinned for both layouts in `packages/companion/tests/test_fork_runtime.py`).
+- The script removes `dist/companion/` first, so switching modes never leaves a
+  file where a folder belongs.
 - PyInstaller is deliberately **not** in any pyproject: the script uses
   `uv run --package solus-companion --with pyinstaller`, layering it ephemerally
   over the companion's real environment so websockets/mcp/pydantic are visible
   to its analysis. (Verified working with PyInstaller 6.21.0 on Linux ARM;
-  the binary boots to companion config validation.)
-- Copies the vendored MCP tree to `dist/companion/mcp/` (excluding
-  `*.template.md` scaffolding).
+  the binary boots to companion config validation. The 6.22.3 pin has not been
+  built yet.)
+- Copies the vendored MCP tree beside the binary (excluding `*.template.md`
+  scaffolding).
 - Build per-platform — PyInstaller does not cross-compile.
 - If a future dependency hides imports from the analyzer, add
   `--hidden-import` / `--copy-metadata` flags in the script.
@@ -52,6 +74,84 @@ The latest token is remembered (in memory only) and replayed on respawn.
 `apps/desktop/electron-builder.yml` ships `dist/companion/` via
 `extraResources` at `<resources>/companion/`. Run the companion build before
 `electron-builder`, e.g. `./scripts/build-companion.sh && pnpm build:linux`.
+
+### macOS signing
+
+When `SOLUS_SIGN_IDENTITY` is set on macOS, `build-companion.sh` signs every
+Mach-O under `solus-companion/_internal/` first, then the main binary with
+`--options runtime --timestamp --identifier com.solusforge.solus.companion`,
+and verifies the binary against the Solus team's Developer ID requirement
+(`SOLUS_TEAM_ID`, ten upper-case letters/digits, is required):
+
+```
+anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6]
+  and certificate leaf[field.1.2.840.113635.100.6.1.13]
+  and certificate leaf[subject.OU] = "<SOLUS_TEAM_ID>"
+  and identifier "com.solusforge.solus.companion"
+```
+
+Unset ⇒ a warning and an unsigned build, which cannot be notarised. Under the
+XPC design (ADR-041 amendment 2026-10-28) the drive agent checks only
+Solus.app's signature — the companion never talks to it — so the companion's
+signature matters for notarisation and integrity, not for driving.
+electron-builder's `mac.signIgnore` leaves it untouched, so Solus.app's own
+entitlements are never applied to it.
+
+Entitlements: none beyond the hardened runtime. A onedir build loads its
+extension modules and Python library from signed files on disk under one team
+signature, so library validation passes without
+`disable-library-validation`. Not yet verified with a real identity: if a
+ctypes callback ever fails under the hardened runtime, the candidate is
+`com.apple.security.cs.allow-unsigned-executable-memory` — add it only with
+that evidence and record why here.
+
+`make desktop-mac` builds the companion (`companion-bin`) and the helper bundle
+(`solus-input-app`, `scripts/build-solus-input.sh`) before
+`pnpm --filter @solus/desktop build:mac`.
+
+### Drive calls: the companion relays, the desktop reaches the agent (slice 3b, XPC)
+
+The companion never talks to the `solus-input` agent and no longer reads
+`SOLUS_DRIVE_HELPER`; `SOLUS_COMPANION_DRIVE=1` (plus macOS and a linked
+workspace) is the only switch. The agent is an XPC Mach service registered by
+Solus.app with SMAppService while "SOL can use your mouse and keyboard" is on;
+its only client is Solus.app's main process. The companion relays each drive
+call to main over the stdin/stdout pipe main created for it
+(`packages/companion/src/solus_companion/drive/helper.py`, `DriveRelay`):
+
+- **Request.** One stdout line `{"type":"drive_request","id":N,"argv":[…]}`,
+  flushed; ids increase. argv is `identify`, `capture` or `act` with its flags.
+- **Reply.** Main answers on stdin with `{"type":"drive_reply","id":N,
+  "reply":{…}}`; `config.apply_token_line` routes it to the pending call. ONE
+  deadline covers the call. A reply over 24 MiB as JSON fails the call
+  (`helper_output`); the reply must be one JSON object with an `ok` flag.
+  Unknown or late ids are dropped. Agent-side failures arrive as replies with
+  a refusal code (`agent_unavailable` when main cannot reach the agent).
+- **Cancel.** Timeout or cancellation (Stop, a dropped bridge) writes
+  `{"type":"drive_cancel","id":N}`; main stops the call in flight.
+- **Stdin bounds.** The reader limit is 25 MiB so a capture-sized reply fits.
+  Every other control line keeps its 32 KiB bound and is refused before
+  parsing exactly as before; an oversize line is parsed only if it starts with
+  `{"type":"drive_reply",` (main serialises `type` first) and is refused if it
+  then turns out not to be a drive reply. Without a stdin control channel the
+  relay is not attached and calls refuse `agent_unavailable` at once.
+- **Stdout** carries only `drive_request`, `drive_cancel` and the
+  `drive_window` outline lines; logging goes to stderr.
+
+### Known limitation: allowlisted environment (no proxy variables)
+
+A packaged companion does not inherit the app's environment wholesale
+(ADR-041 amendment 2026-10-28): `companionEnv` in
+`src/main/companionEnv.ts` passes only `PATH`, `HOME`, `USER`, `LOGNAME`,
+`TMPDIR`, `LANG` and `LC_*` (`PACKAGED_ENV_ALLOWLIST`), then sets the
+`SOLUS_COMPANION_*` values itself. Inherited `SOLUS_COMPANION_*` and `PYTHON*`
+are deliberately ignored. A side effect is that `HTTPS_PROXY` / `HTTP_PROXY` /
+`NO_PROXY`, `SSL_CERT_FILE` / `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE` and similar
+are **not** passed, so a packaged companion behind a corporate proxy or a
+TLS-intercepting CA cannot reach the cloud. Dev runs are unaffected because
+they inherit the full environment. Supporting proxies needs a follow-up
+decision on which variables to admit and how to validate them. Do not widen
+the allowlist ad hoc.
 
 ## Supervision, pidfile, orphan reap
 

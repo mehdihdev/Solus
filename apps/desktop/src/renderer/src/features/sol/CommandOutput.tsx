@@ -12,6 +12,7 @@ export function CommandOutput({ run }: { run: CommandRun }): React.JSX.Element {
   const placeholder = finished ? 'No output.' : 'Waiting for command output…'
   return (
     <div className="confirmation-card__output" aria-label="Command output" role="group">
+      {!finished && <div className="confirmation-card__running" aria-hidden="true" />}
       {run.unavailable && !finished && <p>Progress unavailable. Waiting for the command result.</p>}
       <CodeBlock kind="output" text={run.text} shown={run.text || placeholder} scrollable />
       {run.truncated && (

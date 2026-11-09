@@ -11,8 +11,9 @@ from uuid import UUID
 from solus_api.agent.tools.untrusted import redact_text
 
 Stream = Literal["stdout", "stderr"]
-#: Tools whose approved execution streams incremental output (SOLUSDEV-261/317).
-STREAMING_TOOLS: Final = frozenset({"code.run", "code.test", "code.exec"})
+#: Tools whose approved execution streams incremental output (SOLUSDEV-261/317;
+#: `drive.step` streams its action lines, ADR-041 / sol-drive.md §4).
+STREAMING_TOOLS: Final = frozenset({"code.run", "code.test", "code.exec", "drive.step"})
 
 
 class OutputSink(Protocol):

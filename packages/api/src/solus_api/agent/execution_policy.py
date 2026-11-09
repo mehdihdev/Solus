@@ -41,6 +41,11 @@ _ISAAC = frozenset(
         "isaac.run_routine",
     }
 )
+#: A preview row with this label means the tool itself demands a human approval
+#: for this call (ADR-040 §5). It can only make a call stricter: Build defers it
+#: to the card instead of running it automatically.
+APPROVAL_REQUIRED_LABEL = "Approval required"
+
 # Reviewed native schemas, canonical JSON SHA256. A fork schema change requires
 # review before automatic execution; it cannot expand its own authority.
 _BRIDGE_SCHEMAS = {
@@ -171,6 +176,9 @@ class BuildExecutionPolicy:
                 "The routine changed during validation. "
                 "Nothing was executed; inspect current state.",
             )
+        if any(row.get("label") == APPROVAL_REQUIRED_LABEL for row in before):
+            self._deferred.add(claimed)
+            return False
         if command and scopes != [SYSTEM_SCOPE, SYSTEM_SCOPE]:
             # A workspace (or unknown) program is project code: it keeps its card.
             self._deferred.add(claimed)

@@ -10,8 +10,24 @@
 import { app } from 'electron'
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
-import { companionEnv, findIntegrationsRoot } from './companionEnv'
+import {
+  companionDrive,
+  companionEnv,
+  driveDecisionKey,
+  findIntegrationsRoot,
+  spawnedDrive
+} from './companionEnv'
 import { projectWorkspace, realLocalStateDeps } from './localState'
+import { createCompanionStdoutReader } from './drive/driveWindow'
+import {
+  createDriveGeometryRelay,
+  driveRelayGate,
+  driveRespawnNeeded,
+  folderChangeAction
+} from './drive/companionDrive'
+import type { Rect } from './capture/screenCapture'
+import { createDriveRelay } from './drive/driveRelay'
+import type { DriveTransport } from './drive/driveTransport'
 import { resolveApiBaseUrl } from '../renderer/src/lib/cspConnect'
 import { join } from 'node:path'
 
@@ -42,6 +58,14 @@ export function resolveCompanionCommand(
   rt: CompanionRuntime
 ): { command: string; args: string[] } | null {
   if (rt.isPackaged) {
+    // macOS ships PyInstaller --onedir (sol-drive.md §5): a onefile bootloader
+    // would sit between the drive helper and Solus.app in the caller check.
+    if (rt.platform === 'darwin') {
+      return {
+        command: join(rt.resourcesPath, 'companion', 'solus-companion', 'solus-companion'),
+        args: []
+      }
+    }
     const bin = rt.platform === 'win32' ? 'solus-companion.exe' : 'solus-companion'
     return { command: join(rt.resourcesPath, 'companion', bin), args: [] }
   }
@@ -161,6 +185,49 @@ let activeProjectId: string | null = null
  *  write. `undefined` ⇒ no child has been spawned yet. */
 let activeWorkspace: string | null | undefined
 
+/** SOLUSDEV-319 drive slices 3/3b (sol-drive.md §3, §5): may this project's
+ *  companion drive — on AND available? Read at every spawn, like the
+ *  workspace; no resolver ⇒ never. */
+type DriveResolver = (projectId: string | null) => boolean
+let driveResolver: DriveResolver | null = null
+/** The drive decision baked into the running child, as `driveDecisionKey`:
+ *  null ⇒ drive off, '' ⇒ on without a folder, else the folder the
+ *  nested-folder rule checked (the only `--within` main relays for it).
+ *  `undefined` ⇒ no child spawned yet. */
+let activeDriveKey: string | null | undefined
+/** HIGH-1: main's own-bundle check, run at each drive spawn (null: dev, none). */
+let driveSpawnCheck: (() => Promise<boolean>) | null = null
+/** Main's transport to the helper (XPC packaged, debug helper in dev). */
+let driveTransport: (() => DriveTransport | null) | null = null
+/** The companion relays drive calls to main (3b, XPC); replies go to its stdin. */
+const driveRelay = createDriveRelay({
+  packaged: app.isPackaged,
+  transport: () => driveTransport?.() ?? null,
+  write: (target, line) => writeStdin(target as ChildProcess, line)
+})
+/** drive_window bounds → main's outline: current child, spawned with drive, only. */
+const driveGeometry = createDriveGeometryRelay()
+
+function resolveDrive(): boolean {
+  try {
+    return driveResolver?.(activeProjectId) ?? false
+  } catch {
+    return false // availability unknowable ⇒ off; the setting is the consent, not a default
+  }
+}
+
+/** The drive key a child spawned now would get — the env builder's own
+ *  decision (L6), so a dev workspace override does not look like a change. */
+function driveKeyNow(): string | null {
+  return driveDecisionKey(
+    companionDrive(process.env, {
+      workspace: projectWorkspace(activeProjectId, realLocalStateDeps),
+      drive: resolveDrive(),
+      packaged: app.isPackaged
+    })
+  )
+}
+
 function pidfilePath(): string {
   return join(app.getPath('userData'), 'companion.pid')
 }
@@ -253,6 +320,34 @@ function apiBaseUrl(): string {
   return resolveApiBaseUrl(import.meta.env.VITE_API_BASE_URL)
 }
 
+/** Inherited PLUS the variables the companion cannot start without.
+ *
+ *  The integrations root is resolved only for a dev run: a packaged build
+ *  finds the tree beside its own binary, and passing a path derived from the
+ *  app directory would override that with something wrong. `null` when
+ *  nothing resolves, so the companion still reports the missing variable
+ *  itself instead of running with zero MCP servers. */
+function childEnv(workspace: string | null, driveOn: boolean): Record<string, string | undefined> {
+  return companionEnv(process.env, apiBaseUrl(), {
+    integrationsRoot: app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync),
+    projectId: activeProjectId,
+    workspace,
+    drive: driveOn,
+    // H-1: packaged builds never inherit SOLUS_COMPANION_* / PYTHON*.
+    packaged: app.isPackaged
+  })
+}
+
+/** spawn throws synchronously for a malformed argument (e.g. a NUL byte in an
+ *  env value). Do NOT leave the supervisor dead: schedule a backed-off retry on
+ *  the same path a crash would take (SOLUSDEV-166 review M4). */
+function retryFailedSpawn(cmd: { command: string; args: string[] }, error: unknown): void {
+  console.warn('[companion] spawn failed:', error instanceof Error ? error.message : error)
+  child = null
+  attempt = nextRestartAttempt(attempt, 0)
+  restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
+}
+
 function spawnChild(cmd: { command: string; args: string[] }): void {
   restartTimer = null
   if (stopped) return
@@ -262,6 +357,7 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
   // so a folder-link change respawns only when the value actually changed.
   const workspace = projectWorkspace(activeProjectId, realLocalStateDeps)
   activeWorkspace = workspace
+  const env = childEnv(workspace, resolveDrive())
   let c: ChildProcess
   try {
     c = spawn(cmd.command, cmd.args, {
@@ -269,36 +365,43 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
       // stderr is PIPED, not ignored. The companion validates its own config and
       // exits; with stderr discarded that surfaced as a silent restart loop and
       // was why the bridge never came up (CAD-02).
-      stdio: ['pipe', 'ignore', 'pipe'],
-      // Inherited PLUS the variables the companion cannot start without.
-      //
-      // The integrations root is resolved only for a dev run: a packaged build
-      // finds the tree beside its own binary, and passing a path derived from the
-      // app directory would override that with something wrong. `null` when
-      // nothing resolves, so the companion still reports the missing variable
-      // itself instead of running with zero MCP servers.
-      env: companionEnv(process.env, apiBaseUrl(), {
-        integrationsRoot: app.isPackaged
-          ? null
-          : findIntegrationsRoot(app.getAppPath(), existsSync),
-        projectId: activeProjectId,
-        workspace
-      })
+      // stdout carries only the drive server's geometry and relay lines
+      // (sol-drive.md §3); it is read through a bounded, strictly-validating reader.
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env
     })
   } catch (error) {
-    // spawn throws synchronously for a malformed argument (e.g. a NUL byte in
-    // an env value). Do NOT leave the supervisor dead: schedule a backed-off
-    // retry on the same path a crash would take (SOLUSDEV-166 review M4).
-    console.warn('[companion] spawn failed:', error instanceof Error ? error.message : error)
-    child = null
-    attempt = nextRestartAttempt(attempt, 0)
-    restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
+    retryFailedSpawn(cmd, error)
     return
   }
   c.stderr?.on('data', (chunk: Buffer) => {
     // Bounded: a crash-looping child must not fill the log.
     console.warn('[companion]', chunk.toString('utf8').slice(0, 2_000).trimEnd())
   })
+  // Drive is on for this child only if its env says so (the env builder may
+  // have refused, e.g. a dev workspace override); then `--within` must be the
+  // workspace checked for it, or absent when no folder is linked (window-bound
+  // driving, ADR-041 2026-10-31). A child spawned without drive gets nothing.
+  const drive = spawnedDrive(env, workspace)
+  activeDriveKey = driveDecisionKey(drive)
+  // HIGH-1: Solus.app's own signature is re-checked at every drive spawn; the
+  // relay holds this child's calls until it answers, and a false answer
+  // reaches no agent (main then re-evaluates and respawns without drive).
+  driveRelay.attach(
+    c,
+    drive,
+    driveRelayGate({
+      driveOn: drive !== null,
+      packaged: app.isPackaged,
+      spawnCheck: driveSpawnCheck
+    })
+  )
+  const reader = createCompanionStdoutReader({
+    onBounds: driveGeometry.attach(c, drive !== null),
+    onRequest: (request) => driveRelay.request(c, request),
+    onCancel: (id) => driveRelay.cancel(c, id)
+  })
+  c.stdout?.on('data', (chunk: Buffer) => reader.push(chunk))
   child = c
   spawnedAt = Date.now()
   if (c.pid) {
@@ -316,6 +419,8 @@ function spawnChild(cmd: { command: string; args: string[] }): void {
     if (down) return
     down = true
     if (child === c) child = null
+    driveGeometry.detach(c)
+    driveRelay.detach(c)
     if (stopped) return
     attempt = nextRestartAttempt(attempt, Date.now() - spawnedAt)
     restartTimer = setTimeout(() => spawnChild(cmd), backoffDelayMs(attempt))
@@ -375,16 +480,54 @@ export function setCompanionProject(projectId: string | null): void {
  * A project's folder link changed in the ~/.solus registry (SOLUSDEV-166).
  * The workspace is baked into the child's environment at spawn — exactly like
  * the project id — so when it is the ACTIVE project's link that changed, the
- * companion respawns to pick it up. Other projects' links are irrelevant.
+ * companion respawns to pick it up.
  *
- * Respawn only when the resolved workspace ACTUALLY changed (review M5): a
- * re-link to the same path, or any link event that leaves the value untouched,
- * must not churn the process and its whole MCP fork tree.
+ * ANY project's link can change drive availability (SOLUSDEV-319 nested-folder
+ * rule: another project linked inside or around the active folder turns drive
+ * off), so the drive decision is re-checked for every link event too.
+ *
+ * Respawn only when the resolved workspace or drive workspace ACTUALLY changed
+ * (review M5): a re-link to the same path, or any link event that leaves both
+ * untouched, must not churn the process and its whole MCP fork tree.
  */
 export function notifyProjectFolderChanged(projectId: string): void {
-  if (activeProjectId === null || projectId !== activeProjectId) return
-  if (projectWorkspace(activeProjectId, realLocalStateDeps) === activeWorkspace) return
-  replaceChild()
+  const action = folderChangeAction({
+    changedProjectId: projectId,
+    activeProjectId,
+    workspaceNow: projectWorkspace(activeProjectId, realLocalStateDeps),
+    workspaceBaked: activeWorkspace
+  })
+  if (action === 'respawn') replaceChild()
+  else if (action === 'recheck_drive') notifyCompanionDriveChanged()
+}
+
+/** SOLUSDEV-319 HIGH-1: the own-bundle check run at every drive spawn. */
+export function setCompanionDriveSpawnCheck(check: (() => Promise<boolean>) | null): void {
+  driveSpawnCheck = check
+}
+
+/** SOLUSDEV-319 slice 3b (XPC): main's transport to the helper for relayed calls. */
+export function setCompanionDriveTransport(transport: (() => DriveTransport | null) | null): void {
+  driveTransport = transport
+}
+
+/** SOLUSDEV-319: install the drive decision (main's DriveController). */
+export function setCompanionDriveResolver(resolver: DriveResolver | null): void {
+  driveResolver = resolver
+}
+
+/** The drive setting or availability may have changed: respawn the RUNNING
+ *  child only when its baked drive workspace differs. A child not yet (re)spawned reads
+ *  the fresh decision at spawn anyway. */
+export function notifyCompanionDriveChanged(): void {
+  const state = { hasChild: child !== null, baked: activeDriveKey }
+  if (driveRespawnNeeded(state, driveKeyNow())) replaceChild()
+}
+
+/** Main's outline hears the latest drive_window bounds; null when the child
+ *  that reported them is gone. */
+export function onCompanionDriveWindow(listener: ((bounds: Rect | null) => void) | null): void {
+  driveGeometry.setListener(listener)
 }
 
 /** Kill the current child (if any) and spawn a fresh one against the current
@@ -400,7 +543,11 @@ function replaceChild(): void {
   }
   const previous = child
   child = null // detach first: onDown must not schedule a restart for the old config
-  if (previous) retire(previous)
+  if (previous) {
+    retire(previous)
+    driveGeometry.detach(previous)
+    driveRelay.detach(previous)
+  }
   attempt = -1
   if (!started) return
   // Coalesce (M2): the previous child is already being retired; the respawn
@@ -484,6 +631,10 @@ export async function stopCompanion(): Promise<void> {
   }
   const c = child
   child = null
+  if (c) {
+    driveGeometry.detach(c)
+    driveRelay.detach(c)
+  }
   if (c?.pid && c.exitCode === null && c.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       c.once('exit', () => resolve())

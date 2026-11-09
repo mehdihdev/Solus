@@ -287,14 +287,16 @@ def test_native_library_root_precedes_flatpak_probe(
     assert library.installed_library_root() == tmp_path
 
 
-def test_publication_then_oserror_reports_uncertain(tmp_path, monkeypatch):
+def test_publication_then_oserror_reports_uncertain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     target = tmp_path / "a.kicad_sch"
     target.write_bytes(EMPTY)
     proposed = EMPTY + b" "
     plan = MutationPlan.build(target.name, EMPTY, proposed, {}, [])
     real_replace = os.replace
 
-    def replace_then_raise(*args, **kwargs):
+    def replace_then_raise(*args: Any, **kwargs: Any) -> None:
         real_replace(*args, **kwargs)
         raise OSError("reported after publication")
 
@@ -304,7 +306,9 @@ def test_publication_then_oserror_reports_uncertain(tmp_path, monkeypatch):
     assert target.read_bytes() == proposed
 
 
-def test_final_directory_swap_never_reports_verified(tmp_path, monkeypatch):
+def test_final_directory_swap_never_reports_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     directory = tmp_path / "nested"
     directory.mkdir()
     target = directory / "a.kicad_sch"
@@ -317,7 +321,7 @@ def test_final_directory_swap_never_reports_verified(tmp_path, monkeypatch):
     real_fsync = os.fsync
     swapped = False
 
-    def swap_after_directory_sync(fd):
+    def swap_after_directory_sync(fd: int) -> None:
         nonlocal swapped
         import stat
 

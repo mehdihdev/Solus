@@ -1238,6 +1238,116 @@
         }
       }
     },
+    "/api/v1/users/me/invites": {
+      "get": {
+        "summary": "List My Invites",
+        "operationId": "list_my_invites_api_v1_users_me_invites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List My Invites Api V1 Users Me Invites Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/accept": {
+      "post": {
+        "summary": "Accept My Invite",
+        "operationId": "accept_my_invite_api_v1_users_me_invites__invite_id__accept_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Accept My Invite Api V1 Users Me Invites  Invite Id  Accept Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/decline": {
+      "post": {
+        "summary": "Decline My Invite",
+        "operationId": "decline_my_invite_api_v1_users_me_invites__invite_id__decline_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teams/{team_id}/activity": {
       "get": {
         "summary": "List Activity",
@@ -2719,6 +2829,127 @@
               "application/json": {
                 "schema": {
                   "title": "Response Create Portal Session Api V1 Billing Portal Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get Academic",
+        "description": "The caller's academic status (none / pending / active / expired).",
+        "operationId": "get_academic_api_v1_billing_academic_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Academic Api V1 Billing Academic Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/code": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Send Academic Code",
+        "description": "Email a 6-digit code to an academic address (rate-limited; see the service).",
+        "operationId": "send_academic_code_api_v1_billing_academic_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicCodeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Academic Code Api V1 Billing Academic Code Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/verify": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Verify Academic Code",
+        "description": "Check the code; on a match the caller's plan becomes Academic.",
+        "operationId": "verify_academic_code_api_v1_billing_academic_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicVerifyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Verify Academic Code Api V1 Billing Academic Verify Post"
                 }
               }
             }
@@ -15602,6 +15833,39 @@
   },
   "components": {
     "schemas": {
+      "AcademicCodeCreate": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "AcademicCodeCreate",
+        "description": "POST /billing/academic/code (ADR-042). The domain rule is checked by the service so\nthe error code is specific (`not_academic_email`), not a generic validation error."
+      },
+      "AcademicVerifyCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "AcademicVerifyCreate",
+        "description": "POST /billing/academic/verify: exactly six ASCII digits."
+      },
       "AcceptWiring": {
         "properties": {
           "digest": {
@@ -17326,6 +17590,91 @@
         "title": "FocusIn",
         "description": "The workspace focus a page send carries: the entity the person is looking at and the\ntrail they came through (oldest first, the focus itself excluded). It rides every page\nsend, so ids in it that went stale are dropped rather than refused \u2014 see\n`turn_scope.plan_scope`."
       },
+      "FrontAppBinding": {
+        "properties": {
+          "bundle_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$",
+            "title": "Bundle Id"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2147483647.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4294967295.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Id"
+          },
+          "drivable": {
+            "type": "boolean",
+            "title": "Drivable"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "window"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bundle_id",
+          "name",
+          "title",
+          "pid",
+          "window_id",
+          "drivable",
+          "binding"
+        ],
+        "title": "FrontAppBinding",
+        "description": "The turn's `front_app`, with the API doc's shape and consistency rules \u2014\nusable directly as the request-body field type."
+      },
       "GazeboSimConfig": {
         "properties": {
           "provider": {
@@ -18742,6 +19091,16 @@
                 "type": "null"
               }
             ]
+          },
+          "front_app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrontAppBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -19522,7 +19881,8 @@
         "enum": [
           "basic",
           "pro",
-          "enterprise"
+          "enterprise",
+          "academic"
         ],
         "title": "PlanType"
       },

@@ -57,6 +57,7 @@ from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEdge, GraphEntity
 from solus_api.orchestration import gateway
 from solus_api.orchestration.enums import Complexity, RouteType
+from solus_api.orchestration.providers import ProviderRefusalError
 from solus_api.services.solus_graph import lock_project
 
 if TYPE_CHECKING:
@@ -302,7 +303,8 @@ class _MotifLabeller:
             raise ToolException(
                 f"the labelling call failed ({type(exc).__name__})",
                 code=ToolErrorCode.UNAVAILABLE,
-                retryable=True,
+                # A refusal repeats for the same request; retrying only burns turn calls.
+                retryable=not isinstance(exc, ProviderRefusalError),
             ) from None
         return completion.text
 

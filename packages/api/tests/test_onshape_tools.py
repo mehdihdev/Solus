@@ -22,6 +22,7 @@ from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode
 from solus_api.connectors.contracts import Credentials
 from solus_api.connectors.onshape import ONSHAPE_API_BASE, OnshapeConnector
+from solus_api.connectors.onshape_confirmation import ConfirmedOnshapeTool
 from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.connectors.runtime import refresh_secret_ref
 from solus_api.connectors.secrets import InMemorySecretStore
@@ -135,7 +136,33 @@ async def test_read_tools_are_not_confirmation_gated(
         "onshape.create_fastened_mate",
         "onshape.restore_fastened_pose",
         "onshape.create_revolute_mate",
+        # SOLUSDEV-319: removal and rename.
+        "onshape.suppress_feature",
+        "onshape.rename_feature",
+        "onshape.delete_feature",
+        "onshape.delete_instance",
     }
+
+
+async def test_removal_tools_bind_the_approved_preview(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SOLUSDEV-319: these runners call `require_matching_preview`, so a tool built
+    without the preview binding would refuse every approved write as stale."""
+    project_id, _ref = await _seed(maker)
+    tools = {
+        tool.descriptor.name: tool
+        for tool in build_onshape_tools(
+            maker, project_id, secret_store=InMemorySecretStore(), connectors=_connectors()
+        )
+    }
+    for name in (
+        "onshape.suppress_feature",
+        "onshape.rename_feature",
+        "onshape.delete_feature",
+        "onshape.delete_instance",
+    ):
+        assert isinstance(tools[name], ConfirmedOnshapeTool), name
 
 
 # --------------------------------------------------------------- invocation

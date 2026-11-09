@@ -501,3 +501,93 @@ describe('SOLUSDEV-317 resume turns', () => {
     ).rejects.toMatchObject({ status: 502, code: 'sol_stream_failed' })
   })
 })
+
+describe('SOLUSDEV-319 slice 4 front_app', () => {
+  const base = {
+    projectId: 'p1',
+    conversationId: 'c1',
+    actionMode: 'do' as const,
+    onEvent: vi.fn(),
+    getToken: async () => null,
+    baseUrl: 'http://api.test/api/v1'
+  }
+  const FREECAD = {
+    drivable: true as const,
+    binding: 'window' as const,
+    bundleId: 'org.freecad.FreeCAD',
+    name: 'FreeCAD',
+    pid: 4242,
+    windowId: 77,
+    title: 'bracket_v3.FCStd'
+  }
+  const WIRE_FREECAD = {
+    bundle_id: 'org.freecad.FreeCAD',
+    name: 'FreeCAD',
+    title: 'bracket_v3.FCStd',
+    pid: 4242,
+    window_id: 77,
+    drivable: true,
+    binding: 'window'
+  }
+
+  async function bodyOf(
+    input: Partial<Parameters<typeof streamSolMessage>[0]>
+  ): Promise<Record<string, unknown>> {
+    const fetchImpl = vi.fn(async () => sseResponse(''))
+    await streamSolMessage({
+      ...base,
+      content: 'add a fillet',
+      ...input,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    return JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string
+    ) as Record<string, unknown>
+  }
+
+  it('a Build turn from the pill carries the snapshot with every key', async () => {
+    expect((await bodyOf({ frontApp: FREECAD })).front_app).toEqual(WIRE_FREECAD)
+  })
+
+  it('a denied app is sent with explicit nulls', async () => {
+    const body = await bodyOf({
+      frontApp: { drivable: false, binding: null, bundleId: 'com.apple.mail', name: 'Mail' }
+    })
+    expect(body.front_app).toEqual({
+      bundle_id: 'com.apple.mail',
+      name: 'Mail',
+      title: null,
+      pid: null,
+      window_id: null,
+      drivable: false,
+      binding: null
+    })
+  })
+
+  it('omits front_app with no snapshot, and in Guide mode', async () => {
+    expect(await bodyOf({ frontApp: null })).not.toHaveProperty('front_app')
+    expect(await bodyOf({ frontApp: FREECAD, actionMode: 'guide' })).not.toHaveProperty('front_app')
+  })
+
+  it('never sends front_app on a resume or a wake turn', async () => {
+    const resume = await bodyOf({ content: '', resumeConfirmationId: 'cf-1', frontApp: FREECAD })
+    expect(resume).not.toHaveProperty('front_app')
+    const wake = await bodyOf({
+      content: '',
+      processPrompt: { processId: 'pr-1', promptSeq: 2 },
+      frontApp: FREECAD
+    })
+    expect(wake).not.toHaveProperty('front_app')
+  })
+
+  it('reads the pill’s snapshot from the SOL window store when not given', async () => {
+    const { useSolWindowStore } = await import('./solWindowStore')
+    useSolWindowStore.setState({ frontApp: FREECAD })
+    try {
+      expect((await bodyOf({})).front_app).toEqual(WIRE_FREECAD)
+    } finally {
+      useSolWindowStore.setState({ frontApp: null })
+    }
+    expect(await bodyOf({})).not.toHaveProperty('front_app')
+  })
+})

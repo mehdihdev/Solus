@@ -128,18 +128,27 @@ class _FakeAnthropicRecorder:
         self.stream_kwargs: dict[str, object] = {}
 
 
-def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder, usage: object | None = None) -> type:
+def _fake_anthropic_cls(
+    recorder: _FakeAnthropicRecorder,
+    usage: object | None = None,
+    *,
+    stop_reason: str = "end_turn",
+    stop_details: object | None = None,
+) -> type:
     class FakeUsage:
         input_tokens = 7
         output_tokens = 9
 
     final_usage = FakeUsage() if usage is None else usage
+    final_stop_reason, final_stop_details = stop_reason, stop_details
 
     class FakeFinalMessage:
         usage = final_usage
         # Real messages always carry content blocks; the adapter now scans them
         # for tool_use (SOLUS-RUN-01). Empty = a text-only reply.
         content: list[object] = []
+        stop_reason = final_stop_reason
+        stop_details = final_stop_details
 
     class FakeStreamManager:
         async def __aenter__(self) -> "FakeStreamManager":
@@ -700,3 +709,97 @@ async def test_gemini_sdk_transport_failure_sends_once(
             pass
     assert calls == 1
     assert transport.is_closed
+
+
+# --- Refusals (SOLUSDEV-319: a refused Fable turn became a silent, billed, empty answer) ---
+
+
+_REFUSAL_TEXT = "This request triggered restrictions on violative cyber content and was blocked"
+
+
+async def test_anthropic_refusal_raises_with_the_category_and_reports_no_usage(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`stop_reason: refusal` is not an answer: the adapter raises a typed error carrying only
+    the category, never Anthropic's explanation, and yields no Usage, so nothing is debited.
+    The tokens Solus was billed for still reach the operator log."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    details = SimpleNamespace(type="refusal", category="cyber", explanation=_REFUSAL_TEXT)
+    fake = _fake_anthropic_cls(recorder, stop_reason="refusal", stop_details=details)
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+    seen: list[object] = []
+    caplog.set_level(logging.WARNING, logger="solus.orchestration.providers")
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        async for event in adapter.stream("claude-x", "q", max_tokens=8):
+            seen.append(event)
+
+    assert raised.value.category == "cyber"
+    # The billed tokens ride on the error, so the gateway can debit a refusal that streamed.
+    assert raised.value.usage == Usage(tokens_in=7, tokens_out=9)
+    assert isinstance(raised.value, ProviderError)
+    assert not isinstance(raised.value, ProviderTransientError)  # never retried as-is
+    assert _REFUSAL_TEXT not in str(raised.value)
+    assert not any(isinstance(event, Usage) for event in seen)
+    assert recorder.events[-1] == "client_exit"  # the stream is still closed cleanly
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "claude-x" in logged and "cyber" in logged and "tokens_in=7" in logged
+    assert _REFUSAL_TEXT not in logged
+
+
+async def test_a_refusal_with_malformed_usage_is_still_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider output is untrusted: a broken usage block must not turn the refusal into a
+    generic failure (it would then skip the refusal cap and the re-route)."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    broken = SimpleNamespace(input_tokens=None, output_tokens=None)
+    fake = _fake_anthropic_cls(recorder, broken, stop_reason="refusal")
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.usage is None
+
+
+async def test_anthropic_refusal_without_details_has_no_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    monkeypatch.setattr(
+        "anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder, stop_reason="refusal")
+    )
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.category is None
+
+
+@pytest.mark.parametrize("category", ["", "x" * 65, "cy ber", 7])
+async def test_an_untrusted_refusal_category_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, category: object
+) -> None:
+    """Provider output is untrusted: only a short snake_case word is kept as the category."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    details = SimpleNamespace(category=category)
+    fake = _fake_anthropic_cls(recorder, stop_reason="refusal", stop_details=details)
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.category is None

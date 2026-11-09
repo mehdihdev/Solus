@@ -611,6 +611,46 @@ async def test_loop_guard_is_enforced_by_the_plumbing(
     assert getattr(app.state.agent_runner, "closed", False)
 
 
+class _RefusedAfterAToolRunner:
+    """Round 1 ran a tool; round 2's model refused (SOLUSDEV-319 refusal handling)."""
+
+    async def run(self, ctx: Any) -> Any:
+        from solus_api.agent.tools import ToolResult
+        from solus_api.orchestration.providers import ProviderRefusalError
+
+        call = ToolCall(tool="get_entity", args={"entity_id": str(uuid.uuid4())}, call_id="c1")
+        yield AgentEvent.tool_call(call)
+        yield AgentEvent.tool_result(ToolResult(call_id="c1", ok=True, value={"found": False}))
+        raise ProviderRefusalError("anthropic/claude-x refused the request", category="cyber")
+
+
+async def test_a_refusal_ends_the_turn_as_model_refused_and_keeps_the_tool_turns(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """A refusal is a bounded abort, not a hard failure: the tool call that already ran stays in
+    the conversation, the frame names `model_refused` with Solus-authored text, and `done`
+    follows."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _RefusedAfterAToolRunner()
+    base = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}"
+
+    resp = await client.post(
+        f"{base}/messages", json={"content": "go", "action_mode": "do"}, headers=alice_headers
+    )
+
+    events = _parse_sse(resp.text)
+    error = next(d for t, d in events if t == "error")
+    assert error == {
+        "code": "model_refused",
+        "message": "The model declined to answer this. Try rephrasing.",
+    }
+    assert [t for t, _ in events][-1] == "done"
+    turns = (await client.get(f"{base}/turns", headers=alice_headers)).json()["data"]
+    assert [t["role"] for t in turns] == ["assistant", "tool", "user"]  # newest first
+    assert turns[0]["attrs"]["aborted"] == "model_refused"
+
+
 class _SlowRunner:
     """A runner that never returns in time — used to prove the turn is time-bounded (§7)."""
 
@@ -1222,3 +1262,60 @@ async def test_scoped_prior_tool_payload_reaches_next_turn_without_replaying_act
     assert "observed-leader-axis" in text
     assert "foreign-private-axis" not in text
     assert "never-replay" not in text
+
+
+class _FailingToolRunner:
+    """Streams one refused tool call, the way a bridge refusal arrives."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    async def run(self, ctx: Any) -> AsyncIterator[AgentEvent]:
+        from solus_api.agent.tools.shapes import ToolError, ToolErrorCode, ToolResult
+
+        yield AgentEvent.tool_call(ToolCall(call_id="c1", tool="kicad.add_symbol", args={}))
+        error = ToolError(code=ToolErrorCode.TOOL_ERROR, message=self.message)
+        yield AgentEvent.tool_result(ToolResult.failure("c1", error))
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ("unsupported_symbol: the symbol uses a construct R1 at /home/x", "unsupported_symbol"),
+        ("stale_plan: read it again", "stale_plan"),
+        ("stale_plan", None),
+        ("hunter2abc: leaked", None),
+        ("a_" + "b" * 40 + ": overlong word", None),
+        ("Free-form failure text from some tool", None),
+    ],
+)
+async def test_tool_invoked_event_records_failure_code_not_message(
+    app: Any,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    db: AsyncSession,
+    message: str,
+    reason: str | None,
+) -> None:
+    from solus_api.models import DataEvent
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _FailingToolRunner(message)
+    await client.patch(
+        "/api/v1/users/me/settings", json={"data_collection_consent": True}, headers=alice_headers
+    )
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "place a resistor"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    event = (
+        await db.scalars(select(DataEvent).where(DataEvent.event_type == "agent.tool_invoked"))
+    ).one()
+    assert event.payload["ok"] is False
+    assert event.payload["error_code"] == "tool_error"
+    assert event.payload.get("reason") == reason
+    assert "/home/x" not in json.dumps(event.payload)

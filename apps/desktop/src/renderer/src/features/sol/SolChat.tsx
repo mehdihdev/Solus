@@ -10,35 +10,35 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { SolusLogo } from '../../components/ui/SolusLogo'
-import { Switch } from '../../components/ui/Switch'
-import { Icons } from '../../components/ui/icons.constants'
 import { DomainDot } from './domainDot'
 import { citationDomain, citationTarget, type CitationTarget } from './domainIds'
 import { ReasoningBlock } from './ReasoningBlock'
 import { pageAnchors } from './pageAnchors'
-import { takeDraft } from './pinnedContextStore'
-import { ClassifyIndicator } from './ClassifyIndicator'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
+import { commandHeader } from './commandCard'
+import { PlanCard } from './PlanCard'
 import { AutoRunsView } from './AutoRunRow'
 import { ResearchPills } from './ResearchPills'
 import { AnswerSourceBadge } from './AnswerSourceBadge'
 import { BudgetNotice } from './BudgetNotice'
 import { TraceArgs } from './TraceArgs'
 import { CommandOutput } from './CommandOutput'
+import { DriveStrip } from './DriveStrip'
+import { isDriveTool } from './driveProgress'
 import { ProcessStrip } from './ProcessStrip'
-import { COMPOSER_ATTR, CommandApprovalContext, useCommandShortcut } from './commandHotkey'
+import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
+import { Composer, type ComposerSend } from './Composer'
+import { PillPanel } from './PillPanel'
+import { newestPendingCommand, PillTakeover, useTakeoverFocusReturn } from './PillTakeover'
 import { SolMarkdown } from './Markdown'
-import { ModeBadge } from './ModeBadge'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
-import type { Entity } from '../../lib/api/resources'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { useClassifyPreview } from './useClassifyPreview'
-import { useMentionPicker, type MentionPicker } from './useMentionPicker'
 import type { SolActionMode, SolScreenshot } from './solApi'
+import type { SolRegionPayload } from '../../../../main/sol-window/solWindow'
 import { selectSession, setForceConfirmation, useSolChatStore } from './solChatStore'
 import { regionToScreenshot, useSolActionMode, useSolWindowStore } from './solWindowStore'
 import {
@@ -50,6 +50,9 @@ import {
 } from './useSolChat'
 
 const CITATION_DISPLAY_CAP = 64
+
+/** The message the plan's "Show me how instead" sends, in Guide mode. */
+const SHOW_ME_HOW = 'Show me how to do that myself, step by step, instead of doing it for me.'
 
 /** Display ceiling on the citations region (SEC-M5). */
 const MAX_CITATIONS = 12
@@ -225,6 +228,49 @@ function ParkedConfirmation({
   return <ConfirmationCard pending={pending} onDecide={decide} />
 }
 
+/** One card per parked action. A turn can park several since SOLUSDEV-168,
+ *  and each is approved on its own — approving a batch would suspend the
+ *  staleness re-check that makes "what you saw is what runs" true. The pill
+ *  (SOLUSDEV-319) groups the non-command ones into a PlanCard that still
+ *  decides them one by one; its command cards take over the pill instead
+ *  (PillTakeover), so the thread does not show them. */
+function Confirmations({
+  confirmations,
+  reasoning,
+  onDecide,
+  onShowMe
+}: {
+  confirmations: readonly PendingConfirmation[]
+  /** SOLUSDEV-321 P7: each proposal's reasoning, hung on its own card. */
+  reasoning: ChatItem['reasoning']
+  onDecide: SolChat['decide']
+  onShowMe?: () => void
+}): React.JSX.Element {
+  const pill = onShowMe !== undefined
+  const planned = pill ? confirmations.filter((c) => commandHeader(c) === null) : []
+  const cards = pill ? [] : confirmations
+  return (
+    <>
+      {planned.map((step) => (
+        <ReasoningBlock
+          key={step.confirmationId}
+          reasoning={reasoning}
+          confirmationId={step.confirmationId}
+        />
+      ))}
+      {planned.length > 0 && onShowMe && (
+        <PlanCard steps={planned} onDecide={onDecide} onShowMe={onShowMe} />
+      )}
+      {cards.map((confirmation) => (
+        <Fragment key={confirmation.confirmationId}>
+          <ReasoningBlock reasoning={reasoning} confirmationId={confirmation.confirmationId} />
+          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
 // memo (S2): a token patch replaces ONE ChatItem immutably, so every other row
 // keeps its `item` identity and skips the render. `onDecide` is stable from
 // useSolChat. `settled` rows (not the last, not streaming) also opt into CSS
@@ -238,7 +284,8 @@ const MessageRow = memo(function MessageRow({
   onFile,
   settled,
   page,
-  onFocusEntity
+  onFocusEntity,
+  onShowMe
 }: {
   item: ChatItem
   projectId: string
@@ -247,6 +294,8 @@ const MessageRow = memo(function MessageRow({
   settled: boolean
   page: boolean
   onFocusEntity?: (target: CitationTarget) => void
+  /** SOLUSDEV-319 (pill): given, non-command approvals render as one PlanCard. */
+  onShowMe?: () => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
   if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} page={page} />
@@ -278,20 +327,22 @@ const MessageRow = memo(function MessageRow({
       <ResearchPills research={item.researchSources} projectId={projectId} />
       {/* CTR-03: a destructive action is parked, not executed, until this user
           approves the concrete diff shown here (CLAUDE.md §7). */}
-      {/* One card per parked action. A turn can park several since SOLUSDEV-168,
-          and each is approved on its own — approving a batch would suspend the
-          staleness re-check that makes "what you saw is what runs" true. */}
-      {confirmations.map((confirmation) => (
-        <Fragment key={confirmation.confirmationId}>
-          <ReasoningBlock reasoning={item.reasoning} confirmationId={confirmation.confirmationId} />
-          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
-        </Fragment>
-      ))}
+      <Confirmations
+        confirmations={confirmations}
+        reasoning={item.reasoning}
+        onDecide={onDecide}
+        onShowMe={onShowMe}
+      />
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
           kept with its exit status after the card is gone. */}
-      {(item.commandRuns ?? []).map((run) => (
-        <CommandOutput key={run.confirmationId} run={run} />
-      ))}
+      {/* SOLUSDEV-319: a drive.step shows the A3 strip instead, while it runs. */}
+      {(item.commandRuns ?? []).map((run) =>
+        isDriveTool(run.tool) ? (
+          <DriveStrip key={run.confirmationId} run={run} trace={item.trace} />
+        ) : (
+          <CommandOutput key={run.confirmationId} run={run} />
+        )
+      )}
       {/* Space for the citations is held while the reply streams, so their
           arrival with the closing `message` frame extends nothing above. */}
       <div style={{ minHeight: item.pending ? CITATIONS_RESERVE_PX : undefined }}>
@@ -307,7 +358,7 @@ const MessageRow = memo(function MessageRow({
 })
 
 /** Page (design template): the Solus mark in a gutter and a mono SOL label; the window
- *  keeps its compact rows. */
+ *  and the pill keep their compact rows. */
 function AssistantFrame({
   page,
   rowClass,
@@ -347,13 +398,15 @@ function MessageList({
   projectId,
   page,
   onDecide,
-  onFocusEntity
+  onFocusEntity,
+  onShowMe
 }: {
   chat: SolChat
   projectId: string
   page: boolean
   onDecide: SolChat['decide']
   onFocusEntity?: (target: CitationTarget) => void
+  onShowMe?: () => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
@@ -386,6 +439,7 @@ function MessageList({
     <div
       ref={listRef}
       onScroll={handleScroll}
+      className="sol-thread"
       style={{
         flex: 1,
         minHeight: 0,
@@ -413,411 +467,29 @@ function MessageList({
           settled={i < count - 1 && !item.pending}
           page={page}
           onFocusEntity={onFocusEntity}
+          onShowMe={onShowMe}
         />
       ))}
     </div>
-  )
-}
-
-/** The `@`-mention picker. A plain listbox — the design system has no combobox,
- *  and one short list does not justify a dependency. */
-function MentionList({
-  results,
-  activeId,
-  onChoose,
-  page
-}: {
-  results: readonly Entity[]
-  activeId: string | null
-  onChoose: (entity: Entity) => void
-  page: boolean
-}): React.JSX.Element {
-  return (
-    <ul
-      id="sol-mention-list"
-      role="listbox"
-      aria-label="Graph entities"
-      style={{
-        position: 'absolute',
-        bottom: 'calc(100% + 6px)',
-        left: 0,
-        right: page ? 'auto' : 0,
-        minWidth: 240,
-        maxHeight: 210,
-        overflowY: 'auto',
-        margin: 0,
-        padding: 4,
-        listStyle: 'none',
-        background: 'var(--sur)',
-        border: '1px solid var(--bd)',
-        borderRadius: 6,
-        boxShadow: '0 8px 24px rgba(0,0,0,0.28)',
-        zIndex: 20
-      }}
-    >
-      {results.map((entity) => (
-        <li
-          key={entity.id}
-          id={`sol-mention-${entity.id}`}
-          role="option"
-          aria-selected={entity.id === activeId}
-          // A list item is not focusable, so the input keeps focus and the
-          // caret stays where the user was typing.
-          onMouseDown={(e) => {
-            e.preventDefault()
-            onChoose(entity)
-          }}
-          style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 8,
-            padding: '5px 8px',
-            borderRadius: 4,
-            cursor: 'pointer',
-            background: entity.id === activeId ? 'var(--sur2)' : 'transparent'
-          }}
-        >
-          <span style={{ fontSize: 12.5, color: 'var(--tx)' }}>{entity.name}</span>
-          <Mono size={9.5}>{entity.type}</Mono>
-          {(entity.type === 'code_file' || entity.type === 'code_module') && (
-            <Mono size={9.5}>
-              {typeof entity.properties?.path === 'string'
-                ? entity.properties.path
-                : entity.source_key}
-            </Mono>
-          )}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/** The message box plus its `@` picker. Split from Composer so each stays
- *  readable — the composer owns text/mode/send, this owns the input element. */
-const COMPOSER_MAX_HEIGHT = 160
-
-/** Grow with the draft up to a ceiling (jsdom reports no scrollHeight, so this is a no-op there). */
-function useAutosize(ref: MentionPicker['inputRef'], value: string): void {
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = 'auto'
-    if (el.scrollHeight) el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`
-  }, [ref, value])
-}
-
-function MessageInput({
-  mention,
-  inputRef,
-  value,
-  onChange,
-  onSubmitRequest,
-  page,
-  placeholder
-}: {
-  mention: MentionPicker
-  // Passed beside the picker, not read off it: a ref read during render taints
-  // the whole object for the react-hooks/refs rule.
-  inputRef: MentionPicker['inputRef']
-  value: string
-  onChange: (text: string) => void
-  /** Enter (no Shift, no Ctrl/Cmd — those belong to the command cards) sends. */
-  onSubmitRequest: () => void
-  page: boolean
-  placeholder: string
-}): React.JSX.Element {
-  useAutosize(inputRef, value)
-  return (
-    <>
-      {mention.listOpen && (
-        <MentionList
-          results={mention.results}
-          activeId={mention.active?.id ?? null}
-          onChoose={mention.choose}
-          page={page}
-        />
-      )}
-      <textarea
-        ref={inputRef as React.RefObject<HTMLTextAreaElement | null>}
-        rows={1}
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value)
-          mention.onInput(e.target)
-        }}
-        onKeyDown={(e) => {
-          if (mention.onKeyDown(e)) return
-          if (
-            e.key === 'Enter' &&
-            !e.shiftKey &&
-            !e.ctrlKey &&
-            !e.metaKey &&
-            !e.nativeEvent.isComposing
-          ) {
-            e.preventDefault()
-            onSubmitRequest()
-          }
-        }}
-        onKeyUp={(e) => mention.onCaretMove(e.currentTarget)}
-        onClick={(e) => mention.onCaretMove(e.currentTarget)}
-        role="combobox"
-        aria-expanded={mention.listOpen}
-        aria-controls="sol-mention-list"
-        aria-autocomplete="list"
-        aria-activedescendant={mention.active ? `sol-mention-${mention.active.id}` : undefined}
-        placeholder={placeholder}
-        aria-label="Message SOL"
-        {...{ [COMPOSER_ATTR]: '' }}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: 20,
-          resize: 'none',
-          background: 'transparent',
-          border: 0,
-          color: 'var(--tx)',
-          fontFamily: 'var(--font-ui)',
-          fontSize: 13,
-          lineHeight: 1.5,
-          padding: '6px 4px',
-          outline: 'none'
-        }}
-      />
-    </>
-  )
-}
-
-/** The design's "+" beside the composer: upload a file or image into .solus, or go pick a
- *  node from the graph. Rendered only when the surface offers those paths (the page). */
-function AttachMenu({
-  onUpload,
-  onAddNodeFromGraph
-}: {
-  onUpload?: (file: File) => void
-  onAddNodeFromGraph?: () => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
-  const file = useRef<HTMLInputElement | null>(null)
-  return (
-    <div style={{ position: 'relative', flex: 'none' }}>
-      <button
-        type="button"
-        aria-label="Attach"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="interactive"
-        onClick={() => setOpen((on) => !on)}
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 4,
-          background: 'var(--sur2)',
-          border: '1px solid var(--bd)',
-          color: 'var(--tx)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer'
-        }}
-      >
-        <Icons.plus size={15} />
-      </button>
-      <input
-        ref={file}
-        type="file"
-        aria-label="Upload file or image"
-        style={{ display: 'none' }}
-        onChange={(event) => {
-          const picked = event.currentTarget.files?.[0]
-          event.currentTarget.value = ''
-          if (picked) onUpload?.(picked)
-        }}
-      />
-      {open && (
-        <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
-          <div role="menu" className="popover-in sol-attach-menu">
-            {onUpload && (
-              <button
-                type="button"
-                role="menuitem"
-                className="interactive"
-                onClick={() => {
-                  setOpen(false)
-                  file.current?.click()
-                }}
-              >
-                Upload file or image
-              </button>
-            )}
-            {onAddNodeFromGraph && (
-              <button
-                type="button"
-                role="menuitem"
-                className="interactive"
-                onClick={() => {
-                  setOpen(false)
-                  onAddNodeFromGraph()
-                }}
-              >
-                Add node from graph
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-/** The composer placeholder: the region, when attached, is the subject. */
-const PLACEHOLDER = 'Ask about a signal, a change, a part…'
-const PAGE_PLACEHOLDER = 'Ask SOL about this project…'
-const PLACEHOLDER_WITH_REGION = 'What would you like to know about it?'
-
-/** The attached-region chip on the composer (wireflow §C); × drops the pixels. */
-function RegionChip({ onDismiss }: { onDismiss: () => void }): React.JSX.Element {
-  return (
-    <span className="sol-region-chip">
-      screen
-      <button type="button" aria-label="Remove screenshot" onClick={onDismiss}>
-        ×
-      </button>
-    </span>
-  )
-}
-
-function ReviewPreference({
-  checked,
-  onChange,
-  streaming
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  streaming: boolean
-}): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', ...MUTED }}>
-      <Switch
-        checked={checked}
-        onChange={onChange}
-        ariaLabel="Confirm every change"
-        disabled={streaming}
-      />
-      <span title="Choose before sending. Review each proposed change before SOL applies it.">
-        Confirm every change
-      </span>
-    </div>
-  )
-}
-
-type ComposerSend = (text: string, mentions: readonly string[], thinkHarder: boolean) => void
-
-function Composer({
-  streaming,
-  page,
-  projectId,
-  mode,
-  onModeChange,
-  regionAttached,
-  onDismissRegion,
-  forceConfirmation,
-  onForceConfirmationChange,
-  onSend,
-  onUpload,
-  onAddNodeFromGraph
-}: ComposerProps): React.JSX.Element {
-  // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
-  const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
-  const classify = useClassifyPreview(input)
-  const empty = input.trim() === ''
-
-  // All the `@`-picker state lives in its own hook — see useMentionPicker.
-  const mention = useMentionPicker(projectId, input, setInput)
-
-  const submit = (): void => {
-    const text = input.trim()
-    if (!text || streaming) return
-    onSend(text, mention.mentionIds, classify.override.thinkHarder)
-    setInput('')
-    mention.reset()
-    classify.resetOverride() // also drops "Think harder" — it is per message
-  }
-  const attach = Boolean(onUpload || onAddNodeFromGraph)
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        submit()
-      }}
-      style={{
-        padding: page ? '12px 20px 18px' : 10,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
-      }}
-    >
-      {regionAttached && <RegionChip onDismiss={onDismissRegion} />}
-      <div className="sol-composer-box">
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', position: 'relative' }}>
-          {attach && <AttachMenu onUpload={onUpload} onAddNodeFromGraph={onAddNodeFromGraph} />}
-          <MessageInput
-            mention={mention}
-            inputRef={mention.inputRef}
-            value={input}
-            onChange={setInput}
-            onSubmitRequest={submit}
-            page={page}
-            placeholder={
-              regionAttached ? PLACEHOLDER_WITH_REGION : page ? PAGE_PLACEHOLDER : PLACEHOLDER
-            }
-          />
-          <SendButton streaming={streaming} empty={empty} />
-        </div>
-        <div className="sol-composer-foot">
-          {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
-              Electron) — the same badge the SOL window header shows. */}
-          <ModeBadge mode={mode} onChange={onModeChange} />
-          {/* S1-W3: one tier up for THIS message. Lives in the classify override
-              state so the routing preview reflects it and the post-send reset
-              clears it — one source, two controls (this and the popover). */}
-          <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
-            <Switch
-              checked={classify.override.thinkHarder}
-              onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
-              ariaLabel="Think harder"
-            />
-            Think harder
-          </span>
-          <ReviewPreference
-            checked={forceConfirmation}
-            onChange={onForceConfirmationChange}
-            streaming={streaming}
-          />
-          <ClassifyIndicator
-            preview={classify.preview}
-            override={classify.override}
-            onOverride={classify.setOverride}
-            onReset={classify.resetOverride}
-          />
-        </div>
-      </div>
-    </form>
   )
 }
 
 export interface SolChatProps {
   projectId: string | null
-  /** 'panel' fills the SOL window; 'page' is the SolScreen column — and the only layout that
-   *  also sends the workspace focus and the pinned nodes (SOLUSDEV-321 P0-T3): the window is
-   *  its own renderer with neither. */
-  layout?: 'panel' | 'page'
+  /** 'panel' fills a column; 'page' is the SolScreen column; 'pill' is the
+   *  SOLUSDEV-319 Ember Pill (panel above, bar below). */
+  layout?: 'panel' | 'page' | 'pill'
+  /** Pill only: content at the top of the panel (status, Guide tasks) — the
+   *  panel opens for it — and the footer's leading/trailing slots. */
+  pillTop?: React.ReactNode
+  pillFooterStart?: React.ReactNode
+  pillFooterEnd?: React.ReactNode
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
    *  context panel from the same one). Omitted, the surface owns its own. */
   chat?: SolChat
-  /** Page: the chat's pinned nodes, sent as `pins` with every send and counted in the header. */
+  /** Page: the chat's pinned nodes, sent as `pins` with every send and counted in the header
+   *  (SOLUSDEV-321 P0-T3). Only the page also sends the workspace focus: the window and the
+   *  pill are their own renderer with neither. */
   pinnedMentionIds?: readonly string[]
   /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
   onUpload?: (file: File) => void
@@ -826,10 +498,121 @@ export interface SolChatProps {
   onFocusEntity?: (target: CitationTarget) => void
 }
 
+/** The circled region (SOL window only — main pushes it to that renderer).
+ *  Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
+ *  but only once that turn settled clean: a failed send keeps it attached so
+ *  the person can retry (FIX-2-R M3). A region circled meanwhile is not ours. */
+function useRegionSend(
+  chat: SolChat,
+  mode: SolActionMode,
+  forceConfirmation: boolean,
+  pageAnchorIds: readonly string[] | null
+): {
+  region: SolRegionPayload | null
+  clearRegion: () => void
+  sendWithRegion: ComposerSend
+} {
+  const region = useSolWindowStore((s) => s.region)
+  const clearRegion = useSolWindowStore((s) => s.clearRegion)
+  const sendWithRegion: ComposerSend = (text, mentions, thinkHarder) => {
+    const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
+    const anchors = pageAnchorIds ? pageAnchors(pageAnchorIds) : {}
+    void chat
+      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
+      .then((ok) => {
+        if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
+      })
+  }
+  return { region, clearRegion, sendWithRegion }
+}
+
+/** SOLUSDEV-319: the plan's "Show me how instead" — declined, now teach it. */
+function useShowMeHow(
+  chat: SolChat,
+  setMode: (mode: SolActionMode) => void,
+  forceConfirmation: boolean
+): () => void {
+  return useCallback(() => {
+    setMode('guide')
+    void chat.send(SHOW_ME_HOW, 'guide', [], false, undefined, { forceConfirmation })
+  }, [chat, setMode, forceConfirmation])
+}
+
+interface SurfaceParts {
+  layout: NonNullable<SolChatProps['layout']>
+  shortcut: ReturnType<typeof useCommandShortcut>
+  thread: React.ReactNode
+  hasThread: boolean
+  regionCard: React.ReactNode
+  strip: React.ReactNode
+  composer: React.ReactNode
+  pillTop?: React.ReactNode
+  /** Pill: the pending command card that takes the pill over, or null. */
+  takeover?: PendingConfirmation | null
+  onDecide?: SolChat['decide']
+}
+
+/** The pill: the usual stack, or a pending command card holding all of it. */
+function PillSurface(p: SurfaceParts): React.JSX.Element {
+  const stackRef = useRef<HTMLDivElement>(null)
+  const active = p.takeover != null
+  useTakeoverFocusReturn(active, stackRef)
+  const panelOpen = p.hasThread || Boolean(p.regionCard) || Boolean(p.pillTop)
+  return (
+    <div
+      ref={stackRef}
+      className="sol-pill-stack"
+      data-takeover={active ? 'on' : 'off'}
+      onKeyDownCapture={p.shortcut.onKeyDownCapture}
+    >
+      <div className="sol-pill-normal" inert={active} aria-hidden={active || undefined}>
+        <div className="sol-pill-normal-inner">
+          {panelOpen && (
+            <PillPanel>
+              {p.pillTop}
+              {p.hasThread && p.thread}
+              {p.regionCard}
+            </PillPanel>
+          )}
+          {p.strip}
+          {p.composer}
+        </div>
+      </div>
+      {p.onDecide && <PillTakeover pending={p.takeover ?? null} onDecide={p.onDecide} />}
+    </div>
+  )
+}
+
+/** SOLUSDEV-319: the pill stacks a panel (opened only when it has content)
+ *  over the bar; the panel and page layouts are one column. */
+function Surface(p: SurfaceParts): React.JSX.Element {
+  if (p.layout === 'pill') return <PillSurface {...p} />
+  return (
+    <div
+      onKeyDownCapture={p.shortcut.onKeyDownCapture}
+      style={{
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%'
+      }}
+    >
+      {p.thread}
+      {p.regionCard}
+      {p.strip}
+      {p.composer}
+    </div>
+  )
+}
+
 export function SolChat({
   projectId,
   layout = 'panel',
   chat: shared,
+  pillTop,
+  pillFooterStart,
+  pillFooterEnd,
   pinnedMentionIds,
   onUpload,
   onAddNodeFromGraph,
@@ -850,25 +633,13 @@ export function SolChat({
     [chat, mode]
   )
   const shortcut = useCommandShortcut(chat.items)
-  // The circled region (SOL window only — main pushes it to that renderer).
-  // Attached to exactly ONE send, then dropped from memory (sol-window.md §8) —
-  // but only once that turn settled clean: a failed send keeps it attached so
-  // the person can retry (FIX-2-R M3). A region circled meanwhile is not ours.
-  const region = useSolWindowStore((s) => s.region)
-  const clearRegion = useSolWindowStore((s) => s.clearRegion)
-  const sendWithRegion = (
-    text: string,
-    mentions: readonly string[],
-    thinkHarder: boolean
-  ): void => {
-    const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
-    const anchors = layout === 'page' ? pageAnchors(pinnedMentionIds ?? []) : {}
-    void chat
-      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
-      .then((ok) => {
-        if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
-      })
-  }
+  const { region, clearRegion, sendWithRegion } = useRegionSend(
+    chat,
+    mode,
+    forceConfirmation,
+    layout === 'page' ? (pinnedMentionIds ?? []) : null
+  )
+  const showMeHow = useShowMeHow(chat, setMode, forceConfirmation)
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>
@@ -876,90 +647,53 @@ export function SolChat({
       </div>
     )
   }
-  const page = layout === 'page'
   return (
     <CommandApprovalContext.Provider value={shortcut.registry}>
-      <div
-        onKeyDownCapture={shortcut.onKeyDownCapture}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          width: '100%'
-        }}
-      >
-        <MessageList
-          chat={chat}
-          projectId={projectId}
-          page={page}
-          onDecide={decideInMode}
-          onFocusEntity={onFocusEntity}
-        />
-        {region && (
-          <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
-        )}
-        <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
-        <Composer
-          streaming={chat.streaming}
-          page={page}
-          projectId={projectId}
-          mode={mode}
-          onModeChange={setMode}
-          regionAttached={region !== null}
-          onDismissRegion={clearRegion}
-          forceConfirmation={forceConfirmation}
-          onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
-          onSend={sendWithRegion}
-          onUpload={onUpload}
-          onAddNodeFromGraph={onAddNodeFromGraph}
-        />
-      </div>
+      <Surface
+        layout={layout}
+        shortcut={shortcut}
+        hasThread={chat.items.length > 0}
+        thread={
+          <MessageList
+            chat={chat}
+            projectId={projectId}
+            page={layout === 'page'}
+            onDecide={decideInMode}
+            onFocusEntity={onFocusEntity}
+            onShowMe={layout === 'pill' ? showMeHow : undefined}
+          />
+        }
+        regionCard={
+          region && (
+            <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
+          )
+        }
+        strip={
+          <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
+        }
+        pillTop={pillTop}
+        takeover={layout === 'pill' ? newestPendingCommand(chat.items) : null}
+        onDecide={decideInMode}
+        composer={
+          <Composer
+            streaming={chat.streaming}
+            page={layout === 'page'}
+            projectId={projectId}
+            mode={mode}
+            onModeChange={setMode}
+            regionAttached={region !== null}
+            onDismissRegion={clearRegion}
+            forceConfirmation={forceConfirmation}
+            onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
+            onSend={sendWithRegion}
+            pill={layout === 'pill'}
+            footerStart={pillFooterStart}
+            footerEnd={pillFooterEnd}
+            onUpload={onUpload}
+            onAddNodeFromGraph={onAddNodeFromGraph}
+          />
+        }
+      />
     </CommandApprovalContext.Provider>
   )
-}
-
-function SendButton({
-  streaming,
-  empty
-}: {
-  streaming: boolean
-  empty: boolean
-}): React.JSX.Element {
-  return (
-    <button
-      type="submit"
-      disabled={streaming || empty}
-      style={{
-        height: 32,
-        flex: 'none',
-        background: 'var(--acc)',
-        color: 'var(--acc-ink)',
-        border: 'none',
-        borderRadius: 4,
-        padding: '0 14px',
-        fontSize: 12,
-        fontWeight: 600,
-        cursor: streaming ? 'wait' : 'pointer',
-        opacity: streaming || empty ? 0.6 : 1
-      }}
-    >
-      Send
-    </button>
-  )
-}
-
-interface ComposerProps {
-  streaming: boolean
-  page: boolean
-  projectId: string | null
-  mode: SolActionMode
-  onModeChange: (mode: SolActionMode) => void
-  regionAttached: boolean
-  onDismissRegion: () => void
-  forceConfirmation: boolean
-  onForceConfirmationChange: (checked: boolean) => void
-  onSend: ComposerSend
-  onUpload?: (file: File) => void
-  onAddNodeFromGraph?: () => void
 }

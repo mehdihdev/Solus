@@ -886,6 +886,31 @@ class SubscriptionUpdate(StrictModel):
         return plan
 
 
+class AcademicCodeCreate(StrictModel):
+    """POST /billing/academic/code (ADR-042). The domain rule is checked by the service so
+    the error code is specific (`not_academic_email`), not a generic validation error."""
+
+    email: str = Field(min_length=3, max_length=320)
+
+
+class AcademicVerifyCreate(StrictModel):
+    """POST /billing/academic/verify: exactly six ASCII digits."""
+
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
+class AcademicRead(BaseModel):
+    """GET /billing/academic — the caller's own academic status (ADR-042)."""
+
+    state: Literal["none", "pending", "active", "expired"]
+    email: str | None
+    pending_email: str | None
+    code_expires_at: datetime | None
+    expires_at: datetime | None
+    monthly_credits: int
+    suffixes: list[str]
+
+
 class CheckoutSessionCreate(StrictModel):
     """Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,
     month/year); `pack` needs a price_id that maps to a configured credit pack."""

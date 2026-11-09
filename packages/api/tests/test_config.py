@@ -459,7 +459,9 @@ def test_shipped_catalog_cached_prices_and_reasoning_effort() -> None:
     for entry in config.catalog:
         if entry.provider == "openai":
             assert entry.price_cached_in is not None
-        else:
+        elif entry.roles != ["computer_use"]:
+            # The general Anthropic path ignores effort; only the ADR-041
+            # computer-use call (gateway.computer_use) sends it.
             assert entry.reasoning_effort is None
     # Anthropic cache reads: 0.1x input (0.025x on Fable 5.1) — verified 2026-09-07.
     assert by_name["claude-haiku-4-5"].price_cached_in == 0.1

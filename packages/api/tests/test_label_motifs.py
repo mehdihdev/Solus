@@ -44,7 +44,7 @@ from solus_api.models import (
 )
 from solus_api.orchestration import gateway
 from solus_api.orchestration.enums import Complexity, RouteType
-from solus_api.orchestration.providers import Usage
+from solus_api.orchestration.providers import ProviderRefusalError, Usage
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from test_sol_reasoner import _funded_user
@@ -439,3 +439,34 @@ def test_a_deeply_nested_reply_line_is_noise_not_a_raise() -> None:
 
     reply = "[" * 100_000 + "\n" + '{"candidate": 1, "label": "h_bridge"}'
     assert parse_labels(reply, 1) == ({0: "h_bridge"}, 0)
+
+
+@pytest.mark.parametrize(
+    ("failure", "retryable"),
+    [
+        (ProviderRefusalError("anthropic/claude-x refused the request", category="cyber"), False),
+        (RuntimeError("upstream hiccup"), True),
+    ],
+)
+async def test_a_refused_labelling_call_is_not_offered_as_retryable(
+    db: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    retryable: bool,
+) -> None:
+    """SOLUSDEV-319: a refusal repeats for the same request, so the model is not invited to retry
+    it; any other failure stays retryable."""
+    seeded = await _candidates_project(db)
+
+    async def complete(query: str, **kw: Any) -> Any:
+        raise failure
+
+    monkeypatch.setattr(gateway, "complete", complete)
+    registry = _label_registry(engine, seeded["project_id"], seeded["user_id"])
+
+    result = await _invoke_in_turn(registry, uuid.uuid4())
+
+    assert not result.ok and result.error is not None
+    assert result.error.code is ToolErrorCode.UNAVAILABLE
+    assert result.error.retryable is retryable

@@ -51,11 +51,13 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.services.academic_mail import AcademicMailer, build_academic_mailer
 from solus_api.services.supabase_admin import SupabaseAdmin
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from solus_api.agent.drive.executor import Budget
     from solus_api.agent.tools.mcp_tool import MCPTool
     from solus_api.agent.tools.simulate import SimEnqueue
 
@@ -129,6 +131,12 @@ def get_stripe_gateway(request: Request) -> "StripeGateway":
     return StripeGateway(get_secret_store(request))
 
 
+def get_academic_mailer(request: Request) -> AcademicMailer | None:
+    """The Academic verification mailer (ADR-042), or None when sending is not configured.
+    Overridable in tests via app.dependency_overrides."""
+    return build_academic_mailer(get_settings(request))
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -141,6 +149,7 @@ JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 StripeGatewayDep = Annotated[StripeGateway, Depends(get_stripe_gateway)]
+AcademicMailerDep = Annotated[AcademicMailer | None, Depends(get_academic_mailer)]
 
 
 async def _provision_user(
@@ -251,6 +260,37 @@ def require_verified(claims: ClaimsDep) -> None:
 
 
 RequireVerified = Annotated[None, Depends(require_verified)]
+
+
+async def require_verified_email(
+    claims: ClaimsDep, admin: SupabaseAdminDep, settings: SettingsDep
+) -> str:
+    """The caller's email as proven verified, lower-cased (SOLUSDEV-319).
+
+    Match anything addressed to an email (invites) against this, never `users.email`: that
+    column is set once at sign-up and never refreshed. Supabase access tokens rarely carry
+    `email_verified`, and an absent claim reads as verified (core/security.py), so the proof
+    is the auth user's `email_confirmed_at` through the admin API, which must name the same
+    address as the token. Without a service-role key this fails CLOSED outside `app_env=dev`;
+    in dev it falls back to the token's email, logged."""
+    require_verified(claims)
+    if not claims.email:
+        raise APIError(403, "email_not_verified", "Your sign-in carries no email address")
+    email = claims.email.lower()
+    if admin.configured:
+        if await admin.confirmed_email(claims.sub) != email:
+            raise APIError(403, "email_not_verified", "Verify your email address first")
+        return email
+    if settings.app_env != "dev":
+        logger.error("email verification unavailable: SUPABASE_SERVICE_ROLE_KEY unset")
+        raise APIError(
+            403, "email_not_verified", "Email verification is unavailable on this server"
+        )
+    logger.warning("dev: invitations matched on the token's email (no Supabase admin key)")
+    return email
+
+
+VerifiedEmail = Annotated[str, Depends(require_verified_email)]
 
 
 def require_staff(user: CurrentUser, settings: SettingsDep) -> None:
@@ -446,6 +486,16 @@ async def get_project_read_context(
 ProjectCtx = Annotated[ProjectContext, Depends(get_project_read_context)]
 
 
+def _drive_budget(settings: Settings) -> "Budget":
+    from solus_api.agent.drive.executor import Budget
+
+    return Budget(
+        max_actions=settings.drive_max_actions,
+        max_seconds=settings.drive_max_seconds,
+        max_input_tokens=settings.drive_max_input_tokens,
+    )
+
+
 async def discover_research_tools(
     secret_store: SecretStore, allowlist_root: str
 ) -> list["MCPTool"]:
@@ -556,6 +606,8 @@ async def get_sol_registry(
         artifact_store=getattr(request.app.state, "artifact_store", None),
         enqueue=getattr(request.app.state, "enqueue", None),
         artifact_ttl_seconds=settings.artifact_ttl_seconds,
+        # ADR-041 (2026-10-26 amendment): N actions / T wall-clock seconds per step.
+        drive_budget=_drive_budget(settings),
         # SOLUSDEV-321 P5 (R124): `render_view` never runs an export this route's upload cap
         # could refuse.
         artifact_max_bytes=settings.artifact_max_bytes,

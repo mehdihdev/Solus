@@ -29,6 +29,7 @@ import base64
 import json
 import logging
 import math
+import re
 import time
 from datetime import UTC
 from email.utils import parsedate_to_datetime
@@ -78,6 +79,9 @@ class Usage(NamedTuple):
     tokens_out: int
     tokens_cached_in: int = 0
     provider_items: tuple[dict[str, Any], ...] = ()
+    #: The provider's stop reason when a caller must act on it (a computer-use
+    #: `refusal` ends a drive step); None where nothing reads it.
+    stop_reason: str | None = None
 
 
 class ProviderCredentialsMissingError(RuntimeError):
@@ -100,6 +104,34 @@ class ProviderTransientError(ProviderError):
     def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
         super().__init__(message)
         self.retry_after_seconds = retry_after_seconds
+
+
+#: A refusal category is provider output (untrusted): only a short snake_case word is kept.
+_REFUSAL_CATEGORY = re.compile(r"[a-z][a-z_]{0,31}")
+
+
+class ProviderRefusalError(ProviderError):
+    """The model declined the request (`stop_reason: refusal`) — no answer, and nothing is
+    debited by the adapter (no Usage is yielded). Not transient: the same request to the same
+    model refuses again, so the SOL runtime re-routes round 1 once instead (model-orchestration
+    contract §Refusals). Carries only a validated category, never the provider's explanation
+    text, plus the usage the provider reported: the gateway debits it when text had already
+    streamed to the caller, and records it on the `model.refused` event either way."""
+
+    def __init__(
+        self, message: str, *, category: str | None = None, usage: Usage | None = None
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.usage = usage
+
+
+def refusal_category(details: object) -> str | None:
+    """The `stop_details.category` a provider reported, when it is a plain short word."""
+    category = getattr(details, "category", None)
+    if isinstance(category, str) and _REFUSAL_CATEGORY.fullmatch(category):
+        return category
+    return None
 
 
 def _retry_delay(error: Any, now: float) -> float | None:
@@ -644,6 +676,39 @@ class _BaseAdapter:
             ) from exc
 
 
+def _refusal(model_name: str, final: Any) -> ProviderRefusalError:
+    """A refused Anthropic message as the typed error. Solus is billed for the tokens but the
+    person is not (no Usage is yielded), so the operator log carries them — never any text."""
+    category = refusal_category(getattr(final, "stop_details", None))
+    try:
+        usage: Usage | None = _anthropic_usage(final.usage)
+    except (AttributeError, TypeError):  # a malformed usage block must not hide the refusal
+        usage = None
+    logger.warning(
+        "model refused provider=anthropic model=%s category=%s tokens_in=%s tokens_out=%s",
+        model_name,
+        category,
+        usage.tokens_in if usage else None,
+        usage.tokens_out if usage else None,
+    )
+    return ProviderRefusalError(
+        f"anthropic/{model_name} refused the request", category=category, usage=usage
+    )
+
+
+def _anthropic_usage(usage: Any) -> Usage:
+    """input_tokens EXCLUDES cache reads and writes; tokens_in is the whole prompt,
+    tokens_cached_in its cached subset (price_cached_in).
+    ponytail: cache-creation premium not modeled"""
+    cached = getattr(usage, "cache_read_input_tokens", 0) or 0
+    written = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    return Usage(
+        tokens_in=usage.input_tokens + cached + written,
+        tokens_out=usage.output_tokens,
+        tokens_cached_in=cached,
+    )
+
+
 class AnthropicAdapter(_BaseAdapter):
     provider = "anthropic"
     secret_name = ANTHROPIC_API_KEY_NAME
@@ -703,24 +768,88 @@ class AnthropicAdapter(_BaseAdapter):
                 async for text in stream.text_stream:
                     yield text
                 final = await stream.get_final_message()
+                if final.stop_reason == "refusal":
+                    raise _refusal(model_name, final)
                 # Tool calls arrive assembled: the SDK accumulates input_json_delta
                 # internally, so no second non-streaming path is needed. Partial
                 # args would be useless anyway — half an argument object cannot
                 # be dispatched.
                 for use in anthropic_tool_uses(final.content):
                     yield use
-                # input_tokens EXCLUDES cache reads and writes; tokens_in is the whole
-                # prompt, tokens_cached_in its cached subset (price_cached_in).
-                # ponytail: cache-creation premium not modeled
-                cached = getattr(final.usage, "cache_read_input_tokens", 0) or 0
-                written = getattr(final.usage, "cache_creation_input_tokens", 0) or 0
-                yield Usage(
-                    tokens_in=final.usage.input_tokens + cached + written,
-                    tokens_out=final.usage.output_tokens,
-                    tokens_cached_in=cached,
-                )
+                yield _anthropic_usage(final.usage)
         except anthropic.APIError as exc:
             raise normalize_provider_error(self.provider, model_name, exc) from None
+
+    async def computer_use(
+        self,
+        model_name: str,
+        *,
+        system: str,
+        messages: Sequence[dict[str, Any]],
+        tools: Sequence[dict[str, Any]],
+        max_tokens: int,
+        effort: str | None,
+    ) -> AsyncIterator[str | ToolUse | Usage]:
+        """One round of Anthropic computer use (ADR-041 §6, 2026-10-26 amendment).
+
+        `messages` are already in Messages-API shape (screenshots ride as images
+        on `tool_result` blocks, which the generic `Turn` path refuses). At most
+        one action per call: parallel tool use is off. Only member calls of the
+        computer toolset are proposed; the whole assistant content is returned as
+        `provider_items` so the next round replays it verbatim — Opus 5.5 thinking
+        blocks must come back unchanged. Thinking is left at the model default
+        (always on for Opus 5.5; sending `disabled` is a 400).
+        """
+        api_key = await self._api_key()
+        import anthropic  # lazy: keyless environments never touch provider SDKs
+
+        request: dict[str, Any] = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": list(messages),
+            "tools": list(tools),
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+            # Every round re-sends the whole history (screenshots are never
+            # pruned — that would invalidate the replayed thinking): cache it.
+            "cache_control": {"type": "ephemeral"},
+        }
+        if effort is not None:
+            request["output_config"] = {"effort": effort}
+        client = anthropic.AsyncAnthropic(
+            api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS, max_retries=0
+        )
+        try:
+            async with client:
+                # SDK boundary: the toolset and its result blocks postdate this
+                # SDK's typed params; plain dicts are accepted at runtime.
+                final = await client.messages.create(**cast("Any", request))
+        except anthropic.APIError as exc:
+            raise normalize_provider_error(self.provider, model_name, exc) from None
+        for block in final.content:
+            if block.type == "text" and block.text:
+                yield block.text
+            elif block.type == "tool_use" and getattr(block, "toolset_name", None) == "computer":
+                yield ToolUse(id=block.id, name=block.name, args=dict(block.input or {}))
+        usage = final.usage
+        # Anthropic reports the uncached tail, cache reads and cache writes
+        # SEPARATELY; Usage.tokens_in is the whole input (tokens_cached_in is a
+        # subset of it), so the debit and the step's token cap see real volume.
+        # Writes cost 1.25x input (5-minute cache) and the catalog has no write
+        # price, so they count at that weight here — billed, never under.
+        read = getattr(usage, "cache_read_input_tokens", None) or 0
+        written = getattr(usage, "cache_creation_input_tokens", None) or 0
+        yield Usage(
+            tokens_in=usage.input_tokens + read + math.ceil(written * _CACHE_WRITE_WEIGHT),
+            tokens_out=usage.output_tokens,
+            tokens_cached_in=read,
+            provider_items=tuple(block.model_dump(exclude_none=True) for block in final.content),
+            stop_reason=final.stop_reason,
+        )
+
+
+#: Anthropic's 5-minute cache-write price relative to base input.
+_CACHE_WRITE_WEIGHT: Final = 1.25
 
 
 #: Error codes OpenAI reports INSIDE a stream body (not as an HTTP status), which

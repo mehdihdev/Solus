@@ -50,6 +50,7 @@ from solus_api.orchestration.providers import ToolOutcome, ToolSpec, Turn
 from solus_api.services.solus_graph import SECTION_LABELS
 
 if TYPE_CHECKING:
+    from solus_api.agent.drive.binding import FrontAppBinding
     from solus_api.agent.expertise import Expertise
 
 #: SOLUSDEV-321 P7: Build's ONE sentence asking for the `<reasoning>` block before a proposal — the
@@ -107,8 +108,12 @@ _SYSTEM: Final = (
     "automatically after complete fresh validation; destructive or unclassified actions "
     "need approval. A tool's mutation marker alone does not promise an approval card. "
     "Request the intended action and report its actual result, without inventing a "
-    "card or claiming execution before the result. If intent is ambiguous, ask a short "
-    "clarifying question before changing anything.\n"
+    "card or claiming execution before the result. A request that names the change but "
+    "leaves out routine details (e.g. 'add a resistor' with no value or position) is "
+    "clear: pick common defaults (a typical value, the next free reference, a clear spot "
+    "near related parts), state the defaults you chose, and proceed. Ask a short "
+    "clarifying question before changing anything only when the goal itself is unclear "
+    "or a wrong guess would be costly to undo.\n"
     "- Only when a result says a change is waiting for the person is it pending approval. "
     "That is not a "
     "failure and not a refusal: it worked. Do not call it again, do not look for another "
@@ -351,6 +356,7 @@ def system_prompt(
     action_mode: ActionMode = ActionMode.GUIDE,
     nonce: str | None = None,
     expertise: Expertise | None = None,
+    front_app: FrontAppBinding | None = None,
 ) -> str:
     """The ONLY instruction text in the prompt. Solus-authored end to end — no
     ingested content ever reaches this position (ADR-016 for the mode note).
@@ -374,9 +380,15 @@ def system_prompt(
 
     `expertise` (SOLUSDEV-321 P6) adds one register line right after the mode note, built from
     the validated levels alone (`expertise.register_line`); a domain at `working` adds nothing.
+
+    `front_app` (SOLUSDEV-319 slice 4) adds the Solus-authored route ordering
+    (`front_app.route_note`, chosen from validated booleans alone); the app's name and
+    title never come here — they ride the live turn in a fenced `kind=front_app` block.
     """
-    # Function-local: expertise reads the graph's models, which this module never loads.
+    # Function-local: expertise reads the graph's models, which this module never loads;
+    # front_app imports this module.
     from solus_api.agent.expertise import register_line
+    from solus_api.agent.front_app import route_note
 
     note = _GUIDE_NOTE if mode is SolMode.GUIDE else _EXPERT_NOTE
     parts = [f"{_SYSTEM}\n\n{_CITE_NOTE}\n\n{note}"]
@@ -392,6 +404,8 @@ def system_prompt(
     )
     if action_mode is ActionMode.DO:
         parts.extend((REASONING_NOTE, _COMMAND_NOTE))
+    if front_app is not None:
+        parts.append(route_note(front_app))
     fence = nonce or new_nonce()
     if engineering_preferences:
         payload = bounded_payload(engineering_preferences, DATA_CAP)

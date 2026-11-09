@@ -1,48 +1,18 @@
-// The team block atop Home's sidebar (SOLUSDEV-244 / HOME H5; stacked for the
-// SOLUSDEV-317 sidebar): the active team, always visible; the switcher only
-// with more than one team; one ⋯ menu carrying the account-level actions
-// (Invite teammate for managers, Join team, New team) and Rename (admin+),
-// Leave, and Delete (owner-only, never on the personal team); and where I stand
-// against my plan's collaborative-team limit — stated honestly, with the
-// upgrade path, never as a silent failure (ADR-023; the personal team never
-// counts, ADR-025).
+// The active team's ⋯ menu and plan-limit line (SOLUSDEV-244 / HOME H5; on the team
+// overview's header since SOLUSDEV-319's team rail): the account-level actions (Invite
+// teammate for managers, Join team, New team) and Rename (admin+), Leave, and Delete
+// (owner-only, never on the personal team); and where I stand against my plan's
+// collaborative-team limit — stated honestly, with the upgrade path, never as a silent
+// failure (ADR-023; the personal team never counts, ADR-025).
 import { useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import type { TeamRole, TeamSummary } from '../../lib/api/resources'
 import type { TeamLimitPosition } from '../../lib/api/planLimit'
 import { MANAGER_ROLES } from '../team/MembersPanel'
 import { PlanLimitNotice } from './PlanLimitNotice'
-import { TeamSelect } from './TeamSelect'
+import { AT_LIMIT_MESSAGE, teamLimitText } from './teamLabels'
 
-export interface TeamStripProps {
-  team: TeamSummary | null
-  teams: readonly TeamSummary[]
-  /** From the team detail; null while unknown. */
-  memberCount: number | null
-  myRole: TeamRole | null
-  teamLimit: TeamLimitPosition | null
-  onSwitch: (teamId: string) => void
-  onJoin: () => void
-  onNewTeam: () => void
-  onInvite: () => void
-  onRename: () => void
-  onLeave: () => void
-  onDelete: () => void
-  onUpgrade?: () => void
-}
-
-/** The proactive limit line: "2 of 2 collaborative teams on your plan". */
-export function teamLimitText(limit: TeamLimitPosition | null): string | null {
-  if (!limit || limit.max === null) return null
-  return `${limit.current} of ${limit.max} collaborative teams on your plan · your personal team never counts`
-}
-
-/** The same sentence the server refuses with (services/limits.py) — no client
- *  claim about what an upgrade buys. */
-export const AT_LIMIT_MESSAGE =
-  "You're at your collaborative-team limit. Leave a team or upgrade your plan."
-
-interface TeamMenuProps {
+interface MenuButtonProps {
   canInvite: boolean
   canRename: boolean
   canLeave: boolean
@@ -55,7 +25,7 @@ interface TeamMenuProps {
   onDelete: () => void
 }
 
-function TeamMenu(props: TeamMenuProps): React.JSX.Element {
+function MenuButton(props: MenuButtonProps): React.JSX.Element {
   const { canInvite, canRename, canLeave, canDelete } = props
   const [open, setOpen] = useState(false)
   const pick = (action: () => void): void => {
@@ -74,7 +44,7 @@ function TeamMenu(props: TeamMenuProps): React.JSX.Element {
             role="menu"
             className="popover-in"
             style={{
-              // Anchored to the ⋯'s right edge: the ⋯ sits at the sidebar's
+              // Anchored to the ⋯'s right edge: the ⋯ sits at its container's
               // edge, so opening rightward ran past it (clipped + side scroll).
               position: 'absolute',
               right: 0,
@@ -141,21 +111,7 @@ function MenuItem({
   )
 }
 
-/** "personal workspace · 3 members" — only the facts that are known. */
-function TeamSubtitle({
-  team,
-  memberCount
-}: {
-  team: TeamSummary | null
-  memberCount: number | null
-}): React.JSX.Element {
-  const parts: string[] = []
-  if (team?.is_personal) parts.push('personal workspace')
-  if (memberCount !== null) parts.push(`${memberCount} ${memberCount === 1 ? 'member' : 'members'}`)
-  return <span style={{ fontSize: 12, color: 'var(--mut)' }}>{parts.join(' · ')}</span>
-}
-
-function LimitLine({
+export function TeamLimitLine({
   teamLimit,
   onUpgrade
 }: {
@@ -177,29 +133,34 @@ function LimitLine({
   )
 }
 
-export function TeamStrip(props: TeamStripProps): React.JSX.Element {
-  const { team, teams, memberCount, myRole, teamLimit } = props
+export interface TeamMenuProps {
+  team: TeamSummary | null
+  myRole: TeamRole | null
+  onJoin: () => void
+  onNewTeam: () => void
+  onInvite: () => void
+  onRename: () => void
+  onLeave: () => void
+  onDelete: () => void
+}
+
+/** The ⋯ for the active team, its items gated by my role and the team's kind. */
+export function TeamMenu(props: TeamMenuProps): React.JSX.Element {
+  const { team, myRole } = props
   const canManage = myRole !== null && MANAGER_ROLES.includes(myRole)
   const collaborative = team !== null && !team.is_personal
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        <TeamSelect teams={teams} team={team} onSwitch={props.onSwitch} />
-        <TeamMenu
-          canInvite={team !== null && canManage}
-          canRename={team !== null && canManage}
-          canLeave={collaborative}
-          canDelete={collaborative && myRole === 'owner'}
-          onInvite={props.onInvite}
-          onJoin={props.onJoin}
-          onNewTeam={props.onNewTeam}
-          onRename={props.onRename}
-          onLeave={props.onLeave}
-          onDelete={props.onDelete}
-        />
-      </div>
-      <TeamSubtitle team={team} memberCount={memberCount} />
-      <LimitLine teamLimit={teamLimit} onUpgrade={props.onUpgrade} />
-    </div>
+    <MenuButton
+      canInvite={team !== null && canManage}
+      canRename={team !== null && canManage}
+      canLeave={collaborative}
+      canDelete={collaborative && myRole === 'owner'}
+      onInvite={props.onInvite}
+      onJoin={props.onJoin}
+      onNewTeam={props.onNewTeam}
+      onRename={props.onRename}
+      onLeave={props.onLeave}
+      onDelete={props.onDelete}
+    />
   )
 }

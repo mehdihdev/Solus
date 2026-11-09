@@ -181,6 +181,20 @@ def test_the_packaged_layout_gives_the_integrations_root_a_default(tmp_path: Pat
     assert default_integrations_root(str(binary)) == tmp_path / "mcp"
 
 
+def test_the_macos_onedir_layout_finds_the_tree_beside_the_binary(tmp_path: Path) -> None:
+    """macOS builds --onedir (sol-drive.md §5): the binary sits in its own folder,
+    `<resources>/companion/solus-companion/solus-companion`, with `mcp/` beside
+    it — never the onefile spot one level up."""
+    bundle = tmp_path / "solus-companion"
+    bundle.mkdir()
+    binary = bundle / "solus-companion"
+    binary.write_text("", encoding="utf-8")
+    (bundle / "mcp").mkdir()
+    (tmp_path / "mcp").mkdir()  # a stale onefile-era tree must not be picked up
+
+    assert default_integrations_root(str(binary)) == bundle / "mcp"
+
+
 def test_no_default_is_invented_when_the_tree_is_not_there(tmp_path: Path) -> None:
     """A wrong default is worse than none: it would turn a packaging mistake into
     a silent zero-server run."""

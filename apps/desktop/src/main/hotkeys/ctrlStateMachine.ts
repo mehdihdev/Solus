@@ -98,6 +98,8 @@ export function step(s: CtrlState, e: CtrlEvent): Transition {
 export interface CtrlStateMachine {
   feed(e: CtrlEvent): CtrlOutput[]
   phase(): CtrlPhase
+  /** Back to idle with no remembered tap (SOLUSDEV-319 drive quiet period). */
+  reset(): void
 }
 
 /** Stateful wrapper over `step` for the wiring layer. */
@@ -109,6 +111,7 @@ export function createCtrlStateMachine(): CtrlStateMachine {
       state = next.state
       return next.outputs
     },
-    phase: () => state.phase
+    phase: () => state.phase,
+    reset: () => void (state = IDLE)
   }
 }

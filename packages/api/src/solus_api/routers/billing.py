@@ -90,6 +90,10 @@ def _carried_trial_end(sub: Subscription, now: datetime | None = None) -> int | 
     time into the paid subscription (wireflow billing.md Decisions 1). None when the
     trial is Stripe-backed, expired, has no end date, or has under 48h left (Stripe
     would refuse it) — the customer then starts paying immediately."""
+    # Only a TRIAL carries over; an Academic plan's year-long `expires_at` must not
+    # become a free Stripe trial (ADR-042).
+    if sub.status != SubscriptionStatus.TRIALING:
+        return None
     if sub.stripe_subscription_id is not None or sub.expires_at is None:
         return None
     ends_at = sub.expires_at if sub.expires_at.tzinfo else sub.expires_at.replace(tzinfo=UTC)

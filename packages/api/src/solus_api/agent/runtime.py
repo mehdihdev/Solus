@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
     from solus_api.agent.confirmations import ParkedCall
     from solus_api.agent.deterministic import FactSources
+    from solus_api.agent.drive.binding import FrontAppBinding
+    from solus_api.agent.drive.executor import Budget
     from solus_api.agent.execution_policy import BuildExecutionPolicy
     from solus_api.agent.expertise import Expertise
     from solus_api.agent.research import ResearchCache
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from solus_api.agent.tools.shapes import ToolCall as _ToolCallHint
     from solus_api.agent.tools.simulate import SimEnqueue
     from solus_api.agent.tools.tool import Tool
+    from solus_api.bridge.allowlist import BridgeToolSpec
     from solus_api.bridge.registry import BridgeSessionRegistry
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
@@ -58,13 +61,14 @@ from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, model_result, stream
 from solus_api.agent.context import Context, build_context
 from solus_api.agent.deterministic import DeterministicAnswer, answer_first_tier, first_tier_events
 from solus_api.agent.errors_filing import file_tool_error
+from solus_api.agent.front_app import front_app_block
 from solus_api.agent.guide_toolkb_version import placed_tools
 from solus_api.agent.interfaces import GraphScope, SolSystems
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.project_card import CardInputs, project_card_section
 from solus_api.agent.research import ResearchStep, model_visible, withhold_server_driven
 from solus_api.agent.sol_anchors import resolve_anchor_inputs
-from solus_api.agent.stream import AgentEvent
+from solus_api.agent.stream import AgentEvent, AgentEventType
 from solus_api.agent.tools import (
     ToolCall,
     ToolDescriptor,
@@ -81,7 +85,12 @@ from solus_api.agent.turn_limits import GUIDE_MODEL_ROUNDS, GUIDE_TOOL_CALLS, tu
 from solus_api.models import SolMode
 from solus_api.orchestration import bump_complexity, estimate_complexity, gateway
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
-from solus_api.orchestration.providers import ToolConversation, ToolOutcome, Turn
+from solus_api.orchestration.providers import (
+    ProviderRefusalError,
+    ToolConversation,
+    ToolOutcome,
+    Turn,
+)
 from solus_api.orchestration.router import derive_complexity
 from solus_api.orchestration.type_estimator import (
     estimate_tokens,
@@ -129,6 +138,7 @@ def build_sol_registry(
     presence_service: Any | None = None,
     companion_deployment_service: Any | None = None,
     scene_enqueue: Any | None = None,
+    drive_budget: "Budget | None" = None,
     graph_hub: "LiveHub | None" = None,
     enqueue_sim: "SimEnqueue | None" = None,
     artifact_max_bytes: int | None = None,
@@ -162,6 +172,19 @@ def build_sol_registry(
             bridge_call_cap_bytes=bridge_call_cap_bytes,
             secret_store=secret_store,
         )
+    _register_drive_step(
+        registry,
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=bridge_call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=drive_budget,
+    )
     if user_id is not None:
         _register_user_tools(
             registry,
@@ -509,6 +532,137 @@ def _register_hosted_tools(
         logger.exception("hosted MCP tools unavailable for project %s", project_id)
 
 
+def _register_drive_step(
+    registry: ToolRegistry,
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+) -> None:
+    """ADR-041: `drive.step` — the only model-facing way to the internal drive
+    tools, offered when this user's companion advertises all of them and the
+    metered model call has a secret store."""
+    tool = _drive_step_tool(
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget,
+    )
+    if tool is not None:
+        registry.register(tool)
+
+
+def _drive_step_tool(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+    front_app: "FrontAppBinding | None" = None,
+) -> "Tool | None":
+    if bridge is None or user_id is None or team_id is None or secret_store is None:
+        return None
+    from solus_api.agent.drive.executor import Budget
+    from solus_api.agent.drive.wiring import build_drive_step
+
+    return build_drive_step(
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        project_id=project_id,
+        call_cap_bytes=call_cap_bytes,
+        session_factory=session_factory,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget or Budget(),
+        front_app=front_app,
+    )
+
+
+def with_front_app(
+    registry: ToolRegistry,
+    front_app: "FrontAppBinding | None",
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    *,
+    bridge: "BridgeSessionRegistry | None",
+    user_id: uuid.UUID | None,
+    team_id: uuid.UUID | None,
+    call_cap_bytes: int,
+    secret_store: "SecretStore | None",
+    redis: Any,
+    enqueue: Any,
+    budget: "Budget | None",
+) -> ToolRegistry:
+    """SOLUSDEV-319 slice 4 (sol-drive.md §2.2): this turn's registry with `drive.step`
+    rebuilt from the turn's `front_app`, so it offers `app: "front"` — bound to exactly
+    that window — only when the app is drivable and window-bound. The rebuild goes
+    through the same scope (this user's own companion for this team and project); with
+    no window, no drive.step in the registry, or no companion, the registry is returned
+    unchanged. A new registry, never a mutation: the per-request dependency stays as built."""
+    if front_app is None or front_app.window() is None:
+        return registry
+    current = {tool.descriptor.name: tool for tool in registry.tools()}
+    fronted = _drive_step_tool(
+        session_factory,
+        project_id,
+        bridge=bridge,
+        user_id=user_id,
+        team_id=team_id,
+        call_cap_bytes=call_cap_bytes,
+        secret_store=secret_store,
+        redis=redis,
+        enqueue=enqueue,
+        budget=budget,
+        front_app=front_app,
+    )
+    if fronted is None or fronted.descriptor.name not in current:
+        return registry
+    out = ToolRegistry()
+    for name, tool in current.items():
+        out.register(fronted if name == fronted.descriptor.name else tool)
+    return out
+
+
+def _internal_only(spec: "BridgeToolSpec") -> bool:
+    """Bridge tools Solus code dispatches but the model is never offered."""
+    # `exposure: internal` (sol-drive.md §3): accepted from the companion for
+    # Solus code to dispatch — the ADR-041 drive executor calls `drive.act`.
+    if spec.internal:
+        return True
+    # Internal simulator inputs carry resolved graph data. Only the owned
+    # graph adapter may expose Isaac operations to SOL.
+    if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
+        return True
+    # Automatic code reads must resolve graph identity and the turn's selected
+    # revision through read_code_file. Keep this native primitive available to
+    # that wrapper's internal dispatch, never as a model-visible fallback.
+    # The separate general machine.read_file remains confirmation-gated.
+    # SOLUSDEV-321 P5 (D2, R125): a `returns_image` export is reached only through
+    # `render_view`, which consumes and checks its one artifact; never the model.
+    return spec.descriptor.name == "machine.read_code_file" or spec.returns_image
+
+
 def _register_bridge_tools(
     registry: ToolRegistry,
     session_factory: async_sessionmaker[AsyncSession],
@@ -548,17 +702,7 @@ def _register_bridge_tools(
     environments: EnvironmentFetch | None = None
     tools: list[BridgeTool] = []
     for spec in session.inventory:
-        # Internal simulator inputs carry resolved graph data. Only the owned
-        # graph adapter may expose Isaac operations to SOL.
-        if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
-            continue
-        # Automatic code reads must resolve graph identity and the turn's selected
-        # revision through read_code_file. Keep this native primitive available to
-        # that wrapper's internal dispatch, never as a model-visible fallback.
-        # The separate general machine.read_file remains confirmation-gated.
-        # SOLUSDEV-321 P5 (D2, R125): a `returns_image` export is reached only through
-        # `render_view`, which consumes and checks its one artifact; never the model.
-        if spec.descriptor.name == "machine.read_code_file" or spec.returns_image:
+        if _internal_only(spec):
             continue
         # MCP-05: byo_paid servers get the invoke-time license gate;
         # free-tier and uncataloged servers get zero new checks.
@@ -848,6 +992,10 @@ class AgentRunContext:
     #: extractor pass reads them, the live user Turn carries them, the
     #: transcript never sees them.
     screenshot: "screen.ScreenshotBlock | None" = None
+    #: SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the app the person summoned SOL over,
+    #: for THIS turn only — never stored. Its route ordering reaches the system prompt
+    #: (`front_app.route_note`); its name and title only the live turn's fenced block.
+    front_app: "FrontAppBinding | None" = None
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -1142,6 +1290,91 @@ async def _close_unfinished(stream: gateway.CompletionStream) -> None:
         await stream.aclose()
 
 
+@dataclass
+class _RoundState:
+    """A turn's routing, owned by the round loop: round 1's choice, pinned for later rounds and
+    re-pointed at GENERAL at most once (`rerouted`); `completion` is the last round's answer."""
+
+    complexity: Complexity | None
+    route_type: RouteType | None
+    rerouted: bool = False
+    completion: gateway.Completion | None = None
+
+
+async def _routed_round(
+    query: str,
+    conversation: ToolConversation,
+    adapters: Mapping[str, Any] | None,
+    state: _RoundState,
+    hit: BudgetHit | None,
+    ctx: AgentRunContext,
+    turn_budget: TurnBudget,
+    *,
+    first: bool,
+    round_tokens: int,
+) -> AsyncIterator[AgentEvent]:
+    """One round's model call and its events; the answer lands on `state.completion`.
+
+    SOLUSDEV-319 (model-orchestration contract, Refusals): round 1 refused before anything reached
+    the person is asked once more on the same tier's GENERAL cell, which later rounds then stay
+    pinned to. Any other refusal propagates (`model_refused`). The refused call is not debited."""
+    if ctx.sessionmaker is None or ctx.secret_store is None:  # run() already failed closed
+        raise RuntimeError("LlmRunner requires request identity; refusing an unmetered call")
+    state.completion = None
+    while True:
+        streamed = False
+        async with ctx.sessionmaker() as session:
+            stream = gateway.stream(
+                query,
+                secret_store=ctx.secret_store,
+                context=ctx.interaction_context,
+                estimate_from=ctx.prompt,
+                complexity=state.complexity,
+                type=state.route_type,
+                conversation=conversation,
+                user_id=ctx.user_id,
+                session=session,
+                redis=ctx.redis,
+                enqueue=ctx.enqueue,
+                adapters=adapters,
+                max_tokens=SOL_MAX_TOKENS,
+                extension_id=ctx.extension_id,
+                purpose="answer",
+                turn_id=ctx.turn_id,
+                project_id=ctx.project_id,
+            )
+            try:
+                async for event in _round_events(stream, hit, ctx):
+                    streamed |= event.type is not AgentEventType.BUDGET_REACHED
+                    yield event
+            except ProviderRefusalError:
+                general = stream.model.route_type is RouteType.GENERAL
+                if not first or state.rerouted or streamed or general:
+                    raise
+            else:
+                state.completion = stream.completion
+                return
+            finally:
+                # The transport breaks out of `async for event in runner.run()` when it trips its
+                # own guard, which throws GeneratorExit here. Without this the provider
+                # connection is abandoned open.
+                await _close_unfinished(stream)
+        state.complexity, state.route_type, state.rerouted = (
+            stream.model.complexity,
+            RouteType.GENERAL,
+            True,
+        )
+        hit = None  # already announced
+        turn_budget.note_model_call()  # the re-asked request counts like any other
+        turn_budget.note_input_tokens(round_tokens)
+        logger.warning(
+            "round 1 refused; re-routing to general turn_id=%s project_id=%s role=%s",
+            ctx.turn_id,
+            ctx.project_id,
+            stream.model.role,
+        )
+
+
 async def _round_events(
     stream: gateway.CompletionStream, hit: BudgetHit | None, ctx: AgentRunContext
 ) -> AsyncIterator[AgentEvent]:
@@ -1231,6 +1464,7 @@ class LlmRunner:
             action_mode=ctx.action_mode,
             nonce=nonce,
             expertise=ctx.expertise,
+            front_app=ctx.front_app,
         )
         # P1-T5: the model is offered every tool but the ones only the server drives (research).
         # P7: a GUI tool's knowledge note is read for the release on the asker's own machine.
@@ -1393,7 +1627,8 @@ class LlmRunner:
             counting=scope.counting,
             code_style=code_style_of(ctx.engineering_preferences),
         )
-        for _ in range(limits.model_rounds):
+        state = _RoundState(complexity, route_type)
+        for round_index in range(limits.model_rounds):
             # P1-T3: this round and its model call counted (a call counts against its own cap),
             # its whole request measured, then the first ceiling the turn has reached. A hit makes
             # this the closing round (no tools) and is announced before it runs; the last round
@@ -1401,51 +1636,33 @@ class LlmRunner:
             query = prompt.flatten(turns)
             turn_budget.note_model_round()
             turn_budget.note_model_call()
-            turn_budget.note_input_tokens(fixed_tokens + estimate_tokens(query, config=estimator))
+            round_tokens = fixed_tokens + estimate_tokens(query, config=estimator)
+            turn_budget.note_input_tokens(round_tokens)
             hit = turn_budget.check()
             synthesis = hit is not None
-            completion = None
-            async with ctx.sessionmaker() as session:
-                stream = gateway.stream(
-                    query,
-                    secret_store=ctx.secret_store,
-                    # The context derives the route TYPE unless round 1 asked for CODE;
-                    # the tier comes from the estimator on the person's live message (S1),
-                    # never from the context's HARD default — unless "think harder" or a
-                    # finding made it explicit.
-                    # From round 2 on, BOTH axes are pinned to round 1's choice: the
-                    # growing conversation must not escalate the model mid-turn,
-                    # because `provider_items` (encrypted reasoning) are bound to
-                    # the model that produced them and would 400 on another.
-                    context=ctx.interaction_context,
-                    estimate_from=ctx.prompt,
-                    complexity=complexity,
-                    type=route_type,
-                    conversation=_round_conversation(system, turns, tools, synthesis),
-                    user_id=ctx.user_id,
-                    session=session,
-                    redis=ctx.redis,
-                    enqueue=ctx.enqueue,
-                    adapters=self._adapters,
-                    max_tokens=SOL_MAX_TOKENS,
-                    extension_id=ctx.extension_id,
-                    purpose="answer",
-                    turn_id=ctx.turn_id,
-                    project_id=ctx.project_id,
-                )
-                try:
-                    async for event in _round_events(stream, hit, ctx):
-                        yield event
-                finally:
-                    # The transport breaks out of `async for event in runner.run()`
-                    # when it trips its own guard, which throws GeneratorExit here.
-                    # Without this the provider connection is abandoned open.
-                    await _close_unfinished(stream)
-                completion = stream.completion
-
+            # The context derives the route TYPE unless round 1 asked for CODE; the tier comes
+            # from the estimator on the person's live message (S1), never from the context's HARD
+            # default — unless "think harder" or a finding made it explicit. From round 2 on, BOTH
+            # axes are pinned to round 1's choice (`state`): the growing conversation must not
+            # escalate the model mid-turn, because `provider_items` (encrypted reasoning) are
+            # bound to the model that produced them and would 400 on another.
+            async for event in _routed_round(
+                query,
+                _round_conversation(system, turns, tools, synthesis),
+                self._adapters,
+                state,
+                hit,
+                ctx,
+                turn_budget,
+                first=round_index == 0,
+                round_tokens=round_tokens,
+            ):
+                yield event
+            completion = state.completion
             if completion is None:
                 break
-            complexity, route_type = completion.model.complexity, completion.model.route_type
+            state.complexity = completion.model.complexity
+            state.route_type = completion.model.route_type
             terminal = _terminal_reply(
                 completion,
                 synthesis,
@@ -1692,9 +1909,11 @@ class LlmRunner:
             else prompt.data_block(nonce, "user_message", ctx.prompt)
         )
         images = (ctx.screenshot.image,) if ctx.screenshot is not None else ()
-        turns.append(
-            Turn(role="user", text="\n".join((context.fenced_suffix(nonce), live)), images=images)
-        )
+        # SOLUSDEV-319 slice 4: the front app's fenced block, after the live layers and
+        # before the message — it varies per summon, so it stays out of the cached prefix.
+        front = (front_app_block(nonce, ctx.front_app),) if ctx.front_app is not None else ()
+        text = "\n".join((context.fenced_suffix(nonce), *front, live))
+        turns.append(Turn(role="user", text=text, images=images))
         return tuple(turns)
 
 

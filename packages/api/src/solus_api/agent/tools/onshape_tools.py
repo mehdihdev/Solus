@@ -491,6 +491,10 @@ def _build_tool(
             "onshape.create_fastened_mate",
             "onshape.restore_fastened_pose",
             "onshape.create_revolute_mate",
+            "onshape.suppress_feature",
+            "onshape.rename_feature",
+            "onshape.delete_feature",
+            "onshape.delete_instance",
         }
     )
 

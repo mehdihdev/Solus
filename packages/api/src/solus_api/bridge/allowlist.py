@@ -130,6 +130,11 @@ class ServerAllowlist(BaseModel):
     #: Declared here because this file is the single source of truth for a
     #: server, and because both readers are `extra="forbid"`.
     launched_by: Literal["companion", "cloud", "builtin"] = "companion"
+    #: WHO may call these tools. `model` (the default) registers them in the SOL
+    #: agent's tool set. `internal` accepts them from the companion but leaves
+    #: them out of every agent tool set: only Solus code dispatches them (the
+    #: ADR-041 drive executor calls `drive.act`; the model never can).
+    exposure: Literal["model", "internal"] = "model"
     tools: tuple[AllowedTool, ...] = ()
 
 
@@ -138,6 +143,7 @@ class BridgeAllowlist:
     """Loaded allowlists: `servers[server_name][tool_name] -> AllowedTool`."""
 
     servers: dict[str, dict[str, AllowedTool]]
+    internal: frozenset[str] = frozenset()
 
     def get(self, server: str, tool: str) -> AllowedTool | None:
         return self.servers.get(server, {}).get(tool)
@@ -167,6 +173,7 @@ def load_allowlist(root: Path) -> BridgeAllowlist:
     repo files — a bad one is OUR bug, logged loudly and skipped so one broken
     fork cannot brick the API."""
     servers: dict[str, dict[str, AllowedTool]] = {}
+    internal: set[str] = set()
     for path in sorted(root.glob("*/allowlist.yaml")):
         parsed = _load_one(path)
         if parsed is None:
@@ -187,11 +194,13 @@ def load_allowlist(root: Path) -> BridgeAllowlist:
                 update={"supports_dry_run": supports_dry_run(f"{parsed.server}.{tool.name}")}
             )
         servers[parsed.server] = entries
+        if parsed.exposure == "internal":
+            internal.add(parsed.server)
     if not servers:
         # A wrong root and a correct-but-empty one used to look identical: every
         # bridge tool would then be rejected as un-allowlisted, with no clue why.
         logger.warning("no bridge allowlists found under %s — is the root correct?", root)
-    return BridgeAllowlist(servers=servers)
+    return BridgeAllowlist(servers=servers, internal=frozenset(internal))
 
 
 @dataclass(frozen=True)
@@ -201,6 +210,8 @@ class BridgeToolSpec:
     server: str
     remote_name: str
     descriptor: ToolDescriptor
+    #: From the allowlist's `exposure` — never from the advertisement.
+    internal: bool = False
     #: From the allowlist entry (`AllowedTool.returns_image`): only such a tool's artifact is ever
     #: consumed as an image, and the runtime never offers it to the model.
     returns_image: bool = False
@@ -270,6 +281,7 @@ def validate_inventory(hello: HelloData, allowlist: BridgeAllowlist) -> tuple[Br
                     server=advertised.server,
                     remote_name=tool.name,
                     descriptor=descriptor,
+                    internal=advertised.server in allowlist.internal,
                     returns_image=allowed.returns_image,
                 )
             )

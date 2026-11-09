@@ -142,6 +142,40 @@ class Settings(BaseSettings):
     # Max Stripe webhook body we will parse, bytes — bound untrusted input.
     stripe_webhook_max_bytes: int = 262144
 
+    # --- Academic plan (ADR-042, SOLUSDEV-319) ---
+    # Monthly credit grant for a live Academic plan (CONFIG, provisional like the trial
+    # grant). Unspent academic credits do not roll over.
+    academic_monthly_credits: int = 1000
+    # How long one verification keeps the Academic plan live.
+    academic_validity_days: int = 365
+    # Registrable-domain suffixes that count as academic. `edu` matches mit.edu and
+    # csail.mit.edu, never `edu` itself. JSON env var, e.g. SOLUS_ACADEMIC_EMAIL_SUFFIXES.
+    academic_email_suffixes: list[str] = [
+        "edu",
+        "ac.uk",
+        "edu.au",
+        "ac.nz",
+        "edu.sg",
+        "edu.hk",
+        "ac.jp",
+        "ac.kr",
+        "edu.cn",
+        "ac.in",
+        "edu.in",
+        "ac.il",
+        "ac.za",
+        "edu.br",
+        "edu.mx",
+        "edu.tr",
+        "edu.pl",
+        "ac.at",
+        "ac.be",
+    ]
+    # Verified sender for the code email, e.g. "Solus <verify@solusforge.com>". Sent through
+    # AWS SES in `aws_region` with the task's IAM role (no key in config). Unset outside
+    # `app_env=dev` ⇒ sending answers 503 email_unconfigured; in dev the code is logged.
+    academic_email_sender: str | None = None
+
     # --- Stripe Checkout (SOLUSDEV-83 follow-up) — the outbound money-in surface.
     # The Stripe SECRET API KEY is NOT a setting: it lives in the SecretStore under
     # "stripe_api_key" (like the LLM provider keys), never in config, env, or logs.
@@ -328,6 +362,12 @@ class Settings(BaseSettings):
     # `agent.tools.registry.DEFAULT_TIMEOUT_SECONDS`'s default by convention
     # (not imported, to keep config.py dependency-free of the tools package).
     bridge_tool_timeout_seconds: float = 30.0
+
+    # --- ADR-041 drive steps (2026-10-26 amendment: wall-clock, model time included) ---
+    drive_max_actions: int = Field(default=15, ge=1, le=50)
+    drive_max_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
+    # Cost ceiling per step: screenshots are never pruned, so input grows each round.
+    drive_max_input_tokens: int = Field(default=400_000, ge=20_000, le=2_000_000)
 
     # --- Artifacts (SOLUSDEV-100 T4c / docs/api/artifacts.md) ---
     # Hard upload cap (§4.4) — over → 413, enforced against Content-Length

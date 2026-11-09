@@ -216,14 +216,46 @@ MCP `isError`, which the companion maps to a failed ToolResult with no successfu
 fingerprint. Confinement refusals use the same error path. Examples:
 `path_escapes_workspace`, `file_too_large`, `stale_plan`, `already_exists`,
 `library_unavailable`, `unsupported_symbol`, `ambiguous_target`, `invalid_geometry`,
-`guard_failed`, `cli_unavailable`. No content or host path in exception text.
+`guard_failed`, `cli_unavailable`, `open_in_editor`. The exception text is
+`<code>: <fixed explanation>` (`solus/refusals.py`, SOLUSDEV-319) so SOL can relay
+the cause; explanations are fixed strings — no content or host path.
 
-Open-in-KiCad conflict: `stale_plan` is also the refusal when the schematic is
-open in the KiCad GUI. A write is refused if the file's bytes differ from the
-fingerprint Solus read (the user saved from KiCad since), or if KiCad's
-`~<name>.lck` / `<name>.lck` editor lock exists beside it. Either way nothing
-is written and the file is untouched; the user is told to save/close in KiCad
-and re-read. Pinned by `tests/test_write_tool_open_in_kicad.py`.
+Open-in-KiCad conflict: a write is refused with `stale_plan` if the file's bytes
+differ from the fingerprint Solus read (the user saved from KiCad since), and with
+`open_in_editor` if KiCad's `~<name>.lck` / `<name>.lck` editor lock exists beside
+it — KiCad would overwrite the change on its next save and does not reload it.
+Either way nothing is written and the file is untouched; for `open_in_editor`
+SOL asks the user to close that schematic window in KiCad, then retries.
+Pinned by `tests/test_write_tool_open_in_kicad.py`.
+
+Live edits while KiCad has the sheet open (ADR-040, macOS, SOLUSDEV-319): when the
+lock exists AND the fork's osascript driver finds exactly one window titled
+`<stem> — Schematic Editor`, the write tools use a save → write → File → Revert
+handshake (`solus/development/live_kicad.py`) instead of refusing.
+
+- The `dry_run` preview adds a row labelled `Approval required` describing the
+  handshake; the Build policy (`execution_policy.APPROVAL_REQUIRED_LABEL`) then
+  sends the call to the approval card — it never auto-runs.
+- The real call must match a live preview of the same plan (single use, 30 min);
+  otherwise `live_preview_required`.
+- Save must clear KiCad's `*` (`save_unconfirmed`); a save that changes content
+  makes the write `stale_plan` (formatting-only re-saves match by tokens).
+- Revert refuses a dirty sheet and confirms only the dialog naming the exact path.
+- After Revert the sheet is saved once more (ADR-040 amendment step d) so the file is in
+  KiCad's canonical form; `after_fingerprint` is the file actually on disk. Every Save must
+  change the file stamp within 3 s (a swallowed pre-save refuses `open_in_editor`; a swallowed
+  re-save is retried once, then `kicad_resave: "failed"` with a note).
+- Success adds `kicad_reload: "reloaded"`; a failed Revert returns
+  `kicad_reload: "failed"`, a reason code and a recovery note (use File → Revert,
+  do not save).
+- No driver, no matching window, or more than one matching window keeps the
+  `open_in_editor` refusal.
+
+`kicad.list_projects` (SOLUSDEV-319) lists only `.kicad_pro` files inside the linked
+workspace (no symlink following, depth 6, at most 50), each with `name`, `path`,
+`relative_path`, `modified` and `open_in_kicad` (its `~<name>.kicad_pro.lck`
+exists); the open project sorts first. It replaces upstream's search of
+`~/Documents/KiCad` and search paths, whose results every read tool refused.
 
 Planner output fingerprints original bytes, exact proposed bytes, arguments,
 resolved entities, selected library bytes and generated UUIDs. UUIDs derive from a

@@ -1168,6 +1168,20 @@ async def expire_comps(ctx: dict[str, Any]) -> int:
         return 0
 
 
+async def academic_sweep(ctx: dict[str, Any]) -> int:
+    """ARQ cron (daily, ADR-042): apply each live Academic plan's monthly grant and record
+    new expiries once. Returns how many grants were applied; never raises to ARQ."""
+    from solus_api.billing.academic import sweep_academic
+
+    try:
+        async with ctx["sessionmaker"]() as session:
+            summary = await sweep_academic(session, ctx["settings"])
+    except Exception as exc:  # noqa: BLE001 — logged; the sweep is idempotent and runs again
+        logger.error("academic sweep failed: %s", type(exc).__name__)
+        return 0
+    return summary.granted
+
+
 async def reconcile_stripe_subscriptions(ctx: dict[str, Any]) -> int:
     """ARQ cron (hourly, SOLUSDEV-236): converge local subscription rows onto Stripe.
 
@@ -1343,6 +1357,7 @@ def build_worker_settings(settings: Settings) -> type:
             # and materialising expired staff comps.
             cron(cancel_stripe_subscriptions, minute=None, run_at_startup=True),
             cron(expire_comps, minute={0, 15, 30, 45}, run_at_startup=False),
+            cron(academic_sweep, hour={0}, minute={10}, run_at_startup=True),
             # SOLUSDEV-236: hourly Stripe subscription drift reconciliation (safety net
             # under the webhook; circuit-breaker protected).
             cron(reconcile_stripe_subscriptions, minute={5}, run_at_startup=False),

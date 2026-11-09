@@ -265,6 +265,111 @@ requires adding to the closed `event_type` set in `POST /api/v1/events`.
   above, not in a tooltip.
 - Reduced motion: no animation is added by this screen.
 
+## Academic plan (SOLUSDEV-319, ADR-042)
+
+**Status: APPROVED — 2026-11-08, in-chat (ADR-042).** Academic is not a fourth
+column in the plan grid. It is one full-width card directly under the
+Basic / Pro / Enterprise grid and above Buy credits, so it reads as its own
+offer. The verification flow happens inside that card (no modal, no new screen).
+
+```
+Plans                                              [ Monthly | Yearly ]
+┌ Basic ┐ ┌ Pro ┐ ┌ Enterprise ┐
+└───────┘ └─────┘ └────────────┘
+┌ Academic ─────────────────────────────────────────── FREE ─────────┐
+│ Free for students, teachers and researchers.                       │
+│ Basic limits · 1,000 credits every month · verify once a year      │
+│ ── step area (one of) ─────────────────────────────────────────── │
+│ A0  [ you@university.edu        ] [Send code]                      │
+│ A1  Code sent to you@mit.edu  [ ______ ] [Verify]  Resend · Change │
+│ A2  ✓ Verified you@mit.edu · until {date}           (CURRENT PLAN) │
+│ A3  Ended {date}  [ you@mit.edu ] [Send code]                      │
+│ A4  Cancel your paid plan in Manage billing first, then verify.    │
+└────────────────────────────────────────────────────────────────────┘
+Buy credits
+```
+
+Data: `GET /api/v1/billing/academic`, fetched with the rest of the snapshot
+(failure → the card shows "Academic verification is unavailable right now."
+and no form). Monthly credits and the domain hint come from that response,
+not static copy.
+
+| #   | Card state          | Detection                                                                   | Step area                                                                                                                                                       |
+| --- | ------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A0  | Not verified        | `state` none                                                                | Email field (`type=email`, label "Academic email") + **Send code**. Hint: "Use your school address — .edu, .ac.uk, .edu.au and similar."                        |
+| A1  | Code sent           | `state` pending (or right after Send code)                                  | "We sent a 6-digit code to {email}. It expires in 15 minutes." Code field (`inputmode=numeric`, `autocomplete=one-time-code`, 6 digits) + **Verify**. Buttons: **Resend code** (disabled with a countdown for 60 s), **Use a different email** (back to A0). |
+| A2  | Active              | `state` active                                                              | "Verified {email} · free until {date}". `CURRENT PLAN` badge on the card. Within 30 days of the end, a **Verify again** link opens A0 prefilled.               |
+| A3  | Expired             | `state` expired                                                             | "Your academic plan ended {date}." A0 form prefilled with the old address. The page banner (warn): "Academic plan ended {date} — verify your academic email again or choose a plan." |
+| A4  | Not eligible        | live Stripe subscription (`view.isLive`) or Enterprise                     | "To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends." No form.                                           |
+
+Overlays: offline hides the card with the rest of the page. Stripe degradation
+(states 11, 12) does **not** disable the academic flow; it does not touch Stripe.
+
+Current-plan card when `plan` is academic: header "Academic plan" + chip
+`ACTIVE` (or `EXPIRED` once ended); rows: **Academic email** (the address),
+**Free until** {date} (or **Ended** {date}), **Next charge** "None — Academic is
+free", **Card** as usual, **Credits**. No Change/Cancel buttons. Plan cards keep
+**Subscribe** for Basic and Pro (upgrading ends Academic; see API.md).
+
+### Flow
+
+```mermaid
+flowchart TD
+  a0["A0 enter academic email"] -->|Send code| send["POST academic/code"]
+  send -->|202| a1["A1 enter code"]
+  send -->|422 not_academic_email| a0e["inline error under email"]
+  send -->|409 stripe_subscription_active| a4["A4 not eligible"]
+  send -->|429| cool["inline: wait N s"]
+  a1 -->|Verify| ver["POST academic/verify"]
+  ver -->|200| a2["A2 active + refetch subscription, summary, credits"]
+  ver -->|400 invalid_code| a1e["inline: wrong code, N tries left"]
+  ver -->|410 code_expired| a1x["inline: request a new code"]
+  ver -->|429 too_many_attempts| a1w["inline: wait, then request a new code"]
+  ver -->|409 academic_email_in_use| a0u["inline: address already in use"]
+  a1 -->|Use a different email| a0
+```
+
+### Copy
+
+| Key                         | Copy                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Card title / badge          | Academic / FREE                                                                                        |
+| Card lede                   | Free for students, teachers and researchers.                                                           |
+| Card terms                  | Basic limits · {N} credits every month · verify once a year                                           |
+| Send button                 | Send code                                                                                              |
+| Not academic                | That address isn't on our list of academic domains. Use your school email.                             |
+| Code sent                   | We sent a 6-digit code to {email}. It expires in 15 minutes.                                           |
+| Wrong code                  | That code didn't match — {N} tries left.                                                               |
+| Code expired / no code      | That code can't be used anymore. Send a new one.                                                       |
+| Too many wrong codes        | Too many wrong codes. Wait a while, then send a new one.                                               |
+| Address in use              | That address is already verified on another Solus account.                                             |
+| Rate limited                | Too many codes requested. Try again in a minute.                                                       |
+| Email unconfigured          | We can't send verification emails right now. Try again later.                                          |
+| Success notice              | You're on the Academic plan — {N} credits are in your account.                                         |
+| Active line                 | Verified {email} · free until {date}                                                                   |
+| Expired banner              | Academic plan ended {date} — verify your academic email again or choose a plan                         |
+| Not eligible                | To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends. |
+
+SOL block message for `academic_expired` (SOL mode aware):
+
+- **Guide:** "Your Academic plan ended on {date}, so model features like SOL's answers are paused. Your projects and data still work. Verify your academic email again in Billing to turn them back on."
+- **Expert:** "Academic plan ended. Model features paused — verify again in Billing."
+
+### Events
+
+| Event                                         | When                                   | Source |
+| --------------------------------------------- | -------------------------------------- | ------ |
+| `billing.academic.code_sent` `{domain}`       | code emailed                           | server |
+| `billing.academic.verified` `{domain}`        | plan switched to Academic              | server |
+| `billing.academic.failed` `{reason}`          | wrong, expired or exhausted code; address in use | server |
+| `billing.academic.expired`                    | daily sweep first sees the expiry      | server |
+| `orchestration.blocked` `{reason: "academic_expired"}` | metered call refused          | server |
+
+Accessibility: the step area is a `role="group"` labelled "Academic
+verification"; inline errors use `role="alert"` and are tied to their field with
+`aria-describedby`; focus moves to the code field when A1 opens and to the
+status line after a successful verify.
+
 ## Decisions (2026-10-19, in-chat)
 
 1. **Trial carries over to Checkout.** A subscription Checkout started during a

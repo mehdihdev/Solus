@@ -7,6 +7,7 @@ import { Callout, CodeLine } from '../settingsUi'
 import { ATTENTION_ANCHOR } from '../settingsSections.constants'
 import { RevealList } from '../Reveal'
 import type { AttentionItem } from '../attention'
+import { DRIVE_HELPER_NAME } from '../driveCopy'
 
 export interface AttentionActions {
   openCaptureSettings: () => void
@@ -14,6 +15,11 @@ export interface AttentionActions {
   turnOffCapture: () => void
   openBilling: () => void
   openAccounts: () => void
+  /** SOLUSDEV-319: run the helper's `trust --prompt`. */
+  requestDrivePermissions: () => void
+  turnOffDrive: () => void
+  /** Slice 3b: open System Settings › Login Items. */
+  openDriveApproval: () => void
 }
 
 const SCREEN_RECORDING_PATH = 'System Settings › Privacy & Security › Screen Recording › Solus'
@@ -59,6 +65,64 @@ function CaptureCard({
   )
 }
 
+function DriveCard({
+  item,
+  actions
+}: {
+  item: Extract<AttentionItem, { kind: 'drive' }>
+  actions: AttentionActions
+}): React.JSX.Element {
+  const grants = item.missing.join(' and ')
+  return (
+    <Callout
+      tone="warn"
+      title={`${DRIVE_HELPER_NAME} needs permission`}
+      actions={
+        <>
+          <Button kind="primary" size="sm" onClick={actions.requestDrivePermissions}>
+            Ask macOS for permission
+          </Button>
+          <Button kind="bare" size="sm" onClick={actions.turnOffDrive}>
+            Turn off mouse and keyboard
+          </Button>
+        </>
+      }
+    >
+      <div>
+        SOL uses your mouse and keyboard through {DRIVE_HELPER_NAME}, the Solus input helper. macOS
+        hasn&apos;t given it {grants} yet, so SOL can&apos;t click or type for you.
+      </div>
+      {item.missing.map((grant) => (
+        <div key={grant} style={{ marginTop: 8 }}>
+          <CodeLine>{`System Settings › Privacy & Security › ${grant} › ${DRIVE_HELPER_NAME}`}</CodeLine>
+        </div>
+      ))}
+    </Callout>
+  )
+}
+
+function DriveApprovalCard({ actions }: { actions: AttentionActions }): React.JSX.Element {
+  return (
+    <Callout
+      tone="warn"
+      title={`Allow ${DRIVE_HELPER_NAME} in Login Items`}
+      actions={
+        <>
+          <Button kind="primary" size="sm" onClick={actions.openDriveApproval}>
+            Open Login Items
+          </Button>
+          <Button kind="bare" size="sm" onClick={actions.turnOffDrive}>
+            Turn off mouse and keyboard
+          </Button>
+        </>
+      }
+    >
+      macOS asks you to allow {DRIVE_HELPER_NAME} to run in the background before SOL can use your
+      mouse and keyboard.
+    </Callout>
+  )
+}
+
 function AttentionCard({
   item,
   actions
@@ -69,6 +133,10 @@ function AttentionCard({
   switch (item.kind) {
     case 'capture':
       return <CaptureCard item={item} actions={actions} />
+    case 'drive_approval':
+      return <DriveApprovalCard actions={actions} />
+    case 'drive':
+      return <DriveCard item={item} actions={actions} />
     case 'trial':
       return (
         <Callout

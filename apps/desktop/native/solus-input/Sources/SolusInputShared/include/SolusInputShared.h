@@ -1,0 +1,75 @@
+// Shared by the agent (Swift, solus-input) and its only client, Solus.app main's
+// native module (apps/desktop/native/solus-input-xpc, Objective-C++): the XPC
+// interface and the signing constants, defined once (ADR-041 amendment
+// 2026-10-28; docs/architecture/sol-drive.md §2.1).
+#ifndef SOLUS_INPUT_SHARED_H
+#define SOLUS_INPUT_SHARED_H
+
+#import <Foundation/Foundation.h>
+
+/// Replaced by a human with Solus's Apple team ID. While it is the placeholder
+/// every code requirement fails: the agent exits at start, the listener admits
+/// nobody and the native module refuses to connect (release fails closed).
+#define SOLUS_TEAM_ID "SOLUS_TEAM_ID_PLACEHOLDER"
+#define SOLUS_TEAM_ID_PLACEHOLDER "SOLUS_TEAM_ID_PLACEHOLDER"
+
+#define SOLUS_AGENT_SERVICE "com.solusforge.solus.input.agent"
+#define SOLUS_APP_IDENTIFIER "com.solusforge.solus"
+#define SOLUS_HELPER_IDENTIFIER "com.solusforge.solus.input"
+
+/// Developer ID: Apple anchor, the Developer ID intermediate (...6.2.6) and the
+/// Developer ID Application leaf (...6.1.13), pinned to team (%s) then identifier (%s).
+// One literal on one line: Swift imports single string-literal macros only.
+// clang-format off
+#define SOLUS_REQUIREMENT_FORMAT "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"%s\" and identifier \"%s\""
+// clang-format on
+
+/// Lowest Solus.app CFBundleVersion the agent admits. Set to apps/desktop/package.json's
+/// version; a human bumps it to the first signed 3b build so older signed Solus
+/// builds (before the fuse/environment hardening) can never drive.
+#define SOLUS_APP_VERSION_FLOOR "1.0.0"
+
+/// Appended to Solus.app's requirement (one %s: the floor): no entitlement that lets
+/// foreign code, unsigned code pages or a debugger into the process (allow-jit, which
+/// Solus.app carries, is not one of them), and no build older than the floor.
+// clang-format off
+#define SOLUS_APP_REQUIREMENT_SUFFIX " and !(entitlement[\"com.apple.security.cs.allow-dyld-environment-variables\"] exists) and !(entitlement[\"com.apple.security.cs.disable-library-validation\"] exists) and !(entitlement[\"com.apple.security.get-task-allow\"] exists) and !(entitlement[\"com.apple.security.cs.allow-unsigned-executable-memory\"] exists) and !(entitlement[\"com.apple.security.cs.disable-executable-page-protection\"] exists) and info[CFBundleVersion] >= \"%s\""
+// clang-format on
+
+/// Requests are one JSON object of at most this many bytes.
+#define SOLUS_AGENT_MAX_REQUEST_BYTES 65536
+
+/// The agent's exported interface. `handle` replies with one JSON object (the
+/// request carries a positive integer "id"); `cancel:` stops that request if it is
+/// running, drops it (replying "stopped") if it is still queued, and does nothing
+/// for any other id. There is no connection-wide cancel.
+NS_ASSUME_NONNULL_BEGIN
+@protocol SolusInputAgent
+- (void)handle:(NSData *)request reply:(void (^)(NSData *reply))reply;
+- (void)cancel:(NSInteger)requestId;
+@end
+
+/// <kern/cs_blobs.h> values, as SecCodeCopySigningInformation reports them:
+/// kSecCodeInfoFlags (static) and kSecCodeInfoStatus (dynamic, kSecCSDynamicInformation).
+#define SOLUS_CS_VALID 0x00000001u
+#define SOLUS_CS_RUNTIME 0x00010000u
+#define SOLUS_CS_DEBUGGED 0x10000000u
+
+/// The client (or Solus.app checking itself) runs with the hardened runtime and
+/// a valid, never-debugged signature. A team-signed build without the hardened
+/// runtime satisfies the requirement string but fails here.
+static inline BOOL SolusInputCodeIsHardened(uint32_t staticFlags, uint32_t dynamicStatus) {
+    return (staticFlags & SOLUS_CS_RUNTIME) != 0 && (dynamicStatus & SOLUS_CS_RUNTIME) != 0 &&
+           (dynamicStatus & SOLUS_CS_VALID) != 0 && (dynamicStatus & SOLUS_CS_DEBUGGED) == 0;
+}
+
+/// Safe to send again after an interruption, because it posts no input: `trust`,
+/// or `run` of identify/capture. Never `act` — a replay could repeat a click.
+static inline BOOL SolusInputRequestIsRetryable(NSString *op, NSString *_Nullable command) {
+    if ([op isEqualToString:@"trust"]) return YES;
+    return [op isEqualToString:@"run"] && ([command isEqualToString:@"identify"] || [command isEqualToString:@"capture"]);
+}
+
+NS_ASSUME_NONNULL_END
+
+#endif

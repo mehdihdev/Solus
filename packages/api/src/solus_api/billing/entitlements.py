@@ -59,3 +59,17 @@ def is_local_trial_expired(sub: Subscription, now: datetime | None = None) -> bo
     if sub.expires_at is None:
         return False
     return _aware(sub.expires_at) <= _aware(now or utcnow())
+
+
+def is_academic_expired(sub: Subscription, now: datetime | None = None) -> bool:
+    """Whether an Academic plan (ADR-042) has run past `expires_at`. Read-time, like a
+    local trial; a NULL `expires_at` never expires."""
+    if sub.plan != PlanType.ACADEMIC or sub.expires_at is None:
+        return False
+    return _aware(sub.expires_at) <= _aware(now or utcnow())
+
+
+def is_local_access_expired(sub: Subscription, now: datetime | None = None) -> bool:
+    """A local (non-Stripe) time-boxed plan has ended: an expired trial or Academic plan.
+    Both block metered spend under the same rules (ADR-024, ADR-042)."""
+    return is_local_trial_expired(sub, now) or is_academic_expired(sub, now)
