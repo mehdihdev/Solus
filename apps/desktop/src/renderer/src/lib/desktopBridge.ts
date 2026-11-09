@@ -65,6 +65,8 @@ interface SolusWindow {
     folder?: FolderBridge
     /** `process.platform` of the host, so the renderer can inset for native window controls. */
     platform?: string
+    /** SOLUSDEV-323: centre the macOS lights in the current screen's header. */
+    setWindowChrome?: (kind: 'title' | 'onboarding') => void
     extensions?: ExtensionsBridge
     hosted?: HostedBridge
     sol?: SolBridge
@@ -109,6 +111,11 @@ export function getDesktopExtensionsBridge(): ExtensionsBridge | null {
 /** Host platform under Electron ('darwin', 'win32', 'linux'); null in a plain browser. */
 export function getDesktopPlatform(): string | null {
   return (window as SolusWindow).solus?.platform ?? null
+}
+
+/** Ask main to centre the macOS lights in this screen's header; no-op outside Electron. */
+export function setDesktopWindowChrome(kind: 'title' | 'onboarding'): void {
+  ;(window as SolusWindow).solus?.setWindowChrome?.(kind)
 }
 
 export function getDesktopHostedBridge(): HostedBridge | null {

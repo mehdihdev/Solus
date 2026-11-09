@@ -9,7 +9,6 @@ import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
-import { Wordmark } from '../../components/ui/Wordmark'
 import { useAuthStore } from '../../store/authStore'
 import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -33,7 +32,7 @@ import {
   type OnboardingStep
 } from './onboardingStore'
 import { endOnboardingReplay, isOnboardingReplay } from './onboardingReplay'
-import { getDesktopPlatform } from '../../lib/desktopBridge'
+import { getDesktopPlatform, setDesktopWindowChrome } from '../../lib/desktopBridge'
 import { MAC_TRAFFIC_LIGHT_INSET } from '../workspace/TitleBar'
 import { ensureWorkspace } from './provisioning'
 import { SolLines } from './SolLines'
@@ -44,6 +43,14 @@ import './onboarding.css'
 /** Upper bound on waiting for the terminal 'done' write before navigating. */
 const DONE_PERSIST_TIMEOUT_MS = 2000
 const BUILD_STEP: OnboardingStep = 5
+
+/** Centre the macOS lights in this 64 px header; the workspace's 44 px row gets them back. */
+function useOnboardingWindowChrome(): void {
+  useEffect(() => {
+    setDesktopWindowChrome('onboarding')
+    return () => setDesktopWindowChrome('title')
+  }, [])
+}
 
 function useHydrate(): boolean {
   const navigate = useNavigate()
@@ -139,6 +146,7 @@ function orbStateFor(step: OnboardingStep, hasDescription: boolean, buildDone: b
 }
 
 export function Onboarding(): React.JSX.Element {
+  useOnboardingWindowChrome()
   const hydrated = useHydrate()
   const { store, goTo, beginBuild, finish } = useOnboardingFlow()
   const userEmail = useAuthStore((s) => s.user?.email)
@@ -262,8 +270,28 @@ function SolColumn({ orb, step }: { orb: OrbState; step: OnboardingStep }): Reac
           'radial-gradient(600px 420px at 20% 18%, color-mix(in srgb, var(--acc) 7%, transparent), transparent 70%)'
       }}
     >
-      <div style={{ height: 176, display: 'flex', alignItems: 'center' }}>
+      <div
+        style={{
+          height: 176,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          gap: 14
+        }}
+      >
         <OnboardingOrb state={orb} />
+        <span
+          data-testid="ob-brand"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.24em',
+            color: 'var(--mut)'
+          }}
+        >
+          SOLUS
+        </span>
       </div>
       <SolLines step={step} />
     </section>
@@ -298,9 +326,8 @@ function OnboardingHeader({
         borderBottom: '1px solid var(--bd)'
       }}
     >
-      <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Wordmark size={14} />
-      </div>
+      {/* Left of the rail: the macOS lights on their own (SOL's orb is the brand). */}
+      <div style={{ flex: '1 1 0', minWidth: 0 }} />
       <StepDots step={step} />
       <div
         style={{

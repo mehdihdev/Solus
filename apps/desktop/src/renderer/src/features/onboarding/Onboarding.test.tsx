@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { Onboarding } from './Onboarding'
@@ -323,6 +323,27 @@ describe('Onboarding header — window chrome', () => {
     expect(
       screen.getByRole('button', { name: 'Skip setup' }).closest('.app-no-drag')
     ).not.toBeNull()
+  })
+
+  it('shows no logo in the header — the macOS lights sit there alone', async () => {
+    w.solus = { platform: 'darwin' }
+    await renderOnboarding()
+    expect(within(screen.getByTestId('ob-header')).queryByText('SOLUS')).toBeNull()
+    expect(screen.getByTestId('ob-brand')).toHaveTextContent('SOLUS')
+  })
+
+  it('centres the macOS lights in its header while mounted, and restores them after', async () => {
+    const setWindowChrome = vi.fn()
+    ;(w as { solus?: Record<string, unknown> }).solus = { platform: 'darwin', setWindowChrome }
+    const { unmount } = render(
+      <MemoryRouter>
+        <Onboarding />
+      </MemoryRouter>
+    )
+    await screen.findByText('MAYA@STRIDER.DEV')
+    expect(setWindowChrome).toHaveBeenLastCalledWith('onboarding')
+    unmount()
+    expect(setWindowChrome).toHaveBeenLastCalledWith('title')
   })
 
   it('keeps the plain inset off macOS', async () => {

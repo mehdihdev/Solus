@@ -22,6 +22,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import dockIcon from '../../build/icon.png?asset'
+import { TRAFFIC_LIGHTS, WINDOW_CHROME_CHANNEL, applyWindowChrome } from './windowChrome'
 import {
   awaitGithubCallback,
   awaitOAuthCallback,
@@ -539,7 +540,7 @@ function createWindow(): void {
     // SOLUSDEV-235: the renderer owns the title row (project pill), so on macOS the
     // native bar collapses to the traffic lights, vertically centred in that 44px row.
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: TRAFFIC_LIGHTS.title }
       : {}),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -797,6 +798,11 @@ function registerProjectFolderHandlers(): void {
 /** Settings › About (SOLUSDEV-318): the app version. No arguments, no secrets. */
 function registerAppInfoHandlers(): void {
   ipcMain.handle('app:version', (event) => (isMainRendererSender(event) ? app.getVersion() : null))
+  // SOLUSDEV-323: each screen centres the macOS lights in its own header.
+  ipcMain.on(WINDOW_CHROME_CHANNEL, (event, kind: unknown) => {
+    if (!isMainRendererSender(event)) return
+    applyWindowChrome(BrowserWindow.fromWebContents(event.sender), kind, process.platform)
+  })
 }
 
 function registerBillingHandlers(): void {

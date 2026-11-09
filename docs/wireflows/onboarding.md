@@ -7,7 +7,9 @@ related: `sol-window.md` (§A summoning, §D screen setting), `settings.md` (Nee
 
 ## Layout
 
-One full window. Header (64 px): Solus mark + wordmark · **progress rail** (six segments, labels
+One full window. Header (64 px, the window's drag region): on macOS the traffic lights alone at the
+left, moved down to centre in this header while onboarding is open (no logo — SOL's orb is the brand,
+with a quiet SOLUS under it) · **progress rail** (six segments, labels
 `MEET · PROJECT · VOICE · ACCESS · CONNECT · BUILD`; the current segment is half filled, earlier ones
 full) · the user's email · **Skip setup** (from step 2 on; finishes onboarding, same as completing).
 
