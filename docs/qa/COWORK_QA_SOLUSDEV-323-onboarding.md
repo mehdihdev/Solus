@@ -14,6 +14,37 @@ Governing spec: `docs/wireflows/onboarding.md`. Mark each row ✅ / ❌ and note
       board file (`.kicad_pcb`).
 - [ ] For section H also run once with macOS **Reduce motion** on (Accessibility › Display).
 
+## 0. Before onboarding — the compact signed-out window
+
+1. [ ] Signed out, launch the app → a **small** window (about 460×640) appears directly at that size
+       (no full-size flash first): orb with SOLUS under it, `SOL · HELLO`, "Your robot is one system.
+       Your tools aren't.", CODE → PCB → CAD → ROBOT with a light running along the wires, **Create
+       account**, **Sign in**, **Continue with GitHub**.
+2. [ ] The window cannot be resized, maximized or made full screen; it can be dragged by its top row.
+3. [ ] **Sign in** → the window grows smoothly to about 460×800, the orb shrinks onto the form without
+       disappearing, SOLUS fades out, and "Welcome back" rises in. **← Back** returns, and the window
+       shrinks back just as smoothly.
+4. [ ] From sign in, **Create an account** / from the starter, **Create account** → "First, an account."
+       with no resize (same size as sign in).
+5. [ ] Bad input on either form shows the inline errors; nothing resizes.
+6. [ ] Create an account with the fresh email → the form lifts away, the window **grows from its centre**
+       to full size with the orb still glowing, then onboarding opens on **Meet**. No white or black
+       edge flashes while it grows; no jump at the end.
+7. [ ] If confirmation by email is required: the confirm-email screen appears in the small window;
+       confirming in the email grows the window into Meet the same way.
+8. [ ] Sign in with an onboarded account → the window grows into the workspace.
+9. [ ] In the workspace, resize the window to something distinctive, then sign out → the window shrinks
+       back into the starter. Sign in again → it grows back to **that** size.
+10. [ ] Sign out while the window is maximized → it becomes the compact starter; sign in → a normal
+        (not maximized) full window. While in macOS full screen, signing out keeps full screen with the
+        starter centred.
+11. [ ] Forgot password (from sign in) → the reset screen in the small window; **← Back** returns to
+        sign in.
+12. [ ] With **Reduce motion** on: every resize happens instantly and nothing animates, all screens
+        still work.
+13. [ ] Switch to a light theme in Settings, then sign out → the starter and the grow/shrink edges use
+        the light background.
+
 ## A. Meet (step 1)
 
 1. [ ] Sign in with the fresh account → the onboarding window opens on **Meet**: a glowing orb

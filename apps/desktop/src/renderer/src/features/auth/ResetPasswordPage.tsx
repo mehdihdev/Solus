@@ -2,7 +2,7 @@
 // step 1 sends a recovery code to the email; step 2 verifies the code and sets
 // a new password (authStore.confirmPasswordReset), then returns to sign-in.
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, type NavigateFunction } from 'react-router-dom'
 import { Field } from '../../components/ui/Field'
 import { AuthCard, AuthFooterLink, BusySubmit, InlineSuccess } from './AuthLayout'
 import { validateEmail, validatePassword } from './validation'
@@ -10,7 +10,23 @@ import { useAuthStore } from '../../store/authStore'
 
 type Step = 'request' | 'confirm'
 
-function usePasswordReset() {
+interface PasswordReset {
+  navigate: NavigateFunction
+  step: Step
+  email: string
+  setEmail: (value: string) => void
+  code: string
+  setCode: (value: string) => void
+  password: string
+  setPassword: (value: string) => void
+  error: string | null
+  busy: boolean
+  done: boolean
+  sendCode: () => Promise<void>
+  setNewPassword: () => Promise<void>
+}
+
+function usePasswordReset(): PasswordReset {
   const navigate = useNavigate()
   const requestReset = useAuthStore((s) => s.requestPasswordReset)
   const confirmReset = useAuthStore((s) => s.confirmPasswordReset)
@@ -87,7 +103,8 @@ export function ResetPasswordPage(): React.JSX.Element {
           ? 'We’ll email you a recovery code'
           : 'Enter the code we emailed and choose a new password'
       }
-      onWordmarkClick={() => navigate('/')}
+      caption="SOL · RECOVERY"
+      onBack={() => navigate('/login')}
       footer={
         <AuthFooterLink
           prompt="Remembered it?"

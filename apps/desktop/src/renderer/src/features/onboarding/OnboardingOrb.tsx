@@ -5,8 +5,8 @@ export type OrbState = 'big' | 'idle' | 'listening' | 'small' | 'working'
 
 interface OnboardingOrbProps {
   state: OrbState
-  /** `hub`: the small centre of the Connect ring. */
-  size?: 'default' | 'hub'
+  /** `hub`: the small centre of the Connect ring. `compact`: the signed-out window. */
+  size?: 'default' | 'hub' | 'compact'
 }
 
 export function OnboardingOrb({ state, size = 'default' }: OnboardingOrbProps): React.JSX.Element {

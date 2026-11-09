@@ -1,7 +1,7 @@
 // Signup screen, ported from SignupPage in TestDesign/app/auth.jsx.
 // Wired to Supabase (or dev bypass) via authStore; routes to onboarding on success.
 import { useState } from 'react'
-import { useNavigate, type NavigateFunction } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Field } from '../../components/ui/Field'
 import { AuthCard, AuthFooterLink, BusySubmit, OrDivider } from './AuthLayout'
 import { GithubButton } from './GithubButton'
@@ -22,7 +22,7 @@ interface SignupForm {
   authorizeGitHub: () => Promise<{ error?: string }>
 }
 
-function useSignupForm(navigate: NavigateFunction): SignupForm {
+function useSignupForm(): SignupForm {
   const signUp = useAuthStore((s) => s.signUpWithPassword)
   const signInWithGitHub = useAuthStore((s) => s.signInWithGitHub)
   const [email, setEmail] = useState('')
@@ -46,16 +46,11 @@ function useSignupForm(navigate: NavigateFunction): SignupForm {
       // No session yet — Supabase sent a confirmation link. Hand off to the
       // confirm screen, which polls until the user clicks it.
       setAwaitingConfirmation(true)
-      return
     }
-    navigate('/onboarding')
+    // Signed in: AuthShell grows the window and carries the user into onboarding.
   }
 
-  const authorizeGitHub = async (): Promise<{ error?: string }> => {
-    const result = await signInWithGitHub()
-    if (!result.error) navigate('/onboarding')
-    return result
-  }
+  const authorizeGitHub = (): Promise<{ error?: string }> => signInWithGitHub()
 
   return {
     email,
@@ -73,7 +68,7 @@ function useSignupForm(navigate: NavigateFunction): SignupForm {
 
 export function SignupPage(): React.JSX.Element {
   const navigate = useNavigate()
-  const form = useSignupForm(navigate)
+  const form = useSignupForm()
 
   if (form.awaitingConfirmation) {
     return (
@@ -87,9 +82,10 @@ export function SignupPage(): React.JSX.Element {
 
   return (
     <AuthCard
-      title="Create your workspace"
-      sub="Free for solo builders. No credit card."
-      onWordmarkClick={() => navigate('/')}
+      caption="SOL · BEFORE WE START"
+      title="First, an account."
+      sub="Then this window opens up and I’ll walk you in. About two minutes."
+      onBack={() => navigate('/welcome')}
       footer={
         <AuthFooterLink
           prompt="Already have an account?"

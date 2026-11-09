@@ -29,9 +29,10 @@ describe('AppRoutes guards', () => {
     })
   })
 
-  it('shows the landing page to unauthenticated users at /', () => {
+  it('shows the compact starter to unauthenticated users at /', () => {
     renderAt('/')
-    expect(screen.getByText('Your robot is one system.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Your robot is one system/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument()
   })
 
   it('redirects authenticated-but-not-onboarded users to onboarding', async () => {

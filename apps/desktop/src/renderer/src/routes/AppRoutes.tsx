@@ -1,7 +1,10 @@
 // App routing + auth guards (API.md §5 frontend routes; hash history in Electron).
 import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { LandingPage } from '../features/auth/LandingPage'
+import { AuthShell } from '../features/auth/AuthShell'
+import { StarterPage } from '../features/auth/StarterPage'
+import { rememberedLaunchSize, requestWindowSize } from '../features/auth/starterWindow'
 import { LoginPage } from '../features/auth/LoginPage'
 import { SignupPage } from '../features/auth/SignupPage'
 import { ResetPasswordPage } from '../features/auth/ResetPasswordPage'
@@ -16,6 +19,11 @@ import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
 
 function Splash(): React.JSX.Element {
+  // SOLUSDEV-323: while the session loads, take the size the window last had,
+  // so a signed-out launch opens compact instead of shrinking after a flash.
+  useEffect(() => {
+    void requestWindowSize(rememberedLaunchSize())
+  }, [])
   return (
     <div
       style={{
@@ -31,12 +39,20 @@ function Splash(): React.JSX.Element {
   )
 }
 
+/** SOLUSDEV-323: signed-in screens fill the window (a no-op when it already does). */
+function useFullWindow(active: boolean): void {
+  useEffect(() => {
+    if (active) void requestWindowSize('full')
+  }, [active])
+}
+
 /** Root: route by auth + onboarding status. */
 function RootRoute(): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
   const onboarded = useAuthStore((s) => s.onboarded)
+  useFullWindow(status === 'authenticated')
   if (status === 'loading') return <Splash />
-  if (status === 'unauthenticated') return <LandingPage />
+  if (status === 'unauthenticated') return <Navigate to="/welcome" replace />
   if (!onboarded || isOnboardingReplay()) return <Navigate to="/onboarding" replace />
   return (
     <>
@@ -51,16 +67,10 @@ function RootRoute(): React.JSX.Element {
 function RequireOnboarding({ children }: { children: ReactNode }): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
   const onboarded = useAuthStore((s) => s.onboarded)
+  useFullWindow(status === 'authenticated')
   if (status === 'loading') return <Splash />
   if (status === 'unauthenticated') return <Navigate to="/login" replace />
   if (onboarded && !isOnboardingReplay()) return <Navigate to="/" replace />
-  return <>{children}</>
-}
-
-/** Auth screens redirect away once the user is signed in. */
-function PublicOnly({ children }: { children: ReactNode }): React.JSX.Element {
-  const status = useAuthStore((s) => s.status)
-  if (status === 'authenticated') return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -68,30 +78,15 @@ export function AppRoutes(): React.JSX.Element {
   return (
     <Routes>
       <Route path="/" element={<RootRoute />} />
-      <Route
-        path="/login"
-        element={
-          <PublicOnly>
-            <LoginPage />
-          </PublicOnly>
-        }
-      />
-      <Route
-        path="/signup"
-        element={
-          <PublicOnly>
-            <SignupPage />
-          </PublicOnly>
-        }
-      />
-      <Route
-        path="/reset-password"
-        element={
-          <PublicOnly>
-            <ResetPasswordPage />
-          </PublicOnly>
-        }
-      />
+      {/* SOLUSDEV-323: the compact signed-out window. One shell across these
+          screens, so SOL's orb and the window ease between them; it grows the
+          window and moves on once the user is signed in. */}
+      <Route element={<AuthShell />}>
+        <Route path="/welcome" element={<StarterPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignupPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+      </Route>
       <Route
         path="/onboarding"
         element={

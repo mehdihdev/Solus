@@ -5,6 +5,36 @@ design canvas: "Solus Onboarding Redesign" (prototype + flow map/motion spec) ·
 API: `onboarding_step` in `docs/api/API-implementation.md` (GET/PATCH `/users/me/settings`) ·
 related: `sol-window.md` (§A summoning, §D screen setting), `settings.md` (Needs attention).
 
+## Before onboarding — the compact signed-out window
+
+Signed out, the main window is **compact** (460 wide; main owns the bounds, the renderer names a size
+over `window:size` — `src/main/windowSize.ts`). One persistent shell (`AuthShell`) holds every
+signed-out screen, so SOL's orb never remounts: header (44 px drag row, macOS lights at the `title`
+position, version at the right) · the orb with a quiet SOLUS under it · the screen's content · a mono
+footer `WORKS WITH GITHUB · KICAD · ONSHAPE · ROS 2`.
+
+| Route | Window | Orb | Content |
+| --- | --- | --- | --- |
+| `#/welcome` (signed-out `/`) | `starter` 460×640 | big (120) | `SOL · HELLO` · "Your robot is one system. / Your tools aren't." · one SOL line · CODE → PCB → CAD → ROBOT (a pulse runs along each wire) · **Create account** · **Sign in** · Continue with GitHub |
+| `#/login` | `auth` 460×800 | small (64) | ← Back · `SOL · WELCOME BACK` · "Welcome back" · GitHub · email/password · magic link · forgot password |
+| `#/signup` | `auth` | small | ← Back · `SOL · BEFORE WE START` · "First, an account." · GitHub · email/password · Create account (then the confirm-email screen, same size) |
+| `#/reset-password` | `auth` | small | ← Back (to sign in) · `SOL · RECOVERY` · the two-step reset |
+
+Transitions:
+
+- **Between signed-out screens:** the content rises in (the standard rise), the orb eases between big
+  and small (0.9 s), SOLUS fades out over a form, and the window resizes around the centred column.
+- **Signing in / creating an account:** the content lifts away (0.22 s), the orb settles mid-size,
+  the window grows from its centre to the full size (the size it had before signing out, else the
+  default), then `/` routes to onboarding (Meet rises in) or the workspace.
+- **Signing out:** the workspace hands over to `#/welcome` and the window shrinks back to `starter`.
+- The window is not resizable, maximizable or full-screenable while compact; the workspace minimum
+  (900×600) returns only after the grow finishes. A full-screen window keeps its space.
+- macOS resizes with the native window animation; other platforms jump. Reduced motion: every resize
+  jumps and nothing animates. The theme's `--bg` is painted behind the page so a growing edge never
+  flashes. A fresh window shows only once its first size is applied (≤ 0.7 s), so a signed-out launch
+  never flashes full-size first.
+
 ## Layout
 
 One full window. Header (64 px, the window's drag region): on macOS the traffic lights alone at the

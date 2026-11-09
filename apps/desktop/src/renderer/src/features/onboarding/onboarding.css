@@ -114,6 +114,20 @@
   width: 72px;
   height: 72px;
 }
+/* SOLUSDEV-323: the compact signed-out window's orb (after the state rules so
+   it wins): big on the starter, small over a form, between while leaving. */
+.ob-orb[data-size='compact'] {
+  width: 120px;
+  height: 120px;
+}
+.ob-orb[data-size='compact'][data-state='small'] {
+  width: 64px;
+  height: 64px;
+}
+.ob-orb[data-size='compact'][data-state='listening'] {
+  width: 92px;
+  height: 92px;
+}
 .ob-orb-halo,
 .ob-orb-ring,
 .ob-orb-core {
