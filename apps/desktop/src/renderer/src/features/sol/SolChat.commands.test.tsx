@@ -144,7 +144,7 @@ describe('Cmd/Ctrl+Enter: composer drafts and preview visibility', () => {
     const input = await park(user, command('newer'))
     await user.type(input, 'draft')
     armCards()
-    const approve = screen.getByRole('button', { name: /Approve/ })
+    const approve = screen.getByRole('button', { name: /Run command/ })
     act(() => {
       fireEvent.keyDown(approve, { key: 'Enter', ctrlKey: true })
     })
@@ -281,7 +281,7 @@ describe('after an approved command', () => {
     const user = userEvent.setup()
     await park(user, command('make'))
     const card = screen.getByLabelText('Action needs your approval')
-    await user.click(within(card).getByRole('button', { name: 'Approve' }))
+    await user.click(within(card).getByRole('button', { name: 'Run command' }))
     await waitFor(() =>
       expect(screen.queryByLabelText('Action needs your approval')).not.toBeInTheDocument()
     )

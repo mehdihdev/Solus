@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { commandExitStatus, commandHeader, hasCommandOutput, isCommandTool } from './commandCard'
+import {
+  commandExitStatus,
+  commandHeader,
+  commandLine,
+  hasCommandOutput,
+  isCommandTool
+} from './commandCard'
 
 const row = (label: string, after: string | null): PendingConfirmation['preview'][number] => ({
   label,
@@ -111,6 +117,34 @@ describe('commandHeader', () => {
 
   it('has no program when neither row can be read', () => {
     expect(commandHeader(card('code.exec', [row('command', 'not json')]))?.program).toBeNull()
+  })
+})
+
+describe('commandLine', () => {
+  it('reads the arguments after argv[0] and the working folder', () => {
+    const line = commandLine(
+      card('code.run', [
+        row('command', '["/usr/bin/make","selftest"]'),
+        row('cwd', '/w/SolCmdTest')
+      ])
+    )
+    expect(line).toEqual({ args: ['selftest'], cwd: '/w/SolCmdTest' })
+  })
+
+  it('quotes an argument a shell would split or expand', () => {
+    const line = commandLine(card('code.exec', [row('command', '["echo","a b","it\'s","$HOME"]')]))
+    expect(line.args).toEqual(["'a b'", "'it'\\''s'", "'$HOME'"])
+  })
+
+  it('has no arguments for a chunked, unparseable or non-array command', () => {
+    expect(commandLine(card('code.exec', [row('command 1/2', '["make","-j8"')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', 'not json')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', '{"a":1}')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', '["make",3]')])).args).toBeNull()
+  })
+
+  it('has no cwd when the row is missing', () => {
+    expect(commandLine(card('code.exec', [])).cwd).toBeNull()
   })
 })
 

@@ -214,17 +214,19 @@ function UserRow({
  *  not re-registered on every transcript render (SOLUSDEV-317). */
 function ParkedConfirmation({
   pending,
-  onDecide
+  onDecide,
+  pill
 }: {
   pending: PendingConfirmation
   onDecide: SolChat['decide']
+  pill: boolean
 }): React.JSX.Element {
   const { confirmationId } = pending
   const decide = useCallback(
     (decision: ConfirmationDecision) => onDecide(confirmationId, decision),
     [onDecide, confirmationId]
   )
-  return <ConfirmationCard pending={pending} onDecide={decide} />
+  return <ConfirmationCard pending={pending} onDecide={decide} variant={pill ? 'pill' : 'card'} />
 }
 
 /** One card per parked action. A turn can park several since SOLUSDEV-168,
@@ -261,7 +263,11 @@ function Confirmations({
       {cards.map((confirmation) => (
         <Fragment key={confirmation.confirmationId}>
           <ReasoningBlock reasoning={reasoning} confirmationId={confirmation.confirmationId} />
-          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
+          <ParkedConfirmation
+            pending={confirmation}
+            onDecide={onDecide}
+            pill={onShowMe !== undefined}
+          />
         </Fragment>
       ))}
     </>

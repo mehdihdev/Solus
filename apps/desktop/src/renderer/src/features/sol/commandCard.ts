@@ -97,6 +97,40 @@ export function commandHeader(pending: PendingConfirmation): CommandHeader | nul
   }
 }
 
+export interface CommandLine {
+  /** argv after the program, shell-quoted for display; null when the command
+   *  is chunked or is not a plain JSON string array (the rows still show it). */
+  readonly args: readonly string[] | null
+  readonly cwd: string | null
+}
+
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/
+
+/** One argument as a POSIX shell would need it written — display only. */
+function shellQuote(arg: string): string {
+  return SHELL_SAFE.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
+}
+
+function argvOf(text: string): readonly string[] | null {
+  try {
+    const value: unknown = JSON.parse(text)
+    if (!Array.isArray(value) || !value.every((arg) => typeof arg === 'string')) return null
+    return value as string[]
+  } catch {
+    return null
+  }
+}
+
+/** The card's one-line command, read from the verbatim rows (presentation only). */
+export function commandLine(pending: PendingConfirmation): CommandLine {
+  const command = rowValue(pending, (label) => label === 'command' || label === 'command 1/1')
+  const argv = command === null ? null : argvOf(command)
+  return {
+    args: argv === null ? null : argv.slice(1).map(shellQuote),
+    cwd: rowValue(pending, (label) => label === 'cwd')
+  }
+}
+
 const REASON_CAP = 200
 
 /** The exit status shown under a finished command's retained output. A command
