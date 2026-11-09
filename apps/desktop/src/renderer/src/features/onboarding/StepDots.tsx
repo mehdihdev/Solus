@@ -4,7 +4,8 @@
 import { Mono } from '../../components/ui/Mono'
 import { ONBOARDING_STEP_LABELS } from './onboardingStore'
 
-const SEGMENT_WIDTH = 84
+/** Narrows with the window so the rail never collides with the header ends. */
+const SEGMENT_WIDTH = 'clamp(44px, 6.5vw, 84px)'
 
 function fillFor(index: number, step: number): number {
   if (index < step) return 1

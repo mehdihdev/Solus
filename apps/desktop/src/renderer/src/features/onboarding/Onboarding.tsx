@@ -270,14 +270,14 @@ function OnboardingHeader({
         borderBottom: '1px solid var(--bd)'
       }}
     >
-      <div style={{ width: 260, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span className="ob-dot" style={{ width: 14, height: 14 }} aria-hidden="true" />
+      <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
         <Wordmark size={14} />
       </div>
       <StepDots step={step} />
       <div
         style={{
-          width: 260,
+          flex: '1 1 0',
+          minWidth: 0,
           display: 'flex',
           justifyContent: 'flex-end',
           alignItems: 'center',
