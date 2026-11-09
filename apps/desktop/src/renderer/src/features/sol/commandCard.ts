@@ -102,13 +102,36 @@ export interface CommandLine {
    *  is chunked or is not a plain JSON string array (the rows still show it). */
   readonly args: readonly string[] | null
   readonly cwd: string | null
+  /** True when the program or an argument holds a control, bidi or zero-width
+   *  character: the line could read as a different command, so the card warns. */
+  readonly hasHidden: boolean
+}
+
+/** Characters that change how the line reads without being seen: C0/C1
+ *  controls, bidi embeddings/overrides/isolates and marks, zero-width and
+ *  invisible formatting characters. */
+const HIDDEN =
+  // eslint-disable-next-line no-control-regex -- matching controls is the point
+  /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g
+
+/** `text` with every hidden character shown as a visible ⟨U+XXXX⟩ marker. */
+export function revealHidden(text: string): string {
+  return text.replace(
+    HIDDEN,
+    (ch) => `⟨U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}⟩`
+  )
+}
+
+function hasHiddenChars(text: string): boolean {
+  return text.search(HIDDEN) !== -1
 }
 
 const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/
 
 /** One argument as a POSIX shell would need it written — display only. */
 function shellQuote(arg: string): string {
-  return SHELL_SAFE.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`
+  const shown = revealHidden(arg)
+  return SHELL_SAFE.test(shown) ? shown : `'${shown.replace(/'/g, `'\\''`)}'`
 }
 
 function argvOf(text: string): readonly string[] | null {
@@ -125,9 +148,11 @@ function argvOf(text: string): readonly string[] | null {
 export function commandLine(pending: PendingConfirmation): CommandLine {
   const command = rowValue(pending, (label) => label === 'command' || label === 'command 1/1')
   const argv = command === null ? null : argvOf(command)
+  const program = rowValue(pending, (label) => label === 'program' || label === 'process')
   return {
     args: argv === null ? null : argv.slice(1).map(shellQuote),
-    cwd: rowValue(pending, (label) => label === 'cwd')
+    cwd: rowValue(pending, (label) => label === 'cwd'),
+    hasHidden: [program, ...(argv ?? [])].some((part) => part !== null && hasHiddenChars(part))
   }
 }
 

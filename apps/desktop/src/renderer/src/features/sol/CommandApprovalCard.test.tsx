@@ -83,6 +83,17 @@ describe('CommandCard', () => {
     expect(screen.queryByTitle('/w/SolCmdTest')).toBeNull()
   })
 
+  it('warns and shows markers when the command hides characters', () => {
+    renderCard({
+      pending: {
+        ...PENDING,
+        preview: [{ label: 'command', before: null, after: '["make","self\\u202Etest"]' }]
+      }
+    })
+    expect(screen.getByLabelText('Command line')).toHaveTextContent("$make 'self⟨U+202E⟩test'")
+    expect(screen.getByText('hidden characters — check the rows below')).toBeInTheDocument()
+  })
+
   it('carries its variant and state for styling and motion', () => {
     renderCard({ variant: 'pill', busy: true })
     const card = screen.getByRole('region', { name: 'Action needs your approval' })

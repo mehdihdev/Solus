@@ -15,7 +15,7 @@
 // view — they are what the arming clock watches (§M1) — so the shell line is a
 // summary of them, never a replacement.
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { commandLine, type CommandHeader } from './commandCard'
+import { commandLine, revealHidden, type CommandHeader } from './commandCard'
 
 export type CommandCardVariant = 'card' | 'pill'
 
@@ -57,9 +57,20 @@ function folderName(cwd: string): string {
   return cwd.split('/').filter(Boolean).pop() ?? cwd
 }
 
-function Badges({ header }: { header: CommandHeader }): React.JSX.Element {
+function Badges({
+  header,
+  hasHidden
+}: {
+  header: CommandHeader
+  hasHidden: boolean
+}): React.JSX.Element {
   return (
     <span className="cmd-card__badges">
+      {hasHidden && (
+        <span className="confirmation-card__badge" data-risk="hidden_characters">
+          hidden characters — check the rows below
+        </span>
+      )}
       {header.sandboxed && (
         <span className="confirmation-card__badge" data-sandboxed="true">
           <LockIcon />
@@ -82,7 +93,7 @@ function CommandSummary({
   pending: PendingConfirmation
   header: CommandHeader
 }): React.JSX.Element {
-  const { args, cwd } = commandLine(pending)
+  const { args, cwd, hasHidden } = commandLine(pending)
   return (
     <div className="cmd-card__command" role="group" aria-label="Command">
       <div className="cmd-card__line">
@@ -91,17 +102,17 @@ function CommandSummary({
             $
           </span>
           {header.program !== null && (
-            <span className="confirmation-card__program">{header.program}</span>
+            <span className="confirmation-card__program">{revealHidden(header.program)}</span>
           )}
           {args !== null && args.length > 0 && <span> {args.join(' ')}</span>}
         </code>
         {cwd !== null && (
           <span className="cmd-card__cwd" title={cwd}>
-            {folderName(cwd)}
+            {revealHidden(folderName(cwd))}
           </span>
         )}
       </div>
-      <Badges header={header} />
+      <Badges header={header} hasHidden={hasHidden} />
     </div>
   )
 }
