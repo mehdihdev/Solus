@@ -48,4 +48,4 @@ export const SOL_WINDOW_CHANNELS = {
 export const SOL_PILL_RESUME_MS = 5000
 /** SOLUSDEV-319: how long main waits for the renderer's exit animation before
  *  hiding the window (bounded, so a dead renderer cannot keep it up). */
-export const SOL_PILL_EXIT_MS = 140
+export const SOL_PILL_EXIT_MS = 180

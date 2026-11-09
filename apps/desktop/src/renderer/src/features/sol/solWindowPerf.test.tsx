@@ -3,8 +3,11 @@
 //   registered by the SOL window modules; rendering is CSS only;
 //   streaming indicator ≤ 1 CSS class, applied only while streaming;
 //   prefers-reduced-motion: reduce → no pulse animation at all.
-// The token batcher (tokenBatcher.ts) is the one sanctioned rAF user and is
-// exempt — it runs only while a turn streams.
+// The token batcher (tokenBatcher.ts) is a sanctioned rAF user and is exempt —
+// it runs only while a turn streams. SOLUSDEV-319: so is PillPanel's height
+// spring — it runs only while the panel's height is moving and stops once it
+// settles (PillPanel.test.tsx proves no frame stays pending, and that an
+// unchanged height schedules none).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -49,7 +52,6 @@ describe('idle SOL window: zero scripted animation', () => {
   it('the SOL window modules register no requestAnimationFrame or timers (source ratchet)', () => {
     const sources = [
       'SolWindow.tsx',
-      'PillPanel.tsx',
       'pillMeasure.ts',
       'solWindowStore.ts',
       'solSessionStore.ts',
@@ -102,7 +104,7 @@ describe('reduced motion (a11y)', () => {
     const reduced = css.match(/@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\n\}/g) ?? []
     const guard = reduced.find((block) => block.includes('--sol-pill-in-ms'))
     expect(guard).toBeDefined()
-    expect(guard).toMatch(/--sol-pill-resize-ms:\s*0ms/)
+    expect(guard).toMatch(/--sol-pill-arrive-ms:\s*1ms/)
     expect(guard).toMatch(/\.sol-pill-orb::after[\s\S]*animation:\s*none/)
   })
 

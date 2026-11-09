@@ -259,7 +259,8 @@ body {
      catches up with it, content unrolls upward with the window. */
   justify-content: flex-end;
   overflow: hidden;
-  transition: height var(--sol-pill-resize-ms) cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Height (and the fade while it is nearly closed) is driven per frame by
+     PillPanel's spring — no CSS transition, which would fight it. */
 }
 .sol-pill-panel-body {
   /* SolWindow measures the room the cap leaves after the bar and footer. */
@@ -378,17 +379,23 @@ body {
   color: var(--tx);
 }
 /* SOLUSDEV-319 motion. Transform/opacity only (compositor), tokens only.
-   Summon: fade + rise in; leaving: a quick fade/sink that main waits for
-   (SOL_PILL_EXIT_MS, bounded) before it hides the window. */
+   Summon: fade + rise + settle from a hair smaller, on an expo ease-out;
+   leaving: a quicker fade/sink that main waits for (SOL_PILL_EXIT_MS,
+   bounded) before it hides the window. Both scale from the bottom edge. */
 .sol-pill-host {
-  --sol-pill-in-ms: 180ms;
-  --sol-pill-out-ms: 120ms;
-  --sol-pill-resize-ms: 200ms;
+  --sol-pill-in-ms: 280ms;
+  --sol-pill-out-ms: 160ms;
+  --sol-pill-arrive-ms: 320ms;
+  --sol-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sol-ease-in: cubic-bezier(0.4, 0, 0.9, 0.6);
 }
 @keyframes sol-pill-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.965);
+  }
+  60% {
+    opacity: 1;
   }
   to {
     opacity: 1;
@@ -402,21 +409,21 @@ body {
   }
   to {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(6px) scale(0.98);
   }
 }
 .sol-pill[data-phase='in'] {
-  animation: sol-pill-in var(--sol-pill-in-ms) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: sol-pill-in var(--sol-pill-in-ms) var(--sol-ease-out) both;
 }
 .sol-pill[data-phase='leaving'] {
-  animation: sol-pill-out var(--sol-pill-out-ms) ease-in forwards;
+  animation: sol-pill-out var(--sol-pill-out-ms) var(--sol-ease-in) forwards;
   pointer-events: none;
 }
-/* New messages and plan cards slide up into the space the window already made. */
+/* New messages and plan cards drift up into the space the spring is opening. */
 @keyframes sol-pill-arrive {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -425,7 +432,7 @@ body {
 }
 .sol-pill-panel-body > .sol-thread > *,
 .sol-pill-panel-body .sol-plan {
-  animation: sol-pill-arrive 200ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  animation: sol-pill-arrive var(--sol-pill-arrive-ms) var(--sol-ease-out) both;
 }
 /* The orb breathes while idle and quickens while SOL works (.sol-pulse). */
 @keyframes sol-orb-breathe {
@@ -481,7 +488,7 @@ body {
   .sol-pill-host {
     --sol-pill-in-ms: 1ms;
     --sol-pill-out-ms: 1ms;
-    --sol-pill-resize-ms: 0ms;
+    --sol-pill-arrive-ms: 1ms;
   }
   .sol-pill-panel-body > .sol-thread > *,
   .sol-pill-panel-body .sol-plan,
