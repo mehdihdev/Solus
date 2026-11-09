@@ -25,7 +25,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import type { ConfirmationRow, PendingConfirmation } from '../../lib/api/solStream'
 import './ConfirmationCard.css'
-import { commandHeader, type CommandHeader } from './commandCard'
+import { CommandCard, type CommandCardVariant } from './CommandApprovalCard'
+import { commandHeader } from './commandCard'
 import { approveShortcut, useRegisterCommandApproval } from './commandHotkey'
 import { usePreviewInView } from './previewInView'
 
@@ -39,9 +40,13 @@ export interface ConfirmationCardProps {
   readonly pending: PendingConfirmation
   /** Resolves once the decision is recorded. Rejection is a decision too. */
   readonly onDecide: (decision: ConfirmationDecision) => Promise<void>
+  /** Where a COMMAND card is shown: the SOL window/page (`card`) or the Ember
+   *  Pill (`pill`). Other cards look the same in both. */
+  readonly variant?: CommandCardVariant
 }
 
-function DiffValue({ value }: { value: string | null }): React.JSX.Element {
+/** A value exactly as it will execute — null and '' named, never blank (SOLUSDEV-319 shares it). */
+export function DiffValue({ value }: { value: string | null }): React.JSX.Element {
   return (
     <span className="confirmation-card__value">
       {value === null ? (
@@ -55,7 +60,18 @@ function DiffValue({ value }: { value: string | null }): React.JSX.Element {
   )
 }
 
-function DiffRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
+/** A row with nothing before it (every command row) is one label and value. */
+function ValueRow({ row }: { row: ConfirmationRow }): React.JSX.Element {
+  return (
+    <li className="confirmation-card__change confirmation-card__change--value">
+      <strong className="confirmation-card__label">{row.label}</strong>
+      <DiffValue value={row.after} />
+    </li>
+  )
+}
+
+function DiffRow({ row, compact }: { row: ConfirmationRow; compact: boolean }): React.JSX.Element {
+  if (compact && row.before === null) return <ValueRow row={row} />
   return (
     <li className="confirmation-card__change">
       <strong className="confirmation-card__label">{row.label}</strong>
@@ -109,7 +125,7 @@ function CompletePreview({
       >
         <ul aria-label="Proposed changes" className="confirmation-card__changes">
           {rows.map((row, index) => (
-            <DiffRow key={`${row.label}-${index}`} row={row} />
+            <DiffRow key={`${row.label}-${index}`} row={row} compact={expanded} />
           ))}
         </ul>
       </div>
@@ -157,35 +173,14 @@ function approvalStatus(closed: boolean, busy: boolean): string {
   return busy ? 'Recording decision…' : 'Awaiting approval'
 }
 
-/** Presentation only: what the verbatim rows below already say, at a glance. */
-function CommandHeaderView({ header }: { header: CommandHeader }): React.JSX.Element {
-  return (
-    <div className="confirmation-card__command" role="group" aria-label="Command">
-      {header.program !== null && (
-        <code className="confirmation-card__program">{header.program}</code>
-      )}
-      {header.risks.map((risk) => (
-        <span key={risk} className="confirmation-card__badge" data-risk={risk}>
-          {risk}
-        </span>
-      ))}
-      {header.sandboxed && (
-        <span className="confirmation-card__badge" data-sandboxed="true">
-          sandboxed
-        </span>
-      )}
-    </div>
-  )
-}
-
-export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): React.JSX.Element {
-  const { busy, failed, decide } = useConfirmationDecision(onDecide)
-  const header = commandHeader(pending)
-  const isCommand = header !== null
-  const shortcut = isCommand ? approveShortcut() : null
-  const spent = busy !== null || failed?.terminal === true
-  // Cmd/Ctrl+Enter is the same approval as the click; a busy or spent card
-  // refuses it so the surface does not swallow the key.
+/** Cmd/Ctrl+Enter is the same approval as the click; a busy or spent card
+ *  refuses it so the surface does not swallow the key. */
+function useKeyboardApprove(
+  confirmationId: string,
+  isCommand: boolean,
+  spent: boolean,
+  decide: (decision: ConfirmationDecision) => Promise<void>
+): void {
   const keyboardApprove = useMemo(
     () =>
       !isCommand
@@ -197,9 +192,46 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
           },
     [isCommand, spent, decide]
   )
-  useRegisterCommandApproval(pending.confirmationId, keyboardApprove)
+  useRegisterCommandApproval(confirmationId, keyboardApprove)
+}
+
+export function ConfirmationCard({
+  pending,
+  onDecide,
+  variant = 'card'
+}: ConfirmationCardProps): React.JSX.Element {
+  const { busy, failed, decide } = useConfirmationDecision(onDecide)
+  const header = commandHeader(pending)
+  const isCommand = header !== null
+  const shortcut = isCommand ? approveShortcut() : null
+  const spent = busy !== null || failed?.terminal === true
+  useKeyboardApprove(pending.confirmationId, isCommand, spent, decide)
   // SOLUSDEV-317 M1: the arming clock starts once the open preview is on screen.
   const previewRef = usePreviewInView(pending.confirmationId, isCommand)
+  const preview = <CardPreview rows={pending.preview} expanded={isCommand} regionRef={previewRef} />
+  const failure = failed !== null && (
+    <div role="alert">
+      <DecisionFailure failed={failed} />
+    </div>
+  )
+
+  if (header) {
+    return (
+      <CommandCard
+        pending={pending}
+        header={header}
+        variant={variant}
+        busy={busy !== null}
+        closed={failed?.terminal === true}
+        shortcut={shortcut}
+        onApprove={() => void decide('approve')}
+        onReject={() => void decide('reject')}
+        preview={preview}
+        details={<ConfirmationDetails pending={pending} />}
+        failure={failure}
+      />
+    )
+  }
 
   return (
     <section aria-label="Action needs your approval" className="confirmation-card">
@@ -210,8 +242,6 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
         </span>
       </header>
 
-      {header && <CommandHeaderView header={header} />}
-
       <p className="confirmation-card__summary">{pending.summary}</p>
 
       <div className="confirmation-card__actions">
@@ -220,29 +250,19 @@ export function ConfirmationCard({ pending, onDecide }: ConfirmationCardProps): 
           type="button"
           onClick={() => void decide('approve')}
           disabled={spent}
-          aria-keyshortcuts={shortcut?.aria}
         >
           {busy === 'approve' ? 'Applying…' : 'Approve'}
-          {shortcut && (
-            <kbd className="confirmation-card__hint" aria-hidden="true">
-              {shortcut.hint}
-            </kbd>
-          )}
         </button>
         <button type="button" onClick={() => void decide('reject')} disabled={spent}>
           Reject
         </button>
       </div>
 
-      <CardPreview rows={pending.preview} expanded={isCommand} regionRef={previewRef} />
+      {preview}
 
       <ConfirmationDetails pending={pending} />
 
-      {failed !== null && (
-        <div role="alert">
-          <DecisionFailure failed={failed} />
-        </div>
-      )}
+      {failure}
     </section>
   )
 }

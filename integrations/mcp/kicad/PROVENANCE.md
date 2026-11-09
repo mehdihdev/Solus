@@ -80,6 +80,37 @@ and no installs.
   no later MR widens an existing allowlist (integrations/mcp/CLAUDE.md rule 2); its
   implementation lands in T2b and it is NOT registered until then (test-pinned). Upstream's
   own kicad-cli-invoking tools (DRC, exports, thumbnails) are not exposed at all.
+- **Allowlist addition, flagged for ratification (2026-10-28, SOLUSDEV-321 P4-T3):**
+  `export_spice_netlist` (`solus/spice_export.py`, `requires_confirmation: false`), a
+  Solus-authored read for rung-3 circuit simulation. It runs
+  `kicad-cli sch export netlist --format spice` with a fixed argv through the fork's own capture
+  (`solus/development/flatpak_export.py::_capture`), over the workspace-confined, no-follow
+  snapshot `export_netlist` reads, and returns the netlist inline as data (at most 256 KiB;
+  nothing is written to the workspace). There is no KiCad-free fallback: without a native CLI,
+  or under the Flatpak adapter (whose fixed operations hold no SPICE export), it is degraded
+  with no content. Zero `upstream/` or `vendor/` bytes changed. Adding a tool to this existing
+  allowlist is a human decision (integrations/mcp/CLAUDE.md rule 2) and a re-review trigger
+  (below) that voids the 2026-10-06 sign-offs: neither the entry nor this row is ratified until
+  both reviewers re-sign against a dated `SECURITY_REVIEW.md` checklist.
+- **Allowlist additions, flagged for ratification (2026-10-29, SOLUSDEV-321 P5):**
+  `export_schematic_pdf` and `export_board_pdf` (`solus/pdf_export.py`,
+  `requires_confirmation: false`, `returns_image: true`), Solus-authored reads for SOL's render of
+  a sheet or the board. Each runs `kicad-cli sch export pdf` or
+  `kicad-cli pcb export pdf --layers F.Cu,B.Cu,F.Silkscreen,B.Silkscreen,Edge.Cuts` with a fixed
+  argv against the pinned binary, over a private, no-follow snapshot of the workspace-confined
+  design (the schematic through `_schematic_snapshot`; the board, a sibling of the project, read
+  component by component from the workspace root), writes into a private directory outside the
+  workspace, reads the PDF back no-follow and bounded (at most 2 MiB, `%PDF-` required), and
+  publishes it as the call's one artifact through `solus/export_files.py:publish_artifact` (the
+  companion uploads it; the cloud consumes it once and checks its bytes before rasterising page 1).
+  The design itself is never written. There is no KiCad-free fallback: without a native CLI, or
+  under the Flatpak adapter (whose fixed operations hold no PDF export), each is degraded with no
+  artifact. Zero `upstream/` or `vendor/` bytes changed. `returns_image` is a Solus-owned allowlist
+  field (`AllowedTool.returns_image`): the cloud never offers these two tools to the model directly
+  and reads only their uploaded artifact. Adding tools to this existing allowlist is a human
+  decision (integrations/mcp/CLAUDE.md rule 2) and a re-review trigger (below) that voids the
+  sign-offs: neither entry nor this row is ratified until both reviewers re-sign against a dated
+  `SECURITY_REVIEW.md` checklist. The packaged runtime now lists 18 tools.
 - **Solus overlay shims** (T1a flags a–c + T1b findings d–e; all in `solus/`, zero `upstream/`
   bytes changed — the vendored tree hash is unaffected; full evidence in `SECURITY_REVIEW.md`
   §7):

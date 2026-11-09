@@ -1,6 +1,8 @@
-"""SOLUSDEV-250/317 — `allowlist.yaml` is the complete twenty-two-tool list, validates
+"""SOLUSDEV-250/317/321 — `allowlist.yaml` is the complete twenty-five-tool list, validates
 against the cloud-side `ServerAllowlist`, survives the ingress gate, gates
-exactly the fourteen acting tools with reasons, and agrees with the roster."""
+exactly the fifteen acting tools with reasons, and agrees with the roster. The two
+`ros2_*` reads (SOLUSDEV-321 P6) are unconfirmed: the fork itself refuses any profile
+that is not SYSTEM scope."""
 
 import logging
 
@@ -27,6 +29,8 @@ EXPECTED_READ = frozenset(
         "arduino_probe",
         "process_status",
         "profile_list",
+        "ros2_nodes",
+        "ros2_topics",
     }
 )
 EXPECTED_GATED = frozenset(
@@ -134,6 +138,8 @@ def test_command_tools_have_the_documented_dispatch_bounds() -> None:
         "profile_capture": (True, 60),
         "profile_list": (False, 15),
         "profile_delete": (True, 15),
+        "ros2_nodes": (False, 30),
+        "ros2_topics": (False, 30),
     }
     for name, (gated, timeout) in expected.items():
         assert (by_name[name].requires_confirmation, by_name[name].timeout_seconds) == (

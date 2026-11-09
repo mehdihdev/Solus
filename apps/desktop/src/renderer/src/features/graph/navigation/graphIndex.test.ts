@@ -36,6 +36,19 @@ describe('graph navigation index', () => {
     expect(index.entities.get('leaf')).toBe(entities[3])
   })
 
+  it('keeps findings off the canvas: no card, no child, no link (they badge their subjects)', () => {
+    const entities = [node('board'), node('mcu'), node('f1', 'finding'), node('f2', 'finding')]
+    const index = buildNavigationIndex(entities, [
+      edge('1', 'board', 'mcu'),
+      edge('2', 'f1', 'mcu', 'observes'),
+      edge('3', 'board', 'f2')
+    ])
+    expect(index.roots.map((e) => e.id)).toEqual(['board'])
+    expect(index.children.get('board')?.map((e) => e.id)).toEqual(['mcu'])
+    expect(index.crossLinks).toEqual([])
+    expect(index.entities.get('f1')?.type).toBe('finding')
+  })
+
   it('breaks cycles and chooses one parent deterministically while retaining extra links', () => {
     const entities = ['a', 'b', 'c'].map((id) => node(id))
     const relations = [edge('ab', 'a', 'b'), edge('ba', 'b', 'a'), edge('cb', 'c', 'b')]

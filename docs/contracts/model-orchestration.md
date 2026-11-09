@@ -169,6 +169,13 @@ credits = ceil(dollars * margin_multiplier * credits_per_dollar)
   grants + profit — **not pure profit**, which is why it is `2.0`, not ~`1.25`.
 - **`credits_per_dollar` (config):** **provisional** — no real cost-per-op data yet (ADR-024);
   calibrate post-pilot. Both live in `cost:` in `models.yaml`, never in code.
+- **`web_call_credits` (config, default `2`):** **provisional** — what ONE web-search API call
+  costs, a search and the page-reading call that follows it alike (SOLUSDEV-321 P1-T5). A flat
+  knob, not token-priced: `agent/research.py` writes one `USAGE` ledger row of
+  `-web_call_credits` per call, keyed `web:<call_id>:<n>`, with `attrs.purpose = "web"`,
+  `attrs.kind` (`search` or `context`), `project_id` and `turn_id`; `0` still writes its row. It
+  is spent only after the same `assert_can_spend` pre-flight a model call passes, and a cached
+  answer spends nothing. Calibrate post-pilot; the value is human-set (§8).
 
 **Then debit** (MO-01): append a `CreditLedger` USAGE row (`amount = -credits`, `balance_after`
 snapshot, `attrs = {call_id, model_name, role, tokens_in, tokens_out}`) and update the cached
@@ -219,7 +226,7 @@ Validated by `OrchestrationConfig` (`orchestration/config.py`). Structure:
 - `matrix: { <complexity>: { <route_type>: <role> } }` — the `(complexity × type) → role` map
   (may be partial).
 - `default_role: str` — fallback for missing matrix cells.
-- `cost: { margin_multiplier, credits_per_dollar, price_unit: usd_per_million_tokens }`.
+- `cost: { margin_multiplier, credits_per_dollar, price_unit: usd_per_million_tokens, web_call_credits }` — `web_call_credits` defaults to `2`.
 - `providers: { <provider>: ProviderStanza }` (SOLUSDEV-252, default `{}`) — connection shape for
   providers that have **no dedicated adapter**. `ProviderStanza` (`extra=forbid`):
   `kind: "openai_compatible"`, `endpoint: str` (may be empty until deploy), `api_version: str`,
@@ -262,11 +269,11 @@ covers the addition. **Routing, complexity, window policy and cost mechanics abo
 
 `stream()` and `complete()` take one optional `conversation: ToolConversation`:
 
-| field | meaning |
-| --- | --- |
-| `system` | Solus-authored instruction text. The ONLY instruction position. |
+| field      | meaning                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `system`   | Solus-authored instruction text. The ONLY instruction position.                                             |
 | `messages` | `tuple[Turn, ...]` — multi-turn. A `Turn` carries `text`, `tool_uses` (assistant) or `tool_results` (user). |
-| `tools` | `tuple[ToolSpec, ...]` — `name`, `description`, `input_schema`. |
+| `tools`    | `tuple[ToolSpec, ...]` — `name`, `description`, `input_schema`.                                             |
 
 `ToolSpec.input_schema` is a `ToolDescriptor.params` **verbatim** (it is already JSON Schema), so a
 tool's `params` and `description` are now literally model-facing wire content — see
@@ -293,12 +300,12 @@ PROPOSALS: the shape carries no way to execute itself, and Solus code decides.
 
 ### Provider support is a real constraint on the matrix
 
-| provider | tool calling |
-| --- | --- |
-| anthropic | implemented (Messages API) |
-| openai | implemented (Responses API — SOLUSDEV-252 lane W1, same ticket) |
-| google (gemini) | raises `ToolCallingUnsupportedError` |
-| azure | config stanza only — no adapter, `UnknownProviderError` at dispatch |
+| provider        | tool calling                                                        |
+| --------------- | ------------------------------------------------------------------- |
+| anthropic       | implemented (Messages API)                                          |
+| openai          | implemented (Responses API — SOLUSDEV-252 lane W1, same ticket)     |
+| google (gemini) | raises `ToolCallingUnsupportedError`                                |
+| azure           | config stanza only — no adapter, `UnknownProviderError` at dispatch |
 
 `ToolCallingUnsupportedError` is a `ProviderError` but deliberately **not** a
 `ProviderTransientError` — MO-03 backoff must not retry a structural gap.
@@ -307,6 +314,55 @@ This makes `models.yaml` load-bearing in a new way: a matrix cell that SOL route
 tool-capable provider. Repointing a SOL-reachable cell at a Gemini role fails **loudly** on the next
 SOL turn rather than silently dropping the tools array and returning prose — which would look like
 the model simply choosing not to act.
+
+### Refusals (SOLUSDEV-319, approved in-chat 2026-11-09)
+
+A provider that answers with `stop_reason: refusal` has not answered. Live, the standard CODE cell
+(`claude-fable-5-1`) refused a benign "does the Makefile selftest pass?" turn as `cyber`, and the
+runtime turned it into a silent, billed, empty reply. The rules:
+
+- **The adapter raises `ProviderRefusalError`** (a `ProviderError`, never a
+  `ProviderTransientError`: the same request refuses again, so MO-03 backoff must not retry it).
+  It carries only the refusal `category`, and only when that is a short snake_case word. The
+  provider's explanation text never leaves the adapter. Implemented for anthropic, the only
+  provider that reports one today.
+- **A refused call is not debited, unless text already reached the caller.** The adapter yields
+  no `Usage`; it puts the usage the provider reported on the error instead. The gateway debits
+  that usage only when the stream had already yielded text, so a refusal that delivered nothing
+  is free and a partial answer is never free. The adapter also logs model, category and token
+  counts at warning so operators see the cost.
+- **Refusals are throttled** (approved in-chat 2026-11-09, "Throttle + log event"). A refused call
+  still costs Solus its prompt, so the gateway records each refusal in a per-user sliding window
+  (`limits.max_refusals_per_window`, default 5, per `limits.refusal_window_seconds`, default 600).
+  `check_refusal_cap` runs pre-flight after the frequency cap: at the limit, the call is refused
+  before any provider work with `FrequencyCapExceededError` (the same transient 429 path, with a
+  `retry_after` until the oldest refusal leaves the window) and an `orchestration.blocked
+  {reason: "refusal_cap"}` event. The window fails closed exactly like the frequency cap: Redis
+  (`solus:refusals:<user>`), else the per-process window, and every refusal is also recorded
+  locally. Identity-less calls are neither recorded nor capped.
+- **Every refusal emits `model.refused`** (consent-gated, best effort, never breaks the call)
+  with `provider`, `model`, `role`, `category`, `purpose`, `streamed`, `debited`, `tokens_in`
+  and `tokens_out`. No prompt or provider text is in the payload. Refusal accounting (window,
+  debit, event) never replaces the refusal: a failure in it is logged and the
+  `ProviderRefusalError` still surfaces; a failed event commit is rolled back.
+- **Accepted residual risk:** the cap counts refusals, not their tokens, and is per user. A
+  user can still send up to 5 near-max-context refused prompts per window (two per SOL turn
+  with the re-route) unbilled, and a team multiplies that by its members. A token-weighted or
+  per-team refusal budget is the follow-up if `model.refused` shows abuse.
+- **SOL re-routes round 1 once.** When round 1 of a turn is refused before any event other than
+  `budget_reached` reached the person, and the refused call was not already on the GENERAL route,
+  the runtime asks that round again on the GENERAL cell of the same tier. Later rounds stay pinned
+  to that choice. This is still deterministic and config-driven (ADR-026): the fallback is a
+  matrix cell, never a model name.
+- **Every other refusal ends the turn** with the SSE error code `model_refused` ("The model
+  declined to answer this. Try rephrasing."). That covers a later round (its `provider_items` are
+  bound to the refused model), text already streamed, a refusal on GENERAL, and a second refusal.
+  It is a bounded abort like `timeout` and `loop_limit`: the tool turns that already ran are
+  persisted, the assistant turn carries `aborted: model_refused`, and `done` follows. The
+  re-asked request counts against the turn's model-call and input-token budgets and passes the
+  frequency, refusal and spend gates again.
+- **Tools that make their own model call** (`firmware_recipe`, `label_motifs`) report a refusal
+  as `UNAVAILABLE` with `retryable: false`, so SOL does not spend turn calls repeating it.
 
 ### The shipped matrix and `estimate_from` (SOLUSDEV-252)
 

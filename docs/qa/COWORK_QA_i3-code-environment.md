@@ -92,7 +92,8 @@ shows as "waiting for your approval" text) — send every request below from the
 - The I2 folder flows still pass (link/unlink, Open in KiCad, edit re-syncs once).
 - KiCad writes through SOL still show their diff (I4) — previews for `code.*` and
   `kicad.set_symbol_property` coexist.
-- `run_checkers` in SOL now also returns `python_pin_conflict` warnings alongside the electrical
-  rules when the scope includes requirement nodes.
+- `run_checkers` in SOL now also reports a pin conflict when the scope includes requirement nodes:
+  the matrix rule `package_version_conflict` raises it (SOLUSDEV-321 P3-T3 routes `run_checkers`
+  through the matrix runner), so it reads under that rule id, not `python_pin_conflict`.
 
 - [ ] cross-feature checks

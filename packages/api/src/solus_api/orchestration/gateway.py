@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict
 from solus_api.orchestration.choice import ModelChoice
 from solus_api.orchestration.config import OrchestrationConfig, load_orchestration_config
 from solus_api.orchestration.cost import EnqueueFn, track_cost
-from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
+from solus_api.orchestration.enums import Complexity, InteractionContext, Purpose, RouteType
 from solus_api.orchestration.gates import (
     FrequencyCapExceededError,
     InsufficientCreditsError,
@@ -52,6 +52,9 @@ from solus_api.orchestration.gates import (
     TrialExpiredError,
     assert_can_spend,
     check_frequency_cap,
+    check_refusal_cap,
+    emit_best_effort,
+    record_refusal,
 )
 from solus_api.orchestration.providers import (
     DEFAULT_MAX_TOKENS,
@@ -59,7 +62,9 @@ from solus_api.orchestration.providers import (
     ProviderAdapter,
     ProviderCredentialsMissingError,
     ProviderError,
+    ProviderRefusalError,
     ProviderTransientError,
+    ToolCallingUnsupportedError,
     ToolConversation,
     ToolUse,
     UnknownProviderError,
@@ -140,6 +145,8 @@ class Completion(BaseModel):
     #: Opaque provider replay items (see `providers.Usage.provider_items`). The
     #: runner copies them onto the next assistant `Turn`; nothing else reads them.
     provider_items: tuple[dict[str, Any], ...] = ()
+    #: The provider stop reason, when the adapter reports one (computer use).
+    stop_reason: str | None = None
 
 
 def _select_adapter(provider: str, adapters: Mapping[str, ProviderAdapter]) -> ProviderAdapter:
@@ -149,6 +156,20 @@ def _select_adapter(provider: str, adapters: Mapping[str, ProviderAdapter]) -> P
         raise UnknownProviderError(
             f"No adapter registered for provider {provider!r}; registered: {sorted(adapters)}"
         ) from exc
+
+
+def _ledger_meta(
+    purpose: Purpose, turn_id: uuid.UUID | None, project_id: uuid.UUID | None, tier: Complexity
+) -> dict[str, str]:
+    """Why a call ran, as ledger attrs (SOLUSDEV-321): its purpose, the tier it was routed
+    at and, when it has them, its turn and project (P8 lists a person's rows per project).
+    A missing one is left out rather than recorded as null."""
+    meta: dict[str, str] = {"purpose": purpose, "tier": tier.value}
+    if turn_id is not None:
+        meta["turn_id"] = str(turn_id)
+    if project_id is not None:
+        meta["project_id"] = str(project_id)
+    return meta
 
 
 async def _fire_cost_hook(
@@ -161,12 +182,17 @@ async def _fire_cost_hook(
     session: AsyncSession | None,
     enqueue: EnqueueFn | None,
     extension_id: uuid.UUID | None = None,
+    purpose: Purpose = "answer",
+    turn_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
 ) -> None:
     """The post-call debit. Gated on caller identity; `track_cost` itself never
     raises (contract §6 — failures defer to reconciliation via `enqueue`). The
     routed catalog entry rides along so the debit bills breakpoint
     (long-context) pricing — `route()` stays pure and `ModelChoice` unchanged.
-    `extension_id` is the SOLUSDEV-235 attribution, passed through untouched."""
+    `extension_id` is the SOLUSDEV-235 attribution, passed through untouched;
+    `purpose` / `turn_id` / `project_id` and the routed tier become ledger attrs
+    (`track_cost(meta=…)`)."""
     if user_id is None or session is None:
         return
     await track_cost(
@@ -181,6 +207,7 @@ async def _fire_cost_hook(
         enqueue=enqueue,
         extension_id=extension_id,
         tokens_cached_in=usage.tokens_cached_in,
+        meta=_ledger_meta(purpose, turn_id, project_id, model.complexity),
     )
 
 
@@ -215,6 +242,9 @@ class CompletionStream:
         redis: RedisLike | None,
         enqueue: EnqueueFn | None,
         extension_id: uuid.UUID | None = None,
+        purpose: Purpose = "answer",
+        turn_id: uuid.UUID | None = None,
+        project_id: uuid.UUID | None = None,
     ) -> None:
         self._inner_factory = inner_factory
         self._inner: AsyncIterator[str | ToolUse | Usage] | None = None
@@ -226,11 +256,19 @@ class CompletionStream:
         self._redis = redis
         self._enqueue = enqueue
         self._extension_id = extension_id
+        self._purpose = purpose
+        self._turn_id = turn_id
+        self._project_id = project_id
         self._parts: list[str] = []
         self._tool_uses: list[ToolUse] = []
         self._started = time.monotonic()
         self._closed = False
         self.completion: Completion | None = None
+
+    @property
+    def model(self) -> ModelChoice:
+        """The routed choice, known before the call starts (a refusal has no `completion`)."""
+        return self._model
 
     def __aiter__(self) -> CompletionStream:
         return self
@@ -266,6 +304,10 @@ class CompletionStream:
                 f"{self._model.provider}/{self._model.model_name} stream ended "
                 "without reporting usage"
             ) from None
+        except ProviderRefusalError as exc:
+            self._closed = True
+            await self._on_refusal(exc)
+            raise
         except _PASSTHROUGH_ERRORS:
             self._closed = True
             raise
@@ -283,6 +325,12 @@ class CompletionStream:
         spend/trial gate → (retry-wrapped) provider call."""
         if self._user_id is not None and self._session is not None:
             await check_frequency_cap(
+                self._user_id,
+                redis=self._redis,
+                limits=self._config.limits,
+                session=self._session,
+            )
+            await check_refusal_cap(
                 self._user_id,
                 redis=self._redis,
                 limits=self._config.limits,
@@ -340,6 +388,7 @@ class CompletionStream:
             tool_calls=tuple(self._tool_uses),
             tokens_cached_in=usage.tokens_cached_in,
             provider_items=tuple(usage.provider_items),
+            stop_reason=usage.stop_reason,
         )
         logger.info(
             "model call done call_id=%s provider=%s model=%s role=%s "
@@ -353,6 +402,9 @@ class CompletionStream:
             usage.tokens_out,
             int((time.monotonic() - self._started) * 1000),
         )
+        await self._debit(usage)
+
+    async def _debit(self, usage: Usage) -> None:
         await _fire_cost_hook(
             call_id=self._call_id,
             model=self._model,
@@ -362,6 +414,50 @@ class CompletionStream:
             session=self._session,
             enqueue=self._enqueue,
             extension_id=self._extension_id,
+            purpose=self._purpose,
+            turn_id=self._turn_id,
+            project_id=self._project_id,
+        )
+
+    async def _on_refusal(self, exc: ProviderRefusalError) -> None:
+        """SOLUSDEV-319 refusal accounting (identity-gated, like the gates and the debit):
+        count it toward the refusal cap, debit it only when text already reached the caller,
+        and log a consent-gated `model.refused` event either way."""
+        if self._user_id is None or self._session is None:
+            return
+        try:
+            await self._account_refusal(exc, self._user_id, self._session)
+        except Exception:  # the refusal must always surface as itself, never as this
+            logger.exception("refusal accounting failed call_id=%s", self._call_id)
+
+    async def _account_refusal(
+        self, exc: ProviderRefusalError, user_id: uuid.UUID, session: AsyncSession
+    ) -> None:
+        await record_refusal(user_id, redis=self._redis, limits=self._config.limits)
+        streamed = bool(self._parts)
+        billable = exc.usage if streamed else None
+        if billable is not None:
+            await self._debit(billable)
+        elif streamed:
+            logger.warning(
+                "refusal after streamed text reported no usage; not debited call_id=%s",
+                self._call_id,
+            )
+        await emit_best_effort(
+            session,
+            user_id,
+            "model.refused",
+            {
+                "provider": self._model.provider,
+                "model": self._model.model_name,
+                "role": self._model.role,
+                "category": exc.category,
+                "purpose": self._purpose,
+                "streamed": streamed,
+                "debited": billable is not None,
+                "tokens_in": exc.usage.tokens_in if exc.usage else None,
+                "tokens_out": exc.usage.tokens_out if exc.usage else None,
+            },
         )
 
 
@@ -389,6 +485,9 @@ def stream(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     extension_id: uuid.UUID | None = None,
     estimate_from: str | None = None,
+    purpose: Purpose = "answer",
+    turn_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
 ) -> CompletionStream:
     """Streaming variant of the gateway. Routing and adapter selection happen
     here (synchronously); gates and the provider call start on first iteration.
@@ -396,6 +495,17 @@ def stream(
     `extension_id` (SOLUSDEV-235 / ADR-035 §2): the extension whose `sol.ask`
     caused this call, already verified by the route. Attribution only — it
     reaches `credit_ledger.extension_id` and changes no gate or budget.
+
+    `purpose` / `turn_id` (SOLUSDEV-321): why the call ran and the user turn it
+    belongs to. Attribution only, like `extension_id` — both go on the
+    `model call start` log line and into the ledger attrs (`track_cost(meta=…)`),
+    so spend is countable per purpose and per turn; neither changes routing,
+    gates or billing. The default `purpose` exists so test callers keep
+    working: tests/test_gateway_purpose.py requires every call site under
+    packages/api/src to pass `purpose=` explicitly. `project_id` (P8) is the
+    project the call was made for, the key `GET /projects/{id}/usage/turns`
+    lists a person's rows by; attribution only, and the routed tier rides beside
+    it (`tier`).
 
     Routing (MO-04): both chains + window policy live in ONE shared function —
     `resolution.resolve_routing` — which the classify preview also calls, so
@@ -415,8 +525,8 @@ def stream(
     Not every provider implements it: an adapter that cannot raises
     `ToolCallingUnsupportedError` rather than silently dropping the tools.
 
-    MO-03: `redis` powers the per-user frequency cap (None -> fail-open with a
-    warning, confirmed policy); `enqueue` is the ARQ seam for debit
+    MO-03: `redis` powers the per-user frequency cap (None -> it fails CLOSED on
+    the per-process local window, one warning per process); `enqueue` is the ARQ seam for debit
     reconciliation (None -> failed debits are ERROR-logged for manual
     recovery). Both gates and the debit require `user_id` + `session` — see the
     module docstring's identity-gating warning.
@@ -450,13 +560,16 @@ def stream(
     call_id = str(uuid.uuid4())
     # §7 logging: identifiers and counts only — never the query or completion text.
     logger.info(
-        "model call start call_id=%s provider=%s model=%s role=%s complexity=%s type=%s",
+        "model call start call_id=%s provider=%s model=%s role=%s complexity=%s type=%s "
+        "purpose=%s turn_id=%s",
         call_id,
         choice.provider,
         choice.model_name,
         choice.role,
         choice.complexity,
         choice.route_type,
+        purpose,
+        turn_id,
     )
     # `reasoning_effort` rides only when the catalog entry sets one, so adapters
     # (and test fakes) for non-reasoning entries keep the pre-S1 call shape.
@@ -480,6 +593,9 @@ def stream(
         redis=redis,
         enqueue=enqueue,
         extension_id=extension_id,
+        purpose=purpose,
+        turn_id=turn_id,
+        project_id=project_id,
     )
 
 
@@ -502,10 +618,14 @@ async def complete(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     extension_id: uuid.UUID | None = None,
     estimate_from: str | None = None,
+    purpose: Purpose = "answer",
+    turn_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
 ) -> Completion:
     """Request-response gateway call: drains the streaming path (one code path,
     identical usage numbers) and returns the full `Completion`. Routing, window
-    guard, gating, and retry semantics are documented on `stream()`."""
+    guard, gating, retry semantics and the `purpose` / `turn_id` / `project_id`
+    attribution are documented on `stream()`."""
     completion_stream = stream(
         query,
         secret_store=secret_store,
@@ -524,9 +644,87 @@ async def complete(
         max_tokens=max_tokens,
         extension_id=extension_id,
         estimate_from=estimate_from,
+        purpose=purpose,
+        turn_id=turn_id,
+        project_id=project_id,
     )
     async for _ in completion_stream:
         pass
     if completion_stream.completion is None:  # pragma: no cover - defensive
         raise ProviderError("stream finished without producing a completion")
+    return completion_stream.completion
+
+
+#: The catalog role the ADR-041 drive loop runs on (models.yaml).
+COMPUTER_USE_ROLE = "computer_use"
+COMPUTER_USE_MAX_TOKENS = 8192
+
+
+async def computer_use(
+    *,
+    system: str,
+    messages: Sequence[dict[str, Any]],
+    tools: Sequence[dict[str, Any]],
+    secret_store: SecretStore,
+    config: OrchestrationConfig | None = None,
+    adapters: Mapping[str, ProviderAdapter] | None = None,
+    user_id: uuid.UUID | None = None,
+    session: AsyncSession | None = None,
+    redis: RedisLike | None = None,
+    enqueue: EnqueueFn | None = None,
+    max_tokens: int = COMPUTER_USE_MAX_TOKENS,
+) -> Completion:
+    """One drive-loop model round (ADR-041 §6) through the same MO-03 path as
+    every other call: frequency cap → spend gate → provider call with transient
+    retry and the per-provider breaker → debit. The model is FIXED by the
+    `computer_use` catalog role rather than routed: computer use exists on one
+    provider's toolset, and a routed text model could not hold the loop."""
+    resolved_config = config if config is not None else _default_orchestration_config()
+    entry = resolved_config.entry_for_role(COMPUTER_USE_ROLE)
+    choice = ModelChoice(
+        provider=entry.provider,
+        model_name=entry.name,
+        price_in=entry.price_in,
+        price_out=entry.price_out,
+        context_window=entry.context_window,
+        role=COMPUTER_USE_ROLE,
+        complexity=Complexity.HARD,
+        route_type=RouteType.VISUAL_LOG,
+        rationale="ADR-041 drive loop: fixed computer-use role",
+        reasoning_effort=entry.reasoning_effort,
+    )
+    registry = adapters if adapters is not None else build_adapter_registry(secret_store)
+    adapter = _select_adapter(choice.provider, registry)
+    run = getattr(adapter, "computer_use", None)
+    if run is None:
+        raise ToolCallingUnsupportedError(f"{choice.provider} has no computer-use adapter")
+    call_id = str(uuid.uuid4())
+    logger.info(
+        "model call start call_id=%s provider=%s model=%s role=%s",
+        call_id,
+        choice.provider,
+        choice.model_name,
+        choice.role,
+    )
+    completion_stream = CompletionStream(
+        lambda: run(
+            choice.model_name,
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            effort=choice.reasoning_effort,
+        ),
+        call_id=call_id,
+        model=choice,
+        config=resolved_config,
+        user_id=user_id,
+        session=session,
+        redis=redis,
+        enqueue=enqueue,
+    )
+    async for _ in completion_stream:
+        pass
+    if completion_stream.completion is None:  # pragma: no cover - defensive
+        raise ProviderError("computer-use round finished without a completion")
     return completion_stream.completion

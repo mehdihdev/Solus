@@ -11,11 +11,16 @@ import { externalOpenHandler } from '../externalUrl'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { attachOrbOverlayWire, type WireIpc } from './orbOverlayWire'
-import { SOL_WINDOW_CHANNELS } from './solWindow.constants'
-import type { SolActionMode, SolSettings, SolWindowGeometry } from '../solSettings'
+import { SOL_PILL_EXIT_MS, SOL_PILL_RESUME_MS, SOL_WINDOW_CHANNELS } from './solWindow.constants'
+import type { SolActionMode, SolSettings } from '../solSettings'
 import type { CaptureCapability } from '../capture/screenCapture'
 import type { CapabilityState } from '../platform/capabilities'
 import type { ActiveWindowInfo } from '../capture/activeWindow'
+import { SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH, type Point, type Rect } from './pillGeometry'
+import { createPillPlacement } from './pillPlacement'
+import type { SolFrontApp } from '../drive/frontAppShape'
+
+export type { Point, Rect } from './pillGeometry'
 
 /** The isolation posture, explicit and asserted — never inherited from an
  *  Electron default that a template bump could flip (SEC-H2). */
@@ -26,29 +31,26 @@ export const SOL_WINDOW_WEB_PREFERENCES = {
   webviewTag: false
 } as const
 
-export const SOL_WINDOW_DEFAULT_SIZE = { width: 420, height: 640 } as const
-export const SOL_WINDOW_MIN_SIZE = { width: 360, height: 420 } as const
-export const SOL_WINDOW_MARGIN = 24
-export const GEOMETRY_SAVE_DEBOUNCE_MS = 300
-
+/** SOLUSDEV-319: the Ember Pill. Frameless and transparent (the renderer draws
+ *  the rounded surfaces and their shadow), always on top, sized by main from
+ *  the renderer's measured height — never by hand. */
 export const SOL_WINDOW_OPTIONS = {
-  frame: true,
-  resizable: true,
-  minWidth: SOL_WINDOW_MIN_SIZE.width,
-  minHeight: SOL_WINDOW_MIN_SIZE.height,
+  frame: false,
+  transparent: true,
+  resizable: false,
+  // SOLUSDEV-319: the pill is draggable by its chrome (-webkit-app-region);
+  // a double-click there must never zoom it.
+  maximizable: false,
+  fullscreenable: false,
+  alwaysOnTop: true,
+  skipTaskbar: true,
+  hasShadow: false,
+  width: SOL_PILL_WIDTH,
+  height: SOL_PILL_INITIAL_HEIGHT,
   show: false,
   autoHideMenuBar: true,
   title: 'SOL'
 } as const
-
-export interface Point {
-  x: number
-  y: number
-}
-export interface Rect extends Point {
-  width: number
-  height: number
-}
 
 export interface DisplaySlice {
   id: number
@@ -58,12 +60,14 @@ export interface DisplaySlice {
 /** Structural slice of BrowserWindow — just what the manager needs. */
 export interface SolWindowHandle {
   isDestroyed(): boolean
-  on(event: 'move' | 'resize' | 'close' | 'closed', listener: () => void): void
+  on(event: 'blur' | 'closed' | 'moved', listener: () => void): void
   focus(): void
   show(): void
+  hide(): void
+  isVisible(): boolean
   close(): void
   getBounds(): Rect
-  setAlwaysOnTop(flag: boolean): void
+  setBounds(bounds: Rect): void
   webContents: { send(channel: string, payload: unknown): void }
 }
 
@@ -91,7 +95,6 @@ export interface SolState {
   /** The hold-Ctrl gestures setting (main/solSettings `hotkeys`); `hotkeys`
    *  below is what is actually running given the platform. */
   hotkeysEnabled: boolean
-  alwaysOnTop: boolean
   capture: CaptureCapability
   hotkeys: SolHotkeyStatus | null
   /** The last gesture opened the window without a capture because the setting is off. */
@@ -110,32 +113,48 @@ export interface SolRegionPayload {
   capturedAt: number
 }
 
+/** SOLUSDEV-319: the pill's motion cues (SOL_WINDOW_CHANNELS.pill), SOL window only. */
+export type SolPillEvent = { kind: 'summoned'; resume: boolean } | { kind: 'leaving' }
+
 export interface SolWindowManagerDeps {
-  createWindow(bounds: Rect, alwaysOnTop: boolean): SolWindowHandle
+  createWindow(bounds: Rect): SolWindowHandle
   screen: {
     getCursorScreenPoint(): Point
     getDisplayNearestPoint(point: Point): DisplaySlice
-    getAllDisplays(): DisplaySlice[]
   }
-  settings: Pick<SolSettings, 'get' | 'setWindowGeometry' | 'setAlwaysOnTop'>
   /** The app's OWN renderers that hear state pushes (the main window). The SOL
    *  window is always included by the manager; extension windows never are —
    *  they host third-party bundles (security review M2). */
   allWindows(): ReadonlyArray<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>
-  scheduler?: {
-    setTimeout(fn: () => void, ms: number): unknown
-    clearTimeout(handle: unknown): void
-  }
+  /** The clock for the resume window (tests use fake timers). */
+  now?(): number
+  /** True when one of the app's windows has focus (Solus is the active app). */
+  appActive?(): boolean
+  /** Hand focus back to the previously active app (macOS: app.hide()). */
+  yieldFocus?(): void
 }
 
 export interface SolWindowManager {
-  /** Create the window (near `near`, else the cursor) or focus the live one. */
+  /** Create the pill (near `near`, else the cursor), re-summon a hidden one
+   *  there, or focus a shown one. */
   open(opts?: { near?: Point }): void
+  /** Double-tap Ctrl: hide a shown pill, else open. */
+  toggle(): void
+  /** Esc / blur: the renderer animates out, then the window hides; the window
+   *  and its renderer state live on. A summon within SOL_PILL_RESUME_MS resumes. */
+  hide(): void
+  /** The renderer's measured content height; main grows the pill upward. */
+  resize(height: number): void
+  /** A busy pill (streaming, approval parked, plan running) ignores blur. */
+  setBusy(busy: boolean): void
   focus(): void
   isOpen(): boolean
+  isVisible(): boolean
   close(): void
-  setAlwaysOnTop(flag: boolean): void
   pushState(state: SolState): void
+  /** Send one app push (e.g. SOL_WINDOW_CHANNELS.driveStatus) to the same
+   *  targets as the state: the app's own renderers and the SOL window. */
+  broadcast(channel: string, payload: unknown): void
   /** SOLUSDEV-323: a hotkey summon happened — to the app windows only. */
   pushSummoned(at: number): void
   /** False when no SOL window is open. Queued until the renderer is mounted. */
@@ -145,89 +164,162 @@ export interface SolWindowManager {
   markReady(sender: unknown): void
   /** True for the live SOL window's webContents — the IPC sender gate. */
   isSender(sender: unknown): boolean
-}
-
-const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi)
-
-/** Saved geometry on a display that still exists, clamped into its work area;
- *  otherwise the default 420×640 bottom-right of `fallback`'s work area. */
-export function placeSolWindow(
-  saved: SolWindowGeometry | null,
-  displays: DisplaySlice[],
-  fallback: DisplaySlice
-): Rect {
-  const home = saved ? displays.find((d) => d.id === saved.displayId) : undefined
-  if (saved && home) {
-    const wa = home.workArea
-    // Electron enforces the window's own minimum size, so on a work area smaller
-    // than it the window IS the minimum — compute x/y against that, not a
-    // collapsed clamp (review M6).
-    const width = Math.max(SOL_WINDOW_MIN_SIZE.width, Math.min(saved.width, wa.width))
-    const height = Math.max(SOL_WINDOW_MIN_SIZE.height, Math.min(saved.height, wa.height))
-    return {
-      x: clamp(saved.x, wa.x, Math.max(wa.x, wa.x + wa.width - width)),
-      y: clamp(saved.y, wa.y, Math.max(wa.y, wa.y + wa.height - height)),
-      width,
-      height
-    }
-  }
-  const wa = fallback.workArea
-  return {
-    x: wa.x + wa.width - SOL_WINDOW_DEFAULT_SIZE.width - SOL_WINDOW_MARGIN,
-    y: wa.y + wa.height - SOL_WINDOW_DEFAULT_SIZE.height - SOL_WINDOW_MARGIN,
-    ...SOL_WINDOW_DEFAULT_SIZE
-  }
+  /** SOLUSDEV-319 slice 4: run before every summon shows or focuses the pill
+   *  (the front-app identify, ≤ 250 ms). Null: summon synchronously. */
+  setSummonGate(gate: (() => Promise<void>) | null): void
+  /** The front-app snapshot → the SOL window only; the latest is delivered
+   *  when a fresh renderer mounts. */
+  pushFrontApp(front: SolFrontApp | null): void
 }
 
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
-  const scheduler = deps.scheduler ?? { setTimeout, clearTimeout }
   let current: SolWindowHandle | null = null
   // A fresh window has no renderer yet; a region pushed before its first
   // state request would be lost, so it waits here (one turn's worth — never disk).
   let ready = false
   let pending: SolRegionPayload | null = null
+  const placement = createPillPlacement(deps.screen)
+  let busy = false
+  // A pill the user dragged stays up on blur until they close it (Esc, ×, the shortcut).
+  let pinned = false
+  const now = deps.now ?? Date.now
+  // SOLUSDEV-319: the exit animation's bounded wait, and when the pill last hid.
+  let leaving: ReturnType<typeof setTimeout> | null = null
+  let hiddenAt: number | null = null
+  // SOLUSDEV-319 slice 4: the summon gate and the latest front-app snapshot.
+  let summonGate: (() => Promise<void>) | null = null
+  let summoning = false
+  let frontApp: { value: SolFrontApp | null } | null = null
+  // Summoned over another app: a hand dismissal returns there, not to Solus.
+  let returnFocus = false
   const alive = (): boolean => current !== null && !current.isDestroyed()
+  const cue = (event: SolPillEvent): void => {
+    if (alive()) current?.webContents.send(SOL_WINDOW_CHANNELS.pill, event)
+  }
+  const stopLeaving = (): void => {
+    if (leaving !== null) clearTimeout(leaving)
+    leaving = null
+  }
+
+  /** Cue the renderer's exit animation; hide when the bounded wait ends — a
+   *  dead or slow renderer cannot keep the pill up. Every caller but blur is a
+   *  close by hand, so it also unpins. */
+  const hide = (byHand = true): void => {
+    if (!alive() || !current?.isVisible() || leaving !== null) return
+    pinned = false
+    cue({ kind: 'leaving' })
+    leaving = setTimeout(() => {
+      leaving = null
+      if (!alive() || !current?.isVisible()) return
+      current.hide()
+      hiddenAt = now()
+      // Hiding the key window leaves Solus active, so macOS raises the main
+      // window. A blur already moved focus elsewhere; a hand hide yields it.
+      if (byHand && returnFocus) deps.yieldFocus?.()
+    }, SOL_PILL_EXIT_MS)
+  }
 
   const create = (near: Point): void => {
-    const display = deps.screen.getDisplayNearestPoint(near)
-    const bounds = placeSolWindow(deps.settings.get().window, deps.screen.getAllDisplays(), display)
-    const win = deps.createWindow(bounds, deps.settings.get().alwaysOnTop)
+    const win = deps.createWindow(placement.summon(near, true))
     current = win
     ready = false
     pending = null
-    const cancelSave = trackWindowGeometry(win, deps, scheduler)
+    hiddenAt = null
+    win.on('blur', () => {
+      if (!busy && !pinned && current === win) hide(false)
+    })
+    // A drag (the renderer's -webkit-app-region handle) re-homes and pins the pill.
+    win.on('moved', () => {
+      if (!win.isDestroyed() && win.isVisible() && placement.moved(win.getBounds())) pinned = true
+    })
     win.on('closed', () => {
-      cancelSave()
-      if (current === win) current = null
+      if (current !== win) return
+      current = null
       pending = null // ephemeral by construction: a region never outlives its window
       ready = false
+      busy = false
+      pinned = false
+      stopLeaving()
     })
   }
 
+  const broadcast = (channel: string, payload: unknown): void => {
+    const targets = new Set<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>(deps.allWindows())
+    if (alive() && current !== null) targets.add(current)
+    for (const w of targets) {
+      if (!w.isDestroyed()) w.webContents.send(channel, payload)
+    }
+  }
+
+  /** Within the resume window the pill comes back as it was, where it was;
+   *  after it, a fresh pill at the cursor (collapsed unless SOL is busy, in
+   *  which case the renderer keeps its chat and so its height). */
+  const resummon = (win: SolWindowHandle, near: Point): void => {
+    const resume = hiddenAt !== null && now() - hiddenAt <= SOL_PILL_RESUME_MS
+    if (!resume) win.setBounds(placement.summon(near, !busy))
+    win.show()
+    cue({ kind: 'summoned', resume })
+  }
+
+  const show = (near: Point): void => {
+    if (!alive() || current === null) return create(near)
+    if (leaving !== null) {
+      stopLeaving()
+      cue({ kind: 'summoned', resume: true })
+    } else if (!current.isVisible()) {
+      resummon(current, near)
+    }
+    current.focus()
+  }
+
+  /** Every summon path: the gate (the front-app identify) runs BEFORE the pill
+   *  is shown or takes focus; a summon while it runs is coalesced. */
+  const open = (opts?: { near?: Point }): void => {
+    const near = opts?.near ?? deps.screen.getCursorScreenPoint()
+    // Sampled before the pill shows (after, the pill itself is the active window).
+    if (!(alive() && current?.isVisible())) returnFocus = !(deps.appActive?.() ?? true)
+    const gate = summonGate
+    if (gate === null) return show(near)
+    if (summoning) return
+    summoning = true
+    void gate()
+      .catch(() => undefined)
+      .then(() => {
+        summoning = false
+        show(near)
+      })
+  }
+
+  const sendFrontApp = (): void => {
+    if (frontApp !== null && alive() && ready) {
+      current?.webContents.send(SOL_WINDOW_CHANNELS.frontApp, frontApp.value)
+    }
+  }
+
   return {
-    open(opts) {
-      if (alive()) {
-        current?.focus()
-        return
-      }
-      create(opts?.near ?? deps.screen.getCursorScreenPoint())
+    open,
+    toggle() {
+      if (alive() && current?.isVisible() && leaving === null) hide()
+      else open()
     },
+    hide: () => hide(),
+    resize(next) {
+      if (!alive() || current === null) return
+      // A drag still in progress (macOS sends 'moved' only when it ends) pins too.
+      const live = current.getBounds()
+      if (placement.moved(live)) pinned = true
+      const bounds = placement.grow(next, live)
+      if (bounds !== null) current.setBounds(bounds)
+    },
+    setBusy: (flag) => void (busy = flag),
     focus: () => void (alive() && current?.focus()),
     isOpen: alive,
+    isVisible: () => alive() && (current?.isVisible() ?? false),
     close: () => void (alive() && current?.close()),
-    setAlwaysOnTop(flag) {
-      deps.settings.setAlwaysOnTop(flag)
-      if (alive()) current?.setAlwaysOnTop(flag)
-    },
     pushState(state) {
-      const targets = new Set<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>(
-        deps.allWindows()
-      )
-      if (alive() && current !== null) targets.add(current)
-      for (const w of targets) {
-        if (!w.isDestroyed()) w.webContents.send(SOL_WINDOW_CHANNELS.state, state)
-      }
+      broadcast(SOL_WINDOW_CHANNELS.state, state)
     },
+    broadcast,
     pushSummoned(at) {
       for (const w of deps.allWindows()) {
         if (w === current || w.isDestroyed()) continue
@@ -242,16 +334,24 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     },
     markReady(sender) {
       if (!alive() || current === null || current.webContents !== sender) return
-      ready = true
+      if (!ready) {
+        ready = true
+        sendFrontApp()
+      }
       if (pending !== null) current.webContents.send(SOL_WINDOW_CHANNELS.region, pending)
       pending = null
     },
-    isSender: (sender) => alive() && current?.webContents === sender
+    isSender: (sender) => alive() && current?.webContents === sender,
+    setSummonGate: (gate) => void (summonGate = gate),
+    pushFrontApp(front) {
+      frontApp = { value: front }
+      sendFrontApp()
+    }
   }
 }
 
 export interface SolIpcDeps {
-  windows: Pick<SolWindowManager, 'open' | 'setAlwaysOnTop' | 'markReady'>
+  windows: Pick<SolWindowManager, 'open' | 'markReady' | 'isSender' | 'resize' | 'setBusy' | 'hide'>
   settings: Pick<SolSettings, 'setMode' | 'setScreenIntelligence' | 'setHotkeys'>
   state(): SolState
   guideTarget?(): Promise<ToolWindowRef | null>
@@ -260,7 +360,7 @@ export interface SolIpcDeps {
   openCaptureSettings?(): void
 }
 
-/** Wire the five invokes (channel constants only — see the ratchet). Every
+/** Wire the invokes (channel constants only — see the ratchet). Every
  *  handler answers the current SolState to an allowed sender and null to any
  *  other webContents that gained IPC reach; arguments are validated here. */
 export function registerSolIpcHandlers(
@@ -305,17 +405,12 @@ export function registerSolIpcHandlers(
     })
   )
   ipc.handle(
-    c.setAlwaysOnTop,
-    gated((on) => {
-      if (typeof on === 'boolean') deps.windows.setAlwaysOnTop(on)
-    })
-  )
-  ipc.handle(
     c.setHotkeys,
     gated((on) => {
       if (typeof on === 'boolean') deps.settings.setHotkeys(on)
     })
   )
+  registerPillIpcHandlers(ipc, deps, isAllowedSender)
   // Any renderer argument is ignored: main opens its own capability's URL.
   ipc.handle(
     c.openCaptureSettings,
@@ -323,17 +418,47 @@ export function registerSolIpcHandlers(
   )
 }
 
+/** SOLUSDEV-319: the pill's own invokes. The main window is an allowed sender
+ *  for the others but must not size, pin open or hide the pill. */
+function registerPillIpcHandlers(
+  ipc: SolWindowIpc,
+  deps: SolIpcDeps,
+  isAllowedSender: (event: IpcMainInvokeEvent) => boolean
+): void {
+  const c = SOL_WINDOW_CHANNELS
+  // The pill's own top frame only — never a subframe it might one day host.
+  const fromPillTopFrame = (event: IpcMainInvokeEvent): boolean =>
+    deps.windows.isSender(event.sender) && event.senderFrame === event.sender?.mainFrame
+  const pillOnly =
+    (action: (arg: unknown) => void) =>
+    (event: IpcMainInvokeEvent, arg?: unknown): SolState | null => {
+      if (!isAllowedSender(event) || !fromPillTopFrame(event)) return null
+      action(arg)
+      return deps.state()
+    }
+  ipc.handle(
+    c.resize,
+    pillOnly((h) => {
+      if (typeof h === 'number' && Number.isFinite(h)) deps.windows.resize(h)
+    })
+  )
+  ipc.handle(
+    c.setBusy,
+    pillOnly((on) => {
+      if (typeof on === 'boolean') deps.windows.setBusy(on)
+    })
+  )
+  ipc.handle(
+    c.hide,
+    pillOnly(() => deps.windows.hide())
+  )
+}
+
 /** The real SOL window: same renderer, #/sol-window route, CTR-06 wire. */
-export function createSolBrowserWindow(
-  bounds: Rect,
-  alwaysOnTop: boolean,
-  ipc: WireIpc,
-  icon?: string
-): BrowserWindow {
+export function createSolBrowserWindow(bounds: Rect, ipc: WireIpc, icon?: string): BrowserWindow {
   const win = new BrowserWindow({
     ...SOL_WINDOW_OPTIONS,
     ...bounds,
-    alwaysOnTop,
     ...(icon ? { icon } : {}),
     webPreferences: {
       ...SOL_WINDOW_WEB_PREFERENCES,
@@ -353,6 +478,8 @@ export function createSolBrowserWindow(
   win.webContents.on('render-process-gone', () => {
     if (!win.isDestroyed()) win.close()
   })
+  // SOLUSDEV-319: summoned over whatever is in front, full-screen tools included.
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.on('ready-to-show', () => win.show())
   attachOrbOverlayWire(win, ipc)
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -361,33 +488,4 @@ export function createSolBrowserWindow(
     void win.loadFile(join(__dirname, '../renderer/index.html'), { hash: '/sol-window' })
   }
   return win
-}
-
-function trackWindowGeometry(
-  win: SolWindowHandle,
-  deps: SolWindowManagerDeps,
-  scheduler: NonNullable<SolWindowManagerDeps['scheduler']>
-): () => void {
-  let timer: unknown = null
-  const save = (): void => {
-    timer = null
-    if (win.isDestroyed()) return
-    const b = win.getBounds()
-    const d = deps.screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
-    deps.settings.setWindowGeometry({ ...b, displayId: d.id })
-  }
-  const scheduleSave = (): void => {
-    if (timer !== null) scheduler.clearTimeout(timer)
-    timer = scheduler.setTimeout(save, GEOMETRY_SAVE_DEBOUNCE_MS)
-  }
-  win.on('move', scheduleSave)
-  win.on('resize', scheduleSave)
-  win.on('close', () => {
-    if (timer === null) return
-    scheduler.clearTimeout(timer)
-    save()
-  })
-  return () => {
-    if (timer !== null) scheduler.clearTimeout(timer)
-  }
 }

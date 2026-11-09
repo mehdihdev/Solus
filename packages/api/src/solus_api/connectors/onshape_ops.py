@@ -1213,6 +1213,7 @@ def every_operation() -> tuple[OnshapeOperation, ...]:
     from solus_api.connectors.onshape_mate_repair import REPAIR_OPERATION
     from solus_api.connectors.onshape_mates import MATE_OPERATIONS
     from solus_api.connectors.onshape_refs import REFERENCE_OPERATIONS
+    from solus_api.connectors.onshape_removal import REMOVAL_OPERATIONS
     from solus_api.connectors.onshape_sketch import SKETCH_OPERATIONS
 
     return (
@@ -1224,6 +1225,7 @@ def every_operation() -> tuple[OnshapeOperation, ...]:
         + SKETCH_OPERATIONS
         + MATE_OPERATIONS
         + (REPAIR_OPERATION,)
+        + REMOVAL_OPERATIONS
     )
 
 

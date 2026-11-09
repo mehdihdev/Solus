@@ -1,4 +1,5 @@
 """Build authorization is explicit, narrow, fresh, and consumed exactly once."""
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,attr-defined"
 
 import asyncio
 from contextvars import ContextVar
@@ -377,3 +378,19 @@ async def test_owned_file_wrapper_executes_build_once_with_native_readback(tmp_p
     )
     assert result.ok
     assert (tmp_path / "proof.txt").read_text() == "verified"
+
+
+async def test_preview_declaring_approval_required_goes_to_the_card_never_auto_runs():
+    """ADR-040 §5: a tool's own preview can only make a call stricter. A routine
+    whose preview carries the approval-required row is deferred to the card."""
+    from solus_api.agent.execution_policy import APPROVAL_REQUIRED_LABEL
+
+    rows = [*ROWS, {"label": APPROVAL_REQUIRED_LABEL, "before": None, "after": "saves KiCad"}]
+    tool, registry, handler, _ = tool_fixture(preview=AsyncMock(return_value=rows))
+    policy = BuildExecutionPolicy(registry, ActionMode.DO)
+    call = ToolCall(tool=tool.descriptor.name, args={"n": 1})
+
+    assert await policy.prepare(call) is False
+    assert await policy.prepare(ToolCall(tool=call.tool, args=call.args)) is False
+    handler.assert_not_awaited()
+    assert policy.executed_calls == set()

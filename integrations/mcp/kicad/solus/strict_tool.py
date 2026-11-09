@@ -7,6 +7,8 @@ from typing import Any
 from fastmcp.tools.tool import FunctionTool, ToolResult
 from pydantic import BaseModel, ConfigDict, PrivateAttr, ValidationError, create_model
 
+from solus.refusals import refusal_message
+
 
 class StrictFunctionTool(FunctionTool):
     _argument_model: type[BaseModel] = PrivateAttr()
@@ -15,7 +17,7 @@ class StrictFunctionTool(FunctionTool):
         try:
             self._argument_model.model_validate(arguments)
         except ValidationError:
-            raise ValueError("invalid_arguments") from None
+            raise ValueError(refusal_message("invalid_arguments")) from None
         return await super().run(arguments)
 
 

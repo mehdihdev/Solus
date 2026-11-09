@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- SolusInput.app: the ADR-041 input/capture helper (docs/architecture/sol-drive.md §5).
+     The Accessibility and Screen Recording grants belong to this bundle, never to Solus.app. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.solusforge.solus.input</string>
+	<key>CFBundleExecutable</key>
+	<string>solus-input</string>
+	<key>CFBundleName</key>
+	<string>SolusInput</string>
+	<key>CFBundleDisplayName</key>
+	<string>Solus Input</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Solus uses this to click and type in KiCad for you, only after you approve each step.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Solus uses this to see the KiCad window it is working in, only while you run a step.</string>
+</dict>
+</plist>

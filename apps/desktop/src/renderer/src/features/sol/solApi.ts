@@ -11,6 +11,8 @@ import { ApiError } from '../../lib/api/envelope.types'
 import { unwrapEnvelope } from '../../lib/api/client'
 import { createSolStreamParser, type SolStreamEvent } from './solStream'
 import { toPendingConfirmation, type PendingConfirmation } from '../../lib/api/solStream'
+import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
+import { toFrontAppBody } from './frontAppBody'
 
 /** How SOL may act on one message: explain and point, or operate tools (SOLX-01). */
 export type SolActionMode = 'guide' | 'do'
@@ -135,6 +137,13 @@ async function defaultToken(): Promise<string | null> {
   return useAuthStore.getState().accessToken
 }
 
+/** The pill's front-app snapshot. Only the SOL window subscribes to main's
+ *  pushes (useFrontAppSnapshot), so in every other renderer this is null. */
+async function defaultFrontApp(): Promise<SolFrontApp | null> {
+  const { useSolWindowStore } = await import('./solWindowStore')
+  return useSolWindowStore.getState().frontApp
+}
+
 export interface StreamSolMessageInput {
   projectId: string
   conversationId: string
@@ -164,6 +173,18 @@ export interface StreamSolMessageInput {
    */
   mentions?: readonly string[]
   /**
+   * SOLUSDEV-321 P0-T3: where the person is looking — the workspace focus and the trail they
+   * came through (oldest first, the focus itself excluded). Sent by the SOL page only, and
+   * only when there is a focus; the server drops a stale id in it instead of refusing the turn.
+   */
+  focus?: { readonly entityId: string; readonly path: readonly string[] }
+  /** The chat's pinned nodes, kept apart from the typed `@` mentions. Omitted when empty. */
+  pins?: readonly string[]
+  /** The finding this turn was asked from (the server 404s one the project cannot see). */
+  findingId?: string
+  /** The bench robot this turn was asked from (same). */
+  robotId?: string
+  /**
    * SOLUSDEV-244: the user's engineering conventions from their own
    * `~/.solus/preferences.json`. Sent with the turn (the server keeps no copy)
    * and fenced into the system prompt above the shipped references. Omitted
@@ -172,6 +193,12 @@ export interface StreamSolMessageInput {
   preferences?: EngineeringPreferences | null
   /** The attached screen region, when the user circled one for this turn. */
   screenshot?: SolScreenshot
+  /**
+   * SOLUSDEV-319 slice 4: the app the pill was summoned over (sol-drive.md §2.2).
+   * Omitted ⇒ the pill's snapshot (null outside the SOL window). Sent as
+   * `front_app` on Build turns only — never on a resume or a wake turn.
+   */
+  frontApp?: SolFrontApp | null
   /** Receives each validated stream event in arrival order. */
   onEvent: (event: SolStreamEvent) => void
   signal?: AbortSignal
@@ -180,21 +207,56 @@ export interface StreamSolMessageInput {
   baseUrl?: string
 }
 
-/** The JSON body of a turn. `mentions` is always present, so the server sees
- *  one body shape whether or not the user picked anything. A resume turn omits
- *  `content` when it is empty. */
-function turnBody(input: StreamSolMessageInput): Record<string, unknown> {
-  if (input.processPrompt) return wakeBody(input, input.processPrompt)
-  const resume = input.resumeConfirmationId
+/** SOLUSDEV-321 P0-T3: the anchors a turn carries beside its text, each sent only when it has
+ *  something to say — so the default body stays the minimal one. */
+function anchorFields(input: StreamSolMessageInput): Record<string, unknown> {
+  return {
+    ...(input.focus ? { focus: { entity_id: input.focus.entityId, path: input.focus.path } } : {}),
+    ...(input.pins?.length ? { pins: input.pins } : {}),
+    ...(input.findingId ? { finding_id: input.findingId } : {}),
+    ...(input.robotId ? { robot_id: input.robotId } : {})
+  }
+}
+
+/** A resume turn repeats its confirmation id and omits empty text; any other
+ *  turn sends its text. */
+function textFields(
+  input: StreamSolMessageInput,
+  resume: StreamSolMessageInput['resumeConfirmationId']
+): Record<string, unknown> {
   return {
     ...(resume && input.content === '' ? {} : { content: input.content }),
-    ...(resume ? { resume_confirmation_id: resume } : {}),
-    action_mode: input.actionMode,
-    mentions: input.mentions ?? [],
+    ...(resume ? { resume_confirmation_id: resume } : {})
+  }
+}
+
+/** The per-turn options, each sent only when set. */
+function optionFields(input: StreamSolMessageInput): Record<string, unknown> {
+  return {
     ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
     ...(input.thinkHarder ? { think_harder: true } : {}),
     ...(input.preferences ? { preferences: input.preferences } : {}),
     ...(input.screenshot ? { screenshot: input.screenshot } : {})
+  }
+}
+
+/** The JSON body of a turn. `mentions` is always present, so the server sees
+ *  one body shape whether or not the user picked anything. A resume turn omits
+ *  `content` when it is empty. */
+function turnBody(
+  input: StreamSolMessageInput,
+  frontApp: SolFrontApp | null
+): Record<string, unknown> {
+  if (input.processPrompt) return wakeBody(input, input.processPrompt)
+  const resume = input.resumeConfirmationId
+  const sendFront = !resume && input.actionMode === 'do' && frontApp !== null
+  return {
+    ...textFields(input, resume),
+    action_mode: input.actionMode,
+    mentions: input.mentions ?? [],
+    ...anchorFields(input),
+    ...optionFields(input),
+    ...(sendFront ? { front_app: toFrontAppBody(frontApp) } : {})
   }
 }
 
@@ -219,7 +281,9 @@ async function turnRequest(input: StreamSolMessageInput): Promise<RequestInit> {
     Accept: 'text/event-stream'
   }
   if (token) headers.Authorization = `Bearer ${token}`
-  return { method: 'POST', headers, body: JSON.stringify(turnBody(input)), signal: input.signal }
+  const frontApp = input.frontApp !== undefined ? input.frontApp : await defaultFrontApp()
+  const body = JSON.stringify(turnBody(input, frontApp))
+  return { method: 'POST', headers, body, signal: input.signal }
 }
 
 /**

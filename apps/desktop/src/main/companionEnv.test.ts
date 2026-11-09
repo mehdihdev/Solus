@@ -12,7 +12,14 @@
 //   2. the host must appear in SOLUS_COMPANION_ALLOWED_HOSTS
 // Rule 2 exists because that host is where the user's bearer token gets sent.
 import { describe, expect, it } from 'vitest'
-import { companionEnv, companionWsUrl, findIntegrationsRoot } from './companionEnv'
+import {
+  companionDrive,
+  companionEnv,
+  driveDecisionKey,
+  companionWsUrl,
+  findAncestorPath,
+  findIntegrationsRoot
+} from './companionEnv'
 
 describe('companionWsUrl', () => {
   const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
@@ -233,5 +240,238 @@ describe('companionEnv — integrations root', () => {
     const env = companionEnv({}, 'http://127.0.0.1:8000/api/v1')
 
     expect(env.SOLUS_COMPANION_INTEGRATIONS_ROOT).toBeUndefined()
+  })
+})
+
+// SOLUSDEV-319 drive slice 3 (sol-drive.md §5): the setting is the consent, an
+// environment variable is not — so both drive variables are set ONLY from the
+// option and removed otherwise, inherited values included.
+describe('companionEnv — drive', () => {
+  const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
+  const API = 'https://api.solusforge.com/api/v1'
+  const INHERITED = { SOLUS_COMPANION_DRIVE: '1', SOLUS_DRIVE_HELPER: '/tmp/evil' }
+
+  it('sets only the switch when drive is on (slice 3b: the helper is the agent, reached by session)', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: '/w', drive: true })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
+  })
+
+  it('SOLUS_DRIVE_HELPER is always removed, even with drive on', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', drive: true })
+
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
+  })
+
+  it.each([
+    ['omitted', {}],
+    ['false', { drive: false }]
+  ])('deletes both variables, inherited ones included, when drive is %s', (_label, extra) => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', ...extra })
+
+    expect('SOLUS_COMPANION_DRIVE' in env).toBe(false)
+    expect('SOLUS_DRIVE_HELPER' in env).toBe(false)
+  })
+
+  it('stays off when an inherited workspace override differs from the checked folder', () => {
+    // The nested-folder rule was evaluated for the registry folder; a drive
+    // server bound to some other folder would skip that check.
+    const env = companionEnv({ SOLUS_COMPANION_WORKSPACE: '/elsewhere' }, API, {
+      projectId: P,
+      workspace: '/w',
+      drive: true
+    })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
+  })
+
+  // ADR-041 2026-10-31 "window-bound driving without a workspace" (sol-drive.md §2.2 A2/A3).
+  it('drive on with no folder: the switch is set and the workspace variable stays absent', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: null, drive: true })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
+    expect('SOLUS_COMPANION_WORKSPACE' in env).toBe(false)
+  })
+
+  it('drive on with a folder: both the switch and the workspace', () => {
+    const env = companionEnv({}, API, { projectId: P, workspace: '/w', drive: true })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBe('/w')
+  })
+
+  it('drive off with no folder: neither', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: null, drive: false })
+
+    expect('SOLUS_COMPANION_DRIVE' in env).toBe(false)
+    expect('SOLUS_COMPANION_WORKSPACE' in env).toBe(false)
+  })
+
+  it('no folder but an inherited dev workspace override: off (the relay would get no workspace)', () => {
+    const env = companionEnv({ SOLUS_COMPANION_WORKSPACE: '/elsewhere' }, API, {
+      projectId: P,
+      workspace: null,
+      drive: true
+    })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
+  })
+
+  it('packaged, no folder: drives and the inherited workspace never leaks in', () => {
+    const env = companionEnv({ SOLUS_COMPANION_WORKSPACE: '/elsewhere', PATH: '/bin' }, API, {
+      projectId: P,
+      workspace: null,
+      drive: true,
+      packaged: true
+    })
+
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1')
+    expect('SOLUS_COMPANION_WORKSPACE' in env).toBe(false)
+  })
+})
+
+describe('findAncestorPath', () => {
+  it('walks up to the first ancestor holding the relative path', () => {
+    const exists = (p: string): boolean => p === '/repo/apps/desktop/native/x'
+    expect(
+      findAncestorPath('/repo/apps/desktop/out', ['apps', 'desktop', 'native', 'x'], exists)
+    ).toBe('/repo/apps/desktop/native/x')
+    expect(findAncestorPath('/', ['nope'], () => false)).toBeNull()
+  })
+})
+
+// ADR-041 amendment 2026-10-28 (H-1): a packaged companion's environment is an
+// allowlist plus what main computes, so it always dials the baked API and
+// serves the registry workspace whatever launched Solus.app.
+describe('companionEnv — packaged allowlist', () => {
+  const P = '01a0055b-a961-762a-9bcb-3f1eadca8eb0'
+  const API = 'https://api.solusforge.com/api/v1'
+  const INHERITED = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/Users/me',
+    USER: 'me',
+    LOGNAME: 'me',
+    TMPDIR: '/var/folders/x/T/',
+    LANG: 'en_GB.UTF-8',
+    LC_ALL: 'en_GB.UTF-8',
+    LC_CTYPE: 'UTF-8',
+    SOLUS_COMPANION_URL: 'wss://evil.example/api/v1/projects/x/bridge',
+    SOLUS_COMPANION_ALLOWED_HOSTS: 'evil.example',
+    SOLUS_COMPANION_WORKSPACE: '/elsewhere',
+    SOLUS_COMPANION_INTEGRATIONS_ROOT: '/evil/mcp',
+    PYTHONPATH: '/evil',
+    PYTHONSTARTUP: '/evil/x.py',
+    DYLD_INSERT_LIBRARIES: '/evil.dylib',
+    NODE_OPTIONS: '--require /evil.js',
+    SOMETHING_ELSE: 'x'
+  }
+
+  it('keeps only the allowlist from the inherited env', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w', packaged: true })
+
+    for (const key of ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE']) {
+      expect(env[key]).toBe(INHERITED[key as keyof typeof INHERITED])
+    }
+    for (const key of [
+      'PYTHONPATH',
+      'PYTHONSTARTUP',
+      'DYLD_INSERT_LIBRARIES',
+      'NODE_OPTIONS',
+      'SOMETHING_ELSE'
+    ]) {
+      expect(key in env).toBe(false)
+    }
+  })
+
+  it('ignores inherited SOLUS_COMPANION_* and computes its own', () => {
+    const env = companionEnv(INHERITED, API, {
+      projectId: P,
+      workspace: '/w',
+      drive: true,
+      packaged: true
+    })
+
+    expect(env.SOLUS_COMPANION_URL).toBe(`wss://api.solusforge.com/api/v1/projects/${P}/bridge`)
+    expect(env.SOLUS_COMPANION_WORKSPACE).toBe('/w')
+    expect(env.SOLUS_COMPANION_ALLOWED_HOSTS).toBe('localhost,127.0.0.1,api.solusforge.com')
+    expect(env.SOLUS_COMPANION_DRIVE).toBe('1') // the override no longer blocks it
+    expect('SOLUS_COMPANION_INTEGRATIONS_ROOT' in env).toBe(false)
+  })
+
+  it('dev keeps inheriting (developer overrides)', () => {
+    const env = companionEnv(INHERITED, API, { projectId: P, workspace: '/w' })
+
+    expect(env.SOLUS_COMPANION_URL).toBe(INHERITED.SOLUS_COMPANION_URL)
+    expect(env.PYTHONPATH).toBe('/evil')
+  })
+})
+
+// L6: main bakes the drive decision the env builder actually made, and
+// compares against the same decision, so a dev SOLUS_COMPANION_WORKSPACE
+// override (drive refused) never looks like a change on every refresh.
+describe('companionDrive', () => {
+  it('on with the folder, on without one, or off (null)', () => {
+    expect(companionDrive({}, { workspace: '/w', drive: true })).toEqual({ workspace: '/w' })
+    expect(companionDrive({}, { workspace: null, drive: true })).toEqual({ workspace: null })
+    expect(companionDrive({}, { workspace: '/w', drive: false })).toBeNull()
+    expect(companionDrive({}, { workspace: null, drive: false })).toBeNull()
+    expect(companionDrive({}, { workspace: null })).toBeNull()
+  })
+
+  it('an empty folder is no folder', () => {
+    expect(companionDrive({}, { workspace: '', drive: true })).toEqual({ workspace: null })
+  })
+
+  it('null under a dev workspace override, the same answer the spawned env gets', () => {
+    const inherited = { SOLUS_COMPANION_WORKSPACE: '/elsewhere' }
+    const options = { workspace: '/w', drive: true }
+    expect(companionDrive(inherited, options)).toBeNull()
+    expect(
+      companionEnv(inherited, 'http://127.0.0.1:8000', options).SOLUS_COMPANION_DRIVE
+    ).toBeUndefined()
+  })
+
+  it('packaged ignores the override and drives', () => {
+    expect(
+      companionDrive(
+        { SOLUS_COMPANION_WORKSPACE: '/elsewhere' },
+        { workspace: '/w', drive: true, packaged: true }
+      )
+    ).toEqual({ workspace: '/w' })
+  })
+})
+
+// The respawn comparison key: off, on-without-folder and on-with-folder are all
+// distinct, so every transition between them replaces the running child.
+describe('driveDecisionKey', () => {
+  const OFF = null
+  const NO_FOLDER = { workspace: null }
+  const FOLDER = { workspace: '/w' }
+  const OTHER = { workspace: '/x' }
+
+  it('is null only for drive off', () => {
+    expect(driveDecisionKey(OFF)).toBeNull()
+    expect(driveDecisionKey(NO_FOLDER)).not.toBeNull()
+    expect(driveDecisionKey(FOLDER)).not.toBeNull()
+  })
+
+  it.each([
+    ['off → on, no folder', OFF, NO_FOLDER],
+    ['on, no folder → off', NO_FOLDER, OFF],
+    ['on, no folder → folder linked', NO_FOLDER, FOLDER],
+    ['on, folder → folder unlinked', FOLDER, NO_FOLDER],
+    ['on, folder → off', FOLDER, OFF],
+    ['on, folder → another folder', FOLDER, OTHER]
+  ])('differs for %s', (_label, a, b) => {
+    expect(driveDecisionKey(a)).not.toBe(driveDecisionKey(b))
+  })
+
+  it.each([
+    ['off', OFF],
+    ['on, no folder', NO_FOLDER],
+    ['on, folder', FOLDER]
+  ])('is stable for %s', (_label, d) => {
+    expect(driveDecisionKey(d)).toBe(driveDecisionKey(d === null ? null : { ...d }))
   })
 })

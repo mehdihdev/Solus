@@ -407,6 +407,33 @@ async def test_max_entities_must_be_positive(db: AsyncSession) -> None:
 # ------------------------------------------------------- the W0-07 adapter (one traversal)
 
 
+def test_a_machines_command_history_never_reaches_the_model() -> None:
+    """M38: a machine's `recent_commands` are its owner's (`project_card.owned_commands` reads
+    them owner-gated); the generic model-facing adapter drops them and keeps the rest."""
+    machine = GraphEntity(
+        id=uuid.uuid4(),
+        project_id=uuid.uuid4(),
+        kind="machine",
+        domain=Domain.RUNTIME,
+        name="laptop",
+        attrs={"hostname": "box", "recent_commands": [{"command": "export TOKEN=x"}]},
+    )
+    part = GraphEntity(
+        id=uuid.uuid4(),
+        project_id=machine.project_id,
+        kind="component",
+        domain=Domain.ELECTRICAL,
+        name="U1",
+        attrs={"recent_commands": "a part's own attr"},
+    )
+
+    context = to_graph_context(Neighborhood(entities=[machine, part], edges=[], truncated=False))
+
+    seen = {e.name: e.attrs for e in context.entities}
+    assert seen == {"laptop": {"hostname": "box"}, "U1": {"recent_commands": "a part's own attr"}}
+    assert "recent_commands" in machine.attrs  # the row itself is untouched
+
+
 async def test_adapts_to_the_w0_07_graph_context_shape(db: AsyncSession) -> None:
     """The reuse claim, made concrete: SOL's `get_graph_context` returns THIS traversal through a
     thin adapter, so the focus engine and the agent can never disagree about the graph."""

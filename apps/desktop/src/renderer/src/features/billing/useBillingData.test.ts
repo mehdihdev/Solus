@@ -8,6 +8,7 @@ import { useAuthStore } from '../../store/authStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import * as resources from '../../lib/api/resources'
 import * as billing from '../../lib/api/resources.billing'
+import * as academicApi from '../../lib/api/resources.academic'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -19,6 +20,12 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     createPackCheckout: vi.fn()
   }
 })
+
+vi.mock('../../lib/api/resources.academic', () => ({
+  getAcademicStatus: vi.fn(),
+  sendAcademicCode: vi.fn(),
+  verifyAcademicCode: vi.fn()
+}))
 
 vi.mock('../../lib/api/resources.billing', () => ({
   getBillingSubscription: vi.fn(),
@@ -432,3 +439,45 @@ function billingPortalFlowTests(): void {
     expect(result.current.notice).toMatch(/temporarily unavailable/)
   })
 }
+
+describe('useBillingData academic (ADR-042)', () => {
+  const STATUS: academicApi.AcademicStatus = {
+    state: 'none',
+    email: null,
+    pending_email: null,
+    code_expires_at: null,
+    expires_at: null,
+    monthly_credits: 1000,
+    suffixes: ['edu']
+  }
+
+  it('loads the academic status with the snapshot', async () => {
+    vi.mocked(academicApi.getAcademicStatus).mockResolvedValue(STATUS)
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.academic).toEqual(STATUS)
+  })
+
+  it('a failed academic read is null and the page stays ready', async () => {
+    vi.mocked(academicApi.getAcademicStatus).mockRejectedValue(new Error('down'))
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    expect(result.current.academic).toBeNull()
+  })
+
+  it('send and verify pass straight to the API client', async () => {
+    vi.mocked(academicApi.getAcademicStatus).mockResolvedValue(STATUS)
+    vi.mocked(academicApi.sendAcademicCode).mockResolvedValue({ ...STATUS, state: 'pending' })
+    vi.mocked(academicApi.verifyAcademicCode).mockResolvedValue({ ...STATUS, state: 'active' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await expect(result.current.sendAcademic('ada@mit.edu')).resolves.toMatchObject({
+      state: 'pending'
+    })
+    await expect(result.current.verifyAcademic('123456')).resolves.toMatchObject({
+      state: 'active'
+    })
+    expect(academicApi.sendAcademicCode).toHaveBeenCalledWith('ada@mit.edu')
+    expect(academicApi.verifyAcademicCode).toHaveBeenCalledWith('123456')
+  })
+})

@@ -839,6 +839,9 @@ async def _start_robot_session(
                 "device_path": getattr(identity, "last_seen_path", None),
                 "baud": protocol.params.get("baud"),
             },
+            # SOLUSDEV-321 P2-T3: the robot's session runs its window evaluator as this member
+            robot_entity_id=robot.id,
+            owner_user_id=account_id,
         )
     except APIError as exc:
         return None, exc.message

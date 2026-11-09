@@ -1,0 +1,47 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 318 >>
+stream
+0.2 w 0 0 0 RG
+20 20 380 260 re S
+60 150 m 120 150 l S
+120 140 40 20 re S
+160 150 m 240 150 l S
+240 130 m 240 170 l S
+250 130 m 250 170 l S
+250 150 m 320 150 l S
+BT /F1 9 Tf 125 165 Td (R1 10k) Tj ET
+BT /F1 9 Tf 236 175 Td (C1 100n) Tj ET
+BT /F1 9 Tf 180 154 Td (SDA) Tj ET
+BT /F1 7 Tf 300 30 Td (fake sheet 1/1) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Title (fake schematic sheet) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000610 00000 n 
+0000000680 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
+startxref
+731
+%%EOF

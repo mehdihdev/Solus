@@ -9,9 +9,11 @@
 # ServerAllowlist (extra fields forbidden). Tool contract: docs/api/local-folder.md §4.
 server: local
 tools:
+  # SOLUSDEV-321 P6: reason amended, flagged for ratification. The scan also returns the bounded
+  # texts of the folder's ROS packages (its new `ros` key), which the cloud parses once.
   - name: scan_folder
     requires_confirmation: false
-    reason: read-only listing of tool-relevant files, git identity, digest, and installed-tool probe over the linked folder
+    reason: read-only listing of tool-relevant files, git identity, digest, and installed-tool probe over the linked folder, plus the bounded texts of its ROS packages (only package.xml, the launch files, setup.py/setup.cfg and the Python modules of each package's own module directory, never a file on a hidden, test or credential-named path; no-follow confined reads, at most 32 files of 32 KiB per package and 256 KiB in all; nothing parsed, imported or run on the machine) for the cloud's ROS reader; widens what this read returns, so it needs a human's ratification (integrations/mcp/CLAUDE.md rule 2)
   - name: folder_digest
     requires_confirmation: false
     reason: read-only content digest over the linked folder's tool-relevant files (the change-signal evidence)

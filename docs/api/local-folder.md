@@ -122,7 +122,22 @@ path. Composed names: `local.scan_folder`, `local.folder_digest`, `local.open_in
   ],
   "digest": "<hex blake2b-128>",
   "truncated": false,
-  "tools_installed": { "kicad": true, "altium": false, "vscode": true }
+  "tools_installed": { "kicad": true, "altium": false, "vscode": true },
+  "ros": [
+    {
+      "manifest": {
+        "parts": ["src", "talker_py", "package.xml"],
+        "text": "<package.xml>"
+      },
+      "files": [
+        {
+          "parts": ["src", "talker_py", "launch", "talker.launch.py"],
+          "text": "<file text>"
+        }
+      ],
+      "incomplete": false
+    }
+  ]
 }
 ```
 
@@ -136,8 +151,10 @@ path. Composed names: `local.scan_folder`, `local.folder_digest`, `local.open_in
   `config` is unreadable, over 64 KiB, or has no `[remote "origin"]` url. `head` is the 12-char
   short sha of the resolved commit when HEAD is readable, else null.
 - `digest` includes the ordered relative file paths/hashes and sanitized Git identity
-  (remote, branch, HEAD). Both `scan_folder` and `folder_digest` use the same
-  algorithm, so metadata-only changes invalidate the probe.
+  (remote, branch, HEAD), then one `ros:<path>:<blake2b-128 of the text>` line per shipped ROS
+  text (SOLUSDEV-321 P6), so editing a `.launch.xml` or a `package.xml` — no tool file — still
+  moves it; a folder with no ROS package keeps the digest it had. Both `scan_folder` and
+  `folder_digest` use the same algorithm, so metadata-only changes invalidate the probe.
 - **Why segments, 32-hex hashes and a short head (found in the live run):** every bridge result
   passes the cloud's ingress redaction (`agent/tools/untrusted.py`, a §7 invariant that is never
   weakened) which masks any string ≥ 40 chars of `[A-Za-z0-9+/=_.-]` with ≥ 16 distinct
@@ -149,6 +166,38 @@ path. Composed names: `local.scan_folder`, `local.folder_digest`, `local.open_in
 - `tools_installed` is probed, never assumed: macOS `/Applications/<App>.app` (KiCad, Visual
   Studio Code), Linux `shutil.which` on `kicad`/`code`, Windows the documented install roots.
   Altium is Windows-only and reports false elsewhere. Missing = false.
+- `ros` (SOLUSDEV-321 P6, R132): the ROS packages in the folder, as bounded TEXTS the cloud parses
+  once (`software/ros_reader.py`, §5). One record per package (a directory holding
+  `package.xml`), at most **32**: its `manifest` and up to **32** `files` (its launch and setup
+  files and its own module directory's Python modules), each `{parts, text}` with `text` ≤
+  **32,768** characters; `incomplete: true` when a cap or an unreadable file left one out. `null`
+  (or absent) comes from a companion older than P6; `[]` is a read that found no package. The
+  texts are data: the companion reads them with no-follow, descriptor-confined reads, reads only
+  the manifest's `<name>` (any DTD refused first) and imports or executes none of them (it has
+  no YAML library at all); the cloud validates the shape here
+  (`FolderScan.ros`, `extra="forbid"`) and its reader drops any name that carries `[REDACTED]`.
+  ROS files keep the `files` labels above (`*.launch.py` is `python`); the closed `tool`
+  vocabulary gains nothing. The companion side (`integrations/mcp/local/solus/ros.py:
+collect_ros_packages`): the packages are the walk's `package.xml` files; in a **colcon
+  workspace** (a `src/<pkg>/package.xml` beside an `install/` or `build/` directory) only those
+  under `src/` count, because `install/` holds a share copy of every manifest and launch file. A
+  package ships ONLY what the reader needs (R135): `*.launch.py` and `*.launch.xml` up to three
+  levels down, `launch/*.yaml|yml`, `setup.py` and `setup.cfg` (they name its executables), and
+  the `.py` modules of its own module directory (`<package>/<name>/`, the ament_python layout,
+  where its nodes create their publishers and subscriptions) — launch and setup files first, so a
+  cap keeps them. Never a link, a skip-listed directory or a nested package (that one is its own
+  record), and nothing on a path with a hidden (`.`), a `test`/`tests` or a credential-shaped
+  component: `SECRET_NAME` (`secret|credential|token|passw|apikey|api_key|private|auth|id_rsa|
+  id_ed25519|\.env|\.pem|\.key|\.p12|\.pfx`, case-insensitive) is matched against EVERY component,
+  so a `credentials/` directory is never even walked. It is defence in depth; the module-directory
+  allowlist is the bound. A file over 32 KiB is left out, a manifest that declares a DTD is not shipped, and the
+  whole `ros` list stays within **256 KiB** of text; a package that lost a file to a cap says
+  `incomplete`, and one whose manifest no longer fits the 256 KiB is not shipped (logged). As the
+  frame encodes it (ASCII-escaped compact JSON, where `é` costs six bytes) the list also stays
+  within `ROS_FRAME_BUDGET_BYTES`, **256 KiB**: the first package past it keeps its manifest and
+  the leading files that fit, marked `incomplete`, and the packages after it are dropped (logged).
+  With 2000 file entries of about 300 B, that leaves about 182 KiB of the cloud's 1 MiB
+  tool-result frame for the rest of the answer, so the scan never fails because of `ros`.
 
 `folder_digest {}` → `{ "digest": "<hex>", "truncated": false }`.
 
@@ -175,6 +224,20 @@ carries one.
 | `cad_folder`                                  | mechanical | `cad:<dir>`            | dir basename (or root_name) | `path, files[] (≤100 listed), file_count`                                                                                                 |
 | `arduino_sketch`                              | code       | `arduino:<dir>`        | dir basename                | `path, sketch_file`                                                                                                                       |
 | `python_code`                                 | code       | `python:`              | `root_name (python)`        | `file_count, top_dirs[] (≤50)`                                                                                                            |
+| `ros_node` (SOLUSDEV-321 P6)                  | code       | `ros_node:<name>`      | full node name (`/ns/name`) | `package, executable, publishes[], subscribes[], launched_at ("<launch file>:<line>"), declared_at {topic: "<module>:<line>"}`            |
+| `ros_topic` (SOLUSDEV-321 P6)                 | code       | `ros_topic:<name>`     | full topic name             | `type` (`<pkg>/msg/<Type>`, or null when no import names it or two publishers disagree)                                                   |
+
+The two ROS kinds come from `ros` (§4) through `software/ros_reader.py`, the one reader the code
+hosts share (`connectors/code_content.py`). Nodes are what the launch files start; what a node
+publishes and subscribes comes from its executable's own Python module (the `console_scripts`
+entry names it), and a compiled node lands with neither. A launch line whose package is no ROS
+package name, or whose executable is no identifier with at most one `.py` or `.sh` suffix (each at
+most 128 characters), starts no node.
+The `publishes`/`subscribes` EDGES are
+not the connector's: `graph/inference/ros_edges.py` writes them after the sync at 0.9
+(`origin=inferred`, evidence `config` with `ref = launched_at`), and a live ROS graph listed by
+`code.ros2_nodes`/`code.ros2_topics` only ever raises an existing one to 1.0
+(`docs/api/code-command-execution.md` §12).
 
 **API view (SOLUSDEV-317).** A `local` source's API representation (`GET /sources`, the
 local-folder route's `source`) carries `remote: {repo, host}` — the cursor's normalised
@@ -234,4 +297,7 @@ complete result. Cloud validation rechecks paths, closed call/bus vocabularies,
 lengths and counts. Records attach to the corresponding `arduino_sketch` graph
 entity as source-file observations. They do not establish physical board bindings
 or electrical connections. A projection marker invalidates old unchanged local
-cursors once so existing sketches receive these observations.
+cursors once so existing sketches receive these observations. The marker is one constant,
+`PROJECTION_VERSION` in `connectors/local_folder.py`, named for the whole local projection:
+`local-observations-v2` since SOLUSDEV-321 P6 (it was `arduino-observations-v1`), so a folder
+synced before the ROS read re-syncs once and its packages land.

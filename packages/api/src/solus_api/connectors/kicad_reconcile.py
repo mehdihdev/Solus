@@ -7,7 +7,8 @@ The contract's reconciliation law (§5.2a, mirroring §5.3):
 * the NETLIST is authoritative for component identity and connectivity — the
   output components and nets are the netlist's;
 * the board CORROBORATES: its placement layer is added to a matching component
-  as `properties["layer"]`, nothing else;
+  as `properties["layer"]`, and where it places the part as `position` (the
+  footprint's own `(at …)`, SOLUSDEV-321 P3-T4), nothing else;
 * disagreement is NEVER merged silently — a refdes present on one side only, a
   differing value or footprint, and a pad-net membership the netlist does not
   carry are each reported as a `Netlist.warnings` entry prefixed
@@ -162,12 +163,16 @@ def _by_designator(netlist: Netlist) -> dict[str, Component]:
 
 
 def _enrich(component: Component, board_by_ref: dict[str, Component]) -> Component:
-    """A NEW component carrying the board's `layer` when the board places it."""
+    """A NEW component carrying the board's `layer` and placement (`position`, R77) when the
+    board places it; the netlist's own properties are kept."""
     placed = board_by_ref.get(component.designator)
-    layer = placed.properties.get("layer") if placed is not None else None
-    if not layer:
+    if placed is None:
         return component
-    return replace(component, properties={**component.properties, "layer": layer})
+    layer = placed.properties.get("layer")
+    if not layer and placed.position is None:
+        return component
+    properties = {**component.properties, "layer": layer} if layer else component.properties
+    return replace(component, properties=properties, position=placed.position)
 
 
 def _refdes_mismatches(netlist: Netlist, board: Netlist) -> Iterator[_Finding]:

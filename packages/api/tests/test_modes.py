@@ -138,3 +138,48 @@ def test_run_context_carries_an_explicit_action_mode_defaulting_to_guide() -> No
     # The structural-gate invariants hold unchanged.
     assert "registry" not in fields
     assert {"tools", "dispatch"} <= set(fields)
+
+
+# SOLUSDEV-319 G1: Live Bench's direct writes are not `requires_confirmation`
+# (they apply at once and return inverse_ops for Undo), yet they still change
+# the team's view — so Guide refuses them by a Solus-owned name set.
+def _direct_write(name: str) -> ToolDescriptor:
+    return ToolDescriptor(
+        name=name,
+        description="Direct bench view write.",
+        params={"type": "object", "properties": {}},
+        returns={"type": "object"},
+    )
+
+
+@pytest.mark.parametrize("name", ["bench_view.update_display", "bench_view.upsert_derived"])
+async def test_guide_refuses_direct_write_tools(name: str) -> None:
+    from solus_api.agent.modes import DIRECT_WRITE_TOOLS
+
+    assert name in DIRECT_WRITE_TOOLS
+    executed: list[str] = []
+
+    async def write(args: dict[str, Any]) -> dict[str, Any]:
+        executed.append(name)
+        return {"version": 2}
+
+    registry = ToolRegistry()
+    descriptor = _direct_write(name)
+    registry.register(InProcessTool(descriptor, write))
+    guide = build_mode_dispatch(ActionMode.GUIDE, (descriptor,), build_dispatch(registry, None))
+    do = build_mode_dispatch(ActionMode.DO, (descriptor,), build_dispatch(registry, None))
+
+    refused = await guide(ToolCall(tool=name, args={}))
+    assert executed == []
+    assert refused.error is not None
+    assert refused.error.code is ToolErrorCode.UNAUTHORIZED
+    assert (await do(ToolCall(tool=name, args={}))).ok is True
+    assert executed == [name]
+
+
+def test_direct_write_tools_is_exactly_the_bench_view_direct_writes() -> None:
+    from solus_api.agent.modes import DIRECT_WRITE_TOOLS
+
+    assert frozenset({"bench_view.update_display", "bench_view.upsert_derived"}) == (
+        DIRECT_WRITE_TOOLS
+    )

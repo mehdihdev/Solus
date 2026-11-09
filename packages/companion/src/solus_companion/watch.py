@@ -213,6 +213,67 @@ def fingerprint(root: Path | None) -> str:
     return digest.hexdigest()
 
 
+#: KiCad's own timed writes: local-history snapshots (`.history/`) and autosave
+#: copies. They happen with nobody touching anything, so they are not a save.
+HISTORY_DIR_NAME = ".history"
+AUTOSAVE_PREFIX = "_autosave-"
+#: Narrower than SKIP_DIRS: a KiCad project saved under `build/` must still be
+#: seen. Only bulk folders no schematic is saved into, plus Solus's own exports.
+_SAVED_DESIGN_SKIP_DIRS = frozenset({".git", "node_modules", HISTORY_DIR_NAME, ARTIFACT_DIR_NAME})
+
+
+def _saved_designs(root: Path) -> list[Path] | None:
+    """Every design file a save could have written, symlinks included; None when
+    the workspace is too big to see whole (the caller fails closed)."""
+    found: list[Path] = []
+    pending = [root]
+    remaining = MAX_ENTRIES
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                remaining -= 1
+                if remaining < 0:
+                    return None
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.name not in _SAVED_DESIGN_SKIP_DIRS:
+                        pending.append(Path(entry.path))
+                elif Path(
+                    entry.name
+                ).suffix.lower() in DESIGN_SUFFIXES and not entry.name.startswith(AUTOSAVE_PREFIX):
+                    found.append(Path(entry.path))
+    return found
+
+
+def saved_design_fingerprint(root: Path | None) -> str:
+    """One digest over every saved design file (ADR-041 drive M3): a drive step
+    ends when it changes. Source files, Git metadata and KiCad's timed writes are
+    left out so only a real save moves it; a symlinked design counts by its
+    target. "" = cannot observe (also when the workspace is too big to see whole)
+    — a drive step treats that as a save and stops.
+    """
+    if root is None or not root.is_dir():
+        return ""
+    digest = hashlib.blake2b(digest_size=16)
+    try:
+        root = root.resolve()
+        designs = _saved_designs(root)
+        if designs is None:
+            logger.warning("workspace %s is too big for the saved-design check", root)
+            return ""
+        for path in sorted(designs):
+            try:
+                stat = path.stat()  # follows a symlink: a save through it moves the target
+            except OSError:
+                stat = None
+            rel = path.relative_to(root).as_posix()
+            mark = f"{stat.st_size}:{stat.st_mtime_ns}" if stat else "unreadable"
+            digest.update(f"{rel}:{mark}\n".encode())
+    except (OSError, ValueError, RuntimeError):
+        logger.warning("could not read workspace %s for the saved-design check", root)
+        return ""
+    return digest.hexdigest()
+
+
 def workspace_path(raw: str | None) -> Path | None:
     if not raw:
         return None

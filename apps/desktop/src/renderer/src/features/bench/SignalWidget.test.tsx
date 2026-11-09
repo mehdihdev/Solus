@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SignalWidget } from './SignalWidget'
 import { convertUnit, displayPoints, unitOptions } from './signalUnits'
 
@@ -125,4 +125,53 @@ it('places evidence markers on time without converting unknown event values', ()
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
   fireEvent.change(screen.getByRole('combobox'), { target: { value: 'deg' } })
   expect(screen.getByLabelText('stream_gap at 2026-09-14T12:00:01Z')).toHaveAttribute('x1', '120')
+})
+
+it('marker click opens finding', () => {
+  const finding = '0b5f8a3e-8c1d-4c6e-9a1f-2d3e4f5a6b7c'
+  const opened = vi.fn()
+  const scoped = vi.fn()
+  const props = {
+    userId: 'u',
+    projectId: 'p',
+    deviceId: 'd',
+    onScope: scoped,
+    events: [
+      {
+        kind: 'threshold_breach',
+        device_id: 'd',
+        signal: 'angle',
+        at: '2026-09-14T12:00:01Z',
+        value: null,
+        finding_id: finding
+      },
+      // A plain observer event names no finding: it stays a line, never a control.
+      {
+        kind: 'change_point',
+        device_id: 'd',
+        signal: 'angle',
+        at: '2026-09-14T12:00:01.5Z',
+        value: 1
+      }
+    ],
+    series: {
+      signal: 'angle',
+      points: [
+        { timestamp: '2026-09-14T12:00:00Z', value: 0, unit: 'rad' },
+        { timestamp: '2026-09-14T12:00:02Z', value: 1, unit: 'rad' }
+      ]
+    }
+  }
+  const { rerender } = render(<SignalWidget {...props} onOpenFinding={opened} />)
+  const markers = screen.getAllByRole('button', { name: /^Open finding/ })
+  expect(markers).toHaveLength(1)
+  expect(markers[0]).toHaveAccessibleName('Open finding: threshold_breach at 2026-09-14T12:00:01Z')
+  expect(markers[0].style.left).toContain('50%')
+  fireEvent.click(markers[0])
+  expect(opened).toHaveBeenCalledExactlyOnceWith(finding)
+  expect(scoped).not.toHaveBeenCalled()
+  // A host with no findings pane draws the markers as lines only.
+  rerender(<SignalWidget {...props} />)
+  expect(screen.queryByRole('button', { name: /^Open finding/ })).not.toBeInTheDocument()
+  expect(screen.getByLabelText('threshold_breach at 2026-09-14T12:00:01Z')).toBeInTheDocument()
 })

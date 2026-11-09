@@ -51,6 +51,24 @@ tap (closing over the ctx-derived project id — §7 tenant binding), subscribes
 and retains the last window summary. Stop is idempotent `aclose()` (pump cancelled, partial
 window flushed, subprocesses/ports closed). App-lifespan shutdown closes every session.
 
+**The window evaluator (SOLUSDEV-321 P2-T3).**
+
+- _Who gets one._ A session that knows its root entity has one `WindowEvaluator`
+  (`solus_api/livebench/findings/window_evaluator.py`). The root is `robot_entity_id`: the robot,
+  or a part bound on its own. Its owner is the member who started the session or bound the robot.
+- _How it is built._ The manager's `evaluator_factory` builds it. `main.py` wires the factory with
+  the plumbing's own telemetry buffer, the one shared envelope cache, the live-signal rules and
+  the event ring.
+- _When it runs._ It starts as the last step of a successful start, after the opener resolved and
+  the connection subscribed. The session's close cancels it, then waits for it no longer than
+  `EVALUATOR_STOP_SECONDS`.
+- _Why it has its own clock._ It is a wall-clock ticker of its own, not part of the pump: a silent
+  device closes no window, so only a ticker notices.
+- _What it reads._ It reads the entity buffer by event time, from the channels the session's tap
+  saw resolve, starting where the session first saw each one.
+- _What it does with it._ It judges one-second event-time windows and raises findings through the
+  graph in one transaction per tick. A tick that fails is logged, and the next one runs.
+
 ## Topology honesty (the anticipated evolution)
 
 "Backend starts local processes" is only coherent while the API process runs on the user's

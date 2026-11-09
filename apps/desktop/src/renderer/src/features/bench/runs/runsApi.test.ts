@@ -50,6 +50,12 @@ it('uses only project-scoped recording/read routes with explicit identifiers', a
     method: 'POST',
     body: { baseline_id: 'before', candidate_id: 'after' }
   })
+  // against the routine's twin: the simulation's result stands in for the baseline (R117)
+  await compareRuns('p', 'before', 'after', 'twin')
+  expect(api.request).toHaveBeenLastCalledWith('/projects/p/bench/runs/compare', {
+    method: 'POST',
+    body: { baseline_id: 'before', candidate_id: 'after', sim_result_id: 'twin' }
+  })
   const signal = new AbortController().signal
   vi.mocked(api.request).mockResolvedValue({
     summary,

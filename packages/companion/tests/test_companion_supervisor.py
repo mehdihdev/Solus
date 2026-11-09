@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import os
 import signal
 import sys
@@ -189,6 +190,43 @@ async def test_launch_failure_counts_toward_failed_state(tmp_path: Path) -> None
     assert str(tmp_path) not in entry["detail"]  # no local paths on the wire
 
 
+async def test_exit_before_the_handshake_logs_one_line_naming_the_missing_workspace(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The isaac launcher exits 78 when no project folder is linked; that is a
+    # configuration state, not a crash, so the operator log gets one line with
+    # the cause — not a nested ExceptionGroup traceback per restart.
+    broken = tmp_path / "launch"
+    broken.write_text("#!/bin/sh\nexit 78\n")
+    broken.chmod(0o755)
+    launch = ServerLaunch(name="broken", command=broken, env={"OTHER": "x"})
+    sup = Supervisor((launch,), ping_timeout=1.0)
+    with caplog.at_level(logging.ERROR, logger="solus.companion.supervisor"):
+        assert not await sup.handles["broken"].start()
+    records = [r for r in caplog.records if "broken" in r.getMessage()]
+    assert records
+    assert all(r.exc_info is None for r in records)
+    assert any(
+        "before becoming ready" in m and "Connection closed" in m and "no project folder" in m
+        for m in (r.getMessage() for r in records)
+    )
+
+
+async def test_exit_before_the_handshake_with_a_workspace_omits_the_folder_hint(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    broken = tmp_path / "launch"
+    broken.write_text("#!/bin/sh\nexit 1\n")
+    broken.chmod(0o755)
+    launch = ServerLaunch(name="broken", command=broken, env={"SOLUS_MCP_WORKSPACE": str(tmp_path)})
+    sup = Supervisor((launch,), ping_timeout=1.0)
+    with caplog.at_level(logging.ERROR, logger="solus.companion.supervisor"):
+        assert not await sup.handles["broken"].start()
+    messages = [r.getMessage() for r in caplog.records if "broken" in r.getMessage()]
+    assert any("before becoming ready" in m for m in messages)
+    assert not any("no project folder" in m for m in messages)
+
+
 def test_status_snapshot_shape(supervisor: Supervisor) -> None:
     snapshot = supervisor.status_snapshot()
     assert len(snapshot) == 1
@@ -226,3 +264,30 @@ async def test_busy_while_call_in_flight(supervisor: Supervisor) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await call
     assert supervisor.status_snapshot()[0]["state"] == "ready"  # busy cleared
+
+
+async def test_health_pass_never_restarts_a_server_busy_with_a_call(tmp_path: Path) -> None:
+    """SOLUSDEV-319: a long tool call (the ADR-040 KiCad save/Revert handshake)
+    blocks a sync server's pings. Restarting it mid-call killed the handshake
+    after the write and before the reload; the cloud owns call timeouts."""
+    pid_file = tmp_path / "pid"
+    sup = _make_supervisor(pid_file)
+    await sup.start_all()
+    try:
+        handle = sup.handles["mock"]
+        first_pid = int(pid_file.read_text())
+
+        async def unresponsive(_handle: object) -> bool:
+            return False
+
+        sup._ping = unresponsive  # type: ignore[method-assign,assignment]
+        handle.begin_call()
+        try:
+            await sup.ensure_healthy()
+        finally:
+            handle.end_call()
+
+        assert int(pid_file.read_text()) == first_pid
+        assert handle.state is ServerState.READY
+    finally:
+        await sup.stop_all()

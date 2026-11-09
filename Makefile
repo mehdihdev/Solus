@@ -1,4 +1,4 @@
-.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin seed-secrets
+.PHONY: bootstrap hooks db-up db-down dev-api dev-desktop dev-web lint typecheck test gen-openapi companion-bin solus-input-app solus-input-xpc desktop-mac seed-secrets
 
 bootstrap: ## one-command setup (run after cloning)
 	corepack enable && pnpm install
@@ -40,6 +40,17 @@ mcp-forks: ## materialize the vendored MCP forks' private virtualenvs (hash-veri
 companion-bin: ## build the companion binary + vendored MCP servers into dist/companion (BRG-04)
 	bash scripts/build-companion.sh
 
+solus-input-app: ## build the SOL drive helper bundle into dist/solus-input/SolusInput.app (macOS; ADR-041)
+	bash scripts/build-solus-input.sh
+
+solus-input-xpc: ## build main's XPC client for the drive agent (native/solus-input-xpc; sol-drive.md §2.1)
+	bash scripts/build-solus-input-xpc.sh
+
+# The Electron fuses are flipped and read back by electron-builder's afterPack
+# hook (scripts/verify-fuses.cjs) before signing; a mismatch fails the build.
+desktop-mac: companion-bin solus-input-app solus-input-xpc ## package the macOS app with the companion, drive helper and XPC client it ships
+	pnpm --filter @solus/desktop build:mac
+
 seed-secrets: ## seed every env-sourced SecretStore ref from the root .env (idempotent; prints names+lengths only)
 	uv run --package solus-api python scripts/seed-provider-keys.py
 
@@ -53,8 +64,13 @@ onshape-budget: ## SOLUSDEV-167: print the Onshape before/after call-count table
 corpus-validate: ## SOLUSDEV-241 CORPUS C2: validate the shipped engineering corpus tree + manifest
 	cd packages/api && uv run --no-sync python -m solus_api.corpus validate && uv run --no-sync python -m solus_api.corpus manifest --check
 
-corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DATABASE_URL) (the only write path)
-	cd packages/api && uv run --no-sync python -m solus_api.corpus ingest
+# Dev: SOL's search_corpus tool (SOLUSDEV-321 P1-T4) says "corpus not ingested" until this has run
+# on the database the API uses. The ingest reads SOLUS_DATABASE_URL from the environment, never
+# from .env, and SOL ranks the corpus by full text, so a dev box with no embedding key skips the
+# embeddings:  SOLUS_DATABASE_URL=postgresql+asyncpg://… make corpus-ingest INGEST_FLAGS=--no-embed
+# (the same as: SOLUS_DATABASE_URL=… uv run python -m solus_api.corpus ingest --no-embed).
+corpus-ingest: ## SOLUSDEV-241 CORPUS C2: apply the shipped corpus to $(SOLUS_DATABASE_URL) (the only write path); dev: INGEST_FLAGS=--no-embed
+	cd packages/api && uv run --no-sync python -m solus_api.corpus ingest $(INGEST_FLAGS)
 
 corpus-eval: ## SOLUSDEV-241 CORPUS C2: retrieval eval with per-domain scores (keyless full-text path)
 	cd packages/api && uv run --no-sync pytest tests/corpus/test_corpus_eval.py -q -s

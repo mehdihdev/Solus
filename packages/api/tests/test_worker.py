@@ -498,3 +498,62 @@ async def test_hung_probe_does_not_block_other_sources(
             if s.last_error
         ]
         assert len(errored) == 1 and errored[0].id != enqueued[0]
+
+
+def test_the_rung_3_simulation_jobs_are_bounded_and_keep_no_result() -> None:
+    """SOLUSDEV-321 P4-T3/T4: the three rung-3 jobs record their own runs (`run_and_record`), so the
+    queue keeps no result, and none is retried: a second try would be a second recorded run. The
+    mesh check is one of them (R110): never a multi-second burn in a SOL request."""
+    from typing import cast
+
+    from arq.worker import Function
+    from solus_api.connectors.worker import build_worker_settings
+    from solus_api.core.config import Settings
+
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None, supabase_jwt_secret="dummy", database_url="sqlite+aiosqlite://"
+    )
+    functions = {
+        f.name: f
+        for f in cast(Any, build_worker_settings(settings)).functions
+        if isinstance(f, Function)
+    }
+    for name, timeout in (("run_ngspice_sim", 120), ("run_mujoco_sim", 300), ("run_mesh_sim", 120)):
+        job = functions[name]
+        assert (job.timeout_s, job.max_tries, job.keep_result_s) == (timeout, 1, 0)
+
+
+async def test_the_hourly_sweep_asks_the_daily_expertise_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-321 P6: `scheduled_change_detection` makes one call to the expertise due check
+    with the sweep's clock (it acts only at its daily hour and never raises). P6 fix 1 (m5): it
+    detects FIRST, so the sweep can never eat into change detection's share of the job."""
+    from types import SimpleNamespace
+
+    from solus_api.agent import expertise
+    from solus_api.connectors import worker
+
+    asked: list[Any] = []
+
+    async def due(sessionmaker: Any, *, now: Any) -> int:
+        asked.append((sessionmaker, now))
+        return 0
+
+    async def detect(**kwargs: Any) -> int:
+        asked.append("detected")
+        return 3
+
+    monkeypatch.setattr(expertise, "recompute_due_expertise", due)
+    monkeypatch.setattr(worker, "run_change_detection", detect)
+    sessions = object()
+    ctx = {
+        "settings": SimpleNamespace(bridge_tool_timeout_seconds=5),
+        "sessionmaker": sessions,
+        "registry": None,
+        "secret_store": None,
+    }
+
+    assert await worker.scheduled_change_detection(ctx) == 3
+    detected, (handed, now) = asked
+    assert detected == "detected" and handed is sessions and now.tzinfo is not None

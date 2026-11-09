@@ -54,18 +54,18 @@ lands in the same parser regardless of how it was obtained.
 Two acquisition mechanisms, plus the Onshape thin-API refinement. Acquisition differs; the parsing (§3)
 does not.
 
-| Connector  | Family         | Acquisition                                                                          | v1 format(s) parsed                                    | Parser (§6)                   |
-| ---------- | -------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------ | ----------------------------- |
-| GitHub     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                | GitHub REST/GraphQL trees API |
-| GitLab     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                | GitLab REST trees API         |
+| Connector  | Family         | Acquisition                                                                          | v1 format(s) parsed                                                                          | Parser (§6)                                   |
+| ---------- | -------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| GitHub     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                                                      | GitHub REST/GraphQL trees API                 |
+| GitLab     | Code           | **Live API** — repo tree                                                             | files/modules + imports                                                                      | GitLab REST trees API                         |
 | KiCad      | EDA            | **Committed export in the linked Git repo**                                          | KiCad netlist, XML or S-expression (content-detected); KiCad board file `.kicad_pcb` (§5.2a) | stdlib XML / owned S-expression reader (§6.3) |
-| LTspice    | EDA            | **Committed export**                                                                 | SPICE deck (`.net`; `.asc` only if no netlist)         | `spicelib`                    |
-| NgSpice    | EDA            | **Committed export**                                                                 | SPICE deck (`.cir`/`.net`)                             | `spicelib`                    |
-| Altium     | EDA            | **Committed export**                                                                 | Protel netlist (or SPICE / orcadpcb2)                  | stdlib state machine          |
-| Onshape    | Mechanical CAD | **Thin API** — auth + detect change + fetch/generate STEP/STL export → shared parser | STEP/STL                                               | shared CAD parser (§6.1)      |
-| Fusion 360 | Mechanical CAD | **Committed export**                                                                 | STEP/STL (DWG deferred)                                | shared CAD parser             |
-| SolidWorks | Mechanical CAD | **Committed export**                                                                 | STEP/STL                                               | shared CAD parser             |
-| AutoCAD    | Mechanical CAD | **Committed export**                                                                 | **DWG — DEFERRED** (§5.7); STEP if the team commits it | shared CAD parser             |
+| LTspice    | EDA            | **Committed export**                                                                 | SPICE deck (`.net`; `.asc` only if no netlist)                                               | `spicelib`                                    |
+| NgSpice    | EDA            | **Committed export**                                                                 | SPICE deck (`.cir`/`.net`)                                                                   | `spicelib`                                    |
+| Altium     | EDA            | **Committed export**                                                                 | Protel netlist (or SPICE / orcadpcb2)                                                        | stdlib state machine                          |
+| Onshape    | Mechanical CAD | **Thin API** — auth + detect change + fetch/generate STEP/STL export → shared parser | STEP/STL                                                                                     | shared CAD parser (§6.1)                      |
+| Fusion 360 | Mechanical CAD | **Committed export**                                                                 | STEP/STL (DWG deferred)                                                                      | shared CAD parser                             |
+| SolidWorks | Mechanical CAD | **Committed export**                                                                 | STEP/STL                                                                                     | shared CAD parser                             |
+| AutoCAD    | Mechanical CAD | **Committed export**                                                                 | **DWG — DEFERRED** (§5.7); STEP if the team commits it                                       | shared CAD parser                             |
 
 - **Live API (code hosts):** GitHub, GitLab — query the API for the repo tree; entities = files/modules,
   relations = imports/references.
@@ -173,12 +173,13 @@ STL is geometry-only, DWG is a 2D drawing — see §5–§6; the shared parser d
 
 ## 4. v1-real vs. deferred (explicit)
 
-| Domain            | v1-real (parsed in v1)                                                                                                      | Deferred                                                              |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| **Electrical**    | KiCad XML netlist (**primary** — components + connectivity) + SPICE deck (sim params + topology) + Altium export equivalent | —                                                                     |
+| Domain            | v1-real (parsed in v1)                                                                                                                                                                                           | Deferred                                                              |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **Electrical**    | KiCad XML netlist (**primary** — components + connectivity) + SPICE deck (sim params + topology) + Altium export equivalent                                                                                      | —                                                                     |
 | **Mechanical**    | STEP + STL → geometry + **assembly structure + inter-part connections** where the source has them; a **flat part list** for part-container elements (Onshape Part Studios — SOLUSDEV-168), one SHARED CAD parser | **DWG** (deprioritized — §5.7/§6.4)                                   |
-| **Code**          | repo tree via GitHub/GitLab APIs                                                                                            | —                                                                     |
-| **Manufacturing** | —                                                                                                                           | **Gerber** (copper/manufacturing data — low cross-domain-graph value) |
+| **Code**          | repo tree via GitHub/GitLab APIs                                                                                                                                                                                 | —                                                                     |
+| **Manufacturing** | —                                                                                                                                                                                                                | **Gerber** (copper/manufacturing data — low cross-domain-graph value) |
+| **Any**           | export parsing only                                                                                                                                                                                              | any proprietary-tool DEEP/live integration beyond export parsing      |
 
 > **Amended 2026-09-03 (SOLUSDEV-168).** The original "NOT a flat part list" ruled out
 > treating an assembly as a bag of parts — the cross-domain value is in the STRUCTURE, and
@@ -188,8 +189,6 @@ STL is geometry-only, DWG is a 2D drawing — see §5–§6; the shared parser d
 > entered the graph at all — which is where people actually model, and where FeatureScript
 > operates. Structure is still extracted wherever it exists; a flat element is not a licence
 > to flatten a structured one.
-
-| **Any**           | export parsing only                                                                                                         | any proprietary-tool DEEP/live integration beyond export parsing      |
 
 > **URDF / robot-description note.** URDF (and SDF/xacro) are committed, parseable exports too, but they
 > describe robot KINEMATICS for **Live Bench Sim (ADR-014)**, not the design-artifact cross-domain graph.
@@ -255,9 +254,14 @@ pinfunction, pintype)`.
 - **Obtain:** committed `.kicad_pcb` on config key `board`, content-detected by the `(kicad_pcb` root; same
   8 MiB cap and untrusted posture as every export (§2.1 invariant 4). Inline only in v1 — no live acquisition
   tool exists for it.
-- **Entities:** each footprint carrying a `Reference` property → `EntityOut(kind="component",
-  source_id=<reference designator>, attrs={value, footprint (the footprint lib id), datasheet, layer, custom
-  properties})`. Footprints without a reference are skipped and counted on warnings.
+- **Entities:** each footprint carrying a `Reference` property → an `EntityOut(kind="component")`
+  whose `source_id` is the reference designator and whose `attrs` hold `value`, `footprint` (the
+  footprint lib id), `datasheet`, `layer`, the custom properties and `position`. Footprints without a
+  reference are skipped and counted on warnings.
+- **Placement (SOLUSDEV-321 P3-T4):** `attrs.position = {x, y, rot}` is the footprint's OWN `(at x y [rot])`,
+  in the board's millimetres; `rot` is null when the file omits it. A pad's or a field's `(at …)` is never
+  read. A footprint without a readable `at` has no `position` key at all, never a guessed origin. The
+  matrix's fact store reads this key (`checkers/fact_store.py:pcb_positions`).
 - **modality_hints:** `{part_number (MPN alias property), datasheet_ref}`. **No `schematic_symbol_name`:** a
   board carries no libsource; the hint is absent by design, never guessed.
 - **Relations:** pad `(net <code> "<name>")` memberships → the SAME first-class `net` entities and
@@ -265,8 +269,9 @@ pinfunction, pintype)`.
   unconnected and are skipped. Board-only footprints (mounting holes, fiducials) remain as components with
   no connectivity.
 - **Reconciliation when one KiCad source holds both a netlist and a board (mirrors §5.3):** the netlist is
-  authoritative for component identity and connectivity; the board corroborates. Join key = reference
-  designator. Disagreement is NEVER merged silently: a refdes present in one file only, a differing value or
+  authoritative for component identity and connectivity; the board corroborates, adding its `layer` and
+  `position` to the matching netlist component and nothing else. Join key = reference designator.
+  Disagreement is NEVER merged silently: a refdes present in one file only, a differing value or
   footprint, or a pad-net membership not present in the netlist is emitted as a per-item `SyncError` on the
   sync record for the checker/agent layer. The change-detection content hash covers both files.
 
@@ -386,13 +391,13 @@ buggy — don't rely on it beyond geometry.
 
 ### 6.3 Electrical netlist
 
-| Candidate                                         | Handles netlist?     | License | Deps                          |
-| ------------------------------------------------- | -------------------- | ------- | ----------------------------- |
-| **stdlib `xml.etree`** on KiCad XML (recommended) | YES                  | PSF     | none                          |
-| **owned S-expression reader** (KiCad `.net`, `.kicad_pcb`) | YES         | Solus   | none — bounded token count and nesting depth, scoped traversal, no eval |
-| stdlib `json` + adapter (tscircuit/atopile JSON)  | YES                  | PSF     | none                          |
-| ~~kiutils~~                                       | **NO netlist model** | GPLv3   | avoid (wrong tool + copyleft) |
-| Altium Protel: stdlib state machine (~40 lines)   | YES                  | —       | none                          |
+| Candidate                                                  | Handles netlist?     | License | Deps                                                                    |
+| ---------------------------------------------------------- | -------------------- | ------- | ----------------------------------------------------------------------- |
+| **stdlib `xml.etree`** on KiCad XML (recommended)          | YES                  | PSF     | none                                                                    |
+| **owned S-expression reader** (KiCad `.net`, `.kicad_pcb`) | YES                  | Solus   | none — bounded token count and nesting depth, scoped traversal, no eval |
+| stdlib `json` + adapter (tscircuit/atopile JSON)           | YES                  | PSF     | none                                                                    |
+| ~~kiutils~~                                                | **NO netlist model** | GPLv3   | avoid (wrong tool + copyleft)                                           |
+| Altium Protel: stdlib state machine (~40 lines)            | YES                  | —       | none                                                                    |
 
 **Recommendation:** accept BOTH KiCad netlist formats — XML via the stdlib (zero-dep, schema-stable v5–v10)
 and the default S-expression `.net` via the owned reader (SOLUSDEV-252); the board file rides the same reader.

@@ -812,7 +812,7 @@ async def test_end_to_end_debit_lands_in_ledger_with_streamed_usage(
         config=config,
         adapters={"anthropic": mock},
         user_id=user_id,
-        session=db,  # redis=None -> frequency cap fails open (warned)
+        session=db,  # redis=None -> frequency cap holds on the local window (warned)
     )
     assert result.text == "hello"
     row = await db.scalar(

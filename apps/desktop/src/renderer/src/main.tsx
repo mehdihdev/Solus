@@ -14,11 +14,14 @@ import { ErrorBoundary } from './components/errors/ErrorBoundary'
 import { surfaceForHash } from './components/errors/errorCopy'
 import { appErrorReporter, currentErrorSurface } from './lib/errors/appErrorReporter'
 import { installGlobalErrorHandlers } from './lib/errors/globalHandlers'
+import { startReactMeasureSweep } from './lib/perf/reactMeasureSweep'
 
 // SOLUSDEV-311: event-handler and async errors (which no boundary sees) go to
 // the reporter; render errors are caught by the boundary below. The overlay is
 // a click-through window over the user's screen: it reports but draws nothing.
 installGlobalErrorHandlers(window, appErrorReporter, currentErrorSurface)
+// React's development build never clears its per-render perf measures.
+if (import.meta.env.DEV) startReactMeasureSweep()
 const windowSurface = surfaceForHash(window.location.hash)
 
 createRoot(document.getElementById('root')!).render(

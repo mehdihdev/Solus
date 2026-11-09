@@ -162,3 +162,67 @@ Electron GlobalShortcuts portal when supported; missing portal/permission still
 degrades to the clickable path. The header has no mode selector; Settings and the
 composer retain their controls. An already-open SOL window follows main-window
 workspace selection changes.
+
+## SOLUSDEV-319 Ember Pill
+
+Wireflow: `docs/wireflows/sol-window.md` "SOLUSDEV-319 Ember Pill". Changes to the module map:
+
+- `main/sol-window/pillGeometry.ts` (new, pure): `placePill(cursor, workArea, size)` and
+  `growPill(anchor, current, height, workArea)` — summon placement and bottom-anchored growth with the
+  shift-aside rule. Replaces `placeSolWindow`; geometry is no longer persisted, and the pin is retired
+  with it: `solSettings` drops `window` and `alwaysOnTop` (a stored value is ignored and gone on the next
+  write); `sol:set-always-on-top`, `SolState.alwaysOnTop` and the bridge's `setAlwaysOnTop` are removed.
+- `main/sol-window/solWindow.ts`: the window is frameless, transparent, always on top, non-resizable,
+  hidden from the taskbar. The manager gains `toggle()` (double-tap Ctrl), keeps a hidden window alive
+  between summons (`show` re-places it at the cursor), hides on `blur` unless the renderer reported busy
+  or the user dragged it, and applies renderer resize requests through `growPill`.
+- Three new invokes on `SOL_WINDOW_CHANNELS`, accepted only from the SOL window's own webContents and
+  its top frame (`senderFrame === sender.mainFrame`):
+  `sol:resize` (a finite number, clamped 80–min(620, 60 % of the work area)), `sol:set-busy` (boolean), `sol:hide` (no argument).
+- renderer `features/sol/SolWindow.tsx`: the pill layout (panel above, bar below), a ResizeObserver
+  that reports its content height, Esc to hide, and the busy signal (streaming, a parked approval, or a
+  running plan). `features/sol/Composer.tsx` (moved out of `SolChat.tsx`) gains the `pill` variant;
+  `features/sol/PlanCard.tsx` is new.
+
+### Ember Pill: drag, resume, height cap, motion
+
+- **Drag.** The whole pill frame is a `-webkit-app-region: drag` handle — the panel's edge and padding,
+  the gaps between messages, the bar's empty area, the orb and the footer. Every control (input, buttons,
+  toggles, the Guide|Build switch, the mention list — anything with a `role`, plus `summary`) and every
+  message (`.sol-thread > *`) is `no-drag`, so text stays selectable. The window is `maximizable: false` and
+  `fullscreenable: false` so a double-click on the handle never zooms it. `main/sol-window/pillPlacement.ts`
+  (new) owns the live placement: on the window's `moved` event the dragged bounds become the new home
+  (`dragHome`, clamped into that display's work area) with no shift-aside anchor, so later `growPill` calls
+  keep the user's x and bottom edge. Its own `setBounds` echoes are ignored (last-set comparison).
+- **Pinned after a drag.** A drag (a `moved` that is not our own `setBounds`, or a resize that finds
+  the window already dragged) pins the pill: blur no longer hides it. Only a close by hand — Esc, ×, or
+  the summon shortcut's toggle — hides it and unpins; the next summon (even a resume) hides on blur again.
+- **Resume within 5 s.** `SOL_PILL_RESUME_MS = 5000` (`solWindow.constants.ts`). Main records when the pill
+  actually hid; a summon within 5 s shows it unchanged — same bounds, same renderer state (messages,
+  draft, scroll) — and cues `{ kind: 'summoned', resume: true }`. After 5 s it is re-placed at the cursor
+  (collapsed unless SOL is busy) and cues `resume: false`; the renderer then starts a new pill
+  conversation (A1) unless SOL is busy (streaming, a parked approval, a running plan) and closes Guide
+  tasks. The window's first mount is always fresh. The renderer's old `visibilitychange` trigger is
+  retired: main is the one clock.
+- **Height cap.** `growPill` caps the height at `pillMaxHeight(workArea) = min(620, floor(0.6 × work-area
+  height))` (`SOL_PILL_MAX_SCREEN_FRACTION`); with no room above, the pill slides down rather than clip.
+  The renderer mirrors the cap (`features/sol/solPill.constants.ts`, kept equal by test) as
+  `--sol-pill-max-h` on `.sol-pill`, and sets `--sol-pill-panel-room` (cap minus bar/footer) as the panel
+  body's max height, so the thread scrolls inside and the composer stays visible.
+- **Motion** (CSS transform/opacity only; no animation library, no renderer timers). A new push channel,
+  `sol:pill` (main → the SOL window only, validated in `preload/solBridge.ts` as `onPill`), carries
+  `summoned` / `leaving`. Every hide (Esc, ×, blur, double-tap) cues `leaving`; the renderer plays a
+  ~120 ms fade/sink (`data-phase="leaving"`) and main hides the window after `SOL_PILL_EXIT_MS = 140`
+  regardless — a dead or slow renderer cannot keep it up; a summon during the exit cancels it. Summon
+  plays a ~180 ms fade + rise. `features/sol/PillPanel.tsx` (new) sets the panel's height explicitly from
+  its bottom-aligned body's measured height, so a CSS transition animates opening, growth and shrink;
+  `features/sol/pillMeasure.ts` reports the *target* height to main while the panel grows (window first,
+  content unrolls into it) and the current height while it shrinks (content first). New thread rows and
+  plan cards slide/fade in; the orb breathes slowly while idle and quickens while SOL streams
+  (`.sol-pulse`). `prefers-reduced-motion: reduce` collapses the durations and stops the row and orb
+  animations.
+
+Security posture is unchanged: the same isolated webPreferences, navigation and window-open guards.
+`transparent: true` has no isolation effect. `sol:pill` is main → renderer only and carries no data
+beyond the cue; malformed payloads are dropped at the preload boundary. The plan card is a presentation of the existing
+per-confirmation approvals and adds no new approval path.

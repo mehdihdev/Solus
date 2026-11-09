@@ -35,6 +35,7 @@ from solus_api.models import (
     Team,
     User,
 )
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 BUILTIN_NAMES = {"run_checkers", "query_graph", "retrieve_errors", "get_telemetry"}
@@ -81,12 +82,12 @@ def _row(project_id: uuid.UUID, name: str, attrs: dict[str, Any] | None = None) 
     )
 
 
-def _drives(project_id: uuid.UUID, src: GraphEntity, dst: GraphEntity) -> GraphEdge:
+def _wires(project_id: uuid.UUID, src: GraphEntity, dst: GraphEntity) -> GraphEdge:
     return GraphEdge(
         project_id=project_id,
         src_id=src.id,
         dst_id=dst.id,
-        relation_type=av.DRIVES,
+        relation_type=av.WIRES,
         domain_pair="electrical<->electrical",
         confidence=1.0,
         attrs={},
@@ -122,7 +123,7 @@ async def test_query_graph_returns_the_project_neighborhood(
     root, peer = _row(project.id, "mcu"), _row(project.id, "imu")
     db.add_all([root, peer])
     await db.flush()
-    db.add(_drives(project.id, root, peer))
+    db.add(_wires(project.id, root, peer))
     await db.commit()
 
     _, dispatch = _registry_and_dispatch(maker, project.id, systems)
@@ -226,7 +227,7 @@ async def test_run_checkers_fires_chk01_real_rules_on_seeded_bug(
     )
     db.add_all([op_amp, stage])
     await db.flush()
-    db.add(_drives(project.id, op_amp, stage))
+    db.add(_wires(project.id, op_amp, stage))
     await db.commit()
 
     _, dispatch = _registry_and_dispatch(maker, project.id, systems)
@@ -240,6 +241,47 @@ async def test_run_checkers_fires_chk01_real_rules_on_seeded_bug(
     assert clean.value["warnings"] == []  # unknown anchor → empty graph → no warnings
 
 
+async def test_run_checkers_reports_a_pin_conflict_from_a_dry_run_of_the_matrix(
+    db: AsyncSession, maker: async_sessionmaker[AsyncSession], systems: DbSolSystems
+) -> None:
+    """SOLUSDEV-321 P3-T3 (R64): the tool also judges its slice with the interaction matrix, as a
+    dry run. A package pinned differently across two files (`package_version_conflict`, where the
+    pin rule now lives) reaches SOL again, and nothing is written: persisting is the job's."""
+    project = await _seed_builtin_project(db, "pins")
+    pins = [
+        GraphEntity(
+            project_id=project.id,
+            kind="python_requirement",
+            domain=Domain.CODE,
+            name=f"numpy{specifier}",
+            external_ref=f"req-{source}",
+            attrs={"name": "numpy", "specifier": specifier, "source_file": source},
+        )
+        for specifier, source in (("==1.26.0", "requirements.txt"), ("==2.0.0", "pyproject.toml"))
+    ]
+    db.add_all(pins)
+    await db.commit()
+
+    _, dispatch = _registry_and_dispatch(maker, project.id, systems)
+    result = await dispatch(
+        ToolCall(tool="run_checkers", args={"entity_ids": [str(pin.id) for pin in pins]})
+    )
+
+    assert result.ok, result.error
+    assert result.value is not None
+    (conflict,) = [
+        w for w in result.value["warnings"] if w["checker_id"] == "package_version_conflict"
+    ]
+    assert conflict["severity"] == "critical"
+    assert set(conflict["entity_ids"]) == {str(pin.id) for pin in pins}
+    written = await db.scalars(
+        select(GraphEntity.id).where(
+            GraphEntity.project_id == project.id, GraphEntity.kind == "finding"
+        )
+    )
+    assert list(written) == []
+
+
 async def test_query_graph_cannot_reach_another_projects_entities(
     db: AsyncSession, maker: async_sessionmaker[AsyncSession], systems: DbSolSystems
 ) -> None:
@@ -250,7 +292,7 @@ async def test_query_graph_cannot_reach_another_projects_entities(
     a_root, a_peer = _row(a.id, "a-secret"), _row(a.id, "a-peer")
     db.add_all([a_root, a_peer])
     await db.flush()
-    db.add(_drives(a.id, a_root, a_peer))
+    db.add(_wires(a.id, a_root, a_peer))
     await db.commit()
 
     _, dispatch = _registry_and_dispatch(maker, b.id, systems)
@@ -289,7 +331,7 @@ async def test_run_checkers_cannot_reach_another_projects_graph(
     )
     db.add_all([op_amp, stage])
     await db.flush()
-    db.add(_drives(a.id, op_amp, stage))
+    db.add(_wires(a.id, op_amp, stage))
     await db.commit()
 
     _, dispatch = _registry_and_dispatch(maker, b.id, systems)

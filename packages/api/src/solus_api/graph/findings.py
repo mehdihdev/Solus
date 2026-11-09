@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import uuid
+from collections.abc import Collection
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
@@ -25,7 +26,7 @@ from solus_contracts.relations import (
     MatrixCell,
     RelationType,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.checkers.interface import Severity, Warning
@@ -50,6 +51,9 @@ MAX_EVIDENCE_ITEMS = 20
 MAX_EVIDENCE_BYTES = 16 * 1024  # one raise's serialized evidence; producers trim, not readers
 MAX_LIMIT = 500
 ROBOT_DEPTH = 3
+#: What `annotate_finding` keeps of a narration's prose (SOLUSDEV-321 P2-T6).
+MAX_EXPLANATION_CHARS = 1200
+MAX_DETAIL_CHARS = 4000
 #: Attrs that describe a status a reopened finding no longer has.
 _STALE_ON_OPEN = ("dismissed_until", "resolved_by", "note", "acknowledged_by")
 
@@ -175,7 +179,9 @@ async def list_findings(
     *,
     status: FindingStatus = "open",
     severity: SeverityName | None = None,
+    severities: Collection[str] | None = None,
     subject: uuid.UUID | None = None,
+    subjects: Collection[uuid.UUID] | None = None,
     robot: uuid.UUID | None = None,
     cursor: str | None = None,
     limit: int = 100,
@@ -190,11 +196,15 @@ async def list_findings(
     )
     if severity is not None:
         stmt = stmt.where(GraphEntity.attrs["severity"].astext == severity)
+    if severities is not None:  # any of them (SOL's HARD routing reads the non-info, P0-T7)
+        stmt = stmt.where(GraphEntity.attrs["severity"].astext.in_(list(severities)))
     targets: set[uuid.UUID] | None = None
     if robot is not None:
         targets = await _contained_ids(session, project_id, robot, ROBOT_DEPTH)
     if subject is not None:
         targets = {subject} if targets is None else targets & {subject}
+    if subjects is not None:  # any of them (SOL's findings layer, SOLUSDEV-321 P0-T6)
+        targets = set(subjects) if targets is None else targets & set(subjects)
     if targets is not None:
         observed = select(GraphEdge.src_id).where(
             GraphEdge.project_id == project_id,
@@ -213,6 +223,26 @@ async def list_findings(
     return visible, meta
 
 
+async def count_findings_by_severity(
+    session: AsyncSession, project_id: uuid.UUID, *, status: FindingStatus = "open"
+) -> dict[str, int]:
+    """The project's live findings of one status, counted per severity name that occurs —
+    one GROUP BY. Read per request, never cached: a raise publishes `finding.*`, not
+    `graph.changed` (SOLUSDEV-321 P0-T5, the project card)."""
+    severity = GraphEntity.attrs["severity"].astext.label("severity")
+    rows = await session.execute(
+        select(severity, func.count())
+        .where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == kinds.FINDING,
+            GraphEntity.deleted_at.is_(None),
+            GraphEntity.attrs["status"].astext == status,
+        )
+        .group_by("severity")
+    )
+    return {name: count for name, count in rows.tuples() if name is not None}
+
+
 def serialize_finding(
     entity: GraphEntity, subjects: list[GraphEntity] | None = None
 ) -> dict[str, Any]:
@@ -226,6 +256,8 @@ def serialize_finding(
         "headline": a.get("headline", entity.name),
         "explanation": a.get("explanation", ""),
         "detail": a.get("detail", ""),
+        "causes_ranked": a.get("causes_ranked", []),
+        "robot_id": _evidence_robot(a.get("evidence") or {}),
         "subjects": [uuid.UUID(s) for s in a.get("subjects", [])],
         "evidence": a.get("evidence", {}),
         "count": a.get("count", 1),
@@ -242,19 +274,28 @@ def serialize_finding(
     return out
 
 
+def _evidence_robot(evidence: dict[str, Any]) -> uuid.UUID | None:
+    """The robot an observer finding's evidence names (its bench session's root); None when it
+    names none, or something that is no id."""
+    try:
+        return uuid.UUID(str(evidence["robot_id"]))
+    except (KeyError, ValueError):
+        return None
+
+
 # ------------------------------------------------------------------ writes
 
 
 def _merge_finding_evidence(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
-    """Latest `MAX_EVIDENCE_ITEMS` under `items`; scalar keys take the newest value."""
+    """Latest `MAX_EVIDENCE_ITEMS` under `items`; every top-level key takes the newest raise's
+    value, lists (`also`, `causes`) included (SOLUSDEV-321 M71), so readers see the latest."""
     # The first raise stores the producer's dict verbatim; it becomes item 0 on the second.
     scalars = {k: v for k, v in existing.items() if k != "items"}
     items = list(existing.get("items") or ([scalars] if scalars else []))
+    merged = {**existing, **new}
     if isinstance(new.get("items"), list):
-        merged = {**existing, **new}
         items.extend(new["items"])
     else:
-        merged = {**existing, **{k: v for k, v in new.items() if not isinstance(v, list)}}
         items.append(new)
     merged["items"] = items[-MAX_EVIDENCE_ITEMS:]
     return merged
@@ -357,9 +398,12 @@ async def raise_finding(
 async def _load_for_write(
     session: AsyncSession, project_id: uuid.UUID, finding_id: uuid.UUID
 ) -> GraphEntity:
-    """Serialized against raises (project lock); a resolved finding only reopens via raise."""
+    """Serialized against raises (project lock) and read fresh under it, whatever copy the session
+    held from before (a narration's session outlives a model call); a resolved finding only
+    reopens via raise."""
     await lock_project(session, project_id)
     row = await load_finding(session, project_id, finding_id)
+    await session.refresh(row)
     if row.attrs.get("status") == "resolved":
         raise APIError(409, "conflict", "Finding is already resolved")
     return row
@@ -456,6 +500,23 @@ async def resolve_finding(
     return entry, edge
 
 
+async def resolve_system_finding(
+    session: AsyncSession, project_id: uuid.UUID, finding_id: uuid.UUID, *, reason: str
+) -> GraphEntity:
+    """→ `resolved` by Solus, not a person (SOLUSDEV-321 P3-T3: a matrix run states the fact a
+    standing `info` lacked): `resolved_by = "system"`, the reason as the note; no `.solus` errors
+    entry, no activity, no `fixed_by`. Serialized against raises (project lock) and read fresh; a
+    finding already resolved is returned as it is. Flushes."""
+    await lock_project(session, project_id)
+    row = await load_finding(session, project_id, finding_id)
+    await session.refresh(row)
+    if row.attrs.get("status") != "resolved":
+        _set_status(row, "resolved", resolved_by="system", note=reason)
+        await session.flush()
+        logger.info("finding resolved by the system project=%s finding=%s", project_id, row.id)
+    return row
+
+
 def _spec_of(row: GraphEntity) -> FindingSpec:
     """Rebuild the key input from a row whose `canonical_key` is missing (defensive only)."""
     a = row.attrs
@@ -491,4 +552,31 @@ async def acknowledge_finding(
     row = await _load_for_write(session, project_id, finding_id)
     _set_status(row, "acknowledged", acknowledged_by=str(user_id))
     await session.flush()
+    return row
+
+
+async def annotate_finding(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    *,
+    explanation: str,
+    detail: str,
+    causes_ranked: list[str],
+    narration_tokens: int,
+) -> GraphEntity:
+    """The ONE writer of a finding's narration (SOLUSDEV-321 P2-T6): `explanation` (at most
+    1,200 characters), `detail` (4,000), `causes_ranked` and `narration_tokens`. Status, headline
+    and evidence stay as they are; the attrs are reassigned, the version bumped. Flushes."""
+    row = await _load_for_write(session, project_id, finding_id)
+    row.attrs = {
+        **row.attrs,
+        "explanation": explanation[:MAX_EXPLANATION_CHARS],
+        "detail": detail[:MAX_DETAIL_CHARS],
+        "causes_ranked": list(causes_ranked),
+        "narration_tokens": narration_tokens,
+    }
+    row.version += 1
+    await session.flush()
+    logger.info("finding annotated project=%s finding=%s", project_id, row.id)
     return row

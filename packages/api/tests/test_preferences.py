@@ -9,6 +9,8 @@ builder: labelled, non-empty sections, never the raw document.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 from solus_api.agent.preferences import (
@@ -16,6 +18,8 @@ from solus_api.agent.preferences import (
     PREFERENCE_FREE_TEXT_CAP,
     PREFERENCE_LABELS,
     EngineeringPreferences,
+    ExpertiseOverride,
+    code_style_of,
 )
 
 FULL = {
@@ -125,3 +129,25 @@ def test_at_cap_is_accepted() -> None:
         }
     )
     assert len(prefs.electrical) == PREFERENCE_FIELD_CAP
+
+
+def test_the_code_style_section_is_read_back_from_the_turns_payload() -> None:
+    """SOLUSDEV-321 P6 (R134): the runner binds the turn's `Code style` section for a tool that
+    writes code, from the same labelled payload the prompt gets."""
+    payload = EngineeringPreferences.model_validate(FULL).prompt_payload()
+    assert code_style_of(payload) == "C++17, no dynamic allocation in ISRs."
+    assert code_style_of(None) == "" and code_style_of({"Mechanical": "metric"}) == ""
+
+
+def test_a_stated_expertise_rides_with_the_turn_and_never_into_the_prompt_payload() -> None:
+    """SOLUSDEV-321 P6: the person's own level per domain (the shared-types twin's `expertise`).
+    Unknown domains and levels refuse; the levels set the register, never a fenced section."""
+    body = EngineeringPreferences.model_validate(
+        {**FULL, "expertise": {"control": "novice", "software": "expert"}}
+    )
+    assert body.expertise == ExpertiseOverride(control="novice", software="expert")
+    assert "expertise" not in json.dumps(body.prompt_payload()).lower()
+    assert EngineeringPreferences.model_validate(EMPTY).expertise is None
+    for bad in ({"firmware": "expert"}, {"control": "guru"}, {"control": 3}, ["expert"]):
+        with pytest.raises(ValidationError):
+            EngineeringPreferences.model_validate({**EMPTY, "expertise": bad})

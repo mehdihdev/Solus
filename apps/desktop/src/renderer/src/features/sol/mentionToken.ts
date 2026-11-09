@@ -55,9 +55,10 @@ export function replaceMentionToken(
 }
 
 /**
- * Mirrors `reason.MAX_ANCHORS` on the server, which caps `MessageCreate.mentions`
- * and re-applies the same bound in `plan_query`. Duplicated across the process
- * boundary because it must be; the composer trims to it so a request cannot 422.
+ * Mirrors `reason.MAX_ANCHORS` on the server, which caps `MessageCreate.mentions` and
+ * `MessageCreate.pins` and re-applies the same bound in `plan_query`. Duplicated across the
+ * process boundary because it must be; the composer and the page's pins trim to it so a
+ * request cannot 422.
  */
 export const MAX_MENTIONS = 8
 
@@ -65,15 +66,4 @@ export const MAX_MENTIONS = 8
 export interface PickedMention {
   id: string
   name: string
-}
-
-/** What a send carries: typed `@`-mentions first (explicit intent), then the chat's pinned
- *  nodes, deduped and capped at the server's limit — a silent cap beats a 422. */
-export function mergeMentions(typed: readonly string[], pinned: readonly string[]): string[] {
-  const out: string[] = []
-  for (const id of [...typed, ...pinned]) {
-    if (out.length === MAX_MENTIONS) break
-    if (!out.includes(id)) out.push(id)
-  }
-  return out
 }

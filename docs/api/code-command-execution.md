@@ -520,9 +520,14 @@ judged as running project code:
   `--version`/`--help`-only invocations stay no-risk.
 - **Server scope.** `program_scope: "workspace"` for shell scripts, for interpreters given a
   script or module, for project runners, and whenever the resolved program path (before or
-  after symlinks) or a workspace venv's bin dir holds the program. Right before spawn, the
-  server re-resolves the program's realpath and scope, and refuses if either changed since
-  planning.
+  after symlinks) or a workspace venv's bin dir holds the program. An applied profile counts too
+  (`command_plan.SEARCH_PATH_VARIABLES`, SOLUSDEV-321 P6 R136/R137): it reaches the workspace
+  when any variable's value names an absolute path inside it, or when a search-path or
+  load-configuration variable (PATH, the language search paths, Python's prefix, user site,
+  platform lib dir, executable and bytecode cache, the ament/colcon/CMake/ROS prefixes, the DDS
+  configuration files, libcrypto's) has an empty or relative entry, which means the working
+  directory. Right before spawn, the server re-resolves the program's realpath and scope, and
+  refuses if either changed since planning.
 
 Live output (§5.4): the server packs complete lines into each progress frame, up to the
 2048-char frame limit, so normal bursts are not dropped. `truncated` means a real cap was hit.
@@ -628,3 +633,65 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
   - The wake instruction names the process id and program basename, not the model-chosen
     process `name`.
   - An approved `process_input` card does not trigger a resume turn; the next prompt wakes SOL.
+
+## 12. The live ROS graph: `code.ros2_nodes`, `code.ros2_topics` (SOLUSDEV-321 P6)
+
+Two **unconfirmed** reads (allowlist `requires_confirmation: false`, `timeout_seconds: 30`,
+flagged for human ratification), implemented in `integrations/mcp/code/solus/ros2_reads.py`.
+
+| tool               | args              | fixed argv                                 | answer                                            |
+| ------------------ | ----------------- | ------------------------------------------ | ------------------------------------------------- |
+| `code.ros2_nodes`  | `{profile?: str}` | `ros2 node list --no-daemon --spin-time 2` | `{ok, nodes: [name], truncated, reason}`          |
+| `code.ros2_topics` | `{profile?: str}` | `ros2 topic list --no-daemon -t`           | `{ok, topics: [{name, type}], truncated, reason}` |
+
+- **Why ungated is safe here, and only here.** Each call plans its fixed argv exactly as `exec`
+  would (§2.1: the program resolved without the inherited PATH, the deny table, the OS sandbox of
+  §3), with `ros2` found only through the captured profile the call names (`code.profile_capture`
+  of `/opt/ros/<distro>/setup.bash`). It runs only when `command_plan.program_scope` judges that
+  plan **system** scope over the profile's variables (§10.4): `ros2` is a Python program over a
+  DDS layer, so Python's own variables count (`PYTHONPATH`; R136 `PYTHONUSERBASE`, `PYTHONHOME`,
+  `PYTHONPLATLIBDIR`, `PYTHONEXECUTABLE`; R137 `PYTHONPYCACHEPREFIX`, `__PYVENV_LAUNCHER__`), and
+  so do the configuration files it loads (`FASTRTPS_DEFAULT_PROFILES_FILE`,
+  `FASTDDS_DEFAULT_PROFILES_FILE`, `FASTDDS_ENVIRONMENT_FILE`, `CYCLONEDDS_URI`, `OPENSSL_CONF`,
+  `OPENSSL_MODULES`, `OPENSSL_ENGINES`), as does any variable whose value names a path inside the
+  folder. A profile that reaches the linked folder —
+  a colcon workspace overlay, or a Python user site inside it — can load project code (a ROS CLI
+  extension), so it is refused with "the profile reaches the linked folder (a workspace overlay):
+  use code.exec", and `code.exec` keeps its card. No profile, or one whose PATH holds no `ros2`,
+  answers "ros2 not available: capture a ROS profile first".
+- **Run from an empty directory (R136, R137).** Only the working directory changes: the read runs
+  from a fresh, empty, private temporary directory that is removed when it returns — never the
+  linked folder, never a directory the profile names — because a program treats its working
+  directory as its own (Fast DDS loads `DEFAULT_FASTRTPS_PROFILES.xml` from it; Python puts it on
+  the import path for `-c`/`-m`). Everything that judges the command stays on the linked folder
+  (`execute.prepare(root, plan, cwd=…)`): program resolution, the child environment, the
+  sandbox's writable workspace, and the scope judgement re-run right before spawn, which refuses
+  with "the program changed after it was planned" when a profile entry has come to reach the
+  folder since planning.
+- **`~/.ros` must exist.** rcl writes its log under `~/.ros/log`, and the sandbox grants a declared
+  HOME cache only when it already exists (§9.5); without it `ros2` exits 1. So the read refuses
+  first, running nothing: "ros2 needs its log directory ~/.ros, which the sandbox lets it write
+  only when it exists: create it (or run ros2 once on this machine) and ask again".
+- **Nothing outlives the call.** `--no-daemon` starts no ROS 2 daemon, and the executor kills the
+  command's process group and every descendant once the leader exits (§9.13).
+- **The answer is data, bounded.** Each line is checked against the ROS name grammar
+  (`^/?[A-Za-z_][A-Za-z0-9_/]*$`, at most 256 characters; a topic's type against
+  `pkg/msg/Type`); at most 512 names, `truncated` past that or when the output tail was cut,
+  and then the tail's first line, which may be the end of a longer name, is dropped. A failing
+  `ros2` answers `ok: false` with `ros2 exited <code>`, never its output.
+- **The cloud only raises what it already holds (R131).** `agent/tools/ros_live.py` wraps the two
+  bridge tools (by composed name AND the unconfirmed gate) and hands the answer to the model
+  unchanged. Then, never failing the call, it re-applies the grammar and calls
+  `graph/inference/ros_edges.py:confirm_live` under the project lock, which applies the grammar
+  again itself. A live node name raises
+  every live inferred `publishes`/`subscribes` edge of that node, and a live topic every such
+  edge to that topic (when both types are known they must agree), to 1.0 through
+  `graph/edges.py:annotate_edge(confirmed_by=EdgeEvidence(kind=bus_enumeration, ref="ros2 node
+list" | "ros2 topic list"))`. A name no edge carries writes nothing: no entity and no edge is
+  ever created from live output, since any DDS participant on the network can announce one. The
+  event `ros.live_confirmed {tool, seen, bumped}` carries counts only.
+- **DDS in the sandbox.** The Landlock sandbox grants no write to `/dev/shm`. On the
+  development host (Jazzy, Fast DDS 2.14) Fast DDS logs that its shared-memory transport could
+  not start ("Failed to create Shared Memory Manager … Permission denied") and discovers the graph
+  over UDP: a `demo_nodes_cpp` talker running outside the sandbox was listed as `/talker`, and
+  `/chatter [std_msgs/msg/String]` among the topics (SOLUSDEV-321 P6 report, live run).

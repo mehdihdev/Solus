@@ -42,6 +42,9 @@ export interface HotkeyDeps {
   onToggleMode(): void
   onRegion(region: Rect, display: DisplayInfo): void
   onStatus(status: HotkeyStatus): void
+  /** SOLUSDEV-319 (sol-drive.md §5): true while SOL drives and briefly after —
+   *  the double-tap and circle detectors then drop input; the chords stay. */
+  isQuiet?: () => boolean
   /** Diagnostic sink (coordinates and evaluations only, never pixels). */
   debug?: (line: string) => void
 }
@@ -108,13 +111,28 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
   const machine = createCtrlStateMachine()
 
   const emitRegion = (path: Point[]): boolean => emitCircleRegion(deps, path)
+  // Quiet drops the event AND whatever was in progress, so a stroke or a first
+  // tap from before the step can never complete after it.
+  const quieted = (): boolean => {
+    if (!deps.isQuiet?.()) return false
+    machine.reset()
+    sampler.disarm()
+    if (circleMode.active()) {
+      circleMode.clear() // a chord-entered circle mode ends rather than poll through the step
+      publish()
+    }
+    return true
+  }
 
   const sampler = createCursorSampler({
     getCursor: () => deps.getCursor(),
     now: () => deps.now(),
     scheduler: deps.scheduler,
-    onSample: (t, at) =>
-      circleMode.active() ? circleMode.sample(t, at) : act(machine.feed({ type: 'cursor', t, at }))
+    onSample: (t, at) => {
+      if (quieted()) return
+      if (circleMode.active()) circleMode.sample(t, at)
+      else act(machine.feed({ type: 'cursor', t, at }))
+    }
   })
 
   const act = (outputs: CtrlOutput[]): void => {
@@ -137,14 +155,17 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
   })
 
   hook?.onCtrlDown(() => {
+    if (quieted()) return
     act(machine.feed({ type: 'ctrlDown', t: deps.now(), at: deps.getCursor() }))
     sampler.arm() // ponytail: 60 Hz from ctrlDown (travel decides tap vs gesture), off at ctrlUp
   })
   hook?.onCtrlUp(() => {
+    if (quieted()) return
     act(machine.feed({ type: 'ctrlUp', t: deps.now() }))
     if (!circleMode.active()) sampler.disarm()
   })
   hook?.onOtherKeyDown(() => {
+    if (quieted()) return
     act(machine.feed({ type: 'otherKeyDown', t: deps.now() }))
     if (!circleMode.active()) sampler.disarm()
   })

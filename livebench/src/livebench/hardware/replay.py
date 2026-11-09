@@ -17,6 +17,10 @@ from livebench.hardware.channel import Frame, Opener
 
 MAX_RECORDED_FRAMES: Final = 100_000
 MAX_FRAME_BYTES: Final = 64 * 1024
+#: What a live link with nothing to say does: block for its read timeout. A replay that has ended
+#: does the same, paced or fast, so a pump polling it idles instead of spinning on a thread hop
+#: (a fast one that answered silence at once cost the API process 0.8 of a core).
+QUIET_READ_SECONDS: Final = 0.05
 
 
 @dataclass(frozen=True)
@@ -63,6 +67,7 @@ class ReplayChannel:
         if self._pending:
             return self._take(max_bytes)
         if self._index >= len(self._frames):
+            self._sleep(QUIET_READ_SECONDS)
             return None  # end of the recording is silence, as on a real link
         frame = self._frames[self._index]
         self._index += 1
@@ -92,9 +97,15 @@ class ReplayChannel:
         self.closed = True
 
 
-def load_recording(path: Path) -> Recording:
-    """`{"transport", "binding", "frames": [{"t", "hex", "address"?}]}` with bounds."""
-    raw = json.loads(path.read_text())
+def load_recording(path: Path, *, max_bytes: int | None = None) -> Recording:
+    """`{"transport", "binding", "frames": [{"t", "hex", "address"?}]}` with bounds. A `max_bytes`
+    bounds the file too: it is read once, up to one byte past the cap, and a longer file is a
+    ValueError that names no path."""
+    with path.open("rb") as handle:
+        blob = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+    if max_bytes is not None and len(blob) > max_bytes:
+        raise ValueError(f"a recording is at most {max_bytes} bytes")
+    raw = json.loads(blob)
     if not isinstance(raw, dict):
         raise ValueError("a recording is a JSON object")
     identity = TransportBinding(kind=TransportKind(raw["transport"]), binding=str(raw["binding"]))

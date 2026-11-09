@@ -20,6 +20,7 @@ import {
   type ChatArtifact,
   type ChatItem,
   type ChatStatus,
+  type SendOptions,
   type TraceEntry
 } from './solChatStore'
 
@@ -36,15 +37,17 @@ export interface SolChat {
   activeConversationId: string | null
   /** `mentions` are graph entity ids the user picked with `@` — carried beside
    *  the text, never encoded into it. `screenshot` is the circled region for
-   *  THIS turn only (SOLUSDEV-252 S3). Resolves true when the turn settled
-   *  without error (failures are painted into the transcript, never thrown). */
+   *  THIS turn only (SOLUSDEV-252 S3). `options` carries the Confirm-every-change
+   *  choice and — from the SOL page only — the focus and pins (SOLUSDEV-321 P0-T3).
+   *  Resolves true when the turn settled without error (failures are painted into
+   *  the transcript, never thrown). */
   send: (
     content: string,
     actionMode: SolActionMode,
     mentions?: readonly string[],
     thinkHarder?: boolean,
     screenshot?: SolScreenshot,
-    options?: { forceConfirmation?: boolean }
+    options?: SendOptions
   ) => Promise<boolean>
   /** Switch to another owned conversation (cancels any live turn first). */
   selectConversation: (conversationId: string) => void

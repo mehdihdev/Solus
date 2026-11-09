@@ -29,7 +29,7 @@ from solus_api.agent.modes import ActionMode
 from solus_api.agent.screen import MAX_DECODED_BYTES, ScreenshotBlock
 from solus_api.agent.stream import AgentEvent
 from solus_api.agent.tools import ToolCall
-from solus_api.models import CreditBalance, Domain, GraphEntity, TurnRole
+from solus_api.models import ConversationTurn, CreditBalance, Domain, GraphEntity, TurnRole
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -453,6 +453,40 @@ async def test_empty_or_absent_preferences_reach_the_runner_as_none(
     assert runner.ctx.engineering_preferences is None
 
 
+async def test_slash_web_reaches_the_runner_as_a_research_query_with_the_prompt_whole(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-321 P1-T5: the composer's `/web <q>` is stripped HERE into `research_query` — the
+    one query the runner may search — while the prompt and the stored user turn keep the full text,
+    so history reads as the person wrote it. Every other message carries no query."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    runner = _RecordingRunner()
+    app.state.agent_runner = runner
+    url = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages"
+
+    resp = await client.post(
+        url, json={"content": "/web OV9281 supply voltage"}, headers=alice_headers
+    )
+    assert resp.status_code == 200
+    assert runner.ctx.research_query == "OV9281 supply voltage"
+    assert runner.ctx.prompt == "/web OV9281 supply voltage"
+    assert runner.ctx.research_cache is app.state.research_cache  # the shared 7-day cache
+
+    for content in ("/web", "/webcam stuff", "hello /web x", "what is I2C"):
+        resp = await client.post(url, json={"content": content}, headers=alice_headers)
+        assert resp.status_code == 200
+        assert runner.ctx.research_query is None and runner.ctx.prompt == content
+
+    stored = await db.scalars(
+        select(ConversationTurn.content)
+        .where(ConversationTurn.conversation_id == uuid.UUID(convo["id"]))
+        .where(ConversationTurn.role == TurnRole.USER)
+        .order_by(ConversationTurn.created_at)
+    )
+    assert list(stored)[0] == "/web OV9281 supply voltage"
+
+
 async def test_oversized_or_malformed_preferences_are_rejected_at_the_boundary(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
@@ -475,7 +509,7 @@ async def test_oversized_or_malformed_preferences_are_rejected_at_the_boundary(
 async def test_more_mentions_than_the_anchor_cap_is_rejected(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
-    """Bounded at the boundary as well as in `plan_query` — an unbounded list is
+    """Bounded at the boundary as well as in `turn_scope.plan_scope` — an unbounded list is
     unbounded DB work in the neighbourhood query (SEC-H3)."""
     _, project = await _project(client, alice_headers)
     convo = await _create_conversation(client, alice_headers, project["id"])
@@ -575,6 +609,46 @@ async def test_loop_guard_is_enforced_by_the_plumbing(
     assert error["code"] == "loop_limit"
     assert kinds[-1] == "done"
     assert getattr(app.state.agent_runner, "closed", False)
+
+
+class _RefusedAfterAToolRunner:
+    """Round 1 ran a tool; round 2's model refused (SOLUSDEV-319 refusal handling)."""
+
+    async def run(self, ctx: Any) -> Any:
+        from solus_api.agent.tools import ToolResult
+        from solus_api.orchestration.providers import ProviderRefusalError
+
+        call = ToolCall(tool="get_entity", args={"entity_id": str(uuid.uuid4())}, call_id="c1")
+        yield AgentEvent.tool_call(call)
+        yield AgentEvent.tool_result(ToolResult(call_id="c1", ok=True, value={"found": False}))
+        raise ProviderRefusalError("anthropic/claude-x refused the request", category="cyber")
+
+
+async def test_a_refusal_ends_the_turn_as_model_refused_and_keeps_the_tool_turns(
+    app: Any, client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """A refusal is a bounded abort, not a hard failure: the tool call that already ran stays in
+    the conversation, the frame names `model_refused` with Solus-authored text, and `done`
+    follows."""
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _RefusedAfterAToolRunner()
+    base = f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}"
+
+    resp = await client.post(
+        f"{base}/messages", json={"content": "go", "action_mode": "do"}, headers=alice_headers
+    )
+
+    events = _parse_sse(resp.text)
+    error = next(d for t, d in events if t == "error")
+    assert error == {
+        "code": "model_refused",
+        "message": "The model declined to answer this. Try rephrasing.",
+    }
+    assert [t for t, _ in events][-1] == "done"
+    turns = (await client.get(f"{base}/turns", headers=alice_headers)).json()["data"]
+    assert [t["role"] for t in turns] == ["assistant", "tool", "user"]  # newest first
+    assert turns[0]["attrs"]["aborted"] == "model_refused"
 
 
 class _SlowRunner:
@@ -691,6 +765,7 @@ async def test_the_router_hands_the_runner_the_identity_it_needs(
     assert ctx.user_id is not None
     assert ctx.sessionmaker is not None
     assert ctx.secret_store is not None
+    assert ctx.research_allowed is True  # the person's own words may ask for the web
 
 
 async def test_persisted_tool_turns_carry_no_secret_shaped_values(
@@ -1187,3 +1262,60 @@ async def test_scoped_prior_tool_payload_reaches_next_turn_without_replaying_act
     assert "observed-leader-axis" in text
     assert "foreign-private-axis" not in text
     assert "never-replay" not in text
+
+
+class _FailingToolRunner:
+    """Streams one refused tool call, the way a bridge refusal arrives."""
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+    async def run(self, ctx: Any) -> AsyncIterator[AgentEvent]:
+        from solus_api.agent.tools.shapes import ToolError, ToolErrorCode, ToolResult
+
+        yield AgentEvent.tool_call(ToolCall(call_id="c1", tool="kicad.add_symbol", args={}))
+        error = ToolError(code=ToolErrorCode.TOOL_ERROR, message=self.message)
+        yield AgentEvent.tool_result(ToolResult.failure("c1", error))
+
+
+@pytest.mark.parametrize(
+    ("message", "reason"),
+    [
+        ("unsupported_symbol: the symbol uses a construct R1 at /home/x", "unsupported_symbol"),
+        ("stale_plan: read it again", "stale_plan"),
+        ("stale_plan", None),
+        ("hunter2abc: leaked", None),
+        ("a_" + "b" * 40 + ": overlong word", None),
+        ("Free-form failure text from some tool", None),
+    ],
+)
+async def test_tool_invoked_event_records_failure_code_not_message(
+    app: Any,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    db: AsyncSession,
+    message: str,
+    reason: str | None,
+) -> None:
+    from solus_api.models import DataEvent
+
+    _, project = await _project(client, alice_headers)
+    convo = await _create_conversation(client, alice_headers, project["id"])
+    app.state.agent_runner = _FailingToolRunner(message)
+    await client.patch(
+        "/api/v1/users/me/settings", json={"data_collection_consent": True}, headers=alice_headers
+    )
+    resp = await client.post(
+        f"/api/v1/projects/{project['id']}/sol/conversations/{convo['id']}/messages",
+        json={"content": "place a resistor"},
+        headers=alice_headers,
+    )
+    assert resp.status_code == 200
+
+    event = (
+        await db.scalars(select(DataEvent).where(DataEvent.event_type == "agent.tool_invoked"))
+    ).one()
+    assert event.payload["ok"] is False
+    assert event.payload["error_code"] == "tool_error"
+    assert event.payload.get("reason") == reason
+    assert "/home/x" not in json.dumps(event.payload)

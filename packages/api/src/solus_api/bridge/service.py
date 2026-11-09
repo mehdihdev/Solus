@@ -9,17 +9,23 @@ owned by `ToolRegistry.invoke`'s asyncio.wait_for — nothing here re-times.
 import asyncio
 import base64
 import binascii
+import io
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.command_output import STREAMING_TOOLS, current_output
-from solus_api.agent.tools.shapes import ToolCall, ToolErrorCode, ToolResult
+from solus_api.agent.screen import _SCREENSHOT_MAGIC, ScreenshotError, _image_dims
+from solus_api.agent.tools.shapes import ArtifactRef, ToolCall, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import call_display_paths
+from solus_api.bridge.allowlist import BridgeToolSpec
 from solus_api.bridge.frames import (
     ArtifactChunkData,
     ToolOutputData,
@@ -29,8 +35,13 @@ from solus_api.bridge.frames import (
     tool_call_frame,
 )
 from solus_api.bridge.registry import BridgeSession
+from solus_api.core.errors import APIError
 from solus_api.models import User
+from solus_api.services.artifacts import consume_tool_artifact
 from solus_api.services.events import emit_event
+
+if TYPE_CHECKING:
+    from solus_api.storage import ArtifactStore
 
 logger = logging.getLogger("solus.bridge.service")
 
@@ -43,6 +54,152 @@ MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 #: Whole-transfer deadline. Per-chunk stalls are covered by it too, so a
 #: companion that goes quiet mid-stream cannot pin a worker.
 ARTIFACT_FETCH_TIMEOUT_SECONDS = 300.0
+
+# --------------------------------------------------------------- tool images (SOLUSDEV-321 P5)
+#
+# R102/R124: a `returns_image` tool's output crosses into the API as this call's one uploaded
+# artifact. The bytes say what they are; the media type the companion claimed is only compared.
+
+MAX_TOOL_IMAGE_BYTES: Final = 2 * 1024 * 1024
+MAX_IMAGE_SIDE: Final = 4096
+PDF_MEDIA_TYPE: Final = "application/pdf"
+_PDF_MAGIC: Final = b"%PDF-"
+#: The decoder's name for each type the gate admits: an image is opened only as what its bytes are.
+PIL_FORMATS: Final = MappingProxyType({"image/png": "PNG", "image/jpeg": "JPEG"})
+
+
+class ImageRefusedError(ValueError):
+    """The bytes are not an image the API reads; the message names why, never the bytes."""
+
+
+@dataclass(frozen=True)
+class ToolImage:
+    """A flagged tool's checked output: the type its bytes ARE, and the bytes."""
+
+    media_type: str
+    data: bytes
+
+
+def sniffed_media_type(raw: bytes) -> str | None:
+    """The type `raw` is by its leading bytes — PNG, JPEG or PDF — or None."""
+    if raw.startswith(_PDF_MAGIC):
+        return PDF_MEDIA_TYPE
+    return next((kind for kind, magic in _SCREENSHOT_MAGIC.items() if raw.startswith(magic)), None)
+
+
+def checked_image(raw: bytes) -> tuple[str, int, int]:
+    """`(media type, width, height)` of a PNG or JPEG of at most `MAX_TOOL_IMAGE_BYTES` and
+    `MAX_IMAGE_SIDE` px a side, read from its magic and its header (`agent/screen.py`) before
+    anything decodes it, else `ImageRefusedError`. The one gate every image passes on its way to a
+    decoder (R102): a companion's, a renderer's and a rasterised page alike.
+
+    The header read takes the FIRST IHDR or SOF; a decoder keeps the LAST (P5 fix 1, I1). So the
+    bytes are also opened lazily as that type alone (headers, no pixels), and refused unless that
+    size is the header's."""
+    if len(raw) > MAX_TOOL_IMAGE_BYTES:
+        raise ImageRefusedError(f"the image exceeds {MAX_TOOL_IMAGE_BYTES} bytes")
+    media_type = sniffed_media_type(raw)
+    if media_type is None or media_type == PDF_MEDIA_TYPE:
+        raise ImageRefusedError("the bytes are not a PNG or a JPEG")
+    try:
+        width, height = _image_dims(raw, media_type)
+    except ScreenshotError:
+        raise ImageRefusedError("the image header is not a valid PNG or JPEG") from None
+    if max(width, height) > MAX_IMAGE_SIDE:
+        raise ImageRefusedError(f"the image exceeds {MAX_IMAGE_SIDE} px a side")
+    decoded = _decoded_size(raw, media_type)
+    if decoded is None:
+        raise ImageRefusedError("the bytes do not open as the image their header describes")
+    if decoded != (width, height):
+        raise ImageRefusedError(
+            f"the image's headers disagree: {width}x{height} first, "
+            f"{decoded[0]}x{decoded[1]} as decoded"
+        )
+    return media_type, width, height
+
+
+def _decoded_size(raw: bytes, media_type: str) -> tuple[int, int] | None:
+    """The size a decoder would allocate: `raw` opened lazily as `media_type` alone (its headers
+    are read, never its pixels), or None when it does not open as that."""
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(raw), formats=[PIL_FORMATS[media_type]]) as opened:
+            return opened.size
+    except (OSError, ValueError, Image.DecompressionBombError):
+        return None
+
+
+async def consume_tool_image(
+    session: AsyncSession,
+    store: "ArtifactStore",
+    *,
+    spec: BridgeToolSpec,
+    result: ToolResult,
+    project_id: uuid.UUID,
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    ttl_seconds: int,
+) -> ToolImage | None:
+    """The one artifact a `returns_image` tool uploaded for this call, consumed and checked, or
+    None (R102, R124).
+
+    Only a flagged tool's output is read, and only as this result's `artifact_ref`: the companion
+    uploads one file per call, so that is all a call can hand over. The artifact must pass every
+    anti-forgery condition of `consume_tool_artifact` (this project and team, this user, this
+    tool, this call, live, read once). Its bytes must be at most `MAX_TOOL_IMAGE_BYTES` and be
+    what the companion claimed: a PNG or JPEG through `checked_image`, or a PDF by its header (a
+    renderer rasterises it). Anything else is dropped with a log line naming the types, never the
+    bytes."""
+    name = spec.descriptor.name
+    value = result.value if result.ok else None
+    if not spec.returns_image or value is None:
+        return None
+    try:
+        ref = ArtifactRef.model_validate(value.get("artifact_ref"))
+    except ValidationError:
+        logger.warning("bridge tool %s returned no usable artifact_ref", name)
+        return None
+    if ref.size_bytes is not None and ref.size_bytes > MAX_TOOL_IMAGE_BYTES:
+        logger.warning("bridge tool %s artifact dropped: it claims %d bytes", name, ref.size_bytes)
+        return None
+    try:
+        data, claimed = await consume_tool_artifact(
+            session,
+            store,
+            project_id=project_id,
+            team_id=team_id,
+            artifact_id=ref.artifact_id,
+            requester_id=user_id,
+            source_tool=name,
+            tool_call_id=result.call_id,
+            ttl_seconds=ttl_seconds,
+        )
+    except APIError:
+        logger.warning("bridge tool %s artifact missing, expired or not this call's", name)
+        return None
+    return _checked_tool_image(name, data, claimed)
+
+
+def _checked_tool_image(tool: str, data: bytes, claimed: str) -> ToolImage | None:
+    sniffed = sniffed_media_type(data)
+    try:
+        if len(data) > MAX_TOOL_IMAGE_BYTES or sniffed is None or sniffed != claimed.lower():
+            raise ImageRefusedError("the bytes are not what the companion claimed")
+        if sniffed != PDF_MEDIA_TYPE:
+            checked_image(data)
+    except ImageRefusedError as exc:
+        # Types and a size only: the claim is bounded companion text, the bytes are never logged.
+        logger.warning(
+            "bridge tool %s image dropped (%s): claimed %.64r, bytes are %s, %d bytes",
+            tool,
+            exc,
+            claimed,
+            sniffed,
+            len(data),
+        )
+        return None
+    return ToolImage(sniffed, data)
 
 
 async def dispatch(
@@ -253,6 +410,10 @@ async def fetch_artifact(
 
     Raises `ToolException` on every failure path so callers keep the W0-04
     never-raises story; nothing here returns a partial artifact.
+
+    SOLUSDEV-321 P5 (R124): still a dormant seam. A render's export reaches the API
+    by the upload path (`consume_tool_image`); a later pull-based transport would
+    pass its bytes through the same `checked_image` gate.
     """
     fetch_id = uuid.uuid4().hex
     queue: asyncio.Queue[ArtifactChunkData] = asyncio.Queue()

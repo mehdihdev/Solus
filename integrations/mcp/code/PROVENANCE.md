@@ -42,8 +42,8 @@
 
 No `upstream/` exists, so there are no in-tree edits to log. Solus-authored files need no rows.
 
-| Date | File(s) | What & why | Author |
-| ---- | ------- | ---------- | ------ |
+| Date       | File(s)                                                                                                                                                                                                                                                       | What & why                                                                                                                                                                          | Author               |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
 | 2026-10-18 | `solus/` (new: `command_deny.py`, `command_plan.py`, `sandbox.py`, `git_guard.py`, `landlock_exec.py`, `profiles.py`, `processes.py`, `process_os.py`; changed: `plan.py`, `execute.py`, `server.py`, `roster.py`), `allowlist.yaml` (human-approved entries) | SOLUSDEV-317: sandboxed, confirmed command execution, long-running processes and environment profiles. Solus-authored (no upstream); recorded because it voids the sign-offs below. | agent (SOLUSDEV-317) |
 
 Install-time note: `bin/launch` execs the fork-private interpreter
@@ -57,9 +57,30 @@ performs LATER, on confirmation, act on the USER's workspace venv (ADR-031 amend
 
 - **Allowlist:** `./allowlist.yaml` — authoritative; per-tool `requires_confirmation` lives THERE.
   DRAFT until human-ratified at the MR (integrations/mcp/CLAUDE.md rule 2).
-- **Exposed / upstream total:** `22 / 22` — there is no upstream surface to trim; the server
-  registers exactly the twenty-two allowlisted tools (`solus/roster.py`, pinned by
+- **Exposed / upstream total:** `25 / 25` — there is no upstream surface to trim; the server
+  registers exactly the twenty-five allowlisted tools (`solus/roster.py`, pinned by
   `tests/test_code_allowlist_shape.py` and `tests/test_code_server.py`).
+- **Allowlist additions, flagged for ratification (2026-10-29, SOLUSDEV-321 P6):** `ros2_nodes`
+  and `ros2_topics` (`solus/ros2_reads.py`), two unconfirmed reads of the live ROS 2 graph. Each
+  runs ONE fixed argv (`ros2 node list --no-daemon --spin-time 2`, `ros2 topic list --no-daemon
+-t`) through the same planner, OS sandbox and executor as `exec`, with `ros2` resolved only
+  through the captured profile the call names, and only when `command_plan.program_scope` judges
+  that profile SYSTEM scope over all its search-path variables: a workspace overlay is refused
+  ("use code.exec", which keeps its card). The commit security reviews of these reads (R136,
+  R137) added Python's `PYTHONUSERBASE`, `PYTHONHOME`, `PYTHONPLATLIBDIR`, `PYTHONEXECUTABLE`,
+  `PYTHONPYCACHEPREFIX` and `__PYVENV_LAUNCHER__`, the DDS configuration files and libcrypto's
+  `OPENSSL_*` to those variables, and made any variable naming a path inside the folder count
+  (the judge serves every plan, so this only ever turns a system judgement into a workspace one).
+  The reads run from a fresh, empty, private temporary directory as their working directory —
+  never the linked folder — while resolution, environment, sandbox and the scope re-judgement
+  before spawn stay on the folder, and only once `~/.ros` exists. `--no-daemon` starts no ROS
+  daemon, and the executor kills the command's group and every descendant once it exits. Their
+  names are grammar-checked and bounded here, re-checked in the cloud (`agent/tools/ros_live.py`),
+  and only ever raise existing inferred edges. When a listing's output tail was cut at the
+  executor's tail cap, its first line is dropped: a cut tail starts inside a name, and a partial
+  name (`/arm/x` from `/robot/arm/x`) would pass the grammar. Adding tools to this allowlist is a re-review
+  trigger: the sign-offs below need re-signing against a dated `SECURITY_REVIEW.md` checklist; no
+  sign-off line is written here.
 - **Destructive tools:** `create_environment`, `install`, `run`, `test`, `git_commit`, `git_push`,
   `arduino_prepare`, `arduino_compile`, `arduino_upload`, `exec`, `process_start`, `process_stop`,
   `profile_capture`, `profile_delete` (all

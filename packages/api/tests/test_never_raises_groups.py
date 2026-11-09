@@ -23,6 +23,7 @@ from solus_api.agent.tools import (
     ToolException,
     ToolRegistry,
 )
+from solus_api.agent.tools.read_tool import bounded_read_tool
 
 NO_ARGS: dict[str, Any] = {"type": "object", "properties": {}, "additionalProperties": False}
 
@@ -115,3 +116,42 @@ async def test_an_ordinary_exception_is_unchanged() -> None:
     assert result.error is not None
     assert result.error.code is ToolErrorCode.TOOL_ERROR
     assert "boom" not in result.error.message
+
+
+# SOLUSDEV-321 P1-T4: the retrieval factory catches `Exception`, and an all-`Exception` group IS
+# one. It must let a group through untouched, or a typed failure inside it is lost.
+
+
+def _read_registry(boom: Exception | BaseException) -> ToolRegistry:
+    async def handler(_args: dict[str, Any]) -> list[Any]:
+        raise boom
+
+    registry = ToolRegistry()
+    registry.register(bounded_read_tool("read_probe", "Reads nothing.", NO_ARGS, handler))
+    return registry
+
+
+async def test_a_read_tool_keeps_a_typed_failure_wrapped_by_a_task_group() -> None:
+    wrapped = BaseExceptionGroup(
+        "transport", [ToolException("Reconnect.", code=ToolErrorCode.UNAUTHORIZED)]
+    )
+    result = await _read_registry(wrapped).invoke(ToolCall(tool="read_probe"))
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.UNAUTHORIZED
+    assert result.error.message == "Reconnect."
+
+
+async def test_a_read_tool_behind_a_group_of_ordinary_errors_leaks_nothing() -> None:
+    group = BaseExceptionGroup("transport", [OSError("connection reset"), RuntimeError("x")])
+    result = await _read_registry(group).invoke(ToolCall(tool="read_probe"))
+    assert result.error is not None
+    assert result.error.code is ToolErrorCode.TOOL_ERROR
+    assert "connection reset" not in result.error.message
+
+
+async def test_a_read_tool_never_swallows_a_cancel_or_a_group_carrying_one() -> None:
+    with pytest.raises(asyncio.CancelledError):
+        await _read_registry(asyncio.CancelledError()).invoke(ToolCall(tool="read_probe"))
+    torn_down = BaseExceptionGroup("torn down", [OSError("reset"), asyncio.CancelledError()])
+    with pytest.raises(BaseExceptionGroup):
+        await _read_registry(torn_down).invoke(ToolCall(tool="read_probe"))

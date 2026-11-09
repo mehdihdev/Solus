@@ -109,6 +109,42 @@ Do not confuse this with `billing/reconciliation.py`, which reconciles credit de
 - Alembic is in use (`packages/api/migrations/versions`). The revision id is a
   placeholder until the revision is generated.
 
+## Academic plan (SOLUSDEV-319, ADR-042)
+
+`subscriptions.plan` may be `academic` (and so may `comp_plan`; the CHECK constraints are widened). An academic row is `status = active` with no Stripe subscription, BASIC default limits and `expires_at` = verification + `SOLUS_ACADEMIC_VALIDITY_DAYS` (365). `credit_ledger.type` gains `academic_grant`.
+
+### Table `academic_verifications`
+
+One row per user (unique `user_id`, `ON DELETE CASCADE`).
+
+| Column               | Type          | Notes                                                                                                  |
+| -------------------- | ------------- | ------------------------------------------------------------------------------------------------------ |
+| `id`, `created_at`, `updated_at` | standard |                                                                                                |
+| `user_id`            | uuid FK users | unique                                                                                                 |
+| `pending_email`      | varchar(320)  | lower-cased address the last code was sent to; null once verified                                      |
+| `code_hash`          | varchar(64)   | HMAC-SHA256 of (user id, address, code); never the code itself                                         |
+| `code_expires_at`    | timestamptz   | send + 15 min                                                                                          |
+| `attempts`           | int           | wrong codes for the current code (max 5)                                                               |
+| `last_sent_at`       | timestamptz   | 60 s resend cooldown                                                                                   |
+| `send_window_start`, `send_count` | timestamptz, int | per-user hourly send cap (5)                                                       |
+| `failed_window_start`, `failed_count` | timestamptz, int | wrong codes per account per 24 h across all codes (max 10)                  |
+| `verified_email`     | varchar(320)  | partial unique index (`WHERE verified_email IS NOT NULL`): one account per address                     |
+| `verified_at`        | timestamptz   |                                                                                                        |
+| `expires_at`         | timestamptz   | academic access end; mirrors `subscriptions.expires_at` at verification                                |
+| `expiry_notified_at` | timestamptz   | set by the daily sweep the first time it sees the expiry, so the event and notification fire once      |
+
+### Table `academic_address_claims`
+
+Who holds an academic address and until when. Columns: `id`, `address_hash` (unique; HMAC-SHA256 of the canonical address with a purpose-derived key, never the address), `user_id` (FK users, `SET NULL`, indexed), `expires_at`, `created_at`, `updated_at`. It survives account deletion: an account that verifies an address whose claim has no user and has not expired inherits that `expires_at` rather than starting a new year. Any other account's unexpired claim (deleted, or moved to a paid plan) is inherited with its remaining time. The hash key is derived from the server secret (`SOLUS_SUPABASE_JWT_SECRET`); rotating that secret resets every claim and grant key once. The monthly grant's ledger idempotency key is derived from the same hash, so deleting an account and verifying the address again grants nothing more that month.
+
+### Table `academic_code_sends`
+
+Append-only send log behind the per-address hourly caps: 3 sends per account per address, and 3 distinct accounts per address (an account already sending is not blocked by later ones, so one account cannot lock the owner out). Columns: `id`, `address` (canonical, see below), `user_id` (FK users, `SET NULL`), `created_at`; index (`address`, `created_at`). Sends to one address are serialized with a transaction-scoped advisory lock on the address. The daily academic sweep deletes rows older than one day.
+
+Addresses are stored in **canonical form**: lower-cased, a plain addr-spec only (no quotes, spaces, comments or brackets), with any `+tag` removed from the local part. `ada+lab@MIT.edu` and `ada@mit.edu` are one address for the one-account rule and the send cap, and the code is sent to the canonical form.
+
+An address held by an account whose academic plan has expired is released (its `verified_email` cleared) when another account verifies it.
+
 ## Related
 
 - `docs/api/API-implementation.md` §10 — endpoints, trial expiry block, summary shape.

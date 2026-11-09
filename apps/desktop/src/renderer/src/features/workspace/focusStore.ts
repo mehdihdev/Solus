@@ -25,6 +25,9 @@ import type { FocusStatus, WidgetFocus } from './widget.contract'
 /** Mirrors the server's `MAX_DEPTH`; the route answers 422 beyond this. */
 export const MAX_FOCUS_DEPTH = 2
 
+/** How long the entities SOL looked at glow on the graph (SOLUSDEV-321 P1-T6). */
+export const HIGHLIGHT_TTL_MS = 6000
+
 export interface FocusState {
   focusedEntityId: string | null
   status: FocusStatus
@@ -35,8 +38,15 @@ export interface FocusState {
   cache: Record<string, Neighborhood>
   /** In-flight cache keys, so a double-click does not become two uncapped traversals. */
   inFlight: Record<string, Promise<void>>
+  /** Entities to glow on the graph: where SOL last looked (SOLUSDEV-321 P1-T6). Not a focus — it
+   *  selects nothing, expires by itself and is never persisted. */
+  highlightedIds: readonly string[]
 
   focus: (entityId: string, path?: readonly FocusStep[]) => Promise<void>
+  /** Glow `ids` for `ttlMs`. ONE timer clears them: a later call replaces the ids and resets it,
+   *  and no ids clears at once. Harmless where no graph is mounted (the SOL window has none). */
+  highlight: (ids: readonly string[], ttlMs: number) => void
+  clearHighlight: () => void
   setDepth: (depth: number) => void
   /** Deselect without forgetting what was fetched: the next selection in this project is a cache hit. */
   clearFocus: () => void
@@ -51,7 +61,8 @@ const INITIAL = {
   depth: 1,
   path: [] as readonly FocusStep[],
   cache: {} as Record<string, Neighborhood>,
-  inFlight: {} as Record<string, Promise<void>>
+  inFlight: {} as Record<string, Promise<void>>,
+  highlightedIds: [] as readonly string[]
 }
 
 // Keyed by PROJECT as well as entity. `clearProject` is the primary defence, but entity ids are
@@ -59,11 +70,18 @@ const INITIAL = {
 // tenant's entity names, kinds and properties to the next user straight from renderer memory,
 // with no request and no authorization check. Keying this way makes a missed reset a cache MISS
 // rather than a cross-tenant read.
+const keyPrefix = (projectId: string): string => `${projectId}:`
 const cacheKey = (projectId: string, entityId: string, depth: number): string =>
-  `${projectId}:${entityId}@${depth}`
+  `${keyPrefix(projectId)}${entityId}@${depth}`
 
 const currentProjectId = (): string | undefined => useWorkspaceStore.getState().project?.id
 let projectGeneration = 0
+// The ONE timer that ends a glow: starting a new glow, clearing it and a project reset all stop it.
+let highlightTimer: ReturnType<typeof setTimeout> | undefined
+const stopHighlightTimer = (): void => {
+  clearTimeout(highlightTimer)
+  highlightTimer = undefined
+}
 
 export const useFocusStore = create<FocusState>((set, get) => ({
   ...INITIAL,
@@ -115,16 +133,32 @@ export const useFocusStore = create<FocusState>((set, get) => ({
 
   clearFocus: () => set({ focusedEntityId: null, status: 'idle', error: null, path: [] }),
 
+  highlight: (ids, ttlMs) => {
+    if (ids.length === 0) return get().clearHighlight()
+    stopHighlightTimer()
+    set({ highlightedIds: [...ids] })
+    highlightTimer = setTimeout(() => get().clearHighlight(), ttlMs)
+  },
+
+  // No `set` when nothing glows: a no-op clear must not wake every card's subscriber.
+  clearHighlight: () => {
+    stopHighlightTimer()
+    if (get().highlightedIds.length > 0) set({ highlightedIds: [] })
+  },
+
   // Entity ids are project-scoped, so a project switch must drop the CACHE too — otherwise the
   // next project (or the next USER, after a sign-out) could render the previous one's entities
-  // straight from memory, with no request and no authorization check.
+  // straight from memory, with no request and no authorization check. A glow is ids of that
+  // project too, and its timer must not outlive it.
   clearProject: () => {
     projectGeneration += 1
+    stopHighlightTimer()
     set({ ...INITIAL, depth: get().depth })
   },
 
   reset: () => {
     projectGeneration += 1
+    stopHighlightTimer()
     set({ ...INITIAL })
   }
 }))
@@ -175,6 +209,25 @@ export function selectNeighborhood(state: FocusState): Neighborhood | null {
   const projectId = currentProjectId()
   if (!state.focusedEntityId || !projectId) return null
   return state.cache[cacheKey(projectId, state.focusedEntityId, state.depth)] ?? null
+}
+
+/** The entities to glow on the graph right now (SOLUSDEV-321 P1-T6). */
+export function selectHighlightedIds(state: FocusState): readonly string[] {
+  return state.highlightedIds
+}
+
+/** The name of an entity in any neighbourhood already fetched for the CURRENT project, or null.
+ *  A free read of the cache — never a request, and never another project's entry: the key's
+ *  project prefix is what keeps a missed reset a cache MISS rather than a cross-tenant read. */
+export function selectEntityName(state: FocusState, entityId: string): string | null {
+  const projectId = currentProjectId()
+  if (!projectId) return null
+  for (const [key, neighborhood] of Object.entries(state.cache)) {
+    if (!key.startsWith(keyPrefix(projectId))) continue
+    const entity = neighborhood.entities.find((e) => e.id === entityId)
+    if (entity) return entity.name
+  }
+  return null
 }
 
 /** The focused entity, read out of the neighbourhood rather than fetched a second time. */

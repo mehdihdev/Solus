@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 
 import pytest
 from fixtures.injection_corpus import PAYLOADS, SECRET_SHAPED_VALUE, Payload, poisoned_variables
+from solus_api.agent.expertise import Expertise
 from solus_api.agent.prompt import (
     CUSTOM_INSTRUCTION_CAP,
     DATA_CAP,
@@ -40,6 +42,7 @@ from solus_api.agent.prompt import (
     bounded_payload,
     close_token,
     contain_result,
+    conversation_nonce,
     data_block,
     new_nonce,
     resolve_tool_name,
@@ -104,9 +107,16 @@ def test_a_guessed_nonce_does_not_help() -> None:
     assert block.splitlines()[-1] == close_token(nonce)
 
 
-def test_a_nonce_is_unguessable_and_fresh_per_turn() -> None:
+def test_a_fresh_nonce_is_unguessable_and_a_conversation_nonce_is_stable() -> None:
     assert new_nonce() != new_nonce()
     assert len(new_nonce()) >= 16
+    # SOLUSDEV-321 P0-T4: every turn of ONE conversation fences with the same derived
+    # token, so the prompt prefix stays byte-stable. Containment never rested on the
+    # token being secret — see test_prefix_stability.py.
+    conversation = uuid.uuid4()
+    assert conversation_nonce(conversation) == conversation_nonce(conversation)
+    assert conversation_nonce(conversation) != conversation_nonce(uuid.uuid4())
+    assert len(conversation_nonce(conversation)) == 16
 
 
 def test_content_is_capped() -> None:
@@ -613,3 +623,97 @@ def test_guide_mode_never_proposes_execution() -> None:
     text = system_prompt(SolMode.GUIDE, action_mode=ActionMode.GUIDE)
     assert "code.exec" not in text
     assert "never execute changes" in text
+
+
+def test_build_requests_missing_routine_details_proceed_with_stated_defaults() -> None:
+    """SOLUSDEV-319: "add a resistor" names the change; a missing value or position
+    is a routine detail SOL fills with stated defaults, not a reason to stall."""
+    from solus_api.agent.modes import ActionMode
+
+    text = system_prompt(SolMode.GUIDE, action_mode=ActionMode.DO).lower()
+    assert "routine details" in text
+    assert "state the defaults" in text
+    assert "only when the goal itself is unclear" in text
+
+
+# ------------------------------------------- what a round's input is measured by (P1-T3)
+
+
+def test_flatten_counts_the_arguments_of_the_calls_the_model_made() -> None:
+    """`flatten` is the string a round's input is measured by. A Build round that writes a file
+    carries the whole file in the arguments of its tool call, so they count: per turn, its
+    text, then its calls' arguments (compact JSON), then the results it carries."""
+    from solus_api.agent.prompt import flatten
+    from solus_api.orchestration.providers import ToolOutcome, ToolUse, Turn
+
+    file_text = "line of source\n" * 2_000
+    args = {"path": "fw/arm.ino", "text": file_text}
+    turns = (
+        Turn(role="user", text="write the sketch"),
+        Turn(
+            role="assistant",
+            text="Writing it.",
+            tool_uses=(ToolUse(id="t1", name="solus_write_file", args=args),),
+        ),
+        Turn(role="user", tool_results=(ToolOutcome(id="t1", content='{"ok":true}'),)),
+    )
+
+    assert flatten(turns) == "\n".join(
+        ("write the sketch", "Writing it.", json.dumps(args, separators=(",", ":")), '{"ok":true}')
+    )
+    assert len(flatten(turns)) > len(file_text)
+    assert flatten(()) == ""
+
+
+def test_tools_text_is_the_tool_array_as_compact_json() -> None:
+    """The fixed part of a round's request, next to the system prompt: the specs a round sends,
+    as the one string token estimation measures."""
+    from solus_api.agent.prompt import tools_text
+    from solus_api.orchestration.providers import ToolSpec
+
+    spec = ToolSpec(name="read_blob", description="Reads.", input_schema={"type": "object"})
+
+    assert tools_text((spec,)) == (
+        '[{"name":"read_blob","description":"Reads.","input_schema":{"type":"object"}}]'
+    )
+    assert tools_text(()) == "[]"
+    offered = tool_specs((_DESCRIPTOR,), nonce="n")
+    assert len(tools_text(offered)) > len(_DESCRIPTOR.description)
+
+
+def test_the_register_line_follows_the_mode_note_and_only_for_a_level_that_is_not_working() -> None:
+    """SOLUSDEV-321 P6: the levels set the register in ONE Solus-authored line built from the
+    validated literals, right after the mode note, which stays first; `working` adds nothing."""
+    base = system_prompt(SolMode.GUIDE)
+    leveled = system_prompt(SolMode.GUIDE, expertise=Expertise(control="novice", software="expert"))
+    line = (
+        "By domain: explain fundamentals and define terms in control (novice); "
+        "be terse and skip basics in software (expert)."
+    )
+    assert line in leveled and line not in base
+    assert leveled.index("The person you are helping") < leveled.index(line)
+    assert leveled.index(line) < leveled.index("Current action mode")
+    assert system_prompt(SolMode.GUIDE, expertise=Expertise()) == base
+    assert system_prompt(SolMode.GUIDE, expertise=None) == base
+
+
+def test_build_asks_for_one_reasoning_block_before_a_proposal_in_either_register() -> None:
+    """SOLUSDEV-321 P7: ONE Solus-authored sentence, in Build alone, asks for the `<reasoning>`
+    JSON block before a proposal. Guide and Expert carry the same sentence (the register differs,
+    the shape does not); it stands outside every fence, after the action-mode line, and it is a
+    constant, so the system prompt stays byte-stable across a conversation's turns (P0-T4)."""
+    from solus_api.agent.modes import ActionMode
+    from solus_api.agent.prompt import REASONING_NOTE
+
+    assert REASONING_NOTE.endswith(".") and ". " not in REASONING_NOTE  # one sentence
+    for key in ('"considered"', '"ruled_out"', '"what"', '"why"', '"proposing"'):
+        assert key in REASONING_NOTE, key
+    for mode in (SolMode.GUIDE, SolMode.EXPERT):
+        build = system_prompt(mode, "Prefer metric.", action_mode=ActionMode.DO, nonce="n0")
+        assert build.count(REASONING_NOTE) == 1
+        # After the action-mode line, before the first fenced block (the preference's).
+        note = build.index(REASONING_NOTE)
+        assert build.index("Current action mode: Build") < note < build.index("<<<SOLUS-DATA n0 ")
+        again = system_prompt(mode, "Prefer metric.", action_mode=ActionMode.DO, nonce="n0")
+        assert build == again
+        assert "<reasoning>" not in system_prompt(mode, action_mode=ActionMode.GUIDE)

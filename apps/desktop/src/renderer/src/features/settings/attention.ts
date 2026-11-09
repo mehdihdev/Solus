@@ -4,12 +4,16 @@
 import type { SolState } from '../../../../main/sol-window/solWindow'
 import type { Connection, Subscription } from '../../lib/api/resources'
 import { trialState } from './billingFormat'
+import type { DriveStatus } from '../../lib/driveBridge'
+import { driveBlocked, driveNeedsApproval, missingGrants, type DriveGrant } from './driveCopy'
 
 /** A trial this close to its end earns a callout. */
 export const TRIAL_WARN_DAYS = 14
 
 export type AttentionItem =
   | { kind: 'capture'; message: string; canOpenSettings: boolean }
+  | { kind: 'drive_approval' }
+  | { kind: 'drive'; missing: readonly DriveGrant[] }
   | { kind: 'trial'; days: number; ended: boolean }
   | { kind: 'reconnect'; connectionId: string; provider: string; login: string | null }
 
@@ -17,6 +21,8 @@ export interface AttentionInput {
   sol: SolState | null
   subscription: Subscription | null
   connections: readonly Connection[]
+  /** SOLUSDEV-319: "SOL can use your mouse and keyboard"; absent outside Electron. */
+  drive?: DriveStatus | null
   now?: number
 }
 
@@ -26,6 +32,15 @@ function captureItem(sol: SolState | null): AttentionItem[] {
   return [
     { kind: 'capture', message: sol.capture.message, canOpenSettings: !!sol.capture.settingsUrl }
   ]
+}
+
+/** Login Items approval comes first: the agent must run before it can be granted. */
+function driveItems(drive: DriveStatus | null | undefined): AttentionItem[] {
+  if (!drive) return []
+  const items: AttentionItem[] = []
+  if (driveNeedsApproval(drive)) items.push({ kind: 'drive_approval' })
+  if (driveBlocked(drive)) items.push({ kind: 'drive', missing: missingGrants(drive.trust) })
+  return items
 }
 
 function trialItem(subscription: Subscription | null, now: number): AttentionItem[] {
@@ -54,6 +69,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   const now = input.now ?? Date.now()
   return [
     ...captureItem(input.sol),
+    ...driveItems(input.drive),
     ...trialItem(input.subscription, now),
     ...reconnectItems(input.connections)
   ]

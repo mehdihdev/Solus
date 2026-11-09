@@ -10,7 +10,8 @@ streamed blake2b-128 (null over MAX_HASH_BYTES), and folds
 `joined-path:hash-or-size\n` lines into a blake2b-128 digest. Both tools
 share `_collect()` so the cloud compares like with like. `scan_folder` also
 parses the walked dependency files into `dependencies` (deps.py —
-docs/api/code-environment.md §3).
+docs/api/code-environment.md §3) and ships the bounded texts of the folder's
+ROS packages as `ros` (ros.py, SOLUSDEV-321 P6), whose hashes both digests fold.
 
 Wire shape: a file is `{parts, size, hash, tool}` — `parts` is the relative
 path SPLIT into segments and `hash` is 32 hex chars, because the cloud's
@@ -31,6 +32,7 @@ from .arduino import collect_sketches
 from .deps import collect_dependencies
 from .detect import tools_installed
 from .gitremote import GitInfo, git_info
+from .ros import collect_ros_packages
 from .toolmap import (
     HASH_CHUNK_BYTES,
     MAX_FILES,
@@ -108,13 +110,22 @@ def _entry(rel: str, absolute: Path) -> FileEntry | None:
     }
 
 
-def compute_digest(files: list[FileEntry], git: GitInfo | None = None) -> str:
+def compute_digest(
+    files: list[FileEntry], git: GitInfo | None = None, ros: list[dict[str, Any]] | None = None
+) -> str:
+    """Files, then git identity, then (SOLUSDEV-321 P6) one `ros:<path>:<hash>` line per shipped
+    ROS text: a launch file that is no tool file still moves the digest. A folder with no ROS
+    package keeps the digest it always had."""
     digest = hashlib.blake2b(digest_size=16)
     for entry in files:
         joined = "/".join(entry["parts"])
         digest.update(f"{joined}:{entry['hash'] or entry['size']}\n".encode())
     if git is not None:
         digest.update(json.dumps(git, sort_keys=True, separators=(",", ":")).encode())
+    for package in ros or []:
+        for item in [package["manifest"], *package["files"]]:
+            text = hashlib.blake2b(item["text"].encode(), digest_size=16).hexdigest()
+            digest.update(f"ros:{'/'.join(item['parts'])}:{text}\n".encode())
     return digest.hexdigest()
 
 
@@ -156,22 +167,25 @@ def scan_folder(root: Path, *, tools: dict[str, bool] | None = None) -> dict[str
         root, sorted([entry["parts"] for entry in files] + manifests)
     )
     sketches = [entry["parts"] for entry in files if entry["tool"] == "arduino"]
+    ros = collect_ros_packages(root, manifests)
     return {
         "schema_version": SCHEMA_VERSION,
         "root_name": root.name,
         "git": git,
         "files": files,
-        "digest": compute_digest(files, git),
+        "digest": compute_digest(files, git, ros),
         "truncated": truncated,
         "tools_installed": dict(tools) if tools is not None else dict(tools_installed()),
         "dependencies": dependencies,
         "truncated_dependencies": truncated_dependencies,
         "arduino": collect_sketches(root, sketches),
         "truncated_arduino": len(sketches) > MAX_SKETCHES,
+        "ros": ros,
     }
 
 
 def folder_digest(root: Path) -> dict[str, Any]:
-    """`{digest, truncated}` — the same digest `scan_folder` reports."""
-    files, _, truncated = _collect(root)
-    return {"digest": compute_digest(files, git_info(root)), "truncated": truncated}
+    """`{digest, truncated}` — the same digest `scan_folder` reports, ROS texts included."""
+    files, manifests, truncated = _collect(root)
+    ros = collect_ros_packages(root, manifests)
+    return {"digest": compute_digest(files, git_info(root), ros), "truncated": truncated}

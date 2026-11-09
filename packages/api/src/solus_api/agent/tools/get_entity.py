@@ -56,6 +56,9 @@ def _serialize(entity: GraphEntity) -> dict[str, Any]:
     """A curated, JSON-native view for the model — deliberately omits the embedding
     (a 1536-float vector is noise in the reasoning context, not signal; exactly the
     kind of bulk data the contract keeps off the reasoning path)."""
+    # local: neighborhood → agent.interfaces → agent.tools, which imports this module
+    from solus_api.graph.neighborhood import model_facing_attrs
+
     canonical = entity.canonical_part_id
     return {
         "id": str(entity.id),
@@ -66,7 +69,7 @@ def _serialize(entity: GraphEntity) -> dict[str, Any]:
         "canonical_part_id": str(canonical) if canonical is not None else None,
         "source_connector": entity.source_connector,
         "external_ref": entity.external_ref,
-        "attrs": entity.attrs,
+        "attrs": model_facing_attrs(entity.kind, entity.attrs),  # M38: no machine's commands
         "modality_hints": entity.modality_hints,
     }
 

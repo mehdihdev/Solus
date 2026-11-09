@@ -128,16 +128,27 @@ class _FakeAnthropicRecorder:
         self.stream_kwargs: dict[str, object] = {}
 
 
-def _fake_anthropic_cls(recorder: _FakeAnthropicRecorder) -> type:
+def _fake_anthropic_cls(
+    recorder: _FakeAnthropicRecorder,
+    usage: object | None = None,
+    *,
+    stop_reason: str = "end_turn",
+    stop_details: object | None = None,
+) -> type:
     class FakeUsage:
         input_tokens = 7
         output_tokens = 9
 
+    final_usage = FakeUsage() if usage is None else usage
+    final_stop_reason, final_stop_details = stop_reason, stop_details
+
     class FakeFinalMessage:
-        usage = FakeUsage()
+        usage = final_usage
         # Real messages always carry content blocks; the adapter now scans them
         # for tool_use (SOLUS-RUN-01). Empty = a text-only reply.
         content: list[object] = []
+        stop_reason = final_stop_reason
+        stop_details = final_stop_details
 
     class FakeStreamManager:
         async def __aenter__(self) -> "FakeStreamManager":
@@ -235,11 +246,108 @@ async def test_a_conversation_sends_system_and_tools(monkeypatch: pytest.MonkeyP
     async for _ in adapter.stream("some-model", "ignored", max_tokens=8, conversation=conversation):
         pass
 
-    assert recorder.stream_kwargs["system"] == "You are SOL."
+    # SOLUSDEV-321 P0-T4: a block list, so the system prompt can carry a cache breakpoint.
+    assert recorder.stream_kwargs["system"] == [
+        {"type": "text", "text": "You are SOL.", "cache_control": {"type": "ephemeral"}}
+    ]
     assert recorder.stream_kwargs["messages"] == [{"role": "user", "content": "what changed?"}]
     tools = recorder.stream_kwargs["tools"]
     assert isinstance(tools, list)
     assert tools[0]["name"] == "get_entity"
+    assert "tool_choice" not in recorder.stream_kwargs  # "auto" is the provider's default
+
+
+async def test_anthropic_marks_cache_breakpoints_and_reports_cache_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-321 P0-T4: `cache_control` rides the system block and the LAST content
+    block of each flagged turn (a bare-string turn becomes one text block for it) —
+    three breakpoints, under Anthropic's four. The synthesis round's `tool_choice`
+    reaches the wire, and cache reads come back as `tokens_cached_in` inside a
+    `tokens_in` that counts the whole prompt: Anthropic's `input_tokens` leaves cache
+    reads and cache writes out."""
+    from solus_api.orchestration.providers import ToolConversation, ToolSpec, ToolUse
+
+    recorder = _FakeAnthropicRecorder()
+    usage = SimpleNamespace(
+        input_tokens=7, output_tokens=9, cache_read_input_tokens=100, cache_creation_input_tokens=20
+    )
+    monkeypatch.setattr("anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder, usage))
+    adapter = await _keyed_anthropic_adapter()
+    conversation = ToolConversation(
+        system="You are SOL.",
+        messages=(
+            Turn(role="user", text="the stable prefix", cache_breakpoint=True),
+            Turn(role="user", text="the history"),
+            Turn(role="assistant", tool_uses=(ToolUse(id="tu_1", name="get_entity"),)),
+            Turn(
+                role="user",
+                tool_results=(
+                    ToolOutcome(id="tu_1", content="{}"),
+                    ToolOutcome(id="tu_2", content="{}"),
+                ),
+                cache_breakpoint=True,
+            ),
+        ),
+        tools=(ToolSpec(name="get_entity", description="d", input_schema={"type": "object"}),),
+        tool_choice="none",
+    )
+
+    events = [
+        event
+        async for event in adapter.stream(
+            "some-model", "q", max_tokens=8, conversation=conversation
+        )
+    ]
+
+    ephemeral = {"type": "ephemeral"}
+    sent = recorder.stream_kwargs
+    assert sent["system"] == [{"type": "text", "text": "You are SOL.", "cache_control": ephemeral}]
+    messages = sent["messages"]
+    assert isinstance(messages, list)
+    prefix, history, _, results = messages
+    assert prefix["content"] == [
+        {"type": "text", "text": "the stable prefix", "cache_control": ephemeral}
+    ]
+    assert history["content"] == "the history"  # an unflagged turn is unchanged
+    assert [block.get("cache_control") for block in results["content"]] == [None, ephemeral]
+    assert str(sent).count("cache_control") == 3
+    assert sent["tool_choice"] == {"type": "none"}
+    assert events[-1] == Usage(tokens_in=127, tokens_out=9, tokens_cached_in=100)
+    # A flagged turn carrying a screenshot marks its text — the last block.
+    [shot] = anthropic_messages(
+        [Turn(role="user", text="look", images=(_image(),), cache_breakpoint=True)]
+    )
+    content = shot["content"]
+    assert isinstance(content, list)
+    assert [block.get("cache_control") for block in content] == [None, ephemeral]
+
+
+def test_openai_maps_tool_choice_none_and_leaves_caching_to_the_provider() -> None:
+    """OpenAI caches long prefixes by itself: a breakpoint flag changes nothing on its
+    wire, while the synthesis round's `tool_choice` does reach it."""
+    from solus_api.orchestration.providers import ToolConversation, ToolSpec, openai_request
+
+    conversation = ToolConversation(
+        system="s",
+        messages=(Turn(role="user", text="q", cache_breakpoint=True),),
+        tools=(ToolSpec(name="t", description="d", input_schema={"type": "object"}),),
+        tool_choice="none",
+    )
+    synthesis, usual = (
+        openai_request(
+            "m",
+            "q",
+            max_tokens=8,
+            images=None,
+            conversation=conversation.model_copy(update={"tool_choice": choice}),
+            reasoning_effort=None,
+        )
+        for choice in ("none", "auto")
+    )
+    assert synthesis["tool_choice"] == "none"
+    assert synthesis["input"] == [{"role": "user", "content": "q"}]
+    assert "tool_choice" not in usual
 
 
 def test_transient_error_is_a_provider_error() -> None:
@@ -601,3 +709,97 @@ async def test_gemini_sdk_transport_failure_sends_once(
             pass
     assert calls == 1
     assert transport.is_closed
+
+
+# --- Refusals (SOLUSDEV-319: a refused Fable turn became a silent, billed, empty answer) ---
+
+
+_REFUSAL_TEXT = "This request triggered restrictions on violative cyber content and was blocked"
+
+
+async def test_anthropic_refusal_raises_with_the_category_and_reports_no_usage(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """`stop_reason: refusal` is not an answer: the adapter raises a typed error carrying only
+    the category, never Anthropic's explanation, and yields no Usage, so nothing is debited.
+    The tokens Solus was billed for still reach the operator log."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    details = SimpleNamespace(type="refusal", category="cyber", explanation=_REFUSAL_TEXT)
+    fake = _fake_anthropic_cls(recorder, stop_reason="refusal", stop_details=details)
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+    seen: list[object] = []
+    caplog.set_level(logging.WARNING, logger="solus.orchestration.providers")
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        async for event in adapter.stream("claude-x", "q", max_tokens=8):
+            seen.append(event)
+
+    assert raised.value.category == "cyber"
+    # The billed tokens ride on the error, so the gateway can debit a refusal that streamed.
+    assert raised.value.usage == Usage(tokens_in=7, tokens_out=9)
+    assert isinstance(raised.value, ProviderError)
+    assert not isinstance(raised.value, ProviderTransientError)  # never retried as-is
+    assert _REFUSAL_TEXT not in str(raised.value)
+    assert not any(isinstance(event, Usage) for event in seen)
+    assert recorder.events[-1] == "client_exit"  # the stream is still closed cleanly
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "claude-x" in logged and "cyber" in logged and "tokens_in=7" in logged
+    assert _REFUSAL_TEXT not in logged
+
+
+async def test_a_refusal_with_malformed_usage_is_still_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Provider output is untrusted: a broken usage block must not turn the refusal into a
+    generic failure (it would then skip the refusal cap and the re-route)."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    broken = SimpleNamespace(input_tokens=None, output_tokens=None)
+    fake = _fake_anthropic_cls(recorder, broken, stop_reason="refusal")
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.usage is None
+
+
+async def test_anthropic_refusal_without_details_has_no_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    monkeypatch.setattr(
+        "anthropic.AsyncAnthropic", _fake_anthropic_cls(recorder, stop_reason="refusal")
+    )
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.category is None
+
+
+@pytest.mark.parametrize("category", ["", "x" * 65, "cy ber", 7])
+async def test_an_untrusted_refusal_category_is_dropped(
+    monkeypatch: pytest.MonkeyPatch, category: object
+) -> None:
+    """Provider output is untrusted: only a short snake_case word is kept as the category."""
+    from solus_api.orchestration.providers import ProviderRefusalError
+
+    recorder = _FakeAnthropicRecorder()
+    details = SimpleNamespace(category=category)
+    fake = _fake_anthropic_cls(recorder, stop_reason="refusal", stop_details=details)
+    monkeypatch.setattr("anthropic.AsyncAnthropic", fake)
+    adapter = await _keyed_anthropic_adapter()
+
+    with pytest.raises(ProviderRefusalError) as raised:
+        [event async for event in adapter.stream("claude-x", "q", max_tokens=8)]
+
+    assert raised.value.category is None

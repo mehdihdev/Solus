@@ -24,26 +24,75 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value ? value : null
 }
 
-/** `{rule_id, severity, message}`-ish rows when the shape fits; otherwise the JSON. */
-function CheckerResults({ value }: { value: unknown }): React.JSX.Element {
-  const rows = Array.isArray(value)
-    ? value.flatMap((item) => {
-        if (typeof item !== 'object' || item === null) return []
-        const { rule_id, severity, message } = item as Record<string, unknown>
-        return typeof rule_id === 'string' ? [{ rule_id, severity, message }] : []
-      })
-    : []
-  if (!Array.isArray(value) || rows.length !== value.length)
-    return <pre className="node-sidebar-mono">{JSON.stringify(value, null, 2)}</pre>
+/** One `checker_results` item (docs/api/relations.md §2); `status`/`at` are absent on items
+ *  written before statuses existed, which render as before (`rule_id · severity`). */
+interface CheckerRow {
+  rule_id: string
+  status: string | null
+  severity: string | null
+  message: string | null
+  at: string | null
+}
+
+/** Only a failure is a problem: `unknown_input` means a fact was missing, not a fault. */
+const STATUS_WORDS: Record<string, string> = {
+  fail: 'failed',
+  pass: 'passed',
+  inconclusive: 'inconclusive',
+  unknown_input: 'could not check'
+}
+
+function toRow(item: unknown): CheckerRow | [] {
+  if (typeof item !== 'object' || item === null) return []
+  const { rule_id, status, severity, message, at } = item as Record<string, unknown>
+  if (typeof rule_id !== 'string') return []
+  return {
+    rule_id,
+    status: text(status),
+    severity: text(severity),
+    message: text(message),
+    at: text(at)
+  }
+}
+
+function rowLabel(row: CheckerRow): string {
+  const word = row.status ? STATUS_WORDS[row.status] : undefined
+  const severity = word === undefined || row.status === 'fail' ? row.severity : null
+  return [row.rule_id, word, severity].filter(Boolean).join(' · ')
+}
+
+function CheckerRows({ rows }: { rows: CheckerRow[] }): React.JSX.Element {
   return (
     <ul>
       {rows.map((row, index) => (
         <li key={index}>
-          <span>{[row.rule_id, text(row.severity)].filter(Boolean).join(' · ')}</span>
-          {text(row.message) && <p>{text(row.message)}</p>}
+          <span>{rowLabel(row)}</span>
+          {row.message && <p>{row.message}</p>}
+          {row.at && (
+            <time dateTime={row.at}>{`${row.at.slice(0, 16).replace('T', ' ')} UTC`}</time>
+          )}
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Checker rows when the shape fits, passes folded under one summary; otherwise the JSON. */
+function CheckerResults({ value }: { value: unknown }): React.JSX.Element {
+  const rows = Array.isArray(value) ? value.flatMap(toRow) : []
+  if (!Array.isArray(value) || rows.length !== value.length)
+    return <pre className="node-sidebar-mono">{JSON.stringify(value, null, 2)}</pre>
+  const passed = rows.filter((row) => row.status === 'pass')
+  return (
+    <>
+      <CheckerRows rows={rows.filter((row) => row.status !== 'pass')} />
+      {passed.length > 0 && (
+        <details>
+          <summary>{`${passed.length} passed`}</summary>
+          <CheckerRows rows={passed} />
+        </details>
+      )}
+    </>
   )
 }
 

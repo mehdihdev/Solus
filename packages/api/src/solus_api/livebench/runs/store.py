@@ -37,8 +37,39 @@ async def record(
     return entity
 
 
-def summary(entity: GraphEntity) -> RunSummary:
-    return RunSummary.model_validate(entity.attrs["summary"])
+class RunRead(RunSummary):
+    """A run as the routes and the retrieval tool read it: its summary, and whether it is its
+    robot's baseline. The flag is the record's own attr (`POST …/baseline`), never part of a
+    saved summary (`save` and `new_record` leave it out)."""
+
+    baseline: bool = False
+
+
+def summary(entity: GraphEntity) -> RunRead:
+    return RunRead.model_validate(
+        {**entity.attrs["summary"], "baseline": entity.attrs.get("baseline") is True}
+    )
+
+
+async def baseline_for(session: AsyncSession, project_id: UUID, robot_id: UUID) -> RunRead | None:
+    """The robot's baseline run (`POST …/baseline` keeps one per robot): the marked live record of
+    THIS project whose summary names the robot — the newest, should two ever be marked. None
+    without one. The window evaluator loads its manifest for the learned bounds (SOLUSDEV-321
+    P2-T3, M56)."""
+    entity = await session.scalar(
+        select(GraphEntity)
+        .where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == RUN_KIND,
+            GraphEntity.origin == "system",
+            GraphEntity.deleted_at.is_(None),
+            GraphEntity.attrs["baseline"].astext == "true",
+            GraphEntity.attrs["summary"]["robot_id"].astext == str(robot_id),
+        )
+        .order_by(GraphEntity.updated_at.desc())
+        .limit(1)
+    )
+    return summary(entity) if entity is not None else None
 
 
 async def save(
@@ -95,7 +126,7 @@ async def save(
         )
         info.artifact_id = artifact.id
     entity.attrs = {
-        "summary": info.model_dump(mode="json"),
+        "summary": info.model_dump(mode="json", exclude={"baseline"}),
         "checkpoint_id": str(artifact.id),
         "created_by": str(user_id),
     }
@@ -157,7 +188,10 @@ def new_record(project_id: UUID, info: RunSummary, user_id: UUID) -> GraphEntity
         domain=Domain.PROJECT,
         origin="system",
         name=info.name,
-        attrs={"summary": info.model_dump(mode="json"), "created_by": str(user_id)},
+        attrs={
+            "summary": info.model_dump(mode="json", exclude={"baseline"}),
+            "created_by": str(user_id),
+        },
     )
 
 

@@ -12,6 +12,9 @@ READ_TOOLS: frozenset[str] = frozenset(
         "arduino_probe",
         "process_status",
         "profile_list",
+        # SOLUSDEV-321 P6: ungated only under a SYSTEM profile, judged by the fork itself.
+        "ros2_nodes",
+        "ros2_topics",
     }
 )
 GATED_TOOLS: frozenset[str] = frozenset(

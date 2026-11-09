@@ -73,7 +73,8 @@ const summaryCheck = shape({
   ended_at: nullable(timestamp),
   packet_count: count(10000),
   drop_count: count(),
-  artifact_id: nullable(uuid)
+  artifact_id: nullable(uuid),
+  baseline: optional(oneOf(true, false))
 })
 const dictionary =
   (max: number, keyCheck: Check, valueCheck: Check, min = 0): Check =>
@@ -124,6 +125,18 @@ const snapshot = shape({
   revision: optional(nullable(text(512))),
   data: optional(nullable(text(65536, 0)))
 })
+const severity = oneOf('info', 'warning', 'critical')
+const positive: Check = (value) => count(1e9)(value) && (value as number) >= 1
+/** `RunManifest.findings` (SOLUSDEV-321 P2-T7): at most 64, each bounded as the server's model. */
+const recordedFinding = shape({
+  finding_id: uuid,
+  rule_id: text(128),
+  subjects: array(64, uuid),
+  severity,
+  count: positive,
+  first_seen: timestamp,
+  last_seen: timestamp
+})
 const manifestShape = shape({
   schema_version: oneOf(1),
   robot_id: uuid,
@@ -131,7 +144,17 @@ const manifestShape = shape({
   packets: array(10000, packet),
   sensors: array(10000, sensor),
   parts: array(256, part),
-  snapshots: array(256, snapshot)
+  snapshots: array(256, snapshot),
+  findings: optional(array(64, recordedFinding))
+})
+const occurrence = nullable(shape({ finding_id: uuid, count: positive }))
+const findingDelta = shape({
+  rule_id: text(128),
+  subjects: array(64, uuid),
+  change: oneOf('new', 'cleared', 'persisting'),
+  severity,
+  baseline: occurrence,
+  candidate: occurrence
 })
 const manifest: Check = (value) => {
   if (!bounded(value) || !manifestShape(value) || !object(value)) return false
@@ -202,6 +225,37 @@ const configChange: Check = (value) => {
         )
   return check(value.before) && check(value.after)
 }
+/** A part's residual against the twin's motion (`analysis.residual_attribution`). */
+const residualParameter = oneOf('mass', 'limit', 'sensor_offset', 'contact')
+const residual = shape({
+  status: oneOf('attributed', 'unattributed', 'consistent', 'insufficient'),
+  parameter: nullable(residualParameter),
+  reason: optional(text(2048)),
+  explained: optional(dictionary(4, residualParameter, finite)),
+  estimate: optional(
+    dictionary(
+      4,
+      residualParameter,
+      dictionary(2, text(16), (value) => finite(value) || text(16)(value))
+    )
+  ),
+  residual_rms: optional(finite),
+  samples: optional(count(256))
+})
+const passed = nullable(oneOf(true, false))
+/** Compare's reading of a real run against its routine's twin (docs/api/bench-runs.md). */
+const simControl = shape({
+  sim_result_id: uuid,
+  real_passed: passed,
+  sim_passed: passed,
+  task_passed: passed,
+  sim_control: nullable(
+    oneOf('electrical_or_mechanical', 'software', 'policy_or_perception', 'consistent')
+  ),
+  reason: nullable(text(2048)),
+  simulation_gap: oneOf(true, false),
+  residuals: dictionary(256, uuid, residual)
+})
 const comparisonCheck = shape({
   config_changes: array(1280, configChange),
   source_snapshots_changed: oneOf(true, false),
@@ -219,7 +273,10 @@ const comparisonCheck = shape({
     256,
     shape({ entity_id: uuid, explanation: text(2048), before_limit: finite, after_limit: finite })
   ),
-  insufficient: array(8192, shape({ device_id: text(512), signal: text(128), reason: text(2048) }))
+  insufficient: array(8192, shape({ device_id: text(512), signal: text(128), reason: text(2048) })),
+  finding_deltas: optional(array(128, findingDelta)),
+  expected_source: optional(oneOf('baseline_run', 'definition', 'sim')),
+  evidence: optional(simControl)
 })
 /** Bound traversal and decoded text before nested validation. Never stringify an
  * unvalidated graph or allocate a second whole response to measure its size. */

@@ -24,6 +24,12 @@ import {
   type BillingSummary,
   type PortalFlow
 } from '../../lib/api/resources.billing'
+import {
+  getAcademicStatus,
+  sendAcademicCode,
+  verifyAcademicCode,
+  type AcademicStatus
+} from '../../lib/api/resources.academic'
 import { billingBridge, type CheckoutStatus } from './billingBridge'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
@@ -41,6 +47,12 @@ export interface BillingData {
   credits: number | null
   unlimited: boolean
   packs: CreditPack[]
+  /** GET /billing/academic; null when it failed (the Academic card degrades). */
+  academic: AcademicStatus | null
+  /** Email an academic verification code (ADR-042); rejects with the ApiError. */
+  sendAcademic: (email: string) => Promise<AcademicStatus>
+  /** Check the code; on success the plan is Academic (call `refresh` after). */
+  verifyAcademic: (code: string) => Promise<AcademicStatus>
   /** True while a checkout/portal action is in flight (disables the controls). */
   busy: boolean
   /** A user-facing message when an action can't proceed (e.g. billing unconfigured). */
@@ -119,6 +131,7 @@ interface Snapshot {
   credits: number | null
   unlimited: boolean
   packs: CreditPack[]
+  academic: AcademicStatus | null
 }
 
 /** Resolve to `fallback` instead of throwing: every read except the screen's
@@ -134,18 +147,20 @@ async function orElse<T>(read: Promise<T>, fallback: T): Promise<T> {
 /** Load subscription (404 → null), summary (failure → null = degraded), credit
  *  balance, and packs, concurrently. */
 async function fetchSnapshot(): Promise<Snapshot> {
-  const [subscription, summary, balance, packs] = await Promise.all([
+  const [subscription, summary, balance, packs, academic] = await Promise.all([
     orElse(getBillingSubscription(), null),
     orElse(getBillingSummary(), null),
     orElse(getCredits(), null),
-    orElse(getCreditPacks(), [])
+    orElse(getCreditPacks(), []),
+    orElse(getAcademicStatus(), null)
   ])
   return {
     subscription,
     summary,
     credits: balance ? balance.balance : null,
     unlimited: balance?.unlimited === true,
-    packs
+    packs,
+    academic
   }
 }
 
@@ -158,6 +173,7 @@ export function useBillingData(): BillingData {
   const [credits, setCredits] = useState<number | null>(null)
   const [unlimited, setUnlimited] = useState(false)
   const [packs, setPacks] = useState<CreditPack[]>([])
+  const [academic, setAcademic] = useState<AcademicStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -174,6 +190,7 @@ export function useBillingData(): BillingData {
     setAsOf(Date.now())
     if (snap.credits !== null) setCredits(snap.credits)
     setPacks(snap.packs)
+    setAcademic(snap.academic)
     setStatus('ready')
   }, [fetchEnabled])
 
@@ -228,6 +245,9 @@ export function useBillingData(): BillingData {
     credits,
     unlimited,
     packs,
+    academic,
+    sendAcademic: (email) => sendAcademicCode(email),
+    verifyAcademic: (code) => verifyAcademicCode(code),
     busy,
     notice,
     clearNotice: () => setNotice(null),

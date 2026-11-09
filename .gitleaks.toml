@@ -53,6 +53,23 @@ regexes = [
   # vs 496/201), and every merge of main re-attributes it to the merge commit
   # (SOLUSDEV-320's 69223577 was the first). A value rule holds for both.
   '''aB3dE5fG7hJ9kL1mN2pQ4rS6tU8vW0xY2zA4b''',
+  # SOLUSDEV-321: the made-up `--token=` value in packages/api/tests/
+  # test_machine_tools.py, the fixture the command redactor is proven to mask.
+  # A fingerprint pinned it once (c01ef0cf) and the pin's own comment, which
+  # quoted the value, tripped the next scan — a value rule covers both lines.
+  '''--token=abc123def456''',
+  # SOLUSDEV-321: two values in the recorded P2 acceptance output
+  # (docs/qa/acceptance/P2-acceptance-live.md): a credit-ledger usage row's
+  # idempotency key (the model call's id) and a finding dedupe digest.
+  # Identifiers, never credentials.
+  '''"key": "b3254681-110f-4858-880b-2cff960971f9"''',
+  '''d2e0a7e1651e24d272cbbb632ef52f9ef5da2a45''',
+  # SOLUSDEV-319: the made-up `token=` value in packages/api/tests/
+  # test_drive_step_tool.py, the fixture proving a drive step's summary is
+  # redacted before it is logged. It entered the branch at one line and every
+  # merge of main moved it (341 → 378 → 384), re-attributing the hit to each
+  # merge commit — a value rule covers all of them.
+  '''token=abcdef0123456789abcdef''',
 ]
 
 # You can also pin the exact findings by fingerprint (most surgical):

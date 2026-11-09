@@ -104,6 +104,8 @@ class InviteStatus(enum.StrEnum):
     PENDING = "pending"
     ACCEPTED = "accepted"
     REVOKED = "revoked"
+    # SOLUSDEV-319: the invitee turned it down from Home's "Invitations" list.
+    DECLINED = "declined"
 
 
 class InstallationStatus(enum.StrEnum):
@@ -116,6 +118,8 @@ class PlanType(enum.StrEnum):
     BASIC = "basic"
     PRO = "pro"
     ENTERPRISE = "enterprise"
+    # ADR-042: free, unlocked by a proven academic email; BASIC limits, monthly credits.
+    ACADEMIC = "academic"
 
 
 class SubscriptionStatus(enum.StrEnum):
@@ -132,6 +136,8 @@ class CreditTxnType(enum.StrEnum):
     # One-time starting credits when a paid plan first activates (ADR-023/024,
     # amended 2026-08-08). Distinct from PURCHASE for ledger auditability.
     PLAN_GRANT = "plan_grant"
+    # ADR-042: the Academic plan's monthly grant (idempotent per user and month).
+    ACADEMIC_GRANT = "academic_grant"
     REFUND = "refund"
     ADJUSTMENT = "adjustment"
 
@@ -155,6 +161,8 @@ class NotificationType(enum.StrEnum):
     MEMBER_LEFT = "member.left"
     # SOLUSDEV-216 (ADR-039): a member was removed from the linked GitHub organization.
     GITHUB_ORG_MEMBER_REMOVED = "github_org.member_removed"
+    # SOLUSDEV-319: the invitee declined an invite the recipient sent.
+    INVITE_DECLINED = "invite.declined"
 
 
 class Domain(enum.StrEnum):
@@ -606,6 +614,81 @@ class Subscription(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     )
 
 
+class AcademicVerification(UuidPkMixin, TimestampMixin, Base):
+    """Academic-email proof for the Academic plan (ADR-042, SOLUSDEV-319). One row per
+    user. Only an HMAC of the emailed code is stored. `verified_email` is unique across
+    accounts so one address backs one account; an expired holder is released on reuse.
+    See docs/schemas/subscriptions.md §Academic plan."""
+
+    __tablename__ = "academic_verifications"
+    __table_args__ = (
+        Index(
+            "uq_academic_verifications_verified_email",
+            "verified_email",
+            unique=True,
+            postgresql_where=text("verified_email IS NOT NULL"),
+        ),
+        Index("ix_academic_verifications_pending_email", "pending_email"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    pending_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    code_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    send_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    send_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Wrong codes in the current 24 h window, across every code (security review H1).
+    failed_window_start: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    verified_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    expiry_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+
+
+class AcademicAddressClaim(UuidPkMixin, TimestampMixin, Base):
+    """Who holds an academic address, and until when (ADR-042, security review H2).
+
+    Keyed by an HMAC of the canonical address, never the address itself, and it outlives
+    account deletion (`user_id` SET NULL): an account that verifies an address a deleted
+    account held inherits the original end date instead of starting a fresh year."""
+
+    __tablename__ = "academic_address_claims"
+
+    address_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class AcademicCodeSend(UuidPkMixin, Base):
+    """Append-only log of academic code emails (ADR-042): the per-address hourly cap counts
+    these rows, so it holds across accounts and is not lowered by changing a pending
+    address. Rows older than a day are pruned by the daily academic sweep."""
+
+    __tablename__ = "academic_code_sends"
+    __table_args__ = (Index("ix_academic_code_sends_address_created", "address", "created_at"),)
+
+    address: Mapped[str] = mapped_column(String(320))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+
+
 class CreditBalance(UuidPkMixin, TimestampMixin, Base):
     """Cached per-user balance (no pooling). The ledger is the source of truth.
     `spent_total` is a rolling all-time USAGE total maintained atomically with
@@ -640,6 +723,8 @@ class CreditLedger(UuidPkMixin, Base):
             unique=True,
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
+        # SOLUSDEV-321 P8 (M9): one person's usage rows, newest first (`/usage/turns`).
+        Index("ix_credit_ledger_user_created", "user_id", "created_at"),
     )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -797,6 +882,8 @@ PLAN_LIMITS: dict[PlanType, dict[str, int | None]] = {
     },
     PlanType.ENTERPRISE: {},  # custom per deal; set explicitly at creation.
 }
+# ADR-042: Academic carries BASIC's limits (kept as data, never branched on by name).
+PLAN_LIMITS[PlanType.ACADEMIC] = dict(PLAN_LIMITS[PlanType.BASIC])
 
 
 def default_limits(plan: PlanType) -> dict[str, int | None]:
@@ -1001,6 +1088,47 @@ class ToolConfirmation(UuidPkMixin, TimestampMixin, Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class ProposalOutcome(UuidPkMixin, Base):
+    """One decision on a SOL proposal, as data (SOLUSDEV-321 P8; `services/outcomes.py` writes
+    it): identifiers and digests only — never the arguments, a preview or a credential."""
+
+    __tablename__ = "proposal_outcomes"
+    __table_args__ = (
+        Index("ix_proposal_outcomes_project_created", "project_id", "created_at"),
+        CheckConstraint(
+            "decision IN ('accepted', 'rejected', 'edited', 'accepted_auto', 'expired', 'stale')",
+            name="ck_proposal_outcomes_decision",
+        ),
+        CheckConstraint(
+            "stale_reason IS NULL OR stale_reason IN ('diverged', 'quota', 'no_preview')",
+            name="ck_proposal_outcomes_stale_reason",
+        ),
+    )
+    __mapper_args__ = {"eager_defaults": False}
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    #: The deciding user (R146): only they are shown the row's `machine_id` and turn.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, default=None
+    )
+    #: The decision's tool turn; None for a Build auto-run (its turn is written as the stream ends).
+    conversation_turn_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("conversation_turns.id", ondelete="SET NULL"), index=True, default=None
+    )
+    tool: Mapped[str] = mapped_column(String(64))
+    proposal_digest: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(16))
+    entity_ids: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    #: Source id → that source's change token when the decision was made.
+    design_signals: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict)
+    machine_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, default=None)
+    #: Why a `stale` card was refused (M190): `diverged`, `quota` or `no_preview`; else None.
+    stale_reason: Mapped[str | None] = mapped_column(String(16), default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
 
 
 # --------------------------------------------------------------------- artifacts

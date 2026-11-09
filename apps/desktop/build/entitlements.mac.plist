@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Solus.app (and its Electron helpers, via entitlementsInherit). ADR-041
+  amendment 2026-10-28: no allow-dyld-environment-variables — the drive agent
+  trusts Solus.app's code requirement, so DYLD_INSERT_LIBRARIES must never load
+  foreign code into it. allow-jit is what V8 needs on Electron ≥ 12; the old
+  allow-unsigned-executable-memory is not (@electron/osx-sign's own default app,
+  renderer and GPU entitlements carry only allow-jit; it is kept there for
+  plugin helpers only, which Solus does not ship).
+-->
 <plist version="1.0">
   <dict>
     <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
   </dict>
 </plist>

@@ -22,7 +22,9 @@ async def test_packaged_runtime_strict_tools(tmp_path: Path) -> None:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()
-                assert len(listed.tools) == 15
+                # SOLUSDEV-321 P4-T3: export_spice_netlist moved this from 15 to 16; P5's
+                # export_schematic_pdf and export_board_pdf move it to 18
+                assert len(listed.tools) == 18
                 args = {
                     "schematic_path": "fresh.kicad_sch",
                     "title": "Fresh",

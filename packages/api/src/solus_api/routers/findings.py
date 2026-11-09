@@ -9,6 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from solus_api.core.pagination import PageMeta
 from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.findings import (
     MAX_LIMIT,
@@ -38,7 +39,9 @@ class SubjectOut(BaseModel):
 
 
 class FindingOut(BaseModel):
-    """Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md §7)."""
+    """Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md §7). `causes_ranked` (the
+    narration's order of the evidence's cause kinds) and `robot_id` (the root an observer
+    finding's evidence names) default, so a row older than narration still serializes."""
 
     id: uuid.UUID
     rule_id: str
@@ -48,6 +51,8 @@ class FindingOut(BaseModel):
     headline: str
     explanation: str
     detail: str
+    causes_ranked: list[str] = Field(default_factory=list)
+    robot_id: uuid.UUID | None = None
     subjects: list[uuid.UUID]
     evidence: dict[str, Any]
     count: int
@@ -66,15 +71,9 @@ class ResolveOut(FindingOut):
     fixed_by_edge_id: uuid.UUID | None
 
 
-class FindingPageMeta(BaseModel):
-    limit: int
-    has_next: bool
-    next_cursor: str | None
-
-
 class FindingListOut(BaseModel):
     data: list[FindingOut]
-    meta: FindingPageMeta
+    meta: PageMeta
 
 
 class FindingOneOut(BaseModel):
@@ -133,7 +132,7 @@ async def list_project_findings(
         limit=limit,
     )
     return FindingListOut(
-        data=[FindingOut(**serialize_finding(r)) for r in rows], meta=FindingPageMeta(**meta)
+        data=[FindingOut(**serialize_finding(r)) for r in rows], meta=PageMeta(**meta)
     )
 
 

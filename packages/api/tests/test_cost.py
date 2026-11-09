@@ -189,6 +189,27 @@ async def test_track_cost_debits_ledger_and_balance_atomically(db: AsyncSession)
     assert bal.spent_total == credits
 
 
+async def test_track_cost_meta_lands_in_ledger_attrs_beneath_the_billing_keys(
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-321: caller context (purpose, turn_id, …) is merged into the attrs;
+    the billing keys always win, so a meta key can never rewrite what was billed."""
+    user = await _seed_user(db, balance=500)
+    model = _model()
+    meta = {"purpose": "narration", "turn_id": "turn-1", "tokens_in": 1}
+    await track_cost("call-meta", user.id, model, 10_000, 5_000, session=db, cost=_COST, meta=meta)
+    (row,) = await _ledger_rows(db, "call-meta")
+    assert row.attrs == {
+        "purpose": "narration",
+        "turn_id": "turn-1",
+        "call_id": "call-meta",
+        "model_name": model.model_name,
+        "role": model.role,
+        "tokens_in": 10_000,  # the measured count, not meta's 1
+        "tokens_out": 5_000,
+    }
+
+
 async def test_track_cost_creates_missing_balance_row(db: AsyncSession) -> None:
     """No CreditBalance row exists at provisioning today — the debit upserts one
     (balance goes negative for trial users; the ledger stays truthful)."""
@@ -289,6 +310,23 @@ async def test_track_cost_failure_without_enqueue_still_dead_letters(
         select(PendingCreditDebit).where(PendingCreditDebit.idempotency_key == "call-nofallback")
     )
     assert pending is not None
+
+
+async def test_track_cost_meta_survives_the_dead_letter(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reconciled debit keeps the purpose it was made for."""
+    user = await _seed_user(db, balance=100)
+    _exploding_debit(monkeypatch)
+    meta = {"purpose": "vision"}
+    await track_cost(
+        "call-meta-fail", user.id, _model(), 500, 500, session=db, cost=_COST, meta=meta
+    )
+    pending = await db.scalar(
+        select(PendingCreditDebit).where(PendingCreditDebit.idempotency_key == "call-meta-fail")
+    )
+    assert pending is not None
+    assert pending.attrs["purpose"] == "vision"
 
 
 async def test_track_cost_total_failure_logs_payload_and_never_raises(

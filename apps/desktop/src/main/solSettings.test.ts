@@ -40,7 +40,6 @@ function fakeFs(initial: Record<string, string> = {}): {
 }
 
 const CONFIG = '/home/u/.solus/config.json'
-const GEOMETRY = { x: 10, y: 20, width: 420, height: 640, displayId: 7 }
 
 describe('read', () => {
   it('missing file → defaults, no warning', () => {
@@ -49,20 +48,34 @@ describe('read', () => {
     expect(f.warn).not.toHaveBeenCalled()
   })
 
-  it('reads a well-formed file and ignores unknown/invalid fields', () => {
+  it('reads a well-formed file and ignores unknown fields, the retired pin and geometry too', () => {
     const f = fakeFs({
       [CONFIG]: JSON.stringify({
         schema_version: 1,
-        sol: { actionMode: 'do', screenIntelligence: true, alwaysOnTop: 'yes', window: { x: 1 } }
+        sol: {
+          actionMode: 'do',
+          screenIntelligence: true,
+          alwaysOnTop: true,
+          window: { x: 1, y: 2, width: 420, height: 640, displayId: 7 }
+        }
       })
     })
     expect(createSolSettings(f.deps).get()).toEqual({
       actionMode: 'do',
       screenIntelligence: true,
       hotkeys: true,
-      alwaysOnTop: false,
-      window: null
+      drive: false
     })
+  })
+
+  it('drive defaults to false and only an explicit true turns it on (sol-drive.md §5 consent)', () => {
+    expect(DEFAULT_SOL_SETTINGS.drive).toBe(false)
+    const on = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: { drive: true } }) })
+    expect(createSolSettings(on.deps).get().drive).toBe(true)
+    for (const junk of ['true', 1, {}, null]) {
+      const f = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: { drive: junk } }) })
+      expect(createSolSettings(f.deps).get().drive).toBe(false)
+    }
   })
 
   it('hotkeys defaults to true and only an explicit false turns it off (§7 consent surface)', () => {
@@ -99,8 +112,7 @@ describe('write', () => {
     const s = createSolSettings(f.deps)
     s.setScreenIntelligence(true)
     s.setHotkeys(false)
-    s.setAlwaysOnTop(true)
-    s.setWindowGeometry(GEOMETRY)
+    s.setDrive(true)
     const doc = JSON.parse(f.files.get(CONFIG) ?? '')
     expect(doc.other).toEqual({ keep: true })
     expect(doc.schema_version).toBe(SOL_CONFIG_SCHEMA_VERSION)
@@ -108,8 +120,7 @@ describe('write', () => {
       actionMode: 'guide',
       screenIntelligence: true,
       hotkeys: false,
-      alwaysOnTop: true,
-      window: GEOMETRY
+      drive: true
     })
     expect([...f.files.keys()]).toEqual([CONFIG]) // no temp litter
     expect(createSolSettings(f.deps).get()).toEqual(doc.sol)
@@ -141,7 +152,7 @@ describe('onChange', () => {
     s.setMode('do')
     expect(cb).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
     off()
-    s.setAlwaysOnTop(true)
+    s.setHotkeys(false)
     expect(cb).toHaveBeenCalledTimes(1)
   })
 })

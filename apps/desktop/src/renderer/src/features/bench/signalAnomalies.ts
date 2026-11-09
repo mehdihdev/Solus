@@ -14,8 +14,20 @@ function validTime(value: unknown): value is string {
 function validValue(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value))
 }
+const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i
+/** A marker the window evaluator raised carries its finding (docs/api/findings.md §5). */
+export interface SignalAnomaly extends ObserverEventOut {
+  readonly finding_id?: string
+}
+/** The server attaches the id to the ring's own record; one present but not a UUID makes the
+ *  response malformed, like any other bad field. */
+function findingField(value: unknown): { finding_id?: string } {
+  if (value === undefined || value === null) return {}
+  if (typeof value !== 'string' || !UUID.test(value)) throw new Error('Invalid observer event')
+  return { finding_id: value }
+}
 /** Observer values have no unit; markers communicate time only, never guessed magnitudes. */
-export function decodeAnomalies(raw: unknown): ObserverEventOut[] {
+export function decodeAnomalies(raw: unknown): SignalAnomaly[] {
   if (!Array.isArray(raw) || raw.length > 100) throw new Error('Invalid observer events')
   return raw.map((row: unknown) => {
     if (typeof row !== 'object' || row === null) throw new Error('Invalid observer event')
@@ -34,22 +46,23 @@ export function decodeAnomalies(raw: unknown): ObserverEventOut[] {
       device_id: r.device_id,
       signal: r.signal,
       at: r.at,
-      value: r.value as number | null
+      value: r.value as number | null,
+      ...findingField(r.finding_id)
     }
   })
 }
-export async function getSignalAnomalies(projectId: string): Promise<ObserverEventOut[]> {
+export async function getSignalAnomalies(projectId: string): Promise<SignalAnomaly[]> {
   return decodeAnomalies(
     await api.request<unknown>(`/projects/${encodeURIComponent(projectId)}/bench/events?limit=100`)
   )
 }
 export function anomalyMarkers(
-  events: readonly ObserverEventOut[],
+  events: readonly SignalAnomaly[],
   deviceId: string,
   signal: string,
   points: readonly RecentSampleOut[],
   window?: { start: number; end: number }
-): { kind: string; at: string; x: number }[] {
+): { kind: string; at: string; x: number; finding_id?: string }[] {
   const times = points.map((p) => Date.parse(p.timestamp)).filter(Number.isFinite)
   if (!times.length) return []
   const min = window?.start ?? Math.min(...times),
@@ -57,7 +70,7 @@ export function anomalyMarkers(
   const seen = new Set<string>()
   return events.flatMap((event) => {
     const time = Date.parse(event.at),
-      key = `${event.kind}:${time}`
+      key = `${event.kind}:${time}:${event.finding_id ?? ''}`
     if (
       event.device_id !== deviceId ||
       event.signal !== signal ||
@@ -68,6 +81,7 @@ export function anomalyMarkers(
     )
       return []
     seen.add(key)
-    return [{ kind: event.kind, at: event.at, x: ((time - min) / Math.max(max - min, 1)) * 240 }]
+    const x = ((time - min) / Math.max(max - min, 1)) * 240
+    return [{ kind: event.kind, at: event.at, x, ...findingField(event.finding_id) }]
   })
 }

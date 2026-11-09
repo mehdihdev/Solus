@@ -191,8 +191,9 @@ async def _notifications(client: AsyncClient, headers: dict[str, str]) -> list[d
 async def test_invite_notifies_existing_invitee(
     client: AsyncClient, alice_headers: dict[str, str], bob_headers: dict[str, str]
 ) -> None:
-    """FND-01: the invitation rides the existing notification path — an invitee
-    who already has an account gets an in-app notification carrying the token."""
+    """FND-01: the invitation rides the existing notification path — an invitee who already
+    has an account gets an in-app notification naming the invite (SOLUSDEV-319: never the
+    token; they accept by id from Home's rail)."""
     await me(client, bob_headers)  # Bob exists before the invite
     team = await create_team(client, alice_headers)
     invite = await invite_bob(client, alice_headers, team["id"])
@@ -201,7 +202,8 @@ async def test_invite_notifies_existing_invitee(
     invite_notes = [n for n in notes if n["type"] == "team.invite"]
     assert len(invite_notes) == 1
     assert invite_notes[0]["attrs"]["team_id"] == team["id"]
-    assert invite_notes[0]["attrs"]["token"] == invite["token"]
+    assert invite_notes[0]["attrs"]["invite_id"] == invite["id"]
+    assert "token" not in invite_notes[0]["attrs"]
 
 
 async def test_invite_to_unregistered_email_creates_no_notification(

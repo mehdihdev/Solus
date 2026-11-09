@@ -6,6 +6,8 @@ import full from "../fixtures/local-state/preferences.json";
 import {
   ENGINEERING_PREFERENCES_FIELDS,
   ENGINEERING_PREFERENCES_SCHEMA_VERSION,
+  EXPERTISE_DOMAINS,
+  EXPERTISE_LEVELS,
   PREFERENCES_FIELD_CAP,
   PREFERENCES_FILENAME,
   PREFERENCES_FREE_TEXT_CAP,
@@ -51,6 +53,7 @@ describe("constants", () => {
         "updatedAt",
         "freeText",
         "shared",
+        "expertise",
         ...PREFERENCE_SECTIONS,
       ].sort(),
     );
@@ -219,5 +222,55 @@ describe("shared flags", () => {
       }),
     ).toEqual({});
     expect(sharedSubset(emptyEngineeringPreferences())).toEqual({});
+  });
+});
+
+// SOLUSDEV-321 P6 — `expertise`: the person's own level per domain, sent with
+// the turn; each stated domain wins over the level Solus inferred.
+describe("expertise", () => {
+  test("the domains and levels are fixed", () => {
+    expect(EXPERTISE_DOMAINS).toEqual([
+      "control",
+      "electronics",
+      "mechanical",
+      "software",
+    ]);
+    expect(EXPERTISE_LEVELS).toEqual(["novice", "working", "expert"]);
+  });
+
+  test("absent expertise parses to a document without the field", () => {
+    const result = parseEngineeringPreferences(EMPTY);
+    if (!result.ok) throw new Error("must parse");
+    expect("expertise" in result.preferences).toBe(false);
+  });
+
+  test("levels on known domains are kept; anything else is dropped", () => {
+    const result = parseEngineeringPreferences({
+      ...EMPTY,
+      expertise: { control: "novice", software: "guru", mechanical: 3 },
+    });
+    if (!result.ok) throw new Error("must parse");
+    expect(result.preferences.expertise).toEqual({ control: "novice" });
+  });
+
+  test("an unknown domain, a prototype key or a non-object rejects", () => {
+    for (const expertise of [
+      { firmware: "expert" },
+      JSON.parse('{"__proto__": "expert"}'),
+      ["expert"],
+      "expert",
+    ])
+      expect(parseEngineeringPreferences({ ...EMPTY, expertise })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+  });
+
+  test("a stated level is something to send", () => {
+    const base = emptyEngineeringPreferences();
+    expect(
+      isEmptyPreferences({ ...base, expertise: { control: "expert" } }),
+    ).toBe(false);
+    expect(isEmptyPreferences({ ...base, expertise: {} })).toBe(true);
   });
 });

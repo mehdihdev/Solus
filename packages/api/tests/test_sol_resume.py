@@ -116,6 +116,8 @@ async def test_resume_runs_a_turn_without_a_user_turn_and_records_resume_of(
     assert capture.seen[0].prompt == resume_prompt(
         ResumeTicket(confirmation, "code.exec", 1, program="make", outcome="finished")
     )
+    # The prompt is Solus-authored and embeds the ticket's program: it never researches the web.
+    assert capture.seen[0].research_allowed is False
     turns = (
         await db.scalars(
             select(ConversationTurn)

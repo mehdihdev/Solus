@@ -99,6 +99,20 @@ def test_component_without_a_board_layer_is_not_enriched() -> None:
     board = Netlist(components=(Component(designator="U1"),))
     merged = reconcile_kicad(NETLIST, board)
     assert "layer" not in merged.components[0].properties
+    assert merged.components[0].position is None
+
+
+def test_board_placement_enriches_matching_components() -> None:
+    """R77: the board also corroborates WHERE a part sits, so a source holding both files keeps
+    the footprint positions the matrix's proximity rule reads; the netlist states none itself."""
+    merged = reconcile_kicad(NETLIST, BOARD)
+    placed = {c.designator: c.position for c in merged.components}
+    assert placed == {
+        "U1": {"x": 100.0, "y": 50.0, "rot": None},
+        "R1": {"x": 110.0, "y": 50.0, "rot": None},
+        "C1": {"x": 100.0, "y": 60.0, "rot": None},
+    }
+    assert all(c.position is None for c in NETLIST.components)
 
 
 def test_warnings_from_both_parsers_are_kept_in_order() -> None:

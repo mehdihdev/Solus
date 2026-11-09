@@ -76,6 +76,14 @@ def test_component_entity_carries_all_three_fingerprint_channels() -> None:
     }
 
 
+def test_a_component_states_its_position_only_when_it_has_one() -> None:
+    """R59: a placed part's `attrs.position {x, y, rot}` (the key the matrix's fact store reads);
+    an unplaced one carries no position key at all, never a guessed origin."""
+    placed = Component(designator="U3", position={"x": 1.5, "y": -2.0, "rot": None})
+    assert component_entity(placed).properties["position"] == {"x": 1.5, "y": -2.0, "rot": None}
+    assert "position" not in component_entity(NETLIST.components[0]).properties
+
+
 def test_net_entity_is_namespaced_first_class_node() -> None:
     entity = net_entity(NETLIST.nets[0])
     assert entity.source_key == "net:VCC"

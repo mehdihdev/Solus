@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import { commandExitStatus, commandHeader, hasCommandOutput, isCommandTool } from './commandCard'
+import {
+  commandExitStatus,
+  commandHeader,
+  commandLine,
+  hasCommandOutput,
+  isCommandTool
+} from './commandCard'
 
 const row = (label: string, after: string | null): PendingConfirmation['preview'][number] => ({
   label,
@@ -37,6 +43,7 @@ describe('isCommandTool', () => {
     expect(hasCommandOutput('code.exec')).toBe(true)
     expect(hasCommandOutput('code.run')).toBe(true)
     expect(hasCommandOutput('code.test')).toBe(true)
+    expect(hasCommandOutput('drive.step')).toBe(true)
     expect(hasCommandOutput('code.process_start')).toBe(false)
     expect(hasCommandOutput('code.process_input')).toBe(false)
   })
@@ -110,6 +117,46 @@ describe('commandHeader', () => {
 
   it('has no program when neither row can be read', () => {
     expect(commandHeader(card('code.exec', [row('command', 'not json')]))?.program).toBeNull()
+  })
+})
+
+describe('commandLine', () => {
+  it('reads the arguments after argv[0] and the working folder', () => {
+    const line = commandLine(
+      card('code.run', [
+        row('command', '["/usr/bin/make","selftest"]'),
+        row('cwd', '/w/SolCmdTest')
+      ])
+    )
+    expect(line).toEqual({ args: ['selftest'], cwd: '/w/SolCmdTest', hasHidden: false })
+  })
+
+  it('quotes an argument a shell would split or expand', () => {
+    const line = commandLine(card('code.exec', [row('command', '["echo","a b","it\'s","$HOME"]')]))
+    expect(line.args).toEqual(["'a b'", "'it'\\''s'", "'$HOME'"])
+  })
+
+  it('has no arguments for a chunked, unparseable or non-array command', () => {
+    expect(commandLine(card('code.exec', [row('command 1/2', '["make","-j8"')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', 'not json')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', '{"a":1}')])).args).toBeNull()
+    expect(commandLine(card('code.exec', [row('command', '["make",3]')])).args).toBeNull()
+  })
+
+  it('shows bidi, zero-width and control characters as visible markers and flags them', () => {
+    const argv = JSON.stringify(['rm', 'safe\u202Etxt.sh', 'a\u200Bb', 'x\ny'])
+    const line = commandLine(card('code.exec', [row('command', argv)]))
+    expect(line.args).toEqual(["'safe⟨U+202E⟩txt.sh'", "'a⟨U+200B⟩b'", "'x⟨U+000A⟩y'"])
+    expect(line.hasHidden).toBe(true)
+  })
+
+  it('flags a hidden character in the program row', () => {
+    const line = commandLine(card('code.exec', [row('program', '/bin/l\u2066s')]))
+    expect(line.hasHidden).toBe(true)
+  })
+
+  it('has no cwd when the row is missing', () => {
+    expect(commandLine(card('code.exec', [])).cwd).toBeNull()
   })
 })
 

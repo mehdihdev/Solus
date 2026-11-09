@@ -9,16 +9,20 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import replace
 from typing import Any
 
 import pytest
 from fixtures.fake_systems import FakeSolSystems
 from fixtures.screenshot import screenshot_block
 from solus_api.agent import runtime
+from solus_api.agent.context import build_context
+from solus_api.agent.interfaces import ContextBudget, EntityRead, GraphContext, GraphScope
 from solus_api.agent.runtime import SOL_MAX_TOKENS, AgentRunContext, LlmRunner, build_dispatch
 from solus_api.agent.stream import AgentEventType
 from solus_api.agent.tools import InProcessTool, ToolDescriptor, ToolException, ToolRegistry
 from solus_api.connectors.secrets import InMemorySecretStore
+from solus_api.graph import kinds
 from solus_api.models import (
     CreditBalance,
     PlanType,
@@ -159,6 +163,36 @@ async def test_think_harder_bumps_the_estimator_tier_and_passes_it_explicitly(
     assert calls[0]["estimate_from"] == prompt_text
 
 
+@pytest.mark.parametrize(
+    ("prompt_text", "think_harder", "tier"),
+    [
+        ("hi", False, Complexity.TRIVIAL),
+        ("hi", True, Complexity.STANDARD),  # "think harder" bumps the tier, and its budget
+        ("why is my SLAM drifting when the robot turns", False, Complexity.HARD),
+    ],
+)
+async def test_the_context_budget_follows_the_tier_the_turn_routes_at(
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    prompt_text: str,
+    think_harder: bool,
+    tier: Complexity,
+) -> None:
+    """SOLUSDEV-321: the budget handed to build_context is the one for the tier the
+    gateway routes this turn at — the estimator's, or "think harder"'s explicit one."""
+    budgets: list[ContextBudget | None] = []
+
+    async def spy(*args: Any, **kw: Any) -> Any:
+        budgets.append(kw.get("budget"))
+        return await build_context(*args, **kw)
+
+    monkeypatch.setattr(runtime, "build_context", spy)
+    await _run(_ScriptedModel(), await _ctx(engine, prompt_text, think_harder=think_harder))
+    assert [b.max_tokens for b in budgets if b] == [
+        gateway.default_orchestration_config().context_budget.total_for(tier)
+    ]
+
+
 async def test_provider_items_replay_on_the_next_round_and_never_leave_the_runner(
     engine: AsyncEngine,
 ) -> None:
@@ -205,6 +239,41 @@ async def test_a_screenshot_keeps_the_reasoning_route_and_runs_the_extractor_on_
     screen = [s for s in manifest.data["sections"] if s["kind"] == "screen"]
     assert screen == [{"kind": "screen", "citation": None, "tokens": screen[0]["tokens"]}]
     assert screen[0]["tokens"] > 0
+
+
+#: The code file `_CodeScopeSystems` serves; a turn that mentions it is anchored on code.
+_CODE_FILE = uuid.UUID(int=0xC0DE)
+
+
+class _CodeScopeSystems(FakeSolSystems):
+    """The canned systems with the code file `_CODE_FILE` in every pull: the turn's anchor when
+    it mentions the file, else a neighbour of what it is anchored on (P0-T7 routes on the
+    anchors' kinds only)."""
+
+    async def get_graph_context(
+        self, project_id: uuid.UUID, scope: GraphScope, budget: ContextBudget | None = None
+    ) -> GraphContext:
+        graph = await super().get_graph_context(project_id, scope, budget)
+        code = EntityRead(id=_CODE_FILE, kind=kinds.CODE_FILE, domain="code", name="drive")
+        rest = [entity for entity in graph.entities if entity.id != _CODE_FILE]
+        return graph.model_copy(update={"entities": [code, *rest]})
+
+
+async def test_a_screenshot_on_a_code_scope_routes_the_reasoning_turn_to_code(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sibling of the pin above (SOLUSDEV-321 P0-T7): with a code file as the turn's
+    anchor the reasoning turn asks for CODE explicitly — never VISUAL_LOG, so it keeps its
+    tools — while the extractor pass stays THE VISUAL_LOG call."""
+    calls = _spy(monkeypatch)
+    shot = screenshot_block()
+    ctx = await _ctx(engine, "what is this?", screenshot=shot, mentions=(_CODE_FILE,))
+    await _run(_ScriptedModel(), replace(ctx, systems=_CodeScopeSystems()))
+
+    extractor = [c for c in calls if c.get("conversation") is None]
+    reasoning = [c for c in calls if c.get("conversation") is not None]
+    assert [c["type"] for c in extractor] == [RouteType.VISUAL_LOG]
+    assert [c["type"] for c in reasoning] == [RouteType.CODE]
 
 
 def test_runtime_source_names_no_model() -> None:
@@ -402,13 +471,16 @@ async def _project_with_solus(maker: async_sessionmaker[AsyncSession]) -> uuid.U
         await db.commit()
         project_id = project.id
     async with maker() as db:
+        # A constraint a person wrote: the standing digest's kind of entry (SOLUSDEV-321
+        # P0-T6 keeps the other sections' entries out of it).
         await add_text_entry(
             db,
             project_id,
-            SolusSection.ENVIRONMENT,
+            SolusSection.CONSTRAINTS,
             "the IMU sits on I2C bus 1 at 0x68",
             author="user",
             created_by=None,
+            subsection="rules",
         )
         await db.commit()
     return project_id
@@ -450,8 +522,11 @@ async def test_the_preferences_and_conversation_layers_report_what_the_turn_carr
     )
     await _run(model, ctx)
 
+    # SOLUSDEV-321 P0-T4: preferences are a stable block of the prefix turn; the
+    # conversation's count varies with the message, so it heads the live turn.
+    prefix = model.seen[0].messages[0].text or ""
     live = model.seen[0].messages[-1].text or ""
-    assert "carried in the system prompt" in live  # preferences layer, non-zero
+    assert "carried in the system prompt" in prefix  # preferences layer, non-zero
     assert "carried as the surrounding turns" in live  # conversation layer, non-zero
 
 
@@ -462,4 +537,4 @@ async def test_the_screen_read_is_not_sent_twice(engine: AsyncEngine) -> None:
     await _run(model, await _ctx(engine, "what is this?", screenshot=screenshot_block()))
     live = model.seen[0].messages[-1].text or ""
     assert live.count("context_screen") <= 1
-    assert live.count("Layer 4/5") == 1
+    assert live.count("Layer 11/11") == 1

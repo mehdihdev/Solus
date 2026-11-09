@@ -41,6 +41,11 @@ _ISAAC = frozenset(
         "isaac.run_routine",
     }
 )
+#: A preview row with this label means the tool itself demands a human approval
+#: for this call (ADR-040 §5). It can only make a call stricter: Build defers it
+#: to the card instead of running it automatically.
+APPROVAL_REQUIRED_LABEL = "Approval required"
+
 # Reviewed native schemas, canonical JSON SHA256. A fork schema change requires
 # review before automatic execution; it cannot expand its own authority.
 _BRIDGE_SCHEMAS = {
@@ -119,9 +124,21 @@ class BuildExecutionPolicy:
         self.executed_calls: set[str] = set()
 
     async def prepare(self, call: ToolCall) -> bool | ToolResult:
+        from solus_api.agent.firmware_recipe import routed_by_firmware
+        from solus_api.agent.tools.apply_sim_change import routed_by_simulation
+
         # Review-only requests retain the normal central confirmation gate,
         # including for tools otherwise eligible for automatic Build execution.
-        tool = None if self._force_confirmation else self._owned(call)
+        # So does a routine `simulate` routed this turn to (SOLUSDEV-321 R115):
+        # the person asked to simulate, not to run a routine. And so does the
+        # write a firmware recipe routed this turn to (P6, R134): the person
+        # asked for firmware, not for a write.
+        forced = (
+            self._force_confirmation
+            or routed_by_simulation(call.tool)
+            or routed_by_firmware(call.tool)
+        )
+        tool = None if forced else self._owned(call)
         if tool is None:
             return False
         command = call.tool == AUTO_COMMAND_TOOL
@@ -159,6 +176,9 @@ class BuildExecutionPolicy:
                 "The routine changed during validation. "
                 "Nothing was executed; inspect current state.",
             )
+        if any(row.get("label") == APPROVAL_REQUIRED_LABEL for row in before):
+            self._deferred.add(claimed)
+            return False
         if command and scopes != [SYSTEM_SCOPE, SYSTEM_SCOPE]:
             # A workspace (or unknown) program is project code: it keeps its card.
             self._deferred.add(claimed)

@@ -1,12 +1,15 @@
-// SOLUSDEV-252 S3: the SOL window surface (#/sol-window) — header (wordmark,
-// mode badge, sees-screen dot, pin, close), the degraded-state status line,
-// the region card / refused line, and the SolChat body behind the auth guard.
+// SOLUSDEV-252 S3: the SOL window surface (#/sol-window) — the degraded-state
+// status line, the region card / refused line, and the SolChat body behind the
+// auth guard. SOLUSDEV-319: the Ember Pill — bar (orb, input, Guide|Build,
+// send), footer (SOL, sees-screen, hide), the panel that grows above it, the
+// measured height and busy signal sent to main, Esc to hide.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
 import * as solApi from './solApi'
 import { decideSolConfirmation } from '../../lib/api/resources'
 import { resetSolChatSessions } from './solChatStore'
 import { SolWindow } from './SolWindow'
+import { PreviewObserverContext, type ObserveInView } from './previewInView'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceStore'
 import { useSolSessionStore } from './solSessionStore'
@@ -33,11 +36,21 @@ vi.mock('../../lib/api/resources', async (importOriginal) => ({
   decideSolConfirmation: vi.fn()
 }))
 
-const PLACEHOLDER = 'Ask about a signal, a change, a part…'
+const PLACEHOLDER = 'Ask SOL, or tell it what to do…'
 let bridge: FakeSolBridge
 
+// jsdom has no IntersectionObserver: report every plan step as on screen.
+const allInView: ObserveInView = (_element, onChange) => {
+  onChange(true)
+  return () => undefined
+}
+
 async function mount(): Promise<void> {
-  render(<SolWindow />)
+  render(
+    <PreviewObserverContext.Provider value={allInView}>
+      <SolWindow />
+    </PreviewObserverContext.Provider>
+  )
   // The mount's getState() resolves on a microtask; let the mirror land.
   await act(async () => undefined)
 }
@@ -45,7 +58,7 @@ async function mount(): Promise<void> {
 beforeEach(() => {
   localStorage.clear()
   disconnectSolBridge()
-  useSolWindowStore.setState({ state: null, region: null })
+  useSolWindowStore.setState({ state: null, region: null, planRunning: false })
   useAuthStore.setState({
     status: 'authenticated',
     user: { email: 'a@b.dev' },
@@ -75,18 +88,18 @@ describe('SolWindow header', () => {
     expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument()
   })
 
-  it('keeps the shared action mode control only in the composer', async () => {
+  it('the Guide | Build switch in the bar is the one action-mode control', async () => {
     await mount()
-    const badges = screen.getAllByRole('button', { name: 'SOL action mode' })
-    // The composer remains the action-mode control.
-    expect(badges).toHaveLength(1)
-    for (const badge of badges) expect(badge).toHaveTextContent('Guide')
-    fireEvent.click(badges[0])
+    const modes = screen.getAllByRole('radiogroup', { name: 'SOL action mode' })
+    expect(modes).toHaveLength(1)
+    expect(within(modes[0]).getByRole('radio', { name: 'Guide' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    )
+    fireEvent.click(within(modes[0]).getByRole('radio', { name: 'Build' }))
     expect(bridge.setMode).toHaveBeenCalledWith('do')
     act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-    for (const badge of screen.getAllByRole('button', { name: 'SOL action mode' })) {
-      expect(badge).toHaveTextContent('Build')
-    }
+    expect(screen.getByRole('radio', { name: 'Build' })).toHaveAttribute('aria-checked', 'true')
   })
 
   it('follows a workspace selected in the main window', async () => {
@@ -119,32 +132,110 @@ describe('SolWindow header', () => {
     act(() => bridge.pushState({ ...SOL_STATE, screenIntelligence: false }))
     expect(screen.queryByText('sees your screen')).not.toBeInTheDocument()
   })
+})
 
-  it('pin toggles always-on-top through the bridge; close closes the window', async () => {
+describe('SolWindow hiding', () => {
+  it('has no pin; the hide button and Esc hide the pill through main, never close it', async () => {
     const close = vi.spyOn(window, 'close').mockImplementation(() => undefined)
     try {
       await mount()
-      const pin = screen.getByRole('button', { name: 'Keep on top' })
-      expect(pin).toHaveAttribute('aria-pressed', 'false')
-      fireEvent.click(pin)
-      expect(bridge.setAlwaysOnTop).toHaveBeenCalledWith(true)
-      act(() => bridge.pushState({ ...SOL_STATE, alwaysOnTop: true }))
-      expect(screen.getByRole('button', { name: 'Keep on top' })).toHaveAttribute(
-        'aria-pressed',
-        'true'
-      )
-      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
-      expect(close).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('button', { name: 'Keep on top' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide SOL' }))
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(bridge.hide).toHaveBeenCalledTimes(2)
+      expect(close).not.toHaveBeenCalled()
     } finally {
       close.mockRestore()
     }
   })
 
+  it('an Escape another control already handled does not hide the pill', async () => {
+    await mount()
+    const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    event.preventDefault()
+    act(() => void window.dispatchEvent(event))
+    expect(bridge.hide).not.toHaveBeenCalled()
+  })
+})
+
+describe('SolWindow streaming', () => {
   it('the streaming indicator is one CSS class, present only while a turn streams', async () => {
     await mount()
     expect(document.querySelector('.sol-pulse')).toBeNull()
     act(() => useSolSessionStore.getState().setStreaming(true))
     expect(document.querySelectorAll('.sol-pulse')).toHaveLength(1)
+  })
+})
+
+describe('SolWindow pill sizing and busy signal', () => {
+  it('reports its measured height to main so the window grows upward', async () => {
+    let observed: ResizeObserverCallback | null = null
+    const disconnect = vi.fn()
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          observed = cb
+        }
+        observe = vi.fn()
+        disconnect = disconnect
+      }
+    )
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      vi.spyOn(pill, 'getBoundingClientRect').mockReturnValue({ height: 233.4 } as DOMRect)
+      act(() => observed?.([], {} as ResizeObserver))
+      expect(bridge.resize).toHaveBeenLastCalledWith(234)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('re-reports an unchanged height on a fresh summon, since main resets the window to collapsed', async () => {
+    let observed: ResizeObserverCallback | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          observed = cb
+        }
+        observe = vi.fn()
+        disconnect = vi.fn()
+      }
+    )
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      vi.spyOn(pill, 'getBoundingClientRect').mockReturnValue({ height: 140 } as DOMRect)
+      act(() => observed?.([], {} as ResizeObserver))
+      vi.mocked(bridge.resize).mockClear()
+      act(() => bridge.pushPill({ kind: 'summoned', resume: false }))
+      expect(bridge.resize).toHaveBeenCalledWith(140)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('is busy while a turn streams, so a click elsewhere does not hide it', async () => {
+    await mount()
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(false)
+    act(() => useSolSessionStore.getState().setStreaming(true))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
+    act(() => useSolSessionStore.getState().setStreaming(false))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(false)
+    act(() => useSolWindowStore.getState().setPlanRunning(true))
+    expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
+  })
+
+  it('opens the panel above the bar only when there is something to show', async () => {
+    await mount()
+    // A1: summoned, the pill is the bar alone — in Guide mode too.
+    expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
+    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+    expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
+    act(() => bridge.pushRegion(SOL_REGION))
+    expect(screen.getByRole('region', { name: 'SOL conversation' })).toBeInTheDocument()
   })
 })
 
@@ -212,11 +303,97 @@ describe('SolWindow auth guard (the retired OrbWindow pattern)', () => {
   })
 })
 
-it('mounts Guide tasks and hides them when Build is selected', async () => {
+it('opens Guide tasks on demand from the footer, only in Guide mode', async () => {
   await mount()
+  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
   expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
   act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
   expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Guide tasks' })).not.toBeInTheDocument()
+})
+
+describe('SolWindow summon: resume within 5 s, else a fresh chat (A1)', () => {
+  const summon = (resume: boolean): void => {
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    act(() => bridge.pushPill({ kind: 'summoned', resume }))
+  }
+  const active = (): string | null =>
+    useSolSessionStore.getState().conversationByProject['p1'] ?? null
+
+  it('opening the pill forgets the last conversation; so does a fresh re-summon', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'old-chat' } })
+    await mount()
+    expect(active()).toBeNull()
+    act(() => useSolSessionStore.getState().setConversation('p1', 'second-chat'))
+    summon(false)
+    expect(active()).toBeNull()
+  })
+
+  it('a re-summon within the resume window keeps the conversation and the draft', async () => {
+    await mount()
+    act(() => useSolSessionStore.getState().setConversation('p1', 'same-chat'))
+    const input = screen.getByPlaceholderText(PLACEHOLDER)
+    fireEvent.change(input, { target: { value: 'half-typed' } })
+    summon(true)
+    expect(active()).toBe('same-chat')
+    expect(screen.getByPlaceholderText(PLACEHOLDER)).toHaveValue('half-typed')
+  })
+
+  it('a busy SOL keeps its conversation across a fresh re-summon', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'live-chat' }, streaming: true })
+    await mount()
+    expect(active()).toBe('live-chat')
+    summon(false)
+    expect(active()).toBe('live-chat')
+  })
+
+  it('a running plan keeps its conversation too', async () => {
+    useSolSessionStore.setState({ conversationByProject: { p1: 'plan-chat' } })
+    useSolWindowStore.setState({ planRunning: true })
+    await mount()
+    expect(active()).toBe('plan-chat')
+  })
+
+  it('a fresh re-summon closes Guide tasks again; a resume leaves them open', async () => {
+    await mount()
+    fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
+    summon(true)
+    expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
+    summon(false)
+    expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
+  })
+})
+
+describe('SolWindow motion (SOLUSDEV-319)', () => {
+  it('plays its exit on "leaving" and its entrance again on "summoned"', async () => {
+    await mount()
+    const pill = document.querySelector('.sol-pill') as HTMLElement
+    expect(pill.dataset.phase).toBe('in')
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    expect(pill.dataset.phase).toBe('leaving')
+    act(() => bridge.pushPill({ kind: 'summoned', resume: true }))
+    expect(pill.dataset.phase).toBe('in')
+  })
+
+  it('caps its own height at min(620, 60% of the screen)', async () => {
+    const avail = vi.spyOn(window.screen, 'availHeight', 'get').mockReturnValue(800)
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      expect(pill.style.getPropertyValue('--sol-pill-max-h')).toBe('480px')
+    } finally {
+      avail.mockRestore()
+    }
+  })
+
+  it('unsubscribes from the motion cues on unmount', async () => {
+    const { unmount } = render(<SolWindow />)
+    await act(async () => undefined)
+    unmount()
+    act(() => bridge.pushPill({ kind: 'leaving' }))
+    expect(document.querySelector('.sol-pill')).toBeNull()
+  })
 })
 
 it('shows the fixture hole diff in the actual SOL window and requires an explicit decision', async () => {
@@ -244,11 +421,92 @@ it('shows the fixture hole diff in the actual SOL window and requires an explici
     target: { value: 'Add a 6 mm hole' }
   })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-  const card = await screen.findByLabelText('Action needs your approval')
+  // SOLUSDEV-319: in the pill a non-command approval is a one-step plan.
+  const card = await screen.findByLabelText('Plan needs your approval')
   expect(within(card).getByText('new hole (diameter=6 mm)')).toBeInTheDocument()
   expect(decideSolConfirmation).not.toHaveBeenCalled()
   await act(async () => {
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'Run 1 step' }))
   })
   expect(decideSolConfirmation).toHaveBeenCalledWith('p1', 'hole-card', 'approve')
+})
+
+it('two parked approvals render as one plan; Run approves them in order, one at a time', async () => {
+  resetSolChatSessions()
+  vi.mocked(solApi.createSolConversation).mockResolvedValue({
+    id: 'c-plan'
+  } as solApi.SolConversation)
+  vi.mocked(decideSolConfirmation).mockReset()
+  vi.mocked(decideSolConfirmation).mockResolvedValue({ ok: true } as Awaited<
+    ReturnType<typeof decideSolConfirmation>
+  >)
+  vi.mocked(solApi.streamSolMessage).mockImplementation(async ({ onEvent }) => {
+    for (const [id, after] of [
+      ['r1-card', '10k'],
+      ['r2-card', '4k7']
+    ]) {
+      onEvent({
+        type: 'tool_confirmation',
+        pending: {
+          confirmationId: id,
+          tool: 'kicad.set_symbol_property',
+          summary: `Set ${id}`,
+          preview: [{ label: 'Value', before: '1k', after }]
+        }
+      })
+    }
+  })
+  await mount()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
+    target: { value: 'pull-ups' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  const plan = await screen.findByLabelText('Plan needs your approval')
+  expect(within(plan).getByText('10k')).toBeInTheDocument()
+  expect(screen.queryByLabelText('Action needs your approval')).not.toBeInTheDocument()
+  expect(bridge.setBusy).toHaveBeenLastCalledWith(true)
+  await act(async () => {
+    fireEvent.click(within(plan).getByRole('button', { name: 'Run 2 steps' }))
+  })
+  expect(vi.mocked(decideSolConfirmation).mock.calls.map((c) => c.slice(0, 3))).toEqual([
+    ['p1', 'r1-card', 'approve'],
+    ['p1', 'r2-card', 'approve']
+  ])
+})
+
+it('a command card in the pill keeps its own card and never joins the plan', async () => {
+  resetSolChatSessions()
+  vi.mocked(solApi.createSolConversation).mockResolvedValue({
+    id: 'c-cmd'
+  } as solApi.SolConversation)
+  vi.mocked(solApi.streamSolMessage).mockImplementation(async ({ onEvent }) => {
+    onEvent({
+      type: 'tool_confirmation',
+      pending: {
+        confirmationId: 'cmd-card',
+        tool: 'code.exec',
+        summary: 'Run the tests',
+        preview: [{ label: 'command', before: null, after: 'pytest -q' }]
+      }
+    })
+    onEvent({
+      type: 'tool_confirmation',
+      pending: {
+        confirmationId: 'edit-card',
+        tool: 'kicad.set_symbol_property',
+        summary: 'Set R1',
+        preview: [{ label: 'Value', before: '1k', after: '10k' }]
+      }
+    })
+  })
+  await mount()
+  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+  fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'go' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  const plan = await screen.findByLabelText('Plan needs your approval')
+  expect(within(plan).getByText('PLAN · 1 STEP')).toBeInTheDocument()
+  expect(within(plan).queryByText('pytest -q')).not.toBeInTheDocument()
+  const card = screen.getByLabelText('Action needs your approval')
+  expect(within(card).getByText('pytest -q')).toBeInTheDocument()
 })

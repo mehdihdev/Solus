@@ -107,6 +107,29 @@ async def test_get_entity_returns_a_curated_json_native_value(
     json.dumps(result.model_dump(mode="json"))  # model-consumable — must not raise
 
 
+async def test_a_machines_command_history_is_not_returned_to_the_model(
+    db: AsyncSession, engine: AsyncEngine
+) -> None:
+    """M38: `get_entity` on a machine drops its `recent_commands` (owner-only, read through
+    `project_card.owned_commands`); the rest of its attrs come back."""
+    project, _ = await _make_project_with_entity(db, "machines")
+    machine = GraphEntity(
+        project_id=project.id,
+        kind="machine",
+        domain=Domain.RUNTIME,
+        name="laptop",
+        attrs={"hostname": "box", "recent_commands": [{"command": "export TOKEN=x"}]},
+    )
+    db.add(machine)
+    await db.commit()
+
+    result = await _tool_for(engine, project.id).invoke(
+        ToolCall(tool="get_entity", args={"entity_id": str(machine.id)})
+    )
+
+    assert result.ok is True and _val(result)["attrs"] == {"hostname": "box"}
+
+
 async def test_registry_lists_the_get_entity_tool(db: AsyncSession, engine: AsyncEngine) -> None:
     registry = _tool_for(engine, uuid.uuid4())
     names = [d.name for d in registry.list()]

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.agent.expertise import Expertise, register_line
 from solus_api.connectors.secrets import SecretStore
 from solus_api.models import SolMode
 from solus_api.orchestration.cost import EnqueueFn
@@ -58,8 +59,11 @@ async def narrate(
     redis: RedisLike | None,
     enqueue: EnqueueFn | None,
     mode: SolMode,
+    expertise: Expertise | None = None,
 ) -> dict[str, Any]:
-    """No opt-out from billing, tool access, retries or model-written evidence."""
+    """No opt-out from billing, tool access, retries or model-written evidence. `expertise`, the
+    levels the SOL prompt speaks to (SOLUSDEV-321 P6 fix 1), adds their register line after the
+    mode's note; None leaves the text as it is."""
     if not isinstance(user_id, UUID) or session is None:
         raise ValueError("Narration requires authenticated identity and a metered session")
     cards = result["findings"]
@@ -82,6 +86,9 @@ async def narrate(
         if mode == SolMode.GUIDE
         else "Expert mode: give a terse technical explanation."
     )
+    register = register_line(expertise)
+    if register is not None:
+        style = f"{style} {register}"
     try:
         completion = await complete(
             data,
@@ -96,6 +103,7 @@ async def narrate(
             redis=redis,
             enqueue=enqueue,
             max_tokens=2048,
+            purpose="narration",
         )
         prose = _parse(completion.text, len(cards))
     except Exception:  # noqa: BLE001 — optional prose fails closed; never log private provider text

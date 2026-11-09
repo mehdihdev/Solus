@@ -483,7 +483,72 @@ to the invitee):
 ```
 
 - wrong email on the accepting account → `403`
-- revoked → `409 invite_revoked` · already used → `409 invite_already_accepted` · expired (7-day TTL) → `410 invite_expired`
+- revoked → `409 invite_revoked` · declined → `409 invite_declined` · already used → `409 invite_already_accepted` · expired (7-day TTL) → `410 invite_expired`
+
+### Invitations to me (SOLUSDEV-319, multi-team Home) — authed, verified email
+
+The rail on Home lists the invites waiting for the caller, so joining a team no longer needs a
+pasted token. All three routes require a **proven, verified email** (`403 email_not_verified`,
+the `VerifiedEmail` dependency): matching an invite by an address the caller has not proven
+would let anyone who signs up with someone else's email see, and join, their teams.
+
+- The address is the TOKEN's `email` claim (lower-cased), never `users.email` (set once at
+  sign-up, never refreshed).
+- Supabase access tokens rarely carry `email_verified`, and an absent claim reads as verified
+  (ADR-009, `core/security.py`), so the proof is the auth user's `email_confirmed_at`, read with
+  the service-role key (`SupabaseAdmin.confirmed_email`); it must name the same address. An
+  explicit `email_verified: false` claim is refused first.
+- **Fail closed:** without a service-role key the routes answer `403 email_not_verified`
+  outside `app_env=dev`; in dev they fall back to the token's email (logged).
+
+Only EMAIL invites are matched (lower-cased, exact); GitHub-identity invites (ADR-039) keep their
+token flow. An invite that is not addressed to the caller, or whose team is deleted, is
+`404 not_found` on every route: no existence leak. The `team.invite` notification names the
+invite (`team_id`, `invite_id`, `role`) but **never carries the token** (SOLUSDEV-319). The token
+route also compares the token's email claim, and both paths lock the invite row: racing answers
+settle on one outcome, the loser gets `409` (`already_member` when a concurrent accept won the
+membership).
+
+#### GET /api/v1/users/me/invites
+
+`200` — pending invites whose `email` is the caller's, not expired, for teams the caller is not
+already a live member of; newest first, at most 50 (no cursor: a person has few):
+
+```json
+{
+  "data": [
+    {
+      "id": "019ebe61-ae9e-776e-b01e-4a8f2af10bf5",
+      "team": {
+        "id": "019ebe61-ae57-75e5-bfa9-6ebc83df6b68",
+        "name": "Bracket Labs"
+      },
+      "role": "member",
+      "invited_by": { "name": "Lena V" },
+      "created_at": "2026-11-05T10:00:00Z",
+      "expires_at": "2026-11-12T10:00:00Z"
+    }
+  ]
+}
+```
+
+`invited_by.name` is the inviter's display name (or the local part of their email when they have
+none); `null` when the inviter's account is gone. Never the token, never the invitee email.
+
+#### POST /api/v1/users/me/invites/{invite_id}/accept
+
+`200` `{ "data": { "team_id": "…", "role": "member" } }` — exactly the token route's effects
+(membership, project shares for existing team projects, `invite.accepted` activity, event and the
+inviter's notification) and errors: `409 invite_revoked` / `invite_declined` /
+`invite_already_accepted`, `410 invite_expired`, `409 already_member`, and the plan limit
+(ADR-032, `check_can_accept_team_invite`). Both routes share one implementation.
+
+#### POST /api/v1/users/me/invites/{invite_id}/decline
+
+`204` — the invite becomes `declined` (a new `InviteStatus`; migration widens the CHECK). It drops
+out of the team's pending list. Records `invite.declined` activity on the team, emits the
+`invite.declined` data event, and notifies the inviter ("<email> declined your invite"). Errors:
+`409 invite_revoked` / `invite_declined` / `invite_already_accepted`, `410 invite_expired`.
 
 ### GET /api/v1/teams/{team_id}/activity?limit=3&type=&domain=&actor=
 
@@ -722,15 +787,15 @@ token so a sign-out/sign-in shares nothing with the previous account:
 
 ## 9. Not implemented in this slice (and why)
 
-| Surface                                                                                                                                                                                                                            | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| §2.1 API keys (`/users/me/api-keys`)                                                                                                                                                                                               | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| §2.4–§2.15, WS/SSE                                                                                                                                                                                                                 | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `POST /graph/query`, MCP server, presence topic                                                                                                                                                                                    | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Surface                                                                                                                                                                                                                            | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| §2.1 API keys (`/users/me/api-keys`)                                                                                                                                                                                               | Excluded from Phase 1 by API.md §8 (rides with the MCP decision)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| §2.4–§2.15, WS/SSE                                                                                                                                                                                                                 | Later phases (graph, sources, checkers, agent, bench, …)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `POST /graph/query`, MCP server, presence topic                                                                                                                                                                                    | **[DEFERRED]** per API.md §7.2 — blocked on human decisions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | Stripe billing routes (`POST /api/v1/webhooks/stripe`, `POST /api/v1/billing/checkout-session`, `POST /api/v1/billing/portal-session`, `GET /api/v1/billing/packs`, `GET /api/v1/users/me/credits`, `GET /api/v1/billing/summary`) | **Built** — webhook (SOLUSDEV-83) + the checkout/portal/packs/credits routes (SOLUSDEV-83 follow-up) lift the §7.2 deferral by human decision. **SOLUSDEV-236 (Built 2026-10-21):** `GET /api/v1/billing/summary` (new), `POST /api/v1/billing/portal-session` flow body, trial expiry (`402 trial_expired`), `billing_interval`/`current_period_end` and the hourly subscription reconciliation cron (§10). Locked by ADR-024 (2026-10-19 amendment); the summary shape was approved in-chat 2026-10-19. Full "select plan → Stripe Checkout → webhook confirms" flow. See §10. The trial-only `PATCH /users/me/subscription` (no Stripe call — ADR-032) remains live for onboarding, see §3. Enterprise stays contact-sales. |
-| Alembic migrations                                                                                                                                                                                                                 | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ARQ/Redis worker wiring                                                                                                                                                                                                            | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Data-collection consent (§2.13)                                                                                                                                                                                                    | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Alembic migrations                                                                                                                                                                                                                 | Schema is final-for-phase but baseline migration generation needs a running Postgres; tracked for the integration-environment ticket. Tests/dev use `metadata.create_all`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ARQ/Redis worker wiring                                                                                                                                                                                                            | No job-producing endpoint exists yet (first one: §2.5 sync in Phase 3); §2.16 read/cancel surface is live                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Data-collection consent (§2.13)                                                                                                                                                                                                    | **Live** — the ADR-011 opt-in/out ships as `data_collection_consent` on `GET`/`PATCH /users/me/settings` (see §3), not as dedicated §2.13 routes. Default remains **false**; events are recorded only while consented.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ### Implementation decisions made under delegated judgment (CLAUDE.md §10)
 
@@ -1041,17 +1106,21 @@ same active row and stored preview within the same owner's conversation. A
 conversation row lock serializes concurrent park checks and inserts. This does
 not reuse decided/expired rows or treat chat text as approval.
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, preferences?}` where `action_mode` is
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?, front_app?}` where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
 SOLUSDEV-168: `mentions` is a list of graph entity ids the user pointed at with the composer's
 `@` — integration-agnostic, because an entity id addresses any node in the graph at any depth.
-They lead the neighbourhood's anchors (`reason.plan_query`), capped at `MAX_ANCHORS` (8) both
-here and again in the planner, since that cap is what bounds the traversal's DB work. Ids are
-NOT existence-checked: `load_neighborhood` is project-scoped, so one from another team yields
-an empty neighbourhood rather than a distinguishable error — answering differently for "exists
-elsewhere" than for "does not exist" would be a cross-tenant existence oracle.
+They lead the neighbourhood's anchors (`turn_scope.plan_scope`, SOLUSDEV-321 P1-T1), capped at
+`MAX_ANCHORS` (8) both here and again in the planner, since that cap is what bounds the
+traversal's DB work. Ids are
+checked for visibility at admission, before any spend: one the caller's current view of the
+project cannot see — another team's, deleted, hidden by a source view, or never existing — is
+`409 stale_mentions`, the same answer for all of them, so the refusal is no cross-tenant
+existence oracle. SOLUSDEV-321 (P0-T3) adds `pins`, `focus`, `finding_id` and `robot_id` as
+anchors of their own, each carrying the reason it is there; their stale-id rules are in
+API.md §2.9.
 Returns `text/event-stream`. The user turn is persisted
 (and `sol.message` logged) before streaming; assistant/tool turns are persisted as the stream
 completes. SSE `event:` names and their `data` payloads:
@@ -1069,11 +1138,48 @@ project's `.solus` conventions (reserved `kind=project_preferences`, empty for n
 and that they override shipped references (`kind=context_corpus`), and that they can never
 change rules, tools, scope, or what counts as data. Absent or all-blank ⇒ no block.
 
+**`front_app` (SOLUSDEV-319 slice 4, ADR-041 2026-10-31).** Optional; the app the user summoned SOL
+over, from desktop main's summon snapshot (`docs/architecture/sol-drive.md` §2.2). The desktop sends it
+only on Build turns (`action_mode: "do"`) while "SOL can use your mouse and keyboard" is on and driving
+is available. On any other turn (Guide) `front_app` is dropped silently: no `422`, no
+`sol.front_app_attached`. _(SOLUSDEV-319 Phase 4)_ Strict shape (`extra="forbid"`, `422` on an unknown field):
+
+| Field       | Type                              | Rule                                                                    |
+| ----------- | --------------------------------- | ----------------------------------------------------------------------- |
+| `bundle_id` | string                            | `^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$`                                     |
+| `name`      | string                            | 1–64 characters, visible text only (no Cc/Cf/Co/Cn/Cs/Zl/Zp)            |
+| `title`     | string \| null                    | ≤ 256 characters, visible text only; untrusted data, never instructions |
+| `pid`       | int \| null                       | 1 … 2³¹−1                                                               |
+| `window_id` | int \| null                       | 1 … 2³²−1 (`null` or `0` on a window-bound app: see Consistency)        |
+| `drivable`  | bool                              | required                                                                |
+| `binding`   | `"project"` \| `"window"` \| null | required key                                                            |
+
+Consistency (`422` otherwise): `drivable: false` ⇒ `title`, `pid` and `window_id` are null (a denied
+app's title is never accepted) and `binding` is null or `"project"` (a KiCad that is not drivable here);
+`drivable: true` ⇒ `binding` is non-null; `binding: "window"` with `drivable: true` ⇒ `pid` and
+`window_id` are non-null. A window-bound `drivable: true` whose `window_id` is `null` or `0` (no ordinary
+window in front, e.g. only minimized windows) is normalised before validation to `drivable: false`,
+`binding: null`, with `title`, `pid` and `window_id` null: not a `422`. A missing `window_id` key is
+still refused. Rejected with `422` on resume (`resume_confirmation_id`) and wake
+(`process_prompt`) turns. **Never logged:** not in the transcript, not in `sol.message` or any event
+payload, and a `422` never echoes it (the error handler redacts `input`). The exception is a parked
+`drive.step {app: "front"}`: its copied `window` binding (`bundle_id`, `name`, `title`, `pid`,
+`window_id`, title included) is stored in `tool_confirmations.args`, which the card and its
+decide-time re-checks read. Use: one nonce-fenced `kind=front_app`
+data block in the turn context (title inside the fence), the drive-route ordering in the framing
+(integration API → workspace file tools such as `machine.write_file` → `drive.step`), and — when
+`drivable: true, binding: "window"` — `drive.step`'s `app: "front"`, whose stored `window` binding is
+copied from this field by Solus code, never from model arguments. Emits `sol.front_app_attached`
+`{project_bound, drivable}` (never the title or bundle id). _(SOLUSDEV-319 Phase 4)_
+
 - `token` — `{"text": "…"}` incremental reply delta
-- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped"}`
-  (SOLUSDEV-233) the turn's context manifest, streamed once at turn start. Section
-  TEXT never crosses the wire — kinds (`graph|telemetry|error|document`), verified
-  citation tokens, and token weights only. Drives the client's "context in use" panel.
+- `context_used` — `{"sections":[{"kind","citation","tokens"}],"truncated","dropped","layers":[{"layer","tokens","sections","empty_reason"}],"anchors":[{"id","reason"}],"anchors_dropped":[{"id","reason","cause"}]}`
+  (SOLUSDEV-233; `layers`, `anchors` and `anchors_dropped` SOLUSDEV-321 P0-T4) the turn's
+  context manifest, streamed once at turn start. Section TEXT never crosses the wire — section
+  kinds (`graph|solus|error|document|corpus|telemetry|screen`), verified citation tokens, and
+  token weights only; `layers` lists all eleven context layers in prompt order, each empty one
+  with its reason (`docs/architecture/sol-context-layers.md`). Drives the client's "context in
+  use" panel.
 - `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
 - `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;
@@ -1227,6 +1333,15 @@ later-phases line, and `docs/contracts/sol-interface.md` §4 guarantees the wind
 to continuous delivery without a contract change. Durable telemetry history stays out of scope
 (LNK-06 decision: live ephemeral values only).
 
+Recorded bench runs (start/stop, the run manifest, compare against a sim twin, and the dev-only
+replay provider) are planned in `docs/api/bench-runs.md` (SOLUSDEV-321).
+
+**Finding markers (SOLUSDEV-321 P2-T3).** A `/bench/events` record may carry a `finding_id`: a
+marker a robot session's window evaluator (§15b) attached server-side at a finding's first raise
+in that session, on each channel its part streamed. The ingest model (`ObserverEventIn`,
+`extra="forbid"`) has no such field, so a posted event that names one is refused with `422`, and
+only server-attached ids ever reach the ring.
+
 ### Observed telemetry devices (SOLUSDEV-262 additive amendment)
 
 `GET /api/v1/projects/{project_id}/bench/telemetry-devices` returns the standard
@@ -1276,6 +1391,22 @@ serials refuse with candidates — `409 device_ambiguous` — unless an explicit
 Session state is in-memory and project-keyed (BenchEventRing posture — lifecycle, not history;
 no migration). Lifespan shutdown closes every pump/subprocess/port. Data events:
 `bench.session_started` / `bench.session_stopped`.
+
+**Robot sessions run the window evaluator (SOLUSDEV-321 P2-T3).** A session started for a
+configured robot carries `robot_entity_id`, and session detail and list rows report it (null for
+any other session). This covers the `robot` and `hardware` providers here, and the sessions the
+hardware bind and connect flows start. `robot_entity_id` / `evidence.robot_id` is the session's
+ROOT entity — a robot, or a bare part bound on its own — and `missing_signals` lands on that root.
+Such a session runs one window evaluator:
+
+- it is a per-session ticker that reads the parts' buffered telemetry by event time;
+- it judges the live-signal rules over one-second event-time windows, each within a CPU budget
+  that grows with the session's parts (`docs/api/findings.md` §5);
+- it raises what they find as observer findings (`docs/api/findings.md` §5);
+- it starts once the session's connection is up and is cancelled when the session ends.
+
+The session also keeps the member who started it (or bound the robot) as its owner: the identity
+the evaluator reads the robot's baseline run under.
 
 Related (§2.5 amendment): `GET /api/v1/integrations/local-tools` lists vendor-run loopback MCP
 servers from the ADR-031 catalog (Fusion today) for the desktop's generic `local-bridge` tile —
@@ -1360,3 +1491,38 @@ open ports, create graph facts, alter focus, or change telemetry ownership.
 When true, the per-turn Build policy cannot automatically authorize owned routines; mutating
 calls follow the existing confirmation-card/decision path. Explicit host-mirror offers send true.
 The flag does not grant tool, workspace or project authority and does not make Guide executable.
+
+---
+
+## 17. Proposal outcomes and usage per turn (SOLUSDEV-321 P8) — LIVE
+
+Planned in `API.md` §2.9; the table is `docs/schemas/proposal-outcomes.md`. Both routes take the
+same paging parameters:
+
+| Param    | Type      | Default     | Notes                                                                     |
+| -------- | --------- | ----------- | ------------------------------------------------------------------------- |
+| `since`  | ISO 8601  | 90 days ago | A naive time is UTC; anything older than 90 days reads from 90 days ago.  |
+| `cursor` | opaque    | —           | The previous page's `meta.next_cursor`; malformed → `400 invalid_cursor`. |
+| `limit`  | int 1–200 | 50          | Outside the range → `422 validation_error`.                               |
+
+**`GET /api/v1/projects/{project_id}/outcomes`** — the project's proposal outcomes, newest first:
+`{"data": [{id, conversation_turn_id, tool, proposal_digest, decision, entity_ids,
+design_signals, machine_id, created_at}], "meta": {limit, has_next, next_cursor}}`. Every member
+lists every row; `conversation_turn_id`, `machine_id` and `proposal_digest` are null unless the
+caller made the decision. Implementation: `routers/outcomes.py::list_outcomes`; rows written by
+`services/outcomes.py:record_outcome`.
+
+**`GET /api/v1/projects/{project_id}/usage/turns`** — the caller's own usage rows for this project,
+newest first: `{"data": [{id, created_at, turn_id, purpose, tier, credits, tokens_in,
+tokens_out}], "meta": {limit, has_next, next_cursor}}`. `credits` is what the call spent (0 for a
+zero-credit call); `tier` is null for a web call. A teammate's rows and every balance are never
+returned. Implementation: `routers/usage_turns.py::list_usage_turns` (`credit_ledger.user_id`
+first, then `attrs.project_id`, usage rows only; the `(user_id, created_at)` index serves the
+order).
+
+- **Scoping:** `ProjectCtx` as every project route — 401 without a token; 404 for a non-member or
+  an unknown project, never 403.
+- **Rate limiting:** the app-wide read bucket (§7); neither route is metered.
+- **Example:** `GET {{base}}/api/v1/projects/{{project_id}}/outcomes?limit=2` with
+  `Authorization: Bearer {{jwt}}`; follow `meta.next_cursor` with `&cursor=…`.
+- Tests: `tests/test_outcomes.py`, `tests/test_usage_turns.py`, `tests/test_change_signals.py`.

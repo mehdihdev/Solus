@@ -152,9 +152,10 @@ print(c.model_name, c.context_window)"`
       "Free trial usage limit reached — upgrade to continue" with
       `/settings/billing`. They must never be swapped.
 - [ ] 4d.4 Redis behavior: with `SOLUS_REDIS_URL` unset the frequency cap
-      FAILS OPEN and logs a "fail-open" warning per call (confirmed policy);
-      with Redis up (docker-compose `redis:7`), keys `solus:freqcap:<user_id>`
-      appear with a TTL.
+      FAILS CLOSED on a per-process local window (SOLUSDEV-321): the same
+      limit still refuses the (limit+1)th call in a minute, and one warning
+      per process names the cause; with Redis up (docker-compose `redis:7`),
+      keys `solus:freqcap:<user_id>` appear with a TTL.
 - [ ] 4d.5 Overshoot semantics (by design, Q9): a trialing user just UNDER the
       cap can run one call that lands past it (billed actual); the NEXT call
       blocks. No cost pre-authorization exists.

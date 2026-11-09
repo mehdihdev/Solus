@@ -1,6 +1,6 @@
 // NODES IN CONTEXT (design template): the nodes a person pinned to a chat. Client-side
-// state — the API has no per-chat context set — sent as `mentions` on every send of that
-// chat, merged with the `@`-mentions typed into the message. Persisted per account in
+// state — the API has no per-chat context set — sent as `pins` on every page send of that
+// chat, apart from the `@`-mentions typed into the message. Persisted per account in
 // localStorage (names are project content, so the account's end clears it); a fresh
 // chat's pins live under `new` until the first send creates the conversation.
 // ponytail: localStorage; a server-side set if pins must follow the account across machines.

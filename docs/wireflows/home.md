@@ -30,7 +30,79 @@ item, the "All projects" entry of the project pill (`project-topbar.md`), and
 | └────────────────────────┘ │                                                                  |
 ```
 
-## Layout: sidebar + one pane (SOLUSDEV-317 redesign, concept B)
+## Layout: team rail + team overview (SOLUSDEV-319, multi-team Home, design D)
+
+Supersedes the SIDEBAR of concept B below (the project list leaves it) and adds the team
+overview as the pane's default view. The project pane, Team & invites and Connected accounts
+views below are unchanged.
+
+```
+| Welcome back, Maya        │ [AL] Arm Lab                     (AV)(AV)(AV) +1  [Invite to Arm Lab] ⋯ |
+| YOUR TEAMS · 3            │      ACTIVE · 4 MEMBERS                                              |
+| ┃[AL] Arm Lab           ┃ │ PROJECTS · 2                                          [New project] |
+| ┃     Owner · 4 members ┃ │ PROJECT            SOURCES               LAST CHANGE             ⋯ |
+|  [FR] FSAE Robotics       │ Rover MK2          [Gh] strider/rover-fw  synced GitHub · 2h      ⋯ |
+|       Member · 12 members │   six-wheel rover                                                  |
+|  [PE] Personal workspace  │ Arm                —                     No recent activity      ⋯ |
+|       Only you            │ ▸ ARCHIVED (1)                                                      |
+| ┆ Create a team         ┆ │ MEMBERS · 4                          │ YOU IN ARM LAB               |
+| ┆ Join with an invite code┆│ (AV) Maya   maya@…        Owner      │ Role      Owner              |
+| 1 of 2 collaborative teams│ (AV) Bob    bob@…         Member     │ Joined    3mo ago            |
+| ┌ INVITATIONS · 1 ───────┐│ All 4 members and invites            │ Projects  2                  |
+| │ Bracket Labs           ││                                      │ ┆ PENDING INVITES · 1 ┆       |
+| │ Lena V invited you as a││                                      │ ┆ sam@… · Member · 1d ┆       |
+| │ Member [Accept][Decline]││                                     │ ┆ Manage invites      ┆       |
+| └────────────────────────┘│                                                                     |
+| ┌ ACCOUNT ───────────────┐│                                                                     |
+```
+
+- **Team rail** (`TeamRail`, 280 px, `aside "Teams"`): the greeting; **YOUR TEAMS · N**
+  (`list "Your teams"`) — every team I belong to, collaborative teams in API order and the
+  personal workspace last, each a button with an initials tile, the name ("Personal
+  workspace" for mine), and "<Role> · N members" ("Only you" on the personal workspace; the
+  size is read once per team from `GET /teams/{id}` and left out until known). The active
+  team has the accent border and `aria-current`. **Clicking a team makes it active through
+  the team choke point and shows its overview**; clicking the active team just returns to its
+  overview. Beneath: **Create a team** and **Join with an invite code** (the existing New team
+  and Join team modals), the plan-limit line (`TeamLimitLine`), then **INVITATIONS**.
+- **Invitations** (`region "Invitations"`, only when something is waiting, or when my email is
+  unverified): one row per pending invite addressed to my verified email across teams
+  (`GET /users/me/invites`, docs/api/API-implementation.md §4): the team, "<inviter> invited
+  you as a <Role>", **Accept** and **Decline** (both disabled while an answer is in flight).
+  Accept joins and lands me on that team's overview; Decline drops the row. A refusal is
+  named: at the plan limit the `PlanLimitNotice` with Upgrade; an invite that closed meanwhile
+  "That invitation is no longer open." (and the row leaves); "You're already on that team.";
+  unverified email "Verify your email to see the invitations sent to it."
+- **ACCOUNT** card at the rail's foot, unchanged (Connected accounts, Team & invites).
+- **Pane — Team overview** (`TeamOverview`, the default view; a Settings deep link still
+  picks its pane):
+  - **Header**: initials tile, the team name (h2), a mono line "<PLAN> · N MEMBERS" ("ONLY
+    YOU" on the personal workspace), up to four member avatars and "+N", then **Invite to
+    <team>** for owners and admins — a member or viewer reads "You're a <Role> here · ask an
+    owner or admin to invite" instead — and the team ⋯ menu (`TeamMenu`: Invite teammate,
+    Join team, New team, Rename / Leave / Delete with their existing gating).
+  - **PROJECTS · N** (`TeamProjectsTable`, `table "Projects in <team>"` / "Your projects"):
+    PROJECT (name, description beneath), SOURCES (linked repos via `RepoLine`, "—" when none),
+    LAST CHANGE (the project's latest activity line, or "No recent activity"), and the row ⋯
+    for members and up. **The name opens the project's pane** (makes it current; nothing
+    opens). New project (members and up), the empty-state sentence and ARCHIVED (N) keep the
+    old list's rules. There is no warnings or health column: nothing reports them yet.
+  - **MEMBERS · N** (collaborative teams): the first six members (avatar, name, email, role
+    pill) and "All N members and invites", which opens the Team & invites view. "Loading the
+    team…" until the roster is known.
+  - **YOU IN <TEAM>**: my role, when I joined, the team's live project count. For owners and
+    admins, **PENDING INVITES · N** (up to four: invitee, role, "sent <when>") with Manage
+    invites (the Team & invites view).
+  - **The personal workspace** has no roster: **WORK WITH OTHERS** — "Inviting someone starts
+    a new team for the two of you — your personal workspace stays yours alone. Or join a team
+    you were invited to." — with **Invite a teammate** (the invite modal; on a personal team
+    the server creates the new team, ADR-025) and **Join with an invite code**.
+- **Pane — Project**: unchanged, with "← Back to <team>" above it returning to the overview.
+- Dropped from design D (no data behind them yet): per-project domain owners, warnings,
+  members' last-seen and domain, a per-team SOL mode (ADR-016 keeps it per user), "needs you"
+  badges, and moving a project between teams.
+
+## Layout: sidebar + one pane (SOLUSDEV-317 redesign, concept B — sidebar superseded by the team rail above)
 
 Home is a full-height sidebar beside one pane; each scrolls on its own.
 

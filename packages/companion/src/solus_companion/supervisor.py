@@ -86,6 +86,13 @@ class BuiltinServer(Protocol):
     async def call_tool(self, tool: str, args: dict[str, Any]) -> CallToolResult: ...
 
 
+def _leaf(exc: BaseException) -> str:
+    """The innermost cause of an anyio/mcp ExceptionGroup, as one short line."""
+    while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
+        exc = exc.exceptions[0]
+    return f"{type(exc).__name__}: {exc}"
+
+
 def child_env(
     declared: Mapping[str, str],
     passthrough: Sequence[str] = (),
@@ -205,8 +212,22 @@ class ServerHandle:
                 await stop.wait()
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("server %r session ended abnormally", self.launch.name)
+        except Exception as exc:
+            if self.state is ServerState.READY:
+                logger.exception("server %r session ended abnormally", self.launch.name)
+            else:
+                # A launcher that exits before `initialize` (the isaac fork exits 78
+                # with no linked project folder) is a configuration state, not a
+                # crash: one line with the cause, no ExceptionGroup traceback.
+                no_folder = self.launch.url is None and "SOLUS_MCP_WORKSPACE" not in self.launch.env
+                logger.error(
+                    "server %r exited before becoming ready (%s)%s",
+                    self.launch.name,
+                    _leaf(exc),
+                    "; no project folder is linked, forks that need one refuse to start"
+                    if no_folder
+                    else "",
+                )
         finally:
             self.session = None
             if self.state is ServerState.READY:
@@ -426,6 +447,10 @@ class Supervisor:
         """Periodic health pass: ping each server; restart the dead ones."""
         for handle in self._handles.values():
             if handle.launch.unavailable_reason is not None or handle.state is ServerState.FAILED:
+                continue
+            if handle.active_calls:
+                # A sync server busy with a call cannot answer pings; killing it
+                # would abort the call mid-flight. The cloud owns call timeouts.
                 continue
             session = handle.session
             if session is not None and await self._ping(handle):

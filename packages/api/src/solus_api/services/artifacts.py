@@ -258,9 +258,10 @@ async def consume_tool_artifact(
     project scope + accessibility; the three ToolCall-identity checks lived,
     duplicated and incompletely, in `connectors/mcp_acquire.py`).
 
-    Never reachable via HTTP: `connectors/mcp_acquire.py`'s bridge export
-    acquirer is this function's only caller, so a companion can never trigger
-    consumption of an artifact through any client-facing route.
+    Never reachable via HTTP: its callers are `connectors/mcp_acquire.py`'s bridge
+    export acquirer and `bridge/service.py:consume_tool_image` (SOL's render of a
+    `returns_image` companion export, SOLUSDEV-321 P5), so a companion can never
+    trigger consumption of an artifact through any client-facing route.
 
     All six conditions must hold, or the artifact is left completely
     untouched and a 404 is raised (no existence oracle, same posture as every

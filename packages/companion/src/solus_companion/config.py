@@ -29,6 +29,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from solus_contracts import SOLUS_HOME_DIRNAME
@@ -139,6 +140,20 @@ class ServerLaunch:
     unavailable_reason: str | None = None
 
 
+class DriveReplySink(Protocol):
+    """Takes `{"type":"drive_reply",…}` lines (drive.helper.DriveRelay)."""
+
+    def deliver(self, message: Mapping[str, Any], *, size: int) -> None: ...
+
+
+#: Slice 3b (XPC): a drive reply carries a capture (≤ 24 MiB as JSON) and is the
+#: ONE line allowed past the control bound — recognised by its leading
+#: `{"type":"drive_reply",` before parsing, and re-checked after (a duplicate
+#: "type" key cannot pass). The desktop must serialise `type` first.
+_DRIVE_REPLY_PREFIX = re.compile(rb'\{\s*"type"\s*:\s*"drive_reply"\s*,')
+MAX_DRIVE_REPLY_LINE_BYTES = 25 * 1024 * 1024
+
+
 class TokenBox:
     """Mutable access-token holder (BRG-04 stdin relay). Callable, so it slots
     straight into `CompanionConfig.token_source`; the channel awaits
@@ -151,6 +166,8 @@ class TokenBox:
         # tokens. Attached by the channel once the discovered-server set is
         # known; None until then (credential lines are dropped with a log).
         self.credentials: CredentialRelay | None = None
+        # Slice 3b (sol-drive.md §3): replies to relayed drive calls ride here too.
+        self.drive_relay: DriveReplySink | None = None
         if token:
             self.available.set()
 
@@ -172,21 +189,12 @@ class TokenBox:
 def apply_token_line(box: TokenBox, line: str | bytes) -> None:
     """One stdin line from the desktop app: `{"type":"token","access_token":..}`
     updates the box, `{"type":"signout"}` clears it, `{"type":"credential",..}`
-    routes to the attached MCP-05 credential relay, garbage is logged and
-    ignored. Never raises; never logs token or credential material (§7 —
-    only key NAMES may appear in logs, never values)."""
-    if len(line) > _MAX_STDIN_LINE_BYTES:
-        # Oversize is refused BEFORE parsing: nothing this channel carries is
-        # legitimately this large (Addendum C 16 KiB control cap).
-        logger.warning("ignored oversize stdin line (%d bytes)", len(line))
-        return
-    try:
-        message = json.loads(line)
-    except (ValueError, UnicodeDecodeError):
-        logger.warning("ignored malformed stdin line (not JSON)")
-        return
-    if not isinstance(message, dict):
-        logger.warning("ignored malformed stdin line (not an object)")
+    routes to the attached MCP-05 credential relay, `{"type":"drive_reply",..}`
+    to the drive relay, garbage is logged and ignored. Never raises; never logs
+    token or credential material (§7 — only key NAMES may appear in logs)."""
+    raw = line.encode() if isinstance(line, str) else line
+    message = _control_message(raw)
+    if message is None:
         return
     kind = message.get("type")
     if kind == "token":
@@ -204,8 +212,37 @@ def apply_token_line(box: TokenBox, line: str | bytes) -> None:
             logger.warning("ignored credential line: no relay attached yet")
         else:
             box.credentials.offer(message)  # validates, queues, never raises
+    elif kind == "drive_reply":
+        if box.drive_relay is None:
+            logger.warning("ignored drive_reply line: drive is not attached")
+        else:
+            box.drive_relay.deliver(message, size=len(raw))  # validates, never raises
     else:
         logger.warning("ignored unknown stdin line type %.32r", kind)
+
+
+def _control_message(raw: bytes) -> dict[str, Any] | None:
+    """The parsed line, or None (logged). Oversize is refused BEFORE parsing —
+    nothing but a drive reply is legitimately this large (Addendum C 16 KiB
+    control cap) — and an oversize line must still turn out to BE a drive reply."""
+    oversize = len(raw) > _MAX_STDIN_LINE_BYTES
+    if oversize and (
+        _DRIVE_REPLY_PREFIX.match(raw, 0, 64) is None or len(raw) > MAX_DRIVE_REPLY_LINE_BYTES
+    ):
+        logger.warning("ignored oversize stdin line (%d bytes)", len(raw))
+        return None
+    try:
+        message = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        logger.warning("ignored malformed stdin line (not JSON)")
+        return None
+    if not isinstance(message, dict):
+        logger.warning("ignored malformed stdin line (not an object)")
+        return None
+    if oversize and message.get("type") != "drive_reply":
+        logger.warning("ignored oversize stdin line (%d bytes)", len(raw))
+        return None
+    return message
 
 
 @dataclass(frozen=True)

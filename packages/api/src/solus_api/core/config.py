@@ -89,7 +89,8 @@ class Settings(BaseSettings):
     # below that steady state, so a healthy client 429'd itself after ~30s.
     # Reads get 1200/min (20 req/s, ~10x normal load); writes KEEP 120/min,
     # because that budget is the interim burst bound on model-calling POSTs
-    # (orchestration/gates.py: the frequency cap fails open without Redis).
+    # (orchestration/gates.py: without Redis the frequency cap fails closed on a per-process
+    # local window, so it holds per API process, not fleet-wide).
     rate_limit_per_minute: int = 1200
     write_rate_limit_per_minute: int = 120
     # A7-01 `/panel/pair/start`: unauthenticated, one shared bucket behind the
@@ -140,6 +141,40 @@ class Settings(BaseSettings):
     stripe_pack_usd: dict[str, int] = {}
     # Max Stripe webhook body we will parse, bytes — bound untrusted input.
     stripe_webhook_max_bytes: int = 262144
+
+    # --- Academic plan (ADR-042, SOLUSDEV-319) ---
+    # Monthly credit grant for a live Academic plan (CONFIG, provisional like the trial
+    # grant). Unspent academic credits do not roll over.
+    academic_monthly_credits: int = 1000
+    # How long one verification keeps the Academic plan live.
+    academic_validity_days: int = 365
+    # Registrable-domain suffixes that count as academic. `edu` matches mit.edu and
+    # csail.mit.edu, never `edu` itself. JSON env var, e.g. SOLUS_ACADEMIC_EMAIL_SUFFIXES.
+    academic_email_suffixes: list[str] = [
+        "edu",
+        "ac.uk",
+        "edu.au",
+        "ac.nz",
+        "edu.sg",
+        "edu.hk",
+        "ac.jp",
+        "ac.kr",
+        "edu.cn",
+        "ac.in",
+        "edu.in",
+        "ac.il",
+        "ac.za",
+        "edu.br",
+        "edu.mx",
+        "edu.tr",
+        "edu.pl",
+        "ac.at",
+        "ac.be",
+    ]
+    # Verified sender for the code email, e.g. "Solus <verify@solusforge.com>". Sent through
+    # AWS SES in `aws_region` with the task's IAM role (no key in config). Unset outside
+    # `app_env=dev` ⇒ sending answers 503 email_unconfigured; in dev the code is logged.
+    academic_email_sender: str | None = None
 
     # --- Stripe Checkout (SOLUSDEV-83 follow-up) — the outbound money-in surface.
     # The Stripe SECRET API KEY is NOT a setting: it lives in the SecretStore under
@@ -279,6 +314,16 @@ class Settings(BaseSettings):
     # from. Unset (the default) refuses MCAP sessions outright — an unbounded
     # server-side file read keyed off a request body is not a feature (§7).
     bench_data_root: str | None = None
+    # SOLUSDEV-321 P2-T4: the only directory the DEV-ONLY `replay` bench provider may read
+    # recordings from (`SOLUS_BENCH_REPLAY_ROOT`). Unset (the default, and every deployed
+    # environment) refuses replay sessions outright, for the reason `bench_data_root` does.
+    bench_replay_root: Path | None = None
+    # SOLUSDEV-321 P4-T3: the circuit simulator the rung-3 SPICE job runs (`SOLUS_NGSPICE_BIN`),
+    # pinned here and never looked up on PATH. Unset (the default), missing, or not a regular
+    # executable file, the job says it is not available on this machine; the check is where it
+    # runs (`simulation/providers/ngspice_provider.py:pinned_simulator`), so a bad path never stops
+    # the server.
+    ngspice_bin: Path | None = None
     bridge_control_frame_max_bytes: int = 16_384
     #: `hello` alone is sized apart from the other control frames. It carries
     #: the FULL tool inventory — every advertised tool's JSON schema, for every
@@ -317,6 +362,12 @@ class Settings(BaseSettings):
     # `agent.tools.registry.DEFAULT_TIMEOUT_SECONDS`'s default by convention
     # (not imported, to keep config.py dependency-free of the tools package).
     bridge_tool_timeout_seconds: float = 30.0
+
+    # --- ADR-041 drive steps (2026-10-26 amendment: wall-clock, model time included) ---
+    drive_max_actions: int = Field(default=15, ge=1, le=50)
+    drive_max_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
+    # Cost ceiling per step: screenshots are never pruned, so input grows each round.
+    drive_max_input_tokens: int = Field(default=400_000, ge=20_000, le=2_000_000)
 
     # --- Artifacts (SOLUSDEV-100 T4c / docs/api/artifacts.md) ---
     # Hard upload cap (§4.4) — over → 413, enforced against Content-Length
@@ -375,6 +426,13 @@ class Settings(BaseSettings):
         if isinstance(raw, SecretStr):
             return SecretStr(raw.get_secret_value().replace("\\n", "\n"))
         return raw
+
+    @field_validator("bench_replay_root", "ngspice_bin", mode="before")
+    @classmethod
+    def _empty_replay_root_is_unset(cls, raw: object) -> object:
+        """An empty value is unset: `Path("")` would be the server's working directory. The same
+        holds for the pinned simulator binary."""
+        return None if isinstance(raw, str) and not raw.strip() else raw
 
     @cached_property
     def github_app_private_key_pem(self) -> str | None:

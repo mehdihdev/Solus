@@ -48,9 +48,20 @@ export function findIntegrationsRoot(
   startDir: string,
   exists: (path: string) => boolean
 ): string | null {
+  return findAncestorPath(startDir, INTEGRATIONS_TREE, exists)
+}
+
+/** The first `<ancestor>/<segments…>` that exists, walking up from `startDir`
+ *  to the filesystem root; null when none does. Shared by the MCP tree and the
+ *  dev drive helper (SOLUSDEV-319). */
+export function findAncestorPath(
+  startDir: string,
+  segments: readonly string[],
+  exists: (path: string) => boolean
+): string | null {
   let dir = startDir
   for (;;) {
-    const candidate = join(dir, ...INTEGRATIONS_TREE)
+    const candidate = join(dir, ...segments)
     if (exists(candidate)) return candidate
     const parent = dirname(dir)
     if (parent === dir) return null // filesystem root — stop, never loop
@@ -113,6 +124,39 @@ export interface CompanionEnvOptions {
    *  the variable is then left ABSENT so workspace-gated forks (Altium) fail
    *  closed rather than confining to an arbitrary directory. */
   workspace?: string | null
+  /** SOLUSDEV-319 (sol-drive.md §5): true only while "SOL can use your mouse
+   *  and keyboard" is on AND driving is available for this project. The
+   *  companion then reaches the helper through the agent, with the session
+   *  main sends on stdin (slice 3b) — there is no helper path variable. */
+  drive?: boolean
+  /** ADR-041 amendment 2026-10-28 (H-1): a packaged build starts from
+   *  PACKAGED_ENV_ALLOWLIST instead of inheriting everything, so inherited
+   *  SOLUS_COMPANION_* and PYTHON* (and DYLD_*, NODE_OPTIONS …) never reach the
+   *  companion. Dev keeps inheriting (developer overrides). */
+  packaged?: boolean
+}
+
+/** What a packaged companion may inherit; LC_* is matched by prefix. */
+export const PACKAGED_ENV_ALLOWLIST = ['PATH', 'HOME', 'USER', 'LOGNAME', 'TMPDIR', 'LANG'] as const
+
+function allowlisted(
+  inherited: Record<string, string | undefined>
+): Record<string, string | undefined> {
+  const allowed = new Set<string>(PACKAGED_ENV_ALLOWLIST)
+  return Object.fromEntries(
+    Object.entries(inherited).filter(([key]) => allowed.has(key) || key.startsWith('LC_'))
+  )
+}
+
+/** Set `key` only when nothing was inherited and something resolved: an
+ *  explicit inherited value wins, and nothing resolved means ABSENT, never
+ *  empty. */
+function fillAbsent(
+  env: Record<string, string | undefined>,
+  key: string,
+  value: string | null | undefined
+): void {
+  if (!env[key] && value) env[key] = value
 }
 
 export function companionEnv(
@@ -120,28 +164,67 @@ export function companionEnv(
   apiBaseUrl: string,
   options: CompanionEnvOptions = {}
 ): Record<string, string | undefined> {
-  const env = { ...inherited }
+  const env = options.packaged ? allowlisted(inherited) : { ...inherited }
   // Third of the same kind. Absent when nothing resolved, on purpose: the
   // companion refuses to invent a default because "that would turn a packaging
   // mistake into a silent zero-server run" (config.py), and a guessed path here
   // would replace its actionable error with exactly that.
-  if (!env.SOLUS_COMPANION_INTEGRATIONS_ROOT && options.integrationsRoot) {
-    env.SOLUS_COMPANION_INTEGRATIONS_ROOT = options.integrationsRoot
-  }
+  fillAbsent(env, 'SOLUS_COMPANION_INTEGRATIONS_ROOT', options.integrationsRoot)
+  // Derived only when needed: an insecure base URL throws, and an inherited
+  // URL must keep winning without that check.
   if (!env.SOLUS_COMPANION_URL) {
-    const url = companionWsUrl(apiBaseUrl, options.projectId ?? null)
-    if (url) env.SOLUS_COMPANION_URL = url
+    fillAbsent(env, 'SOLUS_COMPANION_URL', companionWsUrl(apiBaseUrl, options.projectId ?? null))
   }
   // Fourth of the same kind (see CAPABILITIES.md: "read in two places, written
-  // nowhere"). Same rules as its siblings: an explicit inherited value wins,
-  // and nothing resolved means ABSENT, never empty.
-  if (!env.SOLUS_COMPANION_WORKSPACE && options.workspace) {
-    env.SOLUS_COMPANION_WORKSPACE = options.workspace
-  }
-  if (!env.SOLUS_COMPANION_ALLOWED_HOSTS) {
-    env.SOLUS_COMPANION_ALLOWED_HOSTS = allowedHosts(env.SOLUS_COMPANION_URL)
-  }
+  // nowhere"). Same rules as its siblings.
+  fillAbsent(env, 'SOLUS_COMPANION_WORKSPACE', options.workspace)
+  applyDrive(env, options)
+  fillAbsent(env, 'SOLUS_COMPANION_ALLOWED_HOSTS', allowedHosts(env.SOLUS_COMPANION_URL))
   return env
+}
+
+/** The drive switch is NOT like its siblings: the setting is the consent, so
+ *  an inherited value never wins — it is deleted unless the option says on.
+ *  Window-bound driving needs no linked folder (ADR-041 2026-10-31), so the
+ *  switch is set with or without one; it stays off only when the workspace the
+ *  child gets is not the folder the nested-folder rule checked (an inherited
+ *  dev override — absent when no folder is linked). The slice 3 helper path
+ *  variable is retired (3b) and always removed. */
+function applyDrive(env: Record<string, string | undefined>, options: CompanionEnvOptions): void {
+  delete env.SOLUS_COMPANION_DRIVE
+  delete env.SOLUS_DRIVE_HELPER
+  if (options.drive !== true) return
+  if (env.SOLUS_COMPANION_WORKSPACE !== (options.workspace || undefined)) return
+  env.SOLUS_COMPANION_DRIVE = '1'
+}
+
+/** Drive for a child: off (null), or on with its checked folder or none. Same
+ *  shape as the relay's `attach` argument. */
+export type CompanionDrive = { workspace: string | null } | null
+
+/** The drive a child spawned with `env` for `workspace` actually got. */
+export function spawnedDrive(
+  env: Record<string, string | undefined>,
+  workspace: string | null | undefined
+): CompanionDrive {
+  return env.SOLUS_COMPANION_DRIVE === '1' ? { workspace: workspace || null } : null
+}
+
+/** The drive a child built from these inputs would get — exactly the env
+ *  builder's decision. Main bakes and compares this (L6), so what the relay
+ *  accepts as `--within` is what the child got. */
+export function companionDrive(
+  inherited: Record<string, string | undefined>,
+  options: Pick<CompanionEnvOptions, 'workspace' | 'drive' | 'packaged'>
+): CompanionDrive {
+  return spawnedDrive(companionEnv(inherited, '', options), options.workspace)
+}
+
+/** A comparable key for a drive decision: null for off, otherwise the folder
+ *  ('' for none — registry folders are absolute, never empty). Off, on without
+ *  a folder and on with one all differ, so each transition respawns. */
+export function driveDecisionKey(drive: CompanionDrive): string | null {
+  return drive === null ? null : (drive.workspace ?? '')
 }
 
 /** Loopback always, plus the configured URL's host when it parses. */

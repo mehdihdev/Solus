@@ -3,7 +3,7 @@
 // rate budget); panels capped with an honest overflow line. Stream state
 // derives from data timestamps — never asserted.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useAuthStore } from '../../store/authStore'
 import { DeviceBenchView, POLL_MS } from './DeviceBenchView'
@@ -163,6 +163,43 @@ it('fetches scoped observer evidence and clears it on project change', async () 
   mockedRecent.mockImplementation(() => new Promise(() => {}))
   view.rerender(<DeviceBenchView projectId="p2" deviceIds={['d']} />)
   expect(screen.queryByLabelText(`stream_gap at ${at}`)).not.toBeInTheDocument()
+})
+
+it('opens a marker’s finding and hosts the findings pane under LIVE REASONING', async () => {
+  const at = new Date().toISOString()
+  const finding = '0b5f8a3e-8c1d-4c6e-9a1f-2d3e4f5a6b7c'
+  mockedRecent.mockResolvedValue([
+    {
+      device_id: 'd',
+      resolved_entity_id: null,
+      signals: [{ signal: 'qvel', points: [{ timestamp: at, value: 1 }] }]
+    }
+  ])
+  vi.mocked(getSignalAnomalies).mockResolvedValue([
+    {
+      kind: 'threshold_breach',
+      device_id: 'd',
+      signal: 'qvel',
+      at,
+      value: null,
+      finding_id: finding
+    }
+  ])
+  const opened = vi.fn()
+  render(
+    <DeviceBenchView projectId="p1" deviceIds={['d']} onOpenFinding={opened}>
+      <p>findings pane</p>
+    </DeviceBenchView>
+  )
+  fireEvent.click(
+    await screen.findByRole('button', { name: `Open finding: threshold_breach at ${at}` })
+  )
+  expect(opened).toHaveBeenCalledExactlyOnceWith(finding)
+  const reasoning = screen.getByText('LIVE REASONING · SOL WATCHES THE RUN')
+  expect(
+    reasoning.compareDocumentPosition(screen.getByText('findings pane')) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy()
 })
 
 it('keeps signal values visible and reports unavailable anomaly evidence', async () => {

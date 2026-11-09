@@ -1,18 +1,20 @@
 // Live Bench discovers sessions independently of focus and narrows device panels
 // through confirmed topology. Empty projects open Workspace Add Hardware.
-import { lazy, Suspense, useCallback, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import type { Focus } from '@solus/shared-types'
 import { Icons } from '../../components/ui/icons.constants'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
 import { useFocusStore } from '../workspace/focusStore'
 import { useSharedFocus } from '../workspace/useSharedFocus'
-import type { MainScreen } from '../workspace/shellStore'
+import { useShellStore, type MainScreen } from '../workspace/shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Button } from '../../components/ui/Button'
 import { ConnectDeviceModal } from './ConnectDeviceModal'
 import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { BenchCanvasHost } from './BenchCanvasHost'
 import { DeviceBenchView } from './DeviceBenchView'
+import { FindingsPane } from './findings/FindingsPane'
+import type { BenchSession } from '../../lib/api/resources'
 import { activeDeviceIds, useActiveBenchSessions } from './useActiveBenchSessions'
 import { useExternalBenchDevices } from './useExternalBenchDevices'
 import './bench.css'
@@ -115,8 +117,9 @@ export function BenchScreen({
               Recorded sensor frames remain time-aligned in the Runs pane below.
             </p>
           </aside>
-          <DeviceBenchView
+          <BenchSignals
             projectId={project.id}
+            sessions={sessions}
             deviceIds={deviceIds}
             focusEntityId={focusEntityId}
             paused={paused}
@@ -142,6 +145,34 @@ export function BenchScreen({
         </section>
       </div>
     </BenchRealtimeContext.Provider>
+  )
+}
+
+/** The right column: live signals, then the Findings pane under LIVE REASONING (SOLUSDEV-321
+ *  P2-T7). A signal marker that names a finding opens it in the pane, for this session only. */
+function BenchSignals({
+  sessions,
+  ...view
+}: React.ComponentProps<typeof DeviceBenchView> & {
+  sessions: BenchSession[] | null
+}): React.JSX.Element {
+  const generation = useWorkspaceSessionGeneration()
+  // SOLUSDEV-321 P7: the finding a SOL citation pill asked for opens here. Read in the initializer
+  // and cleared in an effect, so a StrictMode double render still sees it (HomeScreen's homeView).
+  const [opened, setOpened] = useState<{ generation: number; id: string } | null>(() => {
+    const id = useShellStore.getState().benchFinding
+    return id ? { generation, id } : null
+  })
+  useEffect(() => useShellStore.getState().clearBenchFinding(), [])
+  return (
+    <DeviceBenchView {...view} onOpenFinding={(id) => setOpened({ generation, id })}>
+      <FindingsPane
+        projectId={view.projectId}
+        sessions={sessions}
+        selectedFindingId={opened?.generation === generation ? opened.id : null}
+        onCloseSelected={() => setOpened(null)}
+      />
+    </DeviceBenchView>
   )
 }
 

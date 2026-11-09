@@ -23,7 +23,7 @@ from solus.development.models import DevelopmentError, Point, fingerprint, valid
 from solus.development.plan import MutationPlan
 from solus.development.structural import children, document, insert_nodes
 from solus.development.structural import value as node_value
-from solus.write.sexpr import Node, parse
+from solus.write.sexpr import Node, TokenKind, parse, tokenize
 
 
 def create_schematic(
@@ -265,7 +265,8 @@ def add_symbol(
         for node in children(_one(root, "lib_symbols"), "symbol")
         if node_value(node) == library_id
     ]
-    if matches and original[matches[0].start : matches[0].end] != embedded:
+    # KiCad re-indents the embedded copy on save; same tokens is the same symbol.
+    if matches and _tokens(original[matches[0].start : matches[0].end]) != _tokens(embedded):
         raise DevelopmentError("unsupported_symbol")
     reference_at, value_at = _field_positions(
         placement, [project_pin(pin, placement, angle) for pin in definition.pins]
@@ -349,6 +350,11 @@ def add_symbol(
     )
     plan = MutationPlan.build(schematic_path, original, proposed, operation, rows)
     return finish(plan, dry_run, [{"kind": "symbol", "uuid": identity, "reference": reference}])
+
+
+def _tokens(data: bytes) -> list[tuple[TokenKind, str | None]]:
+    """Whitespace-insensitive identity of an S-expression (decoded token stream)."""
+    return [(token.kind, token.value) for token in tokenize(data)]
 
 
 def _check_placement(existing: dict[str, Any], root: Node, positions: list[Point]) -> None:

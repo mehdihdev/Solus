@@ -201,6 +201,70 @@ def test_firmware_bytes_are_pure_and_source_is_opaque(monkeypatch: pytest.Monkey
     assert extract_firmware_bytes(b"// empty\n", suffix=".ino", source_ref="review:abc") == []
 
 
+GOAL_SKETCH = """\
+void setGoalPositionDeg(int address, int goal);
+
+void loop() {
+  setGoalPositionDeg(3, 200);
+  bus.setTargetDeg(0x05, -90);
+  writePosition(2, 2.5f);
+  setGoal(4, target);
+  Wire.write(0x01);
+  digitalWrite(13, 1);
+  // setGoalPositionDeg(3, 90);
+}
+"""
+
+
+def test_goal_calls_carry_the_bus_address_and_the_literal_goal() -> None:
+    """SOLUSDEV-321 P3-T2: `write*` / `setGoal*` / `setTarget*` with a numeric first argument is a
+    goal call — the address, and the literal after it (None when the goal is not a literal)."""
+    from livebench.recognition.firmware import extract_firmware_bytes
+
+    found = extract_firmware_bytes(GOAL_SKETCH.encode(), suffix=".ino", source_ref="review:goal")
+
+    goals = {(f.name, f.pin, f.value, f.line, f.pin_ref) for f in found if f.kind == "goal_call"}
+    assert goals == {
+        ("setGoalPositionDeg", 3, 200.0, 4, "3"),
+        ("setTargetDeg", 5, -90.0, 5, "0x05"),
+        ("writePosition", 2, 2.5, 6, "2"),
+        ("setGoal", 4, None, 7, "4"),
+    }
+    assert all(f.language == "cpp" and f.file == "review:goal" for f in found)
+
+
+def test_a_goal_past_the_address_bounds_is_no_goal_and_never_fails_the_file() -> None:
+    from livebench.recognition.firmware import extract_firmware_bytes
+
+    source = b"void f() { setGoal(0x1FFFFFFFFF, 5); setTarget(1, 1e400); writeByte(7); }\n"
+    found = extract_firmware_bytes(source, suffix=".ino", source_ref="review:goal")
+
+    assert [(f.pin, f.value) for f in found if f.kind == "goal_call"] == [(1, None)]
+
+
+def test_a_file_full_of_goal_calls_still_yields_its_attach_calls() -> None:
+    """M11: goal calls have their own cap and never count toward the file's finding budget, so a
+    register-heavy sketch keeps its attach calls; goals fill only the room the other findings
+    leave, so the rows stay within the review's row cap."""
+    from livebench.recognition.firmware import (
+        MAX_EXTRACTION_FINDINGS,
+        MAX_GOAL_FINDINGS,
+        extract_firmware_bytes,
+    )
+
+    goals = "".join(f"setGoal(1, {n}); " for n in range(300))
+    source = f"void f() {{ a.attach(3); {goals}b.attach(5); }}\n".encode()
+    crowded = f"void f() {{ {'s.attach(1); ' * 250}{goals}}}\n".encode()
+
+    found = extract_firmware_bytes(source, suffix=".ino", source_ref="review:goal")
+    full = extract_firmware_bytes(crowded, suffix=".ino", source_ref="review:goal")
+
+    assert [f.pin for f in found if f.kind == "attach_call"] == [3, 5]
+    assert sum(f.kind == "goal_call" for f in found) == MAX_GOAL_FINDINGS
+    assert len(full) == MAX_EXTRACTION_FINDINGS
+    assert sum(f.kind == "attach_call" for f in full) == 250
+
+
 @pytest.mark.parametrize(
     "source,suffix,ref",
     [

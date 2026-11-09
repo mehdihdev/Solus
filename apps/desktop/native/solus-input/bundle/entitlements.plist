@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened runtime (codesign --options runtime) with no exceptions: no JIT, no
+     unsigned memory, no library-validation opt-out, no DYLD environment. Adding any
+     entitlement here weakens the helper that holds Accessibility and Screen Recording. -->
+<plist version="1.0">
+<dict/>
+</plist>

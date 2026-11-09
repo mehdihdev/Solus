@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import { create } from 'zustand'
 import { getDesktopSolBridge, type SolBridge } from '../../lib/desktopBridge'
 import type { SolRegionPayload, SolState } from '../../../../main/sol-window/solWindow'
+import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
 import type { SolActionMode, SolScreenshot } from './solApi'
 import { onAccountEnd } from './solSessionStore'
 
@@ -16,6 +17,13 @@ export interface SolWindowState {
   setState: (state: SolState) => void
   setRegion: (region: SolRegionPayload) => void
   clearRegion: () => void
+  /** SOLUSDEV-319: one plan runs at a time across the surface; the pill is busy meanwhile. */
+  planRunning: boolean
+  setPlanRunning: (running: boolean) => void
+  /** SOLUSDEV-319 slice 4: main's front-app summon snapshot — set only while
+   *  the pill is mounted (useFrontAppSnapshot); null elsewhere and when none. */
+  frontApp: SolFrontApp | null
+  setFrontApp: (front: SolFrontApp | null) => void
 }
 
 export const useSolWindowStore = create<SolWindowState>()((set) => ({
@@ -23,12 +31,16 @@ export const useSolWindowStore = create<SolWindowState>()((set) => ({
   region: null,
   setState: (state) => set({ state }),
   setRegion: (region) => set({ region }),
-  clearRegion: () => set({ region: null })
+  clearRegion: () => set({ region: null }),
+  planRunning: false,
+  setPlanRunning: (planRunning) => set({ planRunning }),
+  frontApp: null,
+  setFrontApp: (frontApp) => set({ frontApp })
 }))
 
 // FIX-2-R H1: the region is the signed-in account's pixels — sign-out or an
 // identity swap drops it (a project switch does too, via projectSwitch.ts).
-onAccountEnd(() => useSolWindowStore.getState().clearRegion())
+onAccountEnd(() => useSolWindowStore.setState({ region: null, frontApp: null }))
 
 let disconnect: (() => void) | null = null
 
@@ -52,6 +64,22 @@ export function connectSolBridge(bridge: SolBridge | null = getDesktopSolBridge(
 export function disconnectSolBridge(): void {
   disconnect?.()
   disconnect = null
+}
+
+/** SOLUSDEV-319 slice 4: the pill (and only the pill) mirrors main's
+ *  front-app snapshot while mounted; unmounting unsubscribes and forgets it.
+ *  A bridge without onFrontApp (older preload, browser) leaves it null. */
+export function useFrontAppSnapshot(
+  bridge: Pick<SolBridge, 'onFrontApp'> | null = getDesktopSolBridge()
+): void {
+  useEffect(() => {
+    const { setFrontApp } = useSolWindowStore.getState()
+    const off = bridge?.onFrontApp?.(setFrontApp)
+    return () => {
+      off?.()
+      setFrontApp(null)
+    }
+  }, [bridge])
 }
 
 /** UI labels for the SOLX-01 axis: Guide | Build (sol-window.md §7). */

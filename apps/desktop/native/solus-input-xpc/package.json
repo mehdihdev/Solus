@@ -1,0 +1,13 @@
+{
+  "name": "@solus/solus-input-xpc",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Solus.app main's XPC client for the SOL drive agent (docs/architecture/sol-drive.md §2.1). macOS only.",
+  "main": "build/Release/solus_input_xpc.node",
+  "os": ["darwin"],
+  "scripts": {
+    "build": "../../../../scripts/build-solus-input-xpc.sh",
+    "build:node": "../../../../scripts/build-solus-input-xpc.sh --node",
+    "test": "node --test test/*.test.js"
+  }
+}

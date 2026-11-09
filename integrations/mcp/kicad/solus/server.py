@@ -54,7 +54,7 @@ def _configure_logging() -> None:
 
 def build_server() -> Any:
     """The trimmed FastMCP server: upstream's lifespan, Solus's roster."""
-    from fastmcp import FastMCP  # type: ignore[import-not-found]
+    from fastmcp import FastMCP
     from kicad_mcp.context import kicad_lifespan
 
     from solus.registration import register_allowlisted_tools

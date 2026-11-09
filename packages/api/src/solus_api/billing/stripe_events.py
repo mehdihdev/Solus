@@ -182,7 +182,28 @@ async def _matched_subscription(
         return None
     if await _refuses_tombstoned_customer(session, local, customer):
         return None
+    if _is_stale_for_academic(local, obj, etype, sub_id):
+        logger.info("stripe event for an ended subscription ignored on an academic row")
+        return None
     return local
+
+
+# A live Stripe subscription can start on an Academic row (upgrading through Checkout);
+# anything else about a subscription the row no longer links is a late event for the
+# plan the user left before claiming Academic (ADR-042), and must not overwrite it.
+_LIVE_STRIPE_STATUSES = frozenset({"active", "trialing"})
+
+
+def _is_stale_for_academic(
+    local: Subscription, obj: dict[str, Any], etype: str, sub_id: str | None
+) -> bool:
+    if local.plan != PlanType.ACADEMIC or local.stripe_subscription_id is not None:
+        return False
+    if sub_id is None:
+        return True
+    return etype == "customer.subscription.deleted" or (
+        str(obj.get("status")) not in _LIVE_STRIPE_STATUSES
+    )
 
 
 async def _apply_subscription(
@@ -473,7 +494,9 @@ async def _apply_invoice_failed(session: AsyncSession, obj: dict[str, Any]) -> N
             Subscription.stripe_customer_id == customer, Subscription.deleted_at.is_(None)
         )
     )
-    if local is None:
+    # No linked Stripe subscription (e.g. Academic, ADR-042): the invoice belongs to a
+    # plan that already ended, so it cannot make this row past due.
+    if local is None or local.stripe_subscription_id is None:
         return
     local.status = SubscriptionStatus.PAST_DUE
     notify_user(

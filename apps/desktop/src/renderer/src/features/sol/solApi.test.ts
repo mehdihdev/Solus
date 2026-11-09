@@ -65,6 +65,7 @@ describe('streamSolMessage', () => {
   messageRequestRoutingTests(WIRE)
   messageRequestScreenshotTests(WIRE)
   messageRequestContextTests(WIRE)
+  messageRequestAnchorTests(WIRE)
   messageRequestAuthorizationTests(WIRE)
 })
 
@@ -293,6 +294,58 @@ function messageRequestContextTests(WIRE: string): void {
   })
 }
 
+function messageRequestAnchorTests(WIRE: string): void {
+  it('body carries focus and pins only when set', async () => {
+    // Canonical UUIDs: the server parses every anchor id as one.
+    const id = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+    // SOLUSDEV-321 P0-T3: where the person is looking, the chat's pinned nodes, a finding
+    // and a bench robot are anchors of their own — never folded into `mentions`. Each key is
+    // sent only when it has something to say, so the default body stays the minimal one.
+    const fetchImpl = vi.fn(async () => sseResponse(WIRE))
+    const base = {
+      projectId: 'p1',
+      conversationId: 'c1',
+      content: 'why is this hot?',
+      actionMode: 'guide' as const,
+      onEvent: () => undefined,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: async () => null,
+      baseUrl: 'http://api.test/api/v1'
+    }
+    await streamSolMessage({
+      ...base,
+      focus: { entityId: id(1), path: [id(2)] },
+      pins: [id(3), id(4)],
+      findingId: id(5),
+      robotId: id(6)
+    })
+    await streamSolMessage({ ...base, focus: { entityId: id(7), path: [] } })
+    await streamSolMessage({ ...base, pins: [] })
+    await streamSolMessage(base)
+    const bodies = fetchImpl.mock.calls.map(
+      (call) =>
+        JSON.parse((call as unknown as [string, RequestInit])[1].body as string) as Record<
+          string,
+          unknown
+        >
+    )
+    expect(bodies[0]).toMatchObject({
+      focus: { entity_id: id(1), path: [id(2)] },
+      pins: [id(3), id(4)],
+      finding_id: id(5),
+      robot_id: id(6),
+      mentions: []
+    })
+    // A focus with no trail is still a focus; an empty pin list is nothing to say.
+    expect(bodies[1].focus).toEqual({ entity_id: id(7), path: [] })
+    for (const body of bodies.slice(2)) {
+      for (const key of ['focus', 'pins', 'finding_id', 'robot_id']) {
+        expect(body).not.toHaveProperty(key)
+      }
+    }
+  })
+}
+
 function messageRequestAuthorizationTests(WIRE: string): void {
   it('omits the Authorization header when unauthenticated', async () => {
     const fetchImpl = vi.fn(async () => sseResponse(WIRE))
@@ -446,5 +499,95 @@ describe('SOLUSDEV-317 resume turns', () => {
     await expect(
       streamSolMessage({ ...base, content: 'x', fetchImpl: fetchImpl as unknown as typeof fetch })
     ).rejects.toMatchObject({ status: 502, code: 'sol_stream_failed' })
+  })
+})
+
+describe('SOLUSDEV-319 slice 4 front_app', () => {
+  const base = {
+    projectId: 'p1',
+    conversationId: 'c1',
+    actionMode: 'do' as const,
+    onEvent: vi.fn(),
+    getToken: async () => null,
+    baseUrl: 'http://api.test/api/v1'
+  }
+  const FREECAD = {
+    drivable: true as const,
+    binding: 'window' as const,
+    bundleId: 'org.freecad.FreeCAD',
+    name: 'FreeCAD',
+    pid: 4242,
+    windowId: 77,
+    title: 'bracket_v3.FCStd'
+  }
+  const WIRE_FREECAD = {
+    bundle_id: 'org.freecad.FreeCAD',
+    name: 'FreeCAD',
+    title: 'bracket_v3.FCStd',
+    pid: 4242,
+    window_id: 77,
+    drivable: true,
+    binding: 'window'
+  }
+
+  async function bodyOf(
+    input: Partial<Parameters<typeof streamSolMessage>[0]>
+  ): Promise<Record<string, unknown>> {
+    const fetchImpl = vi.fn(async () => sseResponse(''))
+    await streamSolMessage({
+      ...base,
+      content: 'add a fillet',
+      ...input,
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })
+    return JSON.parse(
+      (fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string
+    ) as Record<string, unknown>
+  }
+
+  it('a Build turn from the pill carries the snapshot with every key', async () => {
+    expect((await bodyOf({ frontApp: FREECAD })).front_app).toEqual(WIRE_FREECAD)
+  })
+
+  it('a denied app is sent with explicit nulls', async () => {
+    const body = await bodyOf({
+      frontApp: { drivable: false, binding: null, bundleId: 'com.apple.mail', name: 'Mail' }
+    })
+    expect(body.front_app).toEqual({
+      bundle_id: 'com.apple.mail',
+      name: 'Mail',
+      title: null,
+      pid: null,
+      window_id: null,
+      drivable: false,
+      binding: null
+    })
+  })
+
+  it('omits front_app with no snapshot, and in Guide mode', async () => {
+    expect(await bodyOf({ frontApp: null })).not.toHaveProperty('front_app')
+    expect(await bodyOf({ frontApp: FREECAD, actionMode: 'guide' })).not.toHaveProperty('front_app')
+  })
+
+  it('never sends front_app on a resume or a wake turn', async () => {
+    const resume = await bodyOf({ content: '', resumeConfirmationId: 'cf-1', frontApp: FREECAD })
+    expect(resume).not.toHaveProperty('front_app')
+    const wake = await bodyOf({
+      content: '',
+      processPrompt: { processId: 'pr-1', promptSeq: 2 },
+      frontApp: FREECAD
+    })
+    expect(wake).not.toHaveProperty('front_app')
+  })
+
+  it('reads the pill’s snapshot from the SOL window store when not given', async () => {
+    const { useSolWindowStore } = await import('./solWindowStore')
+    useSolWindowStore.setState({ frontApp: FREECAD })
+    try {
+      expect((await bodyOf({})).front_app).toEqual(WIRE_FREECAD)
+    } finally {
+      useSolWindowStore.setState({ frontApp: null })
+    }
+    expect(await bodyOf({})).not.toHaveProperty('front_app')
   })
 })

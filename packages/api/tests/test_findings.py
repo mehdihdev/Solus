@@ -19,15 +19,18 @@ from solus_api.graph.edges import write_edge
 from solus_api.graph.findings import (
     FindingSpec,
     acknowledge_finding,
+    annotate_finding,
     canonical_finding_key,
     dismiss_finding,
     finding_from_warning,
     list_findings,
     raise_finding,
     resolve_finding,
+    resolve_system_finding,
     subject_rows,
 )
 from solus_api.models import (
+    Activity,
     Domain,
     GraphEdge,
     GraphEntity,
@@ -163,6 +166,23 @@ async def test_evidence_items_keep_the_latest_twenty(
     assert node.attrs["count"] == 25
 
 
+async def test_reraise_list_evidence_is_the_latest_raise(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-321 P2-T6 (M71): a re-raise's list-valued evidence (`also`, `causes`) replaces the
+    earlier raise's at the top level, as its scalars do — what the pane and the narration read is
+    the latest raise; `items` keeps each raise whole."""
+    project_id, _ = await _project_ids(client, alice_headers)
+    (a,) = await _seed_entities(db, project_id, 1)
+    first = {"address": "0x68", "also": ["x"], "causes": [{"kind": "actuator"}]}
+    latest = {"address": "0x69", "also": ["y", "z"], "causes": [{"kind": "mechanical_load"}]}
+    await raise_finding(db, project_id, _finding_spec([a.id], evidence=first))
+    node = await raise_finding(db, project_id, _finding_spec([a.id], evidence=latest))
+    evidence = node.attrs["evidence"]
+    assert {key: evidence[key] for key in latest} == latest
+    assert evidence["items"] == [first, latest]
+
+
 async def test_raise_rejects_unknown_or_foreign_subjects(
     client: AsyncClient,
     alice_headers: dict[str, str],
@@ -288,6 +308,47 @@ async def test_resolve_without_fix_ref_writes_no_edge_and_bad_fix_ref_is_404(
     assert [r.id for r in await subject_rows(db, node)] == [a.id]  # foreign id never resolves
 
 
+async def test_resolve_system_finding_needs_no_person_and_files_nothing(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-321 P3-T3 (R63): Solus resolves a finding itself when a matrix run finds the fact a
+    standing info lacked. There is no person, no `.solus` errors entry and no activity:
+    `resolved_by` is "system" and the reason is the note. A finding already resolved comes back
+    unchanged, another project's is 404, and a later raise reopens it without the system's note."""
+    project_id, _ = await _project_ids(client, alice_headers)
+    other_id, _ = await _project_ids(client, bob_headers)
+    (a,) = await _seed_entities(db, project_id, 1)
+    info = _finding_spec([a.id], severity=Severity.INFO)
+    node = await raise_finding(db, project_id, info)
+
+    resolved = await resolve_system_finding(db, project_id, node.id, reason="the fact is stated")
+    await db.commit()
+
+    assert resolved is node and node.attrs["status"] == "resolved"
+    assert (node.attrs["resolved_by"], node.attrs["note"]) == ("system", "the fact is stated")
+    filed = select(SolusEntry.id).where(
+        SolusEntry.project_id == project_id, SolusEntry.section == SolusSection.ERRORS
+    )
+    assert list(await db.scalars(filed)) == []
+    resolutions = select(Activity.id).where(
+        Activity.project_id == project_id, Activity.type == "finding.resolved"
+    )
+    assert list(await db.scalars(resolutions)) == []
+    version = node.version
+    again = await resolve_system_finding(db, project_id, node.id, reason="said again")
+    assert again.version == version and again.attrs["note"] == "the fact is stated"
+    with pytest.raises(APIError) as err:
+        await resolve_system_finding(db, other_id, node.id, reason="not theirs")
+    assert err.value.status_code == 404
+
+    await raise_finding(db, project_id, info)
+    assert node.attrs["status"] == "open" and node.attrs["count"] == 2
+    assert "resolved_by" not in node.attrs and "note" not in node.attrs
+
+
 async def test_acknowledge_sets_status_and_who(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
@@ -359,6 +420,8 @@ async def test_list_filters_status_severity_subject_robot_and_pages(
     assert [r.id for r in rows] == [dismissed.id]
     rows, _ = await list_findings(db, project_id, severity="critical")
     assert [r.id for r in rows] == [on_loose.id]
+    rows, _ = await list_findings(db, project_id, severities=(Severity.CRITICAL, Severity.INFO))
+    assert [r.id for r in rows] == [on_loose.id]  # any of them (SOL's routing read, P0-T7)
     rows, _ = await list_findings(db, project_id, subject=loose.id)
     assert [r.id for r in rows] == [on_loose.id]
     rows, _ = await list_findings(db, project_id, robot=robot.id)
@@ -419,9 +482,15 @@ async def test_live_frames_ignore_other_entity_kinds_and_untouched_findings(
         s.add(GraphEntity(project_id=project_id, kind="part", domain=Domain.MECHANICAL, name="x"))
         row = await s.get(GraphEntity, node.id)
         assert row is not None
+        row.attrs = {**row.attrs, "detail": "SOL filled this in"}
+        await commit_then_drain(s)
+        assert [t for _, t in hub.seen() if t.startswith("finding.")] == []  # a part, a detail
+        # SOLUSDEV-321 P2-T6 (Q4c): an explanation filling in IS a hint — once, not on a rewrite.
         row.attrs = {**row.attrs, "explanation": "SOL filled this in"}
         await commit_then_drain(s)
-    assert [t for _, t in hub.seen() if t.startswith("finding.")] == []
+        row.attrs = {**row.attrs, "explanation": "SOL said it better"}
+        await commit_then_drain(s)
+    assert [t for _, t in hub.seen() if t.startswith("finding.")] == ["finding.updated"]
 
 
 # -------------------------------------------------------------------- routes
@@ -467,6 +536,37 @@ async def test_routes_list_and_get(
     assert resp.json()["data"]["subject_entities"] == [
         {"id": str(s.id), "kind": "component", "name": s.name} for s in subjects
     ]
+
+
+async def test_routes_serve_causes_ranked_and_robot_id(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-321 P2-T6: a finding serves its narration's ranked causes and the robot its
+    evidence names; a row with neither (a checker's, one older than narration) or with a robot id
+    that is no id serves `[]` and null."""
+    project_id, _, subjects, node = await _seeded_finding(client, alice_headers, db)
+    url = f"/api/v1/projects/{project_id}/findings/{node.id}"
+    item = (await client.get(url, headers=alice_headers)).json()["data"]
+    assert (item["causes_ranked"], item["robot_id"]) == ([], None)
+
+    robot, ids = uuid.uuid4(), [s.id for s in subjects]
+    await raise_finding(db, project_id, _finding_spec(ids, evidence={"robot_id": str(robot)}))
+    await annotate_finding(
+        db,
+        project_id,
+        node.id,
+        explanation="Held past its rating.",
+        detail="",
+        causes_ranked=["actuator"],
+        narration_tokens=3,
+    )
+    await db.commit()
+    item = (await client.get(url, headers=alice_headers)).json()["data"]
+    assert (item["causes_ranked"], item["robot_id"]) == (["actuator"], str(robot))
+
+    await raise_finding(db, project_id, _finding_spec(ids, evidence={"robot_id": "not-an-id"}))
+    await db.commit()
+    assert (await client.get(url, headers=alice_headers)).json()["data"]["robot_id"] is None
 
 
 async def test_routes_cross_project_and_non_member_are_404(

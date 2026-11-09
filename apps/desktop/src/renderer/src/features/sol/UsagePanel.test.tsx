@@ -35,6 +35,9 @@ function billing(overrides: Partial<billingData.BillingData> = {}): billingData.
       { price_id: 'pk10', credits: 1000, usd: 10 },
       { price_id: 'pk25', credits: 2600, usd: 25 }
     ],
+    academic: null,
+    sendAcademic: vi.fn(),
+    verifyAcademic: vi.fn(),
     busy: false,
     notice: null,
     clearNotice: vi.fn(),

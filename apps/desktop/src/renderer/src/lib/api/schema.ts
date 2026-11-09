@@ -446,6 +446,57 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/users/me/invites': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** List My Invites */
+    get: operations['list_my_invites_api_v1_users_me_invites_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/users/me/invites/{invite_id}/accept': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Accept My Invite */
+    post: operations['accept_my_invite_api_v1_users_me_invites__invite_id__accept_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/users/me/invites/{invite_id}/decline': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** Decline My Invite */
+    post: operations['decline_my_invite_api_v1_users_me_invites__invite_id__decline_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/teams/{team_id}/activity': {
     parameters: {
       query?: never
@@ -936,6 +987,66 @@ export interface paths {
      *     existing Stripe customer (i.e. a prior checkout).
      */
     post: operations['create_portal_session_api_v1_billing_portal_session_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/billing/academic': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Get Academic
+     * @description The caller's academic status (none / pending / active / expired).
+     */
+    get: operations['get_academic_api_v1_billing_academic_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/billing/academic/code': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Send Academic Code
+     * @description Email a 6-digit code to an academic address (rate-limited; see the service).
+     */
+    post: operations['send_academic_code_api_v1_billing_academic_code_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/billing/academic/verify': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Verify Academic Code
+     * @description Check the code; on a match the caller's plan becomes Academic.
+     */
+    post: operations['verify_academic_code_api_v1_billing_academic_verify_post']
     delete?: never
     options?: never
     head?: never
@@ -2578,9 +2689,45 @@ export interface paths {
     put?: never
     /**
      * Decide Tool Confirmation
-     * @description Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).
+     * @description Approve or reject a destructive action SOL parked (SOLUS-ONS-A5). The decision it
+     *     settles becomes one outcome row: approve → `accepted`, reject → `rejected`, and the
+     *     gate's own `expired` / `stale` (SOLUSDEV-321 P8).
      */
     post: operations['decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/outcomes': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** List Outcomes */
+    get: operations['list_outcomes_api_v1_projects__project_id__outcomes_get']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/usage/turns': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** List Usage Turns */
+    get: operations['list_usage_turns_api_v1_projects__project_id__usage_turns_get']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -2843,6 +2990,28 @@ export interface paths {
     put?: never
     /** Stop Run */
     post: operations['stop_run_api_v1_projects__project_id__bench_runs__run_id__stop_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/bench/runs/{run_id}/baseline': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Mark Baseline
+     * @description Make the run the baseline its robot's learned envelope bounds are read from. One per
+     *     robot: the robot's previous baseline is unmarked in the same commit. A run still running is
+     *     refused, since its next checkpoint rewrites the whole record and the mark with it.
+     */
+    post: operations['mark_baseline_api_v1_projects__project_id__bench_runs__run_id__baseline_post']
     delete?: never
     options?: never
     head?: never
@@ -3966,6 +4135,23 @@ export interface paths {
 export type webhooks = Record<string, never>
 export interface components {
   schemas: {
+    /**
+     * AcademicCodeCreate
+     * @description POST /billing/academic/code (ADR-042). The domain rule is checked by the service so
+     *     the error code is specific (`not_academic_email`), not a generic validation error.
+     */
+    AcademicCodeCreate: {
+      /** Email */
+      email: string
+    }
+    /**
+     * AcademicVerifyCreate
+     * @description POST /billing/academic/verify: exactly six ASCII digits.
+     */
+    AcademicVerifyCreate: {
+      /** Code */
+      code: string
+    }
     /** AcceptWiring */
     AcceptWiring: {
       /** Digest */
@@ -4069,6 +4255,7 @@ export interface components {
         | components['schemas']['SerialRealConfig']
         | components['schemas']['RobotRealConfig']
         | components['schemas']['HardwareRealConfig']
+        | components['schemas']['ReplayRealConfig']
     }
     /** BranchItem */
     BranchItem: {
@@ -4188,6 +4375,8 @@ export interface components {
        * Format: uuid
        */
       candidate_id: string
+      /** Sim Result Id */
+      sim_result_id?: string | null
     }
     /**
      * Complexity
@@ -4367,6 +4556,7 @@ export interface components {
        * @default
        */
       unitsStandards: string
+      expertise?: components['schemas']['ExpertiseOverride'] | null
     }
     /** EntityConfigIn */
     EntityConfigIn: {
@@ -4457,6 +4647,21 @@ export interface components {
        * Format: uuid
        */
       robot_id: string
+    }
+    /**
+     * ExpertiseOverride
+     * @description The person's own level per domain (the twin's `expertise`): each one stated wins over the
+     *     level Solus inferred for the turn's register. Never stored, never a prompt section.
+     */
+    ExpertiseOverride: {
+      /** Control */
+      control?: ('novice' | 'working' | 'expert') | null
+      /** Electronics */
+      electronics?: ('novice' | 'working' | 'expert') | null
+      /** Mechanical */
+      mechanical?: ('novice' | 'working' | 'expert') | null
+      /** Software */
+      software?: ('novice' | 'working' | 'expert') | null
     }
     /** ExtractionAcceptance */
     ExtractionAcceptance: {
@@ -4566,7 +4771,7 @@ export interface components {
     FindingListOut: {
       /** Data */
       data: components['schemas']['FindingOut'][]
-      meta: components['schemas']['FindingPageMeta']
+      meta: components['schemas']['PageMeta']
     }
     /** FindingOneOut */
     FindingOneOut: {
@@ -4574,7 +4779,9 @@ export interface components {
     }
     /**
      * FindingOut
-     * @description Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md §7).
+     * @description Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md §7). `causes_ranked` (the
+     *     narration's order of the evidence's cause kinds) and `robot_id` (the root an observer
+     *     finding's evidence names) default, so a row older than narration still serializes.
      */
     FindingOut: {
       /**
@@ -4605,6 +4812,10 @@ export interface components {
       explanation: string
       /** Detail */
       detail: string
+      /** Causes Ranked */
+      causes_ranked?: string[]
+      /** Robot Id */
+      robot_id?: string | null
       /** Subjects */
       subjects: string[]
       /** Evidence */
@@ -4636,14 +4847,42 @@ export interface components {
       /** Subject Entities */
       subject_entities?: components['schemas']['SubjectOut'][] | null
     }
-    /** FindingPageMeta */
-    FindingPageMeta: {
-      /** Limit */
-      limit: number
-      /** Has Next */
-      has_next: boolean
-      /** Next Cursor */
-      next_cursor: string | null
+    /**
+     * FocusIn
+     * @description The workspace focus a page send carries: the entity the person is looking at and the
+     *     trail they came through (oldest first, the focus itself excluded). It rides every page
+     *     send, so ids in it that went stale are dropped rather than refused — see
+     *     `turn_scope.plan_scope`.
+     */
+    FocusIn: {
+      /**
+       * Entity Id
+       * Format: uuid
+       */
+      entity_id: string
+      /** Path */
+      path?: string[]
+    }
+    /**
+     * FrontAppBinding
+     * @description The turn's `front_app`, with the API doc's shape and consistency rules —
+     *     usable directly as the request-body field type.
+     */
+    FrontAppBinding: {
+      /** Bundle Id */
+      bundle_id: string
+      /** Name */
+      name: string
+      /** Title */
+      title: string | null
+      /** Pid */
+      pid: number | null
+      /** Window Id */
+      window_id: number | null
+      /** Drivable */
+      drivable: boolean
+      /** Binding */
+      binding: ('project' | 'window') | null
     }
     /** GazeboSimConfig */
     GazeboSimConfig: {
@@ -5175,8 +5414,16 @@ export interface components {
       think_harder: boolean
       /** Mentions */
       mentions?: string[]
+      /** Pins */
+      pins?: string[]
+      focus?: components['schemas']['FocusIn'] | null
+      /** Finding Id */
+      finding_id?: string | null
+      /** Robot Id */
+      robot_id?: string | null
       preferences?: components['schemas']['EngineeringPreferences'] | null
       screenshot?: components['schemas']['ScreenshotIn'] | null
+      front_app?: components['schemas']['FrontAppBinding'] | null
     }
     /** MujocoSimConfig */
     MujocoSimConfig: {
@@ -5272,6 +5519,58 @@ export interface components {
       detail?: {
         [key: string]: unknown
       }
+    }
+    /** OutcomeListOut */
+    OutcomeListOut: {
+      /** Data */
+      data: components['schemas']['OutcomeOut'][]
+      meta: components['schemas']['PageMeta']
+    }
+    /** OutcomeOut */
+    OutcomeOut: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string
+      /** Conversation Turn Id */
+      conversation_turn_id: string | null
+      /** Tool */
+      tool: string
+      /** Proposal Digest */
+      proposal_digest: string | null
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'accepted' | 'rejected' | 'edited' | 'accepted_auto' | 'expired' | 'stale'
+      /** Stale Reason */
+      stale_reason?: ('diverged' | 'quota' | 'no_preview') | null
+      /** Entity Ids */
+      entity_ids: string[]
+      /** Design Signals */
+      design_signals: {
+        [key: string]: string
+      }
+      /** Machine Id */
+      machine_id: string | null
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string
+    }
+    /**
+     * PageMeta
+     * @description The §1.4 meta block `page_meta` builds, as the response model typed routes share.
+     */
+    PageMeta: {
+      /** Limit */
+      limit: number
+      /** Has Next */
+      has_next: boolean
+      /** Next Cursor */
+      next_cursor: string | null
     }
     /**
      * PanelLinkApprove
@@ -5402,7 +5701,7 @@ export interface components {
      * PlanType
      * @enum {string}
      */
-    PlanType: 'basic' | 'pro' | 'enterprise'
+    PlanType: 'basic' | 'pro' | 'enterprise' | 'academic'
     /** PlatformImportIn */
     PlatformImportIn: {
       /** Name */
@@ -5590,6 +5889,37 @@ export interface components {
       /** Expected Version */
       expected_version: number
     }
+    /**
+     * ReplayRealConfig
+     * @description DEV ONLY (docs/api/bench-runs.md): a recorded capture replayed as one of the project's
+     *     robots. `recording` is a file under `Settings.bench_replay_root`; `driver_id` decodes it.
+     */
+    ReplayRealConfig: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      provider: 'replay'
+      /** Recording */
+      recording: string
+      /** Driver Id */
+      driver_id: string
+      /**
+       * Robot Entity Id
+       * Format: uuid
+       */
+      robot_entity_id: string
+      /**
+       * Realtime
+       * @default true
+       */
+      realtime: boolean
+      /**
+       * Window Seconds
+       * @default 1
+       */
+      window_seconds: number
+    }
     /** RequestBody */
     RequestBody: {
       /** Assembly Entity Id */
@@ -5689,6 +6019,10 @@ export interface components {
       explanation: string
       /** Detail */
       detail: string
+      /** Causes Ranked */
+      causes_ranked?: string[]
+      /** Robot Id */
+      robot_id?: string | null
       /** Subjects */
       subjects: string[]
       /** Evidence */
@@ -6370,6 +6704,37 @@ export interface components {
       | 'keyboard'
       | 'status_bar'
       | 'terminal'
+    /** UsageTurnListOut */
+    UsageTurnListOut: {
+      /** Data */
+      data: components['schemas']['UsageTurnOut'][]
+      meta: components['schemas']['PageMeta']
+    }
+    /** UsageTurnOut */
+    UsageTurnOut: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string
+      /** Turn Id */
+      turn_id: string | null
+      /** Purpose */
+      purpose: string | null
+      /** Tier */
+      tier: string | null
+      /** Credits */
+      credits: number
+      /** Tokens In */
+      tokens_in: number | null
+      /** Tokens Out */
+      tokens_out: number | null
+    }
     /** UserUpdate */
     UserUpdate: {
       /** Name */
@@ -7454,6 +7819,90 @@ export interface operations {
       }
     }
   }
+  list_my_invites_api_v1_users_me_invites_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+    }
+  }
+  accept_my_invite_api_v1_users_me_invites__invite_id__accept_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        invite_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  decline_my_invite_api_v1_users_me_invites__invite_id__decline_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        invite_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
   list_activity_api_v1_teams__team_id__activity_get: {
     parameters: {
       query?: {
@@ -8320,6 +8769,92 @@ export interface operations {
     requestBody?: {
       content: {
         'application/json': components['schemas']['PortalSessionCreate'] | null
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  get_academic_api_v1_billing_academic_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+    }
+  }
+  send_academic_code_api_v1_billing_academic_code_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcademicCodeCreate']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  verify_academic_code_api_v1_billing_academic_verify_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['AcademicVerifyCreate']
       }
     }
     responses: {
@@ -12195,6 +12730,76 @@ export interface operations {
       }
     }
   }
+  list_outcomes_api_v1_projects__project_id__outcomes_get: {
+    parameters: {
+      query?: {
+        since?: string | null
+        cursor?: string | null
+        limit?: number
+      }
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['OutcomeListOut']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  list_usage_turns_api_v1_projects__project_id__usage_turns_get: {
+    parameters: {
+      query?: {
+        since?: string | null
+        cursor?: string | null
+        limit?: number
+      }
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['UsageTurnListOut']
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
   ingest_telemetry_api_v1_projects__project_id__bench_telemetry_post: {
     parameters: {
       query?: never
@@ -12766,6 +13371,40 @@ export interface operations {
     }
   }
   stop_run_api_v1_projects__project_id__bench_runs__run_id__stop_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        run_id: string
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  mark_baseline_api_v1_projects__project_id__bench_runs__run_id__baseline_post: {
     parameters: {
       query?: never
       header?: never

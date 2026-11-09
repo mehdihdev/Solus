@@ -51,10 +51,15 @@ from solus_api.models import (
     ensure_utc,
     utcnow,
 )
+from solus_api.services.academic_mail import AcademicMailer, build_academic_mailer
 from solus_api.services.supabase_admin import SupabaseAdmin
 
 if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+    from solus_api.agent.drive.executor import Budget
     from solus_api.agent.tools.mcp_tool import MCPTool
+    from solus_api.agent.tools.simulate import SimEnqueue
 
 logger = logging.getLogger("solus.deps")
 
@@ -126,6 +131,12 @@ def get_stripe_gateway(request: Request) -> "StripeGateway":
     return StripeGateway(get_secret_store(request))
 
 
+def get_academic_mailer(request: Request) -> AcademicMailer | None:
+    """The Academic verification mailer (ADR-042), or None when sending is not configured.
+    Overridable in tests via app.dependency_overrides."""
+    return build_academic_mailer(get_settings(request))
+
+
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 SessionMakerDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_sessionmaker)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
@@ -138,6 +149,7 @@ JwksClientDep = Annotated[PyJWKClient | None, Depends(get_jwks_client)]
 SolSystemsDep = Annotated[SolSystems, Depends(get_sol_systems)]
 AgentRunnerDep = Annotated[AgentRunner, Depends(get_agent_runner)]
 StripeGatewayDep = Annotated[StripeGateway, Depends(get_stripe_gateway)]
+AcademicMailerDep = Annotated[AcademicMailer | None, Depends(get_academic_mailer)]
 
 
 async def _provision_user(
@@ -248,6 +260,37 @@ def require_verified(claims: ClaimsDep) -> None:
 
 
 RequireVerified = Annotated[None, Depends(require_verified)]
+
+
+async def require_verified_email(
+    claims: ClaimsDep, admin: SupabaseAdminDep, settings: SettingsDep
+) -> str:
+    """The caller's email as proven verified, lower-cased (SOLUSDEV-319).
+
+    Match anything addressed to an email (invites) against this, never `users.email`: that
+    column is set once at sign-up and never refreshed. Supabase access tokens rarely carry
+    `email_verified`, and an absent claim reads as verified (core/security.py), so the proof
+    is the auth user's `email_confirmed_at` through the admin API, which must name the same
+    address as the token. Without a service-role key this fails CLOSED outside `app_env=dev`;
+    in dev it falls back to the token's email, logged."""
+    require_verified(claims)
+    if not claims.email:
+        raise APIError(403, "email_not_verified", "Your sign-in carries no email address")
+    email = claims.email.lower()
+    if admin.configured:
+        if await admin.confirmed_email(claims.sub) != email:
+            raise APIError(403, "email_not_verified", "Verify your email address first")
+        return email
+    if settings.app_env != "dev":
+        logger.error("email verification unavailable: SUPABASE_SERVICE_ROLE_KEY unset")
+        raise APIError(
+            403, "email_not_verified", "Email verification is unavailable on this server"
+        )
+    logger.warning("dev: invitations matched on the token's email (no Supabase admin key)")
+    return email
+
+
+VerifiedEmail = Annotated[str, Depends(require_verified_email)]
 
 
 def require_staff(user: CurrentUser, settings: SettingsDep) -> None:
@@ -443,6 +486,16 @@ async def get_project_read_context(
 ProjectCtx = Annotated[ProjectContext, Depends(get_project_read_context)]
 
 
+def _drive_budget(settings: Settings) -> "Budget":
+    from solus_api.agent.drive.executor import Budget
+
+    return Budget(
+        max_actions=settings.drive_max_actions,
+        max_seconds=settings.drive_max_seconds,
+        max_input_tokens=settings.drive_max_input_tokens,
+    )
+
+
 async def discover_research_tools(
     secret_store: SecretStore, allowlist_root: str
 ) -> list["MCPTool"]:
@@ -471,6 +524,28 @@ async def discover_research_tools(
         # By CLASS and code only: the message can carry upstream text (§7).
         logger.info("web research unavailable: %s code=%s", type(exc).__name__, exc.code.value)
         return []
+
+
+def create_sim_enqueue(app: "FastAPI") -> "SimEnqueue":
+    """SOLUSDEV-321 P4-T4 (R110): queue one rung-3 simulation job on the app's ARQ pool, resolved
+    at call time as `main.py`'s budgets enqueue is, so a Redis down at boot never fails startup.
+    The id is `<job>:<project>:<sha1 of the request>`: arq refuses an id that is still live, so
+    the same request never queues twice while it waits, and the jobs keep no result
+    (`keep_result=0`, `connectors/worker.py`), so a finished request may run again."""
+
+    async def enqueue_sim(job_name: str, project_id: str, request: dict[str, object]) -> str:
+        import json
+
+        from solus_api.routers import sources
+
+        canonical = json.dumps(request, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha1(canonical.encode(), usedforsecurity=False).hexdigest()[:12]
+        job_id = f"{job_name}:{project_id}:{digest}"
+        pool = await sources._arq_pool(app)
+        await pool.enqueue_job(job_name, request, _job_id=job_id)
+        return job_id
+
+    return enqueue_sim
 
 
 async def get_sol_registry(
@@ -505,6 +580,7 @@ async def get_sol_registry(
     from solus_api.hardware.companion_deployment import get_companion_deployment_service
     from solus_api.hardware.presence import PresenceService
     from solus_api.routers.sol import create_scene_enqueue
+    from solus_api.simulation.sim_ladder import jobs_queued
     from solus_api.widgets.guard import load_bundle_capabilities
 
     return build_sol_registry(
@@ -530,6 +606,11 @@ async def get_sol_registry(
         artifact_store=getattr(request.app.state, "artifact_store", None),
         enqueue=getattr(request.app.state, "enqueue", None),
         artifact_ttl_seconds=settings.artifact_ttl_seconds,
+        # ADR-041 (2026-10-26 amendment): N actions / T wall-clock seconds per step.
+        drive_budget=_drive_budget(settings),
+        # SOLUSDEV-321 P5 (R124): `render_view` never runs an export this route's upload cap
+        # could refuse.
+        artifact_max_bytes=settings.artifact_max_bytes,
         # SOLUSDEV-252 P6: the web `research` tool, bound to whatever the
         # Brave fork advertised for THIS request (none = not registered).
         brave_tools=await discover_research_tools(secret_store, settings.bridge_allowlist_root),
@@ -549,6 +630,11 @@ async def get_sol_registry(
             if getattr(request.app.state, "companion_deployment_service_factory", None) is not None
             else None
         ),
+        # SOLUSDEV-321 P4-T4 (R110): a recorded simulation publishes through the app's own hub
+        # (only the publishing hub fires the fan-out), and a rung-3 job needs a queue: without
+        # Redis, or inline, there is none and rung 3 says so rather than running in the request.
+        graph_hub=getattr(request.app.state, "graph_hub", None),
+        enqueue_sim=create_sim_enqueue(request.app) if jobs_queued(settings) else None,
     )
 
 

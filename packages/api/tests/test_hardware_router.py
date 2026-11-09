@@ -8,7 +8,7 @@ Detection (R2) and library (R4) routes are out of scope here.
 import json
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from conftest import BOB, add_member, create_project, create_team, me
@@ -697,3 +697,50 @@ async def test_write_routes_emit_data_events_when_consented(
         "hardware.lifecycle_promoted",
         "hardware.suggestion_decided",
     }
+
+
+async def test_the_session_a_bind_starts_names_its_robot_and_its_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-321 P2-T3 (C2): the session started after a device is bound is the robot's — the
+    session manager is told the robot and the binding member, so the robot's window evaluator
+    runs (and reads as that member)."""
+    from types import SimpleNamespace
+
+    from solus_api.hardware import hardware_router
+
+    starts: list[dict[str, Any]] = []
+
+    class _Manager:
+        async def start(self, project_id: uuid.UUID, **kwargs: Any) -> Any:
+            starts.append(kwargs)
+            return SimpleNamespace(id=uuid.uuid4())
+
+    async def runtime_config(*args: Any) -> Any:
+        identity = SimpleNamespace(device_ref="usb:BOUND", binding="BOUND")
+        return SimpleNamespace(
+            identity=identity, protocol=SimpleNamespace(driver_id="x", params={})
+        )
+
+    async def entity_config(*args: Any) -> Any:
+        return SimpleNamespace(id=uuid.uuid4()), None
+
+    monkeypatch.setattr(hardware_router, "resolve_runtime_config", runtime_config)
+    monkeypatch.setattr(hardware_router, "read_entity_config", entity_config)
+    monkeypatch.setattr(hardware_router, "prepare_local_hardware", lambda *a, **k: {})
+    monkeypatch.setattr(hardware_router, "get_session_manager", lambda request: _Manager())
+    robot, account = GraphEntity(id=uuid.uuid4(), name="Follower"), uuid.uuid4()
+
+    session_id, error = await hardware_router._start_robot_session(
+        cast(Any, None),
+        object(),
+        uuid.uuid4(),
+        robot,
+        1.0,
+        session=cast(Any, None),
+        account_id=account,
+    )
+
+    assert error is None and session_id is not None
+    (kwargs,) = starts
+    assert (kwargs["robot_entity_id"], kwargs["owner_user_id"]) == (robot.id, account)

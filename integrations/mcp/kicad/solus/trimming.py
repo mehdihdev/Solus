@@ -29,6 +29,7 @@ from collections.abc import Callable
 from typing import Any, Protocol, TypeVar
 
 from solus.confinement import REASON_PATH_ESCAPES_WORKSPACE, confinement_refusal
+from solus.refusals import refusal_message
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -96,7 +97,7 @@ def _harden(fn: Callable[..., Any]) -> Callable[..., Any]:
     def refuse(kwargs: dict[str, Any]) -> dict[str, Any] | None:
         refusal = confinement_refusal(kwargs)
         if refusal is not None and getattr(fn, "_solus_strict_refusals", False):
-            raise ValueError(REASON_PATH_ESCAPES_WORKSPACE)
+            raise ValueError(refusal_message(REASON_PATH_ESCAPES_WORKSPACE))
         return refusal
 
     if inspect.iscoroutinefunction(fn):

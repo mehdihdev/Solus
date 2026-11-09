@@ -102,8 +102,15 @@ def test_exposed_upstream_names_exist_in_the_vendored_tree() -> None:
         "get_symbol_definition",
         "get_schematic_geometry",
         "check_erc",
+        # SOLUSDEV-321 P4-T3: widens the allowlist, flagged for the humans to ratify
+        "export_spice_netlist",
+        # SOLUSDEV-321 P5: the two PDF exports SOL's render reads, flagged for ratification too
+        "export_schematic_pdf",
+        "export_board_pdf",
     }
     assert "export_netlist" not in UPSTREAM_REGISTERED_TOOLS
+    assert "export_spice_netlist" not in UPSTREAM_REGISTERED_TOOLS
+    assert not {"export_schematic_pdf", "export_board_pdf"} & UPSTREAM_REGISTERED_TOOLS
 
 
 # --- registration through the trimming registrar ------------------------------
@@ -113,6 +120,8 @@ def test_registered_tool_set_equals_the_full_roster() -> None:
     fake = FakeMCP()
     register_allowlisted_tools(fake)
     assert set(fake.tools) == FULL_ROSTER
+    # SOLUSDEV-321 P4-T3 and P5: the tools this branch adds, flagged for the humans to ratify
+    assert {"export_spice_netlist", "export_schematic_pdf", "export_board_pdf"} <= set(fake.tools)
 
 
 def test_set_symbol_property_is_registered_and_confirmation_gated() -> None:
@@ -339,6 +348,9 @@ _PROJECT_PATH_TOOLS = (
     "extract_project_netlist",
     "analyze_bom",
     "export_netlist",
+    "export_spice_netlist",
+    "export_schematic_pdf",
+    "export_board_pdf",
 )
 _SCHEMATIC_PATH_TOOLS = ("analyze_schematic_connections",)
 
@@ -405,8 +417,12 @@ async def test_project_path_tools_still_run_when_the_project_is_inside_the_works
     workspace.mkdir()
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(workspace))
     project = write_minimal_project(workspace / "proj")
-    # This test verifies outer path admission, not installed CLI availability.
+    # This test verifies outer path admission, not installed CLI availability: no export may
+    # launch a KiCad this machine happens to have installed.
     monkeypatch.setattr("solus.netlist_reads.read_topology", lambda path: {"success": True})
+    monkeypatch.setattr("solus.netlist_export.detect_kicad_cli", lambda: None)
+    monkeypatch.setattr("solus.spice_export.detect_kicad_cli", lambda: None)
+    monkeypatch.setattr("solus.pdf_export.detect_kicad_cli", lambda: None)
     fake = FakeMCP()
     register_allowlisted_tools(fake)
 

@@ -78,6 +78,18 @@ catalog:
     context_window: 1000000 # full 1M window at standard pricing (verified)
     roles: [anthropic_hard] # bench role — unreferenced since SOLUSDEV-252
 
+  - provider: anthropic
+    name: claude-opus-5-5
+    # $4/$20, cache reads $0.20 (claude-api skill model table, cached 2026-10-06).
+    price_in: 4.0
+    price_out: 20.0
+    price_cached_in: 0.2
+    context_window: 1000000
+    # The ADR-041 drive loop only (gateway.computer_use) — no matrix cell routes
+    # here. Effort high: click accuracy on dense KiCad UIs (Opus 5.5 defaults to medium).
+    reasoning_effort: high
+    roles: [computer_use]
+
   - provider: google
     name: gemini-3.1-flash-lite
     price_in: 0.25 # cheapest model in the catalog, ~1M window: the trivial
@@ -402,6 +414,107 @@ type_estimator:
     - '\boscilloscope\b'
     - '\btrace\s+file(s)?\b'
 
+# --- SOL context budget by routing tier (SOLUSDEV-321) -------------------------
+# Total tokens build_context may pack for a turn at that tier (the tier the
+# gateway will route the turn at). layer_scale: each context layer's cap as a
+# fraction of the total (agent/layers.py LayeredContextBudget.for_tier). Each
+# share is that layer's LayerBudget default over the old flat 4000-token total,
+# so a standard turn is the old turn scaled up. One key per layer, in prompt
+# order (SOLUSDEV-321 P0-T4: the six before `conversation` are the stable prefix).
+context_budget:
+  trivial: 8000
+  standard: 24000
+  hard: 60000
+  layer_scale:
+    preferences: 0.2
+    project_card: 0.1
+    solus_standing: 0.15
+    graph: 0.3
+    solus_scoped: 0.1
+    findings: 0.15
+    conversation: 1.5
+    retrieval: 0.3
+    corpus: 1.0
+    telemetry: 0.15
+    screen: 0.15
+
+# --- Practice questions (SOLUSDEV-321) -----------------------------------------
+# Phrases marking a question as asking for practice/convention guidance. Only
+# those questions consult the shipped engineering corpus. Explicit regexes
+# (IGNORECASE, validated at load) like the estimator: section.
+practice_patterns:
+  - "best practice"
+  - "how should"
+  - "design review"
+  - "is it ok to"
+  - "rule of thumb"
+  - "what is the right way"
+
+# --- Scope domain words (SOLUSDEV-321) -----------------------------------------
+# Plain words / short phrases (trimmed and lowercased at load; not regexes): the
+# scope planner's runtime and environment weights — a runtime word asks for the
+# turn's telemetry window (the one runtime vocabulary, SOLUSDEV-321 P1-T1) — and
+# the gate for the environment divergences table. Kept OUT of
+# estimator.domain_keywords on purpose: every group matched there adds
+# estimator.weights.extra_domain (2) to the complexity score, so a runtime or
+# environment group would shift model routing.
+scope:
+  domain_keywords:
+    runtime:
+      - stall
+      - stalled
+      - telemetry
+      - streaming
+      - finding
+      - bench
+      - session
+      - live
+      - temperature
+      - current
+      - running
+      - runtime
+      - run
+      - spike
+      - spikes
+      - glitch
+      - crash
+      - crashes
+      - drops
+      - dropping
+      - intermittent
+      - during
+      - moving
+      - moves
+    environment:
+      - install
+      - pip
+      - apt
+      - cuda
+      - version
+      - machine
+      - driver
+      - python
+      - ros2
+      - path
+      - dependency
+      - docker
+      - run on
+  # Explicit regexes (IGNORECASE, validated at load) like practice_patterns. A
+  # connectivity question with a `wires` edge in scope is never answered from a
+  # render (TurnScope.exclude_renders); a how-many question is the first tier's
+  # (TurnScope.counting) — SOLUSDEV-321 P1-T1.
+  connectivity_patterns:
+    - '\bconnect(s|ed|ing|ion|ions|or|ors)?\b'
+    - '\bwir(e|es|ed|ing)\b' # not "wireless"
+    - '\bnet(s|list|lists)?\b' # not "network"
+    - '\bpin(s|out|outs)?\b' # not "pinned"
+    - '\b(hooked|tied)\s+(up\s+)?to\b'
+    - '\bshort(ed|s)?\s+to\b'
+  counting_patterns:
+    - '\bhow\s+many\b'
+    - '\bnumber\s+of\b'
+    - '\bcount\s+(the|of|all)\b'
+
 # --- Pre-flight limits + provider retry (MO-03, all tunable) ------------------
 # trial_credit_cap: PROVISIONAL single trial allowance in CREDITS (~$5 of
 #   provider spend at the current cost knobs). Pre-flight check only — a call
@@ -416,6 +529,10 @@ limits:
   trial_credit_cap: 1000 # PROVISIONAL — calibrate with pricing
   max_calls_per_minute: 20
   frequency_window_seconds: 60
+  # SOLUSDEV-319: a refused call still costs Solus its prompt. At this many refusals in the
+  # window the next call is refused pre-flight (transient 429, same as the frequency cap).
+  max_refusals_per_window: 5
+  refusal_window_seconds: 600
   retry_max_attempts: 3
   # Base delay, doubling per retry: 1s + 2s = 3s of waiting across 3 attempts.
   # Raised from 0.5 (SOLUSDEV-252, observed live): a token-per-minute limit
@@ -428,3 +545,36 @@ cost:
   margin_multiplier: 2.0 # infra + failed calls + trial grants + profit (not pure profit)
   credits_per_dollar: 100.0 # PROVISIONAL — calibrate from pilot data
   price_unit: usd_per_million_tokens
+  web_call_credits: 2 # PROVISIONAL — one Brave API call; calibrate from pilot data
+
+# --- Part envelopes (SOLUSDEV-321 P2-T1) --------------------------------------
+# A part states a limit, never a warn bound: the envelope derives `warn` as this
+# fraction of the limit (of the half-range from the midpoint for a two-sided one).
+envelopes:
+  warn_fraction: 0.8
+
+# --- Window evaluator budget (SOLUSDEV-321 P2-T3b) ----------------------------
+# A robot session's window evaluator runs its live-signal rules over each
+# event-time window until the window has spent
+# max(cpu_budget_ms, cpu_budget_ms_per_part x the session's parts) of CPU.
+observer:
+  cpu_budget_ms: 20 # the floor per window (spec P2.3)
+  cpu_budget_ms_per_part: 10 # 17 rules x one part is about 5.5 ms on a dev box (P2-T4); 10 leaves margin
+
+# --- Simulation ladder (SOLUSDEV-321 P4-T1, docs/api/simulation.md) ----------
+# A simulated value at or past its quantity's band of a limit climbs to the
+# next rung; a value with margin stops where it is. `bands` overrides
+# escalate_at per quantity, each strictly between 0 and 1. `targets` are the
+# external routing targets: they are named here and never in the simulation
+# package. cost and fidelity are ordinals that default to the target's rung,
+# the same rank a built-in provider gets.
+simulation:
+  escalate_at: 0.8 # the spec's "within 20 % of a limit"
+  bands: {}
+  targets:
+    - name: isaac # the full-simulation integration; P4-T4 routes it through its gated routine tool
+      rung: 4
+      domain: mechanical
+      quantities: [joint_trajectory]
+      cost: 4
+      fidelity: 4

@@ -15,14 +15,6 @@ const MAX_CONFIG_BYTES = 64 * 1024
 
 export type SolActionMode = 'guide' | 'do'
 
-export interface SolWindowGeometry {
-  x: number
-  y: number
-  width: number
-  height: number
-  displayId: number
-}
-
 export interface SolSettingsState {
   actionMode: SolActionMode
   screenIntelligence: boolean
@@ -30,16 +22,16 @@ export interface SolSettingsState {
    *  Off stops both; the global chords stay. The consent surface for a global
    *  keyboard hook (security review L2). */
   hotkeys: boolean
-  alwaysOnTop: boolean
-  window: SolWindowGeometry | null
+  /** "SOL can use your mouse and keyboard" (sol-drive.md §5). Default off; the
+   *  setting is the consent for the companion's drive server. */
+  drive: boolean
 }
 
 export const DEFAULT_SOL_SETTINGS: SolSettingsState = {
   actionMode: 'guide',
   screenIntelligence: false,
   hotkeys: true,
-  alwaysOnTop: false,
-  window: null
+  drive: false
 }
 
 export type SolSettingsDeps = Pick<
@@ -61,8 +53,7 @@ export interface SolSettings {
   toggleMode(): SolActionMode
   setScreenIntelligence(on: boolean): void
   setHotkeys(on: boolean): void
-  setAlwaysOnTop(on: boolean): void
-  setWindowGeometry(geometry: SolWindowGeometry | null): void
+  setDrive(on: boolean): void
   /** Hear every change (the new state); returns unsubscribe. */
   onChange(cb: (state: SolSettingsState) => void): () => void
 }
@@ -70,23 +61,16 @@ export interface SolSettings {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
-function parseGeometry(v: unknown): SolWindowGeometry | null {
-  if (!isRecord(v)) return null
-  const nums = ['x', 'y', 'width', 'height', 'displayId'].map((k) => v[k])
-  if (!nums.every((n) => typeof n === 'number' && Number.isFinite(n))) return null
-  const [x, y, width, height, displayId] = nums as number[]
-  return { x, y, width, height, displayId }
-}
-
-/** Pick only the known fields; anything malformed falls back to its default. */
+/** Pick only the known fields; anything malformed falls back to its default.
+ *  SOLUSDEV-319: the pill retired the pin and saved geometry, so a stored
+ *  `alwaysOnTop` / `window` is dropped here and gone on the next write. */
 export function parseSolSettings(v: unknown): SolSettingsState {
   const r = isRecord(v) ? v : {}
   return {
     actionMode: r.actionMode === 'do' ? 'do' : 'guide',
     screenIntelligence: r.screenIntelligence === true,
     hotkeys: r.hotkeys !== false,
-    alwaysOnTop: r.alwaysOnTop === true,
-    window: parseGeometry(r.window)
+    drive: r.drive === true
   }
 }
 
@@ -163,8 +147,7 @@ export function createSolSettings(deps: SolSettingsDeps): SolSettings {
     },
     setScreenIntelligence: (screenIntelligence) => update({ screenIntelligence }),
     setHotkeys: (hotkeys) => update({ hotkeys }),
-    setAlwaysOnTop: (alwaysOnTop) => update({ alwaysOnTop }),
-    setWindowGeometry: (window) => update({ window }),
+    setDrive: (drive) => update({ drive }),
     onChange: (cb) => {
       listeners.add(cb)
       return () => void listeners.delete(cb)

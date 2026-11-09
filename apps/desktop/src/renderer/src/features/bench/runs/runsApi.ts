@@ -19,6 +19,8 @@ export interface RunSummary {
   packet_count: number
   drop_count: number
   artifact_id: string | null
+  /** True for the run its robot's envelopes are learned from; start/import/live-stop omit it. */
+  baseline?: boolean
 }
 export interface RunPacket {
   device_id: string
@@ -55,6 +57,27 @@ export interface RunManifest {
     revision?: string | null
     data?: string | null
   }>
+  /** The graph findings the run's bench session raised while it ran (SOLUSDEV-321 P2-T7). */
+  findings?: RunFindingRecord[]
+}
+type FindingSeverity = 'info' | 'warning' | 'critical'
+export interface RunFindingRecord {
+  finding_id: string
+  rule_id: string
+  /** Sorted: with the rule, what compare matches a finding on across runs. */
+  subjects: string[]
+  severity: FindingSeverity
+  count: number
+  first_seen: string
+  last_seen: string
+}
+export interface RunFindingDelta {
+  rule_id: string
+  subjects: string[]
+  change: 'new' | 'cleared' | 'persisting'
+  severity: FindingSeverity
+  baseline: { finding_id: string; count: number } | null
+  candidate: { finding_id: string; count: number } | null
 }
 export interface RunDetail {
   summary: RunSummary
@@ -95,6 +118,40 @@ export interface RunComparison {
     after_limit: number
   }>
   insufficient: Array<{ device_id: string; signal: string; reason: string }>
+  finding_deltas?: RunFindingDelta[]
+  /** What the candidate was compared against: a baseline run, or the routine's twin. */
+  expected_source?: 'baseline_run' | 'definition' | 'sim'
+  /** The real run read against its routine's twin, when exactly one side is the twin's. */
+  evidence?: RunSimControl
+}
+type ResidualParameter = 'mass' | 'limit' | 'sensor_offset' | 'contact'
+/** A part's residual against the twin's motion; the keys present depend on `status`. */
+export interface RunResidual {
+  status: 'attributed' | 'unattributed' | 'consistent' | 'insufficient'
+  parameter: ResidualParameter | null
+  reason?: string
+  explained?: Partial<Record<ResidualParameter, number>>
+  estimate?: Partial<Record<ResidualParameter, Record<string, number | string>>>
+  residual_rms?: number
+  samples?: number
+}
+/** Compare's simulation-as-the-control evidence (docs/api/bench-runs.md). Read the label with
+ * the gap: `electrical_or_mechanical` beside a gap is a twin that models the fault and missed it. */
+export interface RunSimControl {
+  sim_result_id: string
+  real_passed: boolean | null
+  sim_passed: boolean | null
+  task_passed: boolean | null
+  sim_control:
+    | 'electrical_or_mechanical'
+    | 'software'
+    | 'policy_or_perception'
+    | 'consistent'
+    | null
+  /** Why there is no label, when there is none. */
+  reason: string | null
+  simulation_gap: boolean
+  residuals: Record<string, RunResidual>
 }
 const path = (project: string): string => `/projects/${encodeURIComponent(project)}/bench/runs`
 export async function listRuns(
@@ -144,15 +201,22 @@ export async function runFindings(
     await api.request<unknown>(`${path(project)}/${encodeURIComponent(id)}/findings`, { signal })
   )
 }
+/** `simResult`: a trajectory simulation of the routine, whose twin run stands in for the
+ * baseline (R117). Omitted, the two runs compare as they always have. */
 export async function compareRuns(
   project: string,
   baseline: string,
-  candidate: string
+  candidate: string,
+  simResult?: string
 ): Promise<RunComparison> {
   return decodeRunComparison(
     await api.request<unknown>(`${path(project)}/compare`, {
       method: 'POST',
-      body: { baseline_id: baseline, candidate_id: candidate }
+      body: {
+        baseline_id: baseline,
+        candidate_id: candidate,
+        ...(simResult ? { sim_result_id: simResult } : {})
+      }
     })
   )
 }

@@ -174,6 +174,27 @@ async def add_credits(
     )
 
 
+async def expire_credits(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    amount: int,
+    *,
+    idempotency_key: str,
+    attrs: dict[str, Any],
+) -> CreditResult:
+    """Remove unspent granted credits as an ADJUSTMENT (ADR-042: academic credits do not
+    roll over). Never drives the balance below zero: the amount is capped at the balance
+    under the row lock. Not usage, so `spent_total` is untouched. Idempotent by key."""
+    await _ensure_balance_row(session, user_id)
+    current = await session.scalar(
+        select(CreditBalance.balance).where(CreditBalance.user_id == user_id).with_for_update()
+    )
+    capped = min(abs(amount), max(int(current or 0), 0))
+    return await _apply(
+        session, user_id, -capped, CreditTxnType.ADJUSTMENT, idempotency_key, attrs, guard=True
+    )
+
+
 async def debit_credits(
     session: AsyncSession,
     user_id: uuid.UUID,

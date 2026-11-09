@@ -1,3 +1,6 @@
+// Must stay the first import: refuses a packaged launch with debugging switches
+// before anything else in main runs (ADR-041 amendment 2026-10-28).
+import './packagedGuardBoot'
 import { findNativeGuideTarget, readNativeWindowProperty } from './sol-window/nativeGuideTarget'
 import {
   app,
@@ -8,6 +11,7 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  powerMonitor,
   protocol,
   screen,
   systemPreferences,
@@ -64,6 +68,7 @@ import {
   type SolWindowManager
 } from './sol-window/solWindow'
 import { createSolSettings } from './solSettings'
+import { startDrive, type DriveHandle } from './drive/driveWiring'
 import { createScreenCapture, realScreenCaptureDeps, type Rect } from './capture/screenCapture'
 import { createTray, paintDot, type SolTray } from './tray'
 import {
@@ -73,6 +78,7 @@ import {
 } from './platform/capabilities'
 import { enableShortcutPortal } from './hotkeys/globalHotkeys'
 import { startHotkeys, type HotkeysHandle, type HotkeyStatus, type KeyHookLoad } from './hotkeys'
+import { watchHotkeyRecovery } from './hotkeys/recovery'
 import { realExtensionFs } from './extensions/extensionFs'
 import {
   createExtProtocolHandler,
@@ -149,6 +155,8 @@ let machineReporter: MachineReporter | null = null
 let solWindows: SolWindowManager | null = null
 let solTray: SolTray | null = null
 let hotkeys: HotkeysHandle | null = null
+// SOLUSDEV-319 drive slice 3: setting, availability, outline, quiet period.
+let drive: DriveHandle | null = null
 
 /**
  * The ~/.solus project registry (SOLUSDEV-166 / ADR-034): the durable
@@ -166,13 +174,19 @@ function registerFolderRegistryHandlers(): void {
     const input = folderLinkInput(link)
     if (input === null) return { ok: false }
     const ok = linkProjectFolder(projectId, input, realLocalStateDeps)
-    if (ok) notifyProjectFolderChanged(projectId)
+    if (ok) {
+      notifyProjectFolderChanged(projectId)
+      drive?.refresh() // any project's link can change drive availability
+    }
     return { ok }
   })
   ipcMain.handle('folder:unlink', (event, projectId: unknown) => {
     if (!isMainRendererSender(event) || typeof projectId !== 'string') return { ok: false }
     const ok = unlinkProjectFolder(projectId, realLocalStateDeps)
-    if (ok) notifyProjectFolderChanged(projectId)
+    if (ok) {
+      notifyProjectFolderChanged(projectId)
+      drive?.refresh()
+    }
     return { ok }
   })
   ipcMain.handle('folder:links', (event) =>
@@ -372,18 +386,17 @@ function startSol(): void {
   let hotkeyStatus: HotkeyStatus | null = null
   let lastRegionRefused = false
   const state = (): SolState => {
-    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled, alwaysOnTop } = settings.get()
+    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled } = settings.get()
     return {
       actionMode,
       screenIntelligence,
       hotkeysEnabled,
-      alwaysOnTop,
       capture: capture.capability(),
       hotkeys: hotkeyStatus,
       lastRegionRefused
     }
   }
-  const windows = createAppSolWindows(settings)
+  const windows = createAppSolWindows()
   solWindows = windows
   const publish = (): void => {
     const snapshot = state()
@@ -419,6 +432,14 @@ function startSol(): void {
     },
     isSolSender
   )
+
+  drive = startDrive({
+    ipc: ipcMain,
+    settings,
+    windows,
+    isAllowedSender: isSolSender,
+    isMainSender: isMainRendererSender
+  })
 
   startSolTray(basics, settings, windows)
 
@@ -457,6 +478,41 @@ function startSol(): void {
 
   runHotkeys()
   publish()
+
+  watchSolHotkeys(
+    state,
+    publish,
+    runHotkeys,
+    () => settings.get().hotkeys && hotkeyStatus?.hook.status === 'needs-permission'
+  )
+}
+
+/** A late Accessibility grant or a sleep must not leave double-Ctrl dead until a
+ *  relaunch; a grant made in System Settings also clears its status line. */
+function watchSolHotkeys(
+  state: () => SolState,
+  publish: () => void,
+  restart: () => void,
+  hookMissingPermission: () => boolean
+): void {
+  let published = JSON.stringify(state())
+  watchHotkeyRecovery({
+    platform: process.platform,
+    isTrusted: () => systemPreferences.isTrustedAccessibilityClient(false),
+    hookMissingPermission,
+    restart,
+    refresh: () => {
+      const next = JSON.stringify(state())
+      if (next !== published) publish()
+      published = next
+    },
+    onWake: (cb) => {
+      powerMonitor.on('resume', cb)
+      powerMonitor.on('unlock-screen', cb)
+    },
+    setInterval,
+    clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>)
+  })
 }
 
 /** Preferred main-window size, clamped to the primary display's work area so a
@@ -612,6 +668,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', (event) => {
     hotkeys?.stop()
     hotkeys = null
+    drive?.dispose()
     solTray?.destroy()
     solTray = null
     machineReporter?.stop()
@@ -687,8 +744,9 @@ function restartSolHotkeys(
               systemPreferences.isTrustedAccessibilityClient(false)
           }
         : {}),
+      isQuiet: () => drive?.isQuiet() ?? false,
       onSummon: () => {
-        windows.open()
+        windows.toggle()
         windows.pushSummoned(Date.now())
       },
       onToggleMode: () => void settings.toggleMode(),
@@ -835,6 +893,7 @@ function registerCompanionHandlers(): void {
       guideScopeGeneration += 1
       guideProject = projectId
       setCompanionProject(projectId)
+      drive?.setProject(projectId)
       hardwareSources?.setProject(projectId)
       machineReporter?.setProject(projectId)
     }
@@ -851,20 +910,20 @@ function registerCompanionHandlers(): void {
   )
 }
 
-function createAppSolWindows(settings: ReturnType<typeof createSolSettings>): SolWindowManager {
+function createAppSolWindows(): SolWindowManager {
   return createSolWindowManager({
-    createWindow: (bounds, alwaysOnTop) =>
-      createSolBrowserWindow(
-        bounds,
-        alwaysOnTop,
-        ipcMain,
-        process.platform === 'linux' ? icon : undefined
-      ),
+    createWindow: (bounds) =>
+      createSolBrowserWindow(bounds, ipcMain, process.platform === 'linux' ? icon : undefined),
     screen,
-    settings,
     // The main window only (the manager adds the SOL window itself). Never the
     // checkout window (remote Stripe content) nor extension windows (third-party
     // bundles) — sol:state is for the app's own renderers (security M2).
-    allWindows: () => (mainWindow ? [mainWindow] : [])
+    allWindows: () => (mainWindow ? [mainWindow] : []),
+    appActive: () => BrowserWindow.getFocusedWindow() !== null,
+    // macOS raises the main window when the pill hides; app.hide() returns to
+    // the app the pill was summoned over instead (Windows/Linux need nothing).
+    yieldFocus: () => {
+      if (process.platform === 'darwin') app.hide()
+    }
   })
 }

@@ -138,6 +138,7 @@ All entries below were codified 2026-06-06 from the initial planning cycle.
 **Rejected (historical):** Free-forever tier (support load, weak demand signal).
 **Amended (2026-07-03, SOLUSDEV-72):** Originally specified a _pooled_ team credit allowance and rejected per-member allowances (rationale: robotics usage is lumpy, pooling absorbs spikes). Superseded by per-user allowances: usage attribution is per-user (feeds ADR-011 cost-calibration and user history), credits/history stay portable across the individual→team upgrade (ADR-015 first-class flow), and one code path serves solo and team users (W0-01 keys `credit_balance`/`credit_ledger` by `user_id`). Spike-absorption is consciously traded away; per-team spending caps (ADR-018/019) still bound runaway cost, so tenant cost-safety is unaffected.
 **Revisit when:** Real usage data exists to tune plan limits, pack sizes, and prices (see ADR-023/024).
+**See also (2026-11-08, SOLUSDEV-319):** ADR-042 narrows the rejected free-forever tier with one exception: a free ACADEMIC plan that requires a proven academic email, expires, and caps cost.
 
 ## ADR-018: Metering in credits, not tokens; ambient checks unmetered
 
@@ -194,6 +195,7 @@ Concretely: outbound provider calls are counted per **provider account** (not pe
 **Clarified (2026-10-07, SOLUSDEV-313, founder-approved in-chat):** Limits remain stored as data. A subscription may carry a staff-set `limits_override`, merged per key over plan defaults (explicit `null` = unlimited; an absent key falls through to the plan default). Billing events never write or clear the override. Enforcement reads only the effective limits (override merged over plan defaults) and never plan names.
 **Rejected:** Individual/Team-seat pricing (ADR-017; conflated segment with plan); hardcoding plan names in enforcement branches (blocks Enterprise overrides and per-plan tuning); overflow-and-warn on invites (ambiguous billing, silent overage).
 **Revisit when:** Real usage data allows tuning limit values and prices; if a plan between BASIC and PRO proves needed.
+**Amended (2026-11-08, SOLUSDEV-319, approved in-chat):** a fourth plan, ACADEMIC, is added by ADR-042. Its limits are BASIC's defaults, stored as data like every plan's.
 
 ## ADR-024: Credits — per-user, packs, ledger + cached balance, cost-capped trial
 
@@ -1201,3 +1203,129 @@ verification), annual allowance 2,500, quiet period 90 s.
 - ADR-030 GitHub webhooks become real.
 - Existing OAuth-bound sources are not migrated automatically.
 - GitLab groups would follow this pattern under their own ADR.
+
+## ADR-040: Live edits to an open KiCad schematic via a save → write → Revert handshake
+
+**Status:** Accepted (2026-10-24, SOLUSDEV-319; approved in-chat against the concrete text below).
+
+**Context:**
+
+- KiCad 10.0.1's IPC API exposes no schematic item types.
+- Eeschema neither watches its file nor reloads external changes.
+- The SOL write tools therefore refuse (`open_in_editor`) while the sheet is open, so users must close KiCad to let SOL edit.
+
+**Decision:**
+
+1. When the target sheet's editor lock exists, the KiCad fork may perform a three-step handshake inside the already-confirmed write: (a) save the open sheet in KiCad, (b) re-read and verify the plan fingerprint, then write atomically as today, (c) run KiCad's File → Revert to reload from disk.
+2. Synthetic input is a fixed vocabulary only: activate the KiCad window whose title names the target sheet, choose File → Save, choose File → Revert and confirm. No free-text typing, no coordinates, no other application. Each step verifies the KiCad window is frontmost and aborts otherwise.
+3. Input runs through `/usr/bin/osascript` with a fixed script; the sheet name is passed as an argv value, never interpolated.
+4. It requires the user's macOS Accessibility grant to Solus. Without it, or with no matching window, the tool refuses with `open_in_editor` exactly as before.
+5. The approval preview states that KiCad will save and reload the open sheet, which saves in-progress work and resets that sheet's undo history. The user's approval covers that single call.
+6. If the save changes the file (unsaved edits in KiCad), the write refuses with `stale_plan` and nothing is written. If Revert fails after a write, the tool reports it so SOL tells the user to use File → Revert and not save.
+7. macOS only. Other OSes keep `open_in_editor`. KiCad's IPC API replaces this once it supports schematic items.
+
+**Consequences:**
+
+- SOL can edit while the project is open.
+- One new local capability (synthetic input) is gated to KiCad, a declared sandbox-posture change that triggers a PROVENANCE re-review of the fork.
+
+**ADR-040 amendment (2026-10-24, SOLUSDEV-319; approved in-chat against the concrete text below):** Decision §1 gains step (d): after a successful Revert, save the (now clean, reloaded) sheet once more in KiCad, so the file on disk is in KiCad's canonical form and the next live edit's pre-save does not change it. The tool returns the fingerprint of the file after that save. If step (d) fails, the edit stands (KiCad shows it) and the result says the next live edit may need one retry. Vocabulary is unchanged (Save is already in §2).
+
+## ADR-041: SOL drives desktop tools through a gated pointer and keyboard loop
+
+**Status:** Accepted (2026-10-24, SOLUSDEV-319 follow-up; approved in-chat against the concrete text below). Supersedes ADR-040 §2 only.
+
+**Context:**
+
+- Users ask SOL to _do_ things in tools they don't know ("add a resistor in KiCad"). The Ember Pill shows a plan, but SOL can only act through tool APIs (MCP fork tools, Onshape REST), and many actions have none.
+- ADR-040 §2 limits synthetic input to a fixed KiCad save/revert vocabulary: no free typing, no coordinates, no other app.
+- Driving the pointer is the most powerful local capability Solus would have. Everything on screen is untrusted input (CLAUDE.md §7), including text inside the target app that a malicious project could plant.
+
+**Decision:**
+
+1. **API first, pointer last.** SOL uses a tool's API when one exists. Driving is only for steps with no API equivalent, and the plan step says which kind it is.
+2. **Opt-in, Build only.**
+   - A new Settings switch, **SOL can use your mouse and keyboard**, is off by default.
+   - Driving needs Build mode, that switch on, and the OS grants: macOS Accessibility + Screen Recording, Windows equivalent.
+   - Guide never drives; it may only point (overlay arrows).
+3. **Allowlisted apps only.**
+   - Drivable apps are a Solus-authored allowlist, keyed by OS app identity (bundle id or executable path, not window title). Start with KiCad; Fusion and browser-hosted Onshape come later, each by amendment.
+   - A drive session is bound to one app window, chosen before any model sees the screen.
+4. **Approval is per plan step, with a bounded budget.**
+   - The plan card shows each driven step's intent ("Place R1 above nSLEEP").
+   - Approving a step authorises at most N low-level actions and T seconds inside that window (defaults: 15 actions, 30 s, config-driven).
+   - Running out of budget pauses and asks; it never extends itself.
+   - Steps with a real-world effect outside the app (save to disk, plot, export, delete, close) need their own explicit approval.
+5. **Closed action vocabulary, checked by Solus code.** The model may only _propose_, through the validated tool interface: `click`, `double_click`, `right_click`, `drag`, `scroll`, `move`, `key(chord)`, `type(text)`, `wait`. Before every action Solus code checks:
+
+   - The bound window is frontmost and its app identity still matches.
+   - Coordinates fall inside the window bounds (window-relative).
+   - The chord is not on a system denylist: app switch, quit, close, Spotlight, lock, screenshot, OS settings.
+   - `type` text is capped in length, and is refused while a secure/password field is focused (where the OS reports it).
+   - There is no clipboard access beyond pasting text the step itself produced.
+
+   A failed check aborts the step, not just the action.
+
+6. **The loop:** capture the bound window only (not the whole screen) → the model proposes one action → validate → execute → re-capture → the model confirms progress.
+   - Screenshots stay in memory for that step and are never persisted (as in sol-window §6).
+   - Every model call goes through ADR-019 budgets and ADR-026 routing, with timeouts, bounded retries and a per-provider circuit breaker.
+7. **The user is always in control.**
+   - The A3 driving status line and the amber outline on the bound window are shown for the whole session.
+   - Any physical mouse or keyboard input (detected by the existing uiohook listener) pauses immediately. Esc and double-tap Ctrl stop.
+   - Stopping lets no further action run. An action already sent to the OS is reported as done, never hidden.
+8. **The input executor is a Solus-built helper** (`solus-input`, a small signed native binary).
+   - It sits at a pinned path, takes argument lists only (as ADR-040 §3 does), and accepts only the vocabulary in §5. It refuses on its own if the target app identity doesn't match.
+   - No general-purpose third-party automation library.
+   - macOS first; then Windows (SendInput) and Linux X11; Wayland not supported.
+9. **Prompt-injection posture.**
+   - Captured pixels and their OCR'd text are data inside fenced untrusted blocks.
+   - Nothing on screen can change the bound app, the approved plan, the budget or the tool set. Those are fixed by Solus code before capture.
+   - Red-team fixtures (schematics and windows showing "ignore your instructions…") are part of the agent test suite.
+10. **Data events (ADR-011):** `drive.session_started` / `ended` (app id, step count, outcome), `drive.action` (action type, validation result; never typed text or screenshots), `drive.aborted` (reason code).
+11. **ADR-040 §2 is replaced by:** "Synthetic input happens only through the ADR-041 drive gate. ADR-040's save → write → Revert handshake stays as a fixed, pre-approved use of that gate for KiCad."
+
+**Consequences:**
+
+- SOL can carry out tool operations that have no API, in front of the user, with a visible way to stop.
+- A new signed native helper, plus Accessibility and Screen Recording grants. This is a declared sandbox-posture change that triggers a security and provenance review.
+- Driving costs credits per loop iteration, which matters for pricing (ADR-017/024).
+- Per-app allowlist and denylist maintenance; KiCad UI changes between versions can break steps. Mitigation: verification after every action, plus tool-knowledge notes (ADR-033).
+- Enterprise can disable driving per team. The setting is a team policy flag, so SSO/audit plans are not foreclosed.
+
+**ADR-041 amendment (2026-10-26, SOLUSDEV-319 drive slice 1 security review H1; approved in-chat against the concrete text below):** The OS grants (Accessibility, Screen Recording) are held only by `solus-input`, shipped as its own signed, notarised, `LSUIElement` app bundle inside Solus.app and launched with responsibility disclaimed. Solus.app never requests or holds either grant. The helper verifies its caller's code signature (Solus team ID) and its own integrity before acting, so no other process — including MCP servers and commands Solus runs — can use it or the grants. Consequence: one more signed artifact and signing identity to maintain; the drive setting's permission prompts name the helper, not Solus.
+
+**ADR-041 amendment (2026-10-26, SOLUSDEV-319 drive slice 2; approved in-chat against the concrete text below):** §4's per-step budget T is wall-clock time from the step's first capture to its last action, model calls included, and its default becomes 120 s (N stays 15 actions; both config-driven). The plan card states the budget in those terms ('up to 15 actions · 2 min'). The loop runs on Anthropic's computer-use toolset with one action per model call; Solus code maps each proposed action onto the §5 vocabulary and the helper's checks, and every member outside §5 is disabled in the request.
+
+**ADR-041 amendment (2026-10-26, SOLUSDEV-319 drive security M2/M3; approved in-chat against the concrete text below):** A drive session is also bound to the project: the bound app's process must be working inside the linked workspace, checked by solus-input on the machine before every command, so no other project's window can be driven or captured, and no path leaves the machine. No linked workspace means no driving. §4's effects outside the app are enforced structurally: dialogs, sheets and menus are other windows, which the helper's focus and hit-test checks refuse, so plot, export, print and close-confirm can't be completed by a drive step. The one such effect a click inside the bound window can reach is saving the bound document, which is inside the workspace by the rule above. It is accepted as an in-step effect: the companion ends the step as soon as a design file in the workspace changes, and the step reports that SOL saved.
+
+**ADR-041 amendment (2026-10-27, SOLUSDEV-319 drive slice 3; approved in-chat against the concrete text below):** The H1 amendment's caller check is narrowed, because MCP servers run as the same signed companion binary and a team-ID check alone would admit them. Before acting, solus-input requires all three, read from the kernel and the code-signing service, never from its own arguments or environment: (1) its parent process satisfies a code requirement pinning the Solus team ID and the companion's signing identifier; (2) that parent is the top-level companion, not a server or command it runs (its arguments carry no fork or run mode); (3) the parent's parent satisfies the requirement for Solus.app. A failed check refuses with no input posted and no capture taken. Debug builds may compile in an explicit unsigned mode for development; release builds cannot be switched into it. Residual: code running inside the companion process itself can use the helper. Signing identities and notarisation remain human.
+
+**ADR-041 amendment (2026-10-27, SOLUSDEV-319 drive slice 3 security review C1; approved in-chat against the concrete text below):** The 2026-10-27 caller check cannot keep other same-user processes out: it identifies the parent and grandparent by pid after the fact, and a process can start the helper with arguments it chose and then exec the signed companion and Solus.app binaries into those pids. Inspecting the process tree cannot close this. The helper is therefore redesigned (slice 3b) as a background agent registered by Solus.app (SMAppService) that alone holds the Accessibility and Screen Recording grants and serves requests over a Unix socket in a user-private directory. Each request is accepted only when the socket peer's audit token, captured at connect, satisfies the companion's code requirement, so a request is only ever written by a running companion. The parent-chain check stays as defence in depth. Until slice 3b ships, the team ID stays a placeholder, so release builds of the helper refuse every capture and input; only debug builds (unsigned mode) drive.
+
+**ADR-041 amendment (2026-10-27, SOLUSDEV-319 drive slice 3b; approved in-chat against the concrete text below):** Refines the C1 amendment. A companion's code identity alone does not prove the request is the user's: a signed companion started by another process with its own server, account or workspace would pass. So the agent accepts a request only when both hold: (1) the socket peer's audit token, captured at connect, satisfies the companion's code requirement; (2) the request carries the current session token, which the agent issues only to a peer satisfying Solus.app's code requirement and which Solus.app passes to the companion it launched over that companion's stdin. Solus.app's Electron fuses are locked (run-as-node, NODE_OPTIONS and inspect arguments off; ASAR integrity validation and load-only-from-ASAR on), so its identity means Solus code. The agent is registered with SMAppService only while "SOL can use your mouse and keyboard" is on and unregistered when it is turned off. The parent-chain check and the disclaim launcher are removed: under launchd they verify nothing. Accepted residual: a same-user process that binds the socket path before the agent can see the requests sent to it and answer with false captures; it cannot post input, and the token it receives is useless without the companion's identity.
+
+**ADR-041 amendment (2026-10-28, SOLUSDEV-319 drive slice 3b security review C-1/C-2; approved in-chat against the concrete text below):** Supersedes the transport in the C1 and 3b amendments; their claim that a Unix socket's peer audit token is captured at connect is wrong (macOS answers LOCAL*PEERTOKEN for the socket's current process, so a client that sends and then execs a signed binary passes; reproduced on this machine), and a squatted socket path leaks the session token to a process that can then start a genuine companion. The agent is instead an XPC Mach service declared in its launchd plist and registered with SMAppService while "SOL can use your mouse and keyboard" is on. The listener requires every connection to satisfy Solus.app's code requirement (NSXPCConnection setCodeSigningRequirement, checked against each message's send-time audit token; exec changes the process's pidversion, so a message sent before an exec fails), and the client requires the agent's. Its only client is Solus.app's main process, through a native module in the app; the companion no longer talks to the agent and instead relays drive calls to main over the stdin/stdout pipe main created for it. The session token is removed. Packaged builds build the companion's environment from an allowlist, ignoring inherited SOLUS_COMPANION*_ and PYTHON_ variables, refuse to start with remote-debugging switches, and Solus.app no longer carries allow-dyld-environment-variables, so a process satisfying Solus.app's requirement runs Solus code with Solus configuration. Release drive stays blocked (team-ID placeholder) until this ships.
+
+**ADR-041 amendment (2026-10-31, SOLUSDEV-319 frontmost-app driving; approved in-chat against the concrete text below):** §3 is replaced. SOL may drive the app that is in front when the user asks, except apps on a Solus-authored denylist compiled into `solus-input` and Solus itself. The denylist covers terminals and shells (typing there would run commands outside the ADR-031 sandbox), password managers and Keychain Access, System Settings, mail and messaging clients, and web browsers; browser-hosted tools such as Onshape come later, each by amendment. Apps on the project-bound list (KiCad today) keep the M2 working-folder binding. Any other app is bound to the exact window the user confirms on the drive card, which names the app, the window title and "SOL will see this window"; the binding is keyed by app identity, pid and window id, a relaunch or different window ends the session, and nothing is captured before the user confirms. For these apps the denied-chord list adds save, close, quit and print, so a drive step never writes or closes the document; saving stays with the user, and edits saved by the app's own autosave are accepted. When the pill is summoned, SOL's turn context carries the frontmost app (bundle id and name; the window title as untrusted data), and SOL plans integration API first, then workspace file tools (e.g. `machine.write_file`), then driving. §2 (opt-in, Build only), §4 (budget), §5 (vocabulary and checks, including secure-field refusal), §7 (kill switch), §9 and the team policy flag are unchanged. Accepted residual: typing into a terminal pane inside an allowed app (e.g. VS Code) cannot be detected; it is mitigated by per-step approval and the live A3 strip.
+
+**ADR-041 amendment (2026-10-31, SOLUSDEV-319 window-bound driving without a workspace; approved in-chat against the concrete text below):** M2's "No linked workspace means no driving" now applies only to project-bound apps (KiCad today). A window-bound app may be driven when the project has no linked workspace; the binding is the window the user confirmed (app identity, pid and window id from the summon snapshot, re-verified before every `drive.step`). Without a workspace, the companion's file-change watch is off and the step cannot report that SOL saved; the save, close, quit and print chords stay denied, so a drive step cannot write a file through a chord; and the executor still refuses steps whose intent mentions upload, flash or deploy. With a workspace, the watch covers the bound document's folder when it lies inside the workspace. Accepted residual: with no workspace nothing ties the window to the project, and a click inside it can still save or change a file outside any project; this is covered only by per-step approval and the live A3 strip.
+
+**ADR-041 amendment (2026-11-01, SOLUSDEV-319 Phase 4 security review M-1; approved in-chat against the concrete text below):** The frontmost-app denylist also covers apps that run commands or reach other machines under another name: remote-desktop and VM consoles (Screen Sharing, Microsoft Remote Desktop, UTM, Parallels, VMware Fusion, VirtualBox, TeamViewer, AnyDesk, RealVNC, Jump, Parsec), launchers and automation tools (Raycast, Alfred, Keyboard Maestro, Hammerspoon), Python REPLs (IDLE, Thonny), disk imagers (balenaEtcher, Raspberry Pi Imager), plus the earlier additions Finder, Script Editor, Automator, Shortcuts, Script Debugger, Activity Monitor, Disk Utility, Installer and credential prompts.
+
+## ADR-042: Academic plan — free, proven academic email
+
+**Status:** Accepted — 2026-11-08, SOLUSDEV-319 (approved in-chat per ADR-032 tier 2).
+Amends ADR-023 (adds a fourth plan) and narrows ADR-017's rejected free-forever tier: the plan is free, but conditional, expiring, and cost-capped.
+
+**Decision:**
+
+1. A new plan, **ACADEMIC** (`academic`). It is free and has no Stripe subscription. Its limits are the BASIC defaults, stored as data (ADR-023).
+2. **Credits:** a monthly grant (CONFIG, default 1,000) that does not roll over and is idempotent per (user, month). Credit packs can still be bought. There is no one-time starting grant.
+3. **Eligibility:** a proven address on an academic domain, meaning `.edu` plus a CONFIG suffix list (`ac.uk`, `edu.au`, …). Any account may add one, separate from its sign-in email.
+4. **Proof:** a 6-digit code emailed through AWS SES. The code is stored hashed, expires after 15 minutes and allows 5 attempts. Sending is rate-limited per user and per address. Each account has at most one academic address, and an address may back only one account at a time.
+5. **Expiry:** 12 months, then the user verifies again. An expired academic plan follows the trial-expired rules (ADR-024). Nothing is deleted.
+6. **Conflicts:** a claim is refused (`409`) while a live Stripe subscription exists, and the user cancels first. Upgrading from academic to Pro through Checkout is allowed and ends the academic plan.
+7. **Events:** `billing.academic.code_sent`, `billing.academic.verified`, `billing.academic.failed`, `billing.academic.expired`.
+
+**Rejected:** requiring the account email to be `.edu` (forces users to change their sign-in email); unlimited free credits (unbounded cost); manual document review (support load).
+**Revisit when:** abuse data or the cost per academic user is known.

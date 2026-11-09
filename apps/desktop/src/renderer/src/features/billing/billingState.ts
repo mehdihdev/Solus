@@ -21,6 +21,9 @@ export type BillingStateKind =
   | 'cancel_pending'
   | 'canceled'
   | 'past_due'
+  /** ADR-042: the free Academic plan, live or past its `expires_at`. */
+  | 'academic'
+  | 'academic_expired'
 
 export interface BillingBannerSpec {
   level: 'warn' | 'info'
@@ -60,30 +63,49 @@ const PAST_DUE_COPY =
 
 const NONE: TrialInfo = { kind: 'none', days: 0, endsAt: null }
 
-function kindOf(sub: BillingSubscription | null, trial: TrialInfo): BillingStateKind {
+function academicKind(sub: BillingSubscription, now: number): BillingStateKind {
+  const ends = sub.expires_at ? Date.parse(sub.expires_at) : Number.NaN
+  return !Number.isNaN(ends) && ends <= now ? 'academic_expired' : 'academic'
+}
+
+/** A live subscription with a scheduled end: cancelled, running out at `cancel_at`. */
+function isCancelPending(sub: BillingSubscription): boolean {
+  return Boolean(sub.cancel_at) && (sub.status === 'active' || sub.status === 'trialing')
+}
+
+/** A trialing subscription: Stripe's trial when it has a Stripe id, else the local one. */
+function trialingKind(sub: BillingSubscription, trial: TrialInfo): BillingStateKind {
+  if (sub.stripe_subscription_id) return 'stripe_trialing'
+  return trial.kind === 'ended' ? 'local_trial_expired' : 'local_trial_active'
+}
+
+function kindOf(sub: BillingSubscription | null, trial: TrialInfo, now: number): BillingStateKind {
   if (!sub) return 'no_subscription'
+  if (sub.plan === 'academic' && sub.status === 'active') return academicKind(sub, now)
   if (sub.status === 'canceled') return 'canceled'
-  if (sub.cancel_at && (sub.status === 'active' || sub.status === 'trialing')) {
-    return 'cancel_pending'
-  }
+  if (isCancelPending(sub)) return 'cancel_pending'
   if (sub.status === 'past_due') return 'past_due'
-  if (sub.status === 'trialing') {
-    if (sub.stripe_subscription_id) return 'stripe_trialing'
-    return trial.kind === 'ended' ? 'local_trial_expired' : 'local_trial_active'
-  }
+  if (sub.status === 'trialing') return trialingKind(sub, trial)
   return 'active'
 }
 
 function bannerFor(
   kind: BillingStateKind,
   degraded: StripeStatus,
-  trial: TrialInfo
+  trial: TrialInfo,
+  sub: BillingSubscription | null
 ): BillingBannerSpec | null {
   if (degraded === 'unavailable') return { level: 'warn', text: UNAVAILABLE_COPY }
   if (degraded === 'unconfigured') return { level: 'info', text: UNCONFIGURED_COPY }
   if (kind === 'past_due') return { level: 'warn', text: PAST_DUE_COPY }
   if (kind === 'local_trial_expired') {
     return { level: 'warn', text: `Trial ended ${formatDate(trial.endsAt)} — choose a plan` }
+  }
+  if (kind === 'academic_expired') {
+    return {
+      level: 'warn',
+      text: `Academic plan ended ${formatDate(sub?.expires_at)} — verify your academic email again or choose a plan`
+    }
   }
   return null
 }
@@ -122,13 +144,13 @@ export function classifyBilling(input: ClassifyInput): BillingView {
   if (status === 'offline') return placeholder('offline')
   if (status === 'loading') return placeholder('loading')
   const trial = effectiveTrial(sub, summary, now)
-  const kind = kindOf(sub, trial)
+  const kind = kindOf(sub, trial, now)
   const degraded: StripeStatus = summary ? summary.stripe_status : 'unavailable'
   const isLive = isLiveSub(sub, kind)
   const cancelPending = kind === 'cancel_pending'
   return {
     kind,
-    banner: bannerFor(kind, degraded, trial),
+    banner: bannerFor(kind, degraded, trial, sub),
     degraded,
     isLive,
     showPlanActions: isLive && !cancelPending,

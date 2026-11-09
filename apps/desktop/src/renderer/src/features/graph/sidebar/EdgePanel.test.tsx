@@ -108,3 +108,60 @@ describe('EdgePanel', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 })
+
+// SOLUSDEV-321 P3-T1 — `checker_results` items carry `status` and `at`; only a failure reads as a
+// problem, passes fold under one summary and a missing fact reads "could not check".
+describe('EdgePanel checker results', () => {
+  it('status and at render, pass collapses', () => {
+    const at = '2026-10-27T10:00:00Z'
+    mount({
+      ...candidate,
+      properties: {
+        checker_results: [
+          {
+            rule_id: 'pin_in_code_vs_wiring',
+            status: 'fail',
+            severity: 'critical',
+            message: 'pin 9 is not wired',
+            at,
+            evidence: {}
+          },
+          { rule_id: 'power_budget', status: 'pass', severity: 'info', message: 'ok', at },
+          { rule_id: 'tolerance_stack', status: 'pass', severity: 'info', message: 'ok', at }
+        ]
+      }
+    })
+    expect(screen.getByText('pin_in_code_vs_wiring · failed · critical')).toBeVisible()
+    expect(screen.getByText('pin 9 is not wired')).toBeVisible()
+    const [first] = screen.getAllByText('2026-10-27 10:00 UTC')
+    expect(first).toBeVisible()
+    expect(first).toHaveAttribute('datetime', at)
+    const passed = screen.getByText('2 passed')
+    expect(screen.getByText('power_budget · passed')).not.toBeVisible()
+    fireEvent.click(passed)
+    expect(screen.getByText('power_budget · passed')).toBeVisible()
+    expect(screen.getByText('tolerance_stack · passed')).toBeVisible()
+  })
+
+  it('unknown_input shows could not check', () => {
+    mount({
+      ...candidate,
+      properties: {
+        checker_results: [
+          {
+            rule_id: 'gains_vs_resonance',
+            status: 'unknown_input',
+            severity: 'info',
+            message: 'resonance_hz unknown; set it in the part limits',
+            at: '2026-10-27T10:00:00Z'
+          },
+          { rule_id: 'cable_length_voltage_drop', status: 'inconclusive', severity: 'warning' }
+        ]
+      }
+    })
+    expect(screen.getByText('gains_vs_resonance · could not check')).toBeVisible()
+    expect(screen.getByText('resonance_hz unknown; set it in the part limits')).toBeVisible()
+    expect(screen.getByText('cable_length_voltage_drop · inconclusive')).toBeVisible()
+    expect(screen.queryByText(/passed/)).toBeNull()
+  })
+})

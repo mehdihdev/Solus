@@ -9,32 +9,38 @@ import asyncio
 import contextlib
 import dataclasses
 import logging
+import os
 import signal
 import sys
+from collections.abc import Mapping
 
 from solus_companion.channel import run_channel
 from solus_companion.config import (
-    _MAX_STDIN_LINE_BYTES,
+    MAX_DRIVE_REPLY_LINE_BYTES,
     CompanionConfig,
     TokenBox,
     apply_token_line,
     config_from_env,
     discover_servers,
 )
+from solus_companion.drive.helper import DriveRelay
+from solus_companion.drive.outline import stdout_writer
+from solus_companion.drive.server import drive_server_from_env
 from solus_companion.machine.server import MachineServer
-from solus_companion.supervisor import Supervisor
+from solus_companion.supervisor import BuiltinServer, Supervisor
 from solus_companion.watch import workspace_path
 
 logger = logging.getLogger("solus.companion")
 
 HEALTH_INTERVAL_SECONDS = 30.0
 
-# MCP-05 / M4: cap the stdin StreamReader at twice the control-line bound so a
-# well-formed control line always fits (apply_token_line still rejects any
-# line over _MAX_STDIN_LINE_BYTES before parsing). A line longer than THIS
-# makes asyncio's readline raise ValueError instead of returning; the consume
-# loop drops it and resyncs rather than letting the whole control channel die.
-STDIN_READER_LIMIT = _MAX_STDIN_LINE_BYTES * 2
+# MCP-05 / M4, slice 3b: the stdin StreamReader must hold a drive_reply line
+# carrying a capture (≤ 24 MiB as JSON), so its limit is the drive-reply bound;
+# apply_token_line still rejects every OTHER line over the control bound before
+# parsing. A line longer than THIS makes asyncio's readline raise ValueError
+# instead of returning; the consume loop drops it and resyncs rather than
+# letting the whole control channel die.
+STDIN_READER_LIMIT = MAX_DRIVE_REPLY_LINE_BYTES
 
 
 async def _health_loop(supervisor: Supervisor) -> None:
@@ -74,6 +80,23 @@ async def _stdin_token_loop(box: TokenBox) -> None:
     await _consume_token_lines(reader, box)
 
 
+def build_builtins(
+    workspace: str | None,
+    *,
+    env: Mapping[str, str],
+    platform: str = sys.platform,
+    relay: DriveRelay | None = None,
+) -> tuple[BuiltinServer, ...]:
+    """The servers the companion implements natively. `drive` (ADR-041,
+    sol-drive.md §3) advertises nothing unless the desktop switched it on and
+    the pinned helper validates, and only inside the linked workspace."""
+    linked = workspace_path(workspace)
+    return (
+        MachineServer(linked),
+        drive_server_from_env(env, workspace=linked, platform=platform, relay=relay),
+    )
+
+
 async def _amain(config: CompanionConfig) -> int:
     # S5: the built-in `machine` server — advertises nothing (and fails closed)
     # until a project workspace is linked (SOLUS_COMPANION_WORKSPACE).
@@ -81,13 +104,21 @@ async def _amain(config: CompanionConfig) -> int:
     # unset OR non-existent SOLUS_COMPANION_WORKSPACE means NO workspace, so the
     # server advertises nothing rather than confining to a directory that is not
     # there.
-    machine = MachineServer(workspace_path(config.workspace))
-    supervisor = Supervisor(config.servers, builtins=(machine,))
+    # Slice 3b (XPC): drive calls are relayed to the desktop — requests on
+    # stdout, `drive_reply` lines back on the same stdin control channel as
+    # tokens, routed by apply_token_line.
+    relay = DriveRelay(stdout_writer())
+    supervisor = Supervisor(
+        config.servers,
+        builtins=build_builtins(config.workspace, env=os.environ, relay=relay),
+    )
     await supervisor.start_all()
     channel = asyncio.create_task(run_channel(config, supervisor))
     side_tasks = [asyncio.create_task(_health_loop(supervisor))]
     box = config.token_source if isinstance(config.token_source, TokenBox) else None
     if box is not None and not sys.stdin.isatty():
+        box.drive_relay = relay
+        relay.attached = True  # replies can arrive: the stdin loop is running
         side_tasks.append(asyncio.create_task(_stdin_token_loop(box)))
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):

@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
+from solus_api.checkers.fact_store import FactStore
 from solus_api.checkers.interface import Checker, Severity, Warning
 from solus_api.contracts.impact import ImpactResult
 from solus_api.fingerprint.contract import FingerprintOutput
@@ -132,7 +133,7 @@ async def test_sensor_conflict_spans_code_and_electrical(db: AsyncSession) -> No
         db, project, "imu_reader.cpp", domain=Domain.CODE, attrs={"loop_rate_hz": 10.0}
     )
     sensor = await _entity(db, project, "IMU1", attrs={"min_sample_rate_hz": 100.0})
-    await _edge(db, project, reader, sensor, "reads_from")
+    await _edge(db, project, reader, sensor, "reads")
     provider = checker_provider()
 
     mapping = await provider(await _hood(db, project, sensor), sensor.id)
@@ -140,6 +141,39 @@ async def test_sensor_conflict_spans_code_and_electrical(db: AsyncSession) -> No
     assert set(mapping) == {reader.id, sensor.id}
     assert mapping[reader.id][0].severity is Severity.WARNING
     assert "alias" in mapping[reader.id][0].headline
+
+
+async def test_a_package_pinned_differently_across_two_files_is_one_consequence(
+    db: AsyncSession,
+) -> None:
+    """M105: impact reports pin conflicts again — `PinConflictChecker` left `DEFAULT_CHECKERS`
+    (the matrix raises the finding), so the impact provider runs it beside the defaults."""
+    project = await _project(db, "imp2-pins")
+    pins = []
+    for source_file, specifier in (
+        ("requirements.txt", "==1.0"),
+        ("ros/requirements.txt", "==2.0"),
+    ):
+        row = GraphEntity(
+            project_id=project.id,
+            kind="python_requirement",
+            domain=Domain.CODE,
+            name="numpy",
+            origin="connector",
+            attrs={"name": "numpy", "source_file": source_file, "specifier": specifier},
+            modality_hints={},
+        )
+        db.add(row)
+        pins.append(row)
+    await db.flush()
+    await _edge(db, project, pins[0], pins[1], "depends_on")
+
+    mapping = await checker_provider()(await _hood(db, project, pins[0]), pins[0].id)
+
+    assert set(mapping) == {pins[0].id, pins[1].id}
+    (cons,) = mapping[pins[0].id]
+    assert cons.severity is Severity.CRITICAL and "numpy" in cons.headline
+    assert mapping[pins[1].id][0].id == cons.id
 
 
 async def test_clean_graph_yields_no_consequences(db: AsyncSession) -> None:
@@ -177,7 +211,9 @@ async def test_unknown_rule_is_marked_not_dropped(db: AsyncSession) -> None:
         checker_id = "mystery_rule"
         domains = ("electrical",)
 
-        def check(self, graph: Any, parts: FingerprintOutput) -> list[Warning]:
+        def check(
+            self, graph: Any, parts: FingerprintOutput, facts: FactStore | None = None
+        ) -> list[Warning]:
             return [
                 Warning(
                     checker_id=self.checker_id,
@@ -219,7 +255,7 @@ async def test_narration_replaces_template_in_one_batched_call(db: AsyncSession)
         db, project, "reader.cpp", domain=Domain.CODE, attrs={"loop_rate_hz": 10.0}
     )
     sensor = await _entity(db, project, "IMU", attrs={"min_sample_rate_hz": 100.0})
-    await _edge(db, project, reader, sensor, "reads_from")
+    await _edge(db, project, reader, sensor, "reads")
     await _edge(db, project, driver, sensor, "connected_to")  # reachable from supply
 
     hood = await _hood(db, project, supply)
@@ -300,7 +336,9 @@ class _EmittingChecker(Checker):
     def __init__(self, warnings: list[Warning]) -> None:
         self._warnings = warnings
 
-    def check(self, graph: Any, parts: FingerprintOutput) -> list[Warning]:
+    def check(
+        self, graph: Any, parts: FingerprintOutput, facts: FactStore | None = None
+    ) -> list[Warning]:
         return list(self._warnings)
 
 
@@ -452,7 +490,7 @@ async def test_engine_with_checker_provider_spans_domains(db: AsyncSession) -> N
     await _edge(db, project, driver, motor, "driven_by")
     await _edge(db, project, psu, driver, "powers")
     await _edge(db, project, imu, motor, "connected_to")
-    await _edge(db, project, firmware, imu, "reads_from")
+    await _edge(db, project, firmware, imu, "reads")
 
     from solus_api.contracts.action_gate import DiffRow
 

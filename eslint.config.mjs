@@ -24,6 +24,10 @@ export default tseslint.config(
       "**/.uv-cache/**",
       // Design mockups (prototype HTML + inline JS), not shipped code.
       "docs/ui-reference/**",
+      // Design-sync build output and machine state (gitignored; CI never sees
+      // them, so a local `pnpm lint` must not either).
+      ".ds-sync/**",
+      "ds-bundle/**",
     ],
   },
   js.configs.recommended,
@@ -69,6 +73,14 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // CommonJS by design, so require() is the import: electron-builder loads
+    // the scripts/*.cjs afterPack hook with require(), and the native addon's
+    // test runs under plain `node --test` against a .node binary only
+    // require() can load.
+    files: ["scripts/**/*.cjs", "apps/desktop/native/**/*.js"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   prettier,
 );

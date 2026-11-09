@@ -15,6 +15,10 @@ export interface Finding {
   headline: string
   explanation: string
   detail: string | null
+  /** The narration's order of the evidence's cause kinds, most likely first (SOLUSDEV-321). */
+  causes_ranked?: string[]
+  /** The root an observer finding's evidence names: its bench session's robot, or a bare part. */
+  robot_id?: string | null
   /** Entity ids the finding observes. */
   subjects: string[]
   evidence: Record<string, unknown>
@@ -26,6 +30,8 @@ export interface Finding {
   dismissed_until: string | null
   created_at: string
   updated_at: string
+  /** Only `GET /findings/{id}` names the subjects. */
+  subject_entities?: { id: string; kind: string; name: string }[] | null
 }
 
 export interface FindingFilters {
@@ -73,6 +79,15 @@ export async function listFindings(
     cursor = nextCursor(page.meta, seen)
   } while (cursor)
   return all
+}
+
+/** One finding of the project (404 for another project's, so no existence oracle). */
+export function getFinding(
+  projectId: string,
+  findingId: string,
+  client: ApiClient = api
+): Promise<Finding> {
+  return client.request<Finding>(`/projects/${projectId}/findings/${findingId}`)
 }
 
 export function resolveFinding(

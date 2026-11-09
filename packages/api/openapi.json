@@ -1238,6 +1238,116 @@
         }
       }
     },
+    "/api/v1/users/me/invites": {
+      "get": {
+        "summary": "List My Invites",
+        "operationId": "list_my_invites_api_v1_users_me_invites_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response List My Invites Api V1 Users Me Invites Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/accept": {
+      "post": {
+        "summary": "Accept My Invite",
+        "operationId": "accept_my_invite_api_v1_users_me_invites__invite_id__accept_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Accept My Invite Api V1 Users Me Invites  Invite Id  Accept Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/invites/{invite_id}/decline": {
+      "post": {
+        "summary": "Decline My Invite",
+        "operationId": "decline_my_invite_api_v1_users_me_invites__invite_id__decline_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invite_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Invite Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/teams/{team_id}/activity": {
       "get": {
         "summary": "List Activity",
@@ -2719,6 +2829,127 @@
               "application/json": {
                 "schema": {
                   "title": "Response Create Portal Session Api V1 Billing Portal Session Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic": {
+      "get": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Get Academic",
+        "description": "The caller's academic status (none / pending / active / expired).",
+        "operationId": "get_academic_api_v1_billing_academic_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Academic Api V1 Billing Academic Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/code": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Send Academic Code",
+        "description": "Email a 6-digit code to an academic address (rate-limited; see the service).",
+        "operationId": "send_academic_code_api_v1_billing_academic_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicCodeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Academic Code Api V1 Billing Academic Code Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/billing/academic/verify": {
+      "post": {
+        "tags": [
+          "billing"
+        ],
+        "summary": "Verify Academic Code",
+        "description": "Check the code; on a match the caller's plan becomes Academic.",
+        "operationId": "verify_academic_code_api_v1_billing_academic_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicVerifyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Verify Academic Code Api V1 Billing Academic Verify Post"
                 }
               }
             }
@@ -10066,7 +10297,7 @@
     "/api/v1/projects/{project_id}/sol/confirmations/{confirmation_id}": {
       "post": {
         "summary": "Decide Tool Confirmation",
-        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5).",
+        "description": "Approve or reject a destructive action SOL parked (SOLUS-ONS-A5). The decision it\nsettles becomes one outcome row: approve \u2192 `accepted`, reject \u2192 `rejected`, and the\ngate's own `expired` / `stale` (SOLUSDEV-321 P8).",
         "operationId": "decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post",
         "security": [
           {
@@ -10114,6 +10345,188 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Decide Tool Confirmation Api V1 Projects  Project Id  Sol Confirmations  Confirmation Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/outcomes": {
+      "get": {
+        "summary": "List Outcomes",
+        "operationId": "list_outcomes_api_v1_projects__project_id__outcomes_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/usage/turns": {
+      "get": {
+        "summary": "List Usage Turns",
+        "operationId": "list_usage_turns_api_v1_projects__project_id__usage_turns_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Since"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageTurnListOut"
                 }
               }
             }
@@ -11209,6 +11622,64 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Stop Run Api V1 Projects  Project Id  Bench Runs  Run Id  Stop Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/runs/{run_id}/baseline": {
+      "post": {
+        "summary": "Mark Baseline",
+        "description": "Make the run the baseline its robot's learned envelope bounds are read from. One per\nrobot: the robot's previous baseline is unmarked in the same commit. A run still running is\nrefused, since its next checkpoint rewrites the whole record and the mark with it.",
+        "operationId": "mark_baseline_api_v1_projects__project_id__bench_runs__run_id__baseline_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Mark Baseline Api V1 Projects  Project Id  Bench Runs  Run Id  Baseline Post"
                 }
               }
             }
@@ -15362,6 +15833,39 @@
   },
   "components": {
     "schemas": {
+      "AcademicCodeCreate": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "AcademicCodeCreate",
+        "description": "POST /billing/academic/code (ADR-042). The domain rule is checked by the service so\nthe error code is specific (`not_academic_email`), not a generic validation error."
+      },
+      "AcademicVerifyCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$",
+            "title": "Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "title": "AcademicVerifyCreate",
+        "description": "POST /billing/academic/verify: exactly six ASCII digits."
+      },
       "AcceptWiring": {
         "properties": {
           "digest": {
@@ -15574,6 +16078,9 @@
               },
               {
                 "$ref": "#/components/schemas/HardwareRealConfig"
+              },
+              {
+                "$ref": "#/components/schemas/ReplayRealConfig"
               }
             ],
             "title": "Config",
@@ -15584,6 +16091,7 @@
                 "hardware": "#/components/schemas/HardwareRealConfig",
                 "mcap-replay": "#/components/schemas/McapSimConfig",
                 "mujoco": "#/components/schemas/MujocoSimConfig",
+                "replay": "#/components/schemas/ReplayRealConfig",
                 "robot": "#/components/schemas/RobotRealConfig",
                 "serial": "#/components/schemas/SerialRealConfig"
               }
@@ -15906,6 +16414,18 @@
             "type": "string",
             "format": "uuid",
             "title": "Candidate Id"
+          },
+          "sim_result_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sim Result Id"
           }
         },
         "additionalProperties": false,
@@ -16280,6 +16800,16 @@
             "maxLength": 800,
             "title": "Unitsstandards",
             "default": ""
+          },
+          "expertise": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExpertiseOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -16518,6 +17048,78 @@
           "robot_id"
         ],
         "title": "ExistingRobotTarget"
+      },
+      "ExpertiseOverride": {
+        "properties": {
+          "control": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "novice",
+                  "working",
+                  "expert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control"
+          },
+          "electronics": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "novice",
+                  "working",
+                  "expert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Electronics"
+          },
+          "mechanical": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "novice",
+                  "working",
+                  "expert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mechanical"
+          },
+          "software": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "novice",
+                  "working",
+                  "expert"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Software"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ExpertiseOverride",
+        "description": "The person's own level per domain (the twin's `expertise`): each one stated wins over the\nlevel Solus inferred for the turn's register. Never stored, never a prompt section."
       },
       "ExtractionAcceptance": {
         "properties": {
@@ -16769,7 +17371,7 @@
             "title": "Data"
           },
           "meta": {
-            "$ref": "#/components/schemas/FindingPageMeta"
+            "$ref": "#/components/schemas/PageMeta"
           }
         },
         "type": "object",
@@ -16843,6 +17445,25 @@
           "detail": {
             "type": "string",
             "title": "Detail"
+          },
+          "causes_ranked": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Causes Ranked"
+          },
+          "robot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robot Id"
           },
           "subjects": {
             "items": {
@@ -16942,37 +17563,117 @@
           "updated_at"
         ],
         "title": "FindingOut",
-        "description": "Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md \u00a77)."
+        "description": "Headline, evidence and explanation are UNTRUSTED text (CLAUDE.md \u00a77). `causes_ranked` (the\nnarration's order of the evidence's cause kinds) and `robot_id` (the root an observer\nfinding's evidence names) default, so a row older than narration still serializes."
       },
-      "FindingPageMeta": {
+      "FocusIn": {
         "properties": {
-          "limit": {
-            "type": "integer",
-            "title": "Limit"
+          "entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entity Id"
           },
-          "has_next": {
-            "type": "boolean",
-            "title": "Has Next"
+          "path": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entity_id"
+        ],
+        "title": "FocusIn",
+        "description": "The workspace focus a page send carries: the entity the person is looking at and the\ntrail they came through (oldest first, the focus itself excluded). It rides every page\nsend, so ids in it that went stale are dropped rather than refused \u2014 see\n`turn_scope.plan_scope`."
+      },
+      "FrontAppBinding": {
+        "properties": {
+          "bundle_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$",
+            "title": "Bundle Id"
           },
-          "next_cursor": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "title": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 256
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Next Cursor"
+            "title": "Title"
+          },
+          "pid": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2147483647.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pid"
+          },
+          "window_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 4294967295.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Id"
+          },
+          "drivable": {
+            "type": "boolean",
+            "title": "Drivable"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "project",
+                  "window"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "limit",
-          "has_next",
-          "next_cursor"
+          "bundle_id",
+          "name",
+          "title",
+          "pid",
+          "window_id",
+          "drivable",
+          "binding"
         ],
-        "title": "FindingPageMeta"
+        "title": "FrontAppBinding",
+        "description": "The turn's `front_app`, with the API doc's shape and consistency rules \u2014\nusable directly as the request-body field type."
       },
       "GazeboSimConfig": {
         "properties": {
@@ -18328,6 +19029,49 @@
             "maxItems": 8,
             "title": "Mentions"
           },
+          "pins": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Pins"
+          },
+          "focus": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FocusIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "finding_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finding Id"
+          },
+          "robot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robot Id"
+          },
           "preferences": {
             "anyOf": [
               {
@@ -18342,6 +19086,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/ScreenshotIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "front_app": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FrontAppBinding"
               },
               {
                 "type": "null"
@@ -18601,6 +19355,165 @@
         ],
         "title": "ObserverEventIn",
         "description": "Wire shape of an edge-observer event (mirrors livebench's ObserverEvent)."
+      },
+      "OutcomeListOut": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/OutcomeOut"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "OutcomeListOut"
+      },
+      "OutcomeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "conversation_turn_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Turn Id"
+          },
+          "tool": {
+            "type": "string",
+            "title": "Tool"
+          },
+          "proposal_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Digest"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "rejected",
+              "edited",
+              "accepted_auto",
+              "expired",
+              "stale"
+            ],
+            "title": "Decision"
+          },
+          "stale_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "diverged",
+                  "quota",
+                  "no_preview"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Reason"
+          },
+          "entity_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Entity Ids"
+          },
+          "design_signals": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Design Signals"
+          },
+          "machine_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Machine Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "conversation_turn_id",
+          "tool",
+          "proposal_digest",
+          "decision",
+          "entity_ids",
+          "design_signals",
+          "machine_id",
+          "created_at"
+        ],
+        "title": "OutcomeOut"
+      },
+      "PageMeta": {
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "has_next": {
+            "type": "boolean",
+            "title": "Has Next"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "limit",
+          "has_next",
+          "next_cursor"
+        ],
+        "title": "PageMeta",
+        "description": "The \u00a71.4 meta block `page_meta` builds, as the response model typed routes share."
       },
       "PanelLinkApprove": {
         "properties": {
@@ -18968,7 +19881,8 @@
         "enum": [
           "basic",
           "pro",
-          "enterprise"
+          "enterprise",
+          "academic"
         ],
         "title": "PlanType"
       },
@@ -19528,6 +20442,53 @@
         ],
         "title": "ReplaceModel"
       },
+      "ReplayRealConfig": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "const": "replay",
+            "title": "Provider"
+          },
+          "recording": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Recording"
+          },
+          "driver_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "title": "Driver Id"
+          },
+          "robot_entity_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Robot Entity Id"
+          },
+          "realtime": {
+            "type": "boolean",
+            "title": "Realtime",
+            "default": true
+          },
+          "window_seconds": {
+            "type": "number",
+            "maximum": 60.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Window Seconds",
+            "default": 1.0
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "provider",
+          "recording",
+          "driver_id",
+          "robot_entity_id"
+        ],
+        "title": "ReplayRealConfig",
+        "description": "DEV ONLY (docs/api/bench-runs.md): a recorded capture replayed as one of the project's\nrobots. `recording` is a file under `Settings.bench_replay_root`; `driver_id` decodes it."
+      },
       "RequestBody": {
         "properties": {
           "assembly_entity_id": {
@@ -19805,6 +20766,25 @@
           "detail": {
             "type": "string",
             "title": "Detail"
+          },
+          "causes_ranked": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Causes Ranked"
+          },
+          "robot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robot Id"
           },
           "subjects": {
             "items": {
@@ -21710,6 +22690,111 @@
         ],
         "title": "UiSurface",
         "description": "Where in the tool's UI the control lives."
+      },
+      "UsageTurnListOut": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/UsageTurnOut"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "UsageTurnListOut"
+      },
+      "UsageTurnOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purpose"
+          },
+          "tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
+          },
+          "credits": {
+            "type": "integer",
+            "title": "Credits"
+          },
+          "tokens_in": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens In"
+          },
+          "tokens_out": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Out"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "turn_id",
+          "purpose",
+          "tier",
+          "credits",
+          "tokens_in",
+          "tokens_out"
+        ],
+        "title": "UsageTurnOut"
       },
       "UserUpdate": {
         "properties": {

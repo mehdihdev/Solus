@@ -5,17 +5,35 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 from fixtures.fake_systems import FakeSolSystems
-from solus_api.agent.context import build_context
+from fixtures.scope_doubles import empty_graph, no_hits
+from solus_api.agent.context import DEFAULT_K, MAX_K, build_context
 from solus_api.agent.interfaces import GraphScope
-from solus_api.agent.reason import plan_query, verified_citations
+from solus_api.agent.reason import verified_citations
+from solus_api.agent.turn_scope import ScopeInputs, TurnScope, plan_scope
+from solus_api.orchestration.config import load_orchestration_config
+from solus_api.orchestration.enums import Complexity
 from solus_api.orchestration.providers import ToolConversation, ToolUse, Usage
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 ANCHOR = uuid.uuid4()
+
+_CONFIG = load_orchestration_config()
+
+
+async def _plan(query: str, *, mentions: Sequence[uuid.UUID] = ()) -> TurnScope:
+    """`plan_scope` at the standard tier, with no index hit and an empty graph: these tests
+    are about anchors and windows, not budgets (tests/test_context_budget.py owns those)."""
+    return await plan_scope(
+        ScopeInputs(message=query, tier=Complexity.STANDARD, mentions=tuple(mentions)),
+        search=no_hits,
+        load=empty_graph,
+        disambiguate=None,
+        config=_CONFIG,
+    )
 
 
 if TYPE_CHECKING:
@@ -31,68 +49,69 @@ def _runner(model: object) -> LlmRunner:
     return LlmRunner(adapters={"anthropic": model, "openai": model, "google": model})
 
 
-def test_plan_extracts_graph_anchors_from_the_query() -> None:
-    plan = plan_query(f"why does entity {ANCHOR} overheat?")
+async def test_plan_extracts_graph_anchors_from_the_query() -> None:
+    plan = await _plan(f"why does entity {ANCHOR} overheat?")
     assert plan.scope.anchor_entity_ids == [ANCHOR]
     assert plan.scope.degree >= 1
 
 
-def test_plan_requests_telemetry_only_for_runtime_shaped_queries() -> None:
-    live = plan_query("the motor current spikes at runtime when the servo moves")
-    static = plan_query("what package is the LM358 in?")
+async def test_plan_requests_telemetry_only_for_runtime_shaped_queries() -> None:
+    live = await _plan("the motor current spikes at runtime when the servo moves")
+    static = await _plan("what package is the LM358 in?")
     assert live.window is not None
     assert static.window is None
 
 
-def test_explicit_mentions_become_anchors() -> None:
+async def test_explicit_mentions_become_anchors() -> None:
     """An `@`-mention is the user pointing at one node. It reaches the plan as an
     explicit id rather than being inferred from the prose, so SOL is grounded on
     the thing the user meant instead of whatever RAG's similarity search
     surfaced."""
     mentioned = uuid.uuid4()
 
-    plan = plan_query("will this clear the belt?", mentions=[mentioned])
+    plan = await _plan("will this clear the belt?", mentions=[mentioned])
 
     assert plan.scope.anchor_entity_ids == [mentioned]
 
 
-def test_mentions_outrank_ids_pasted_in_the_prose_when_the_cap_bites() -> None:
+async def test_mentions_outrank_ids_pasted_in_the_prose_when_the_cap_bites() -> None:
     """Both are anchors, but a mention is deliberate and a pasted UUID may just
     be quoted log output — so mentions are kept first and the cap trims the
     inferred ones."""
     mentions = [uuid.uuid4() for _ in range(8)]
     pasted = uuid.uuid4()
 
-    plan = plan_query(f"compare against {pasted}", mentions=mentions)
+    plan = await _plan(f"compare against {pasted}", mentions=mentions)
 
     assert plan.scope.anchor_entity_ids == mentions
     assert pasted not in plan.scope.anchor_entity_ids
 
 
-def test_mentions_are_deduped_against_the_prose_and_themselves() -> None:
+async def test_mentions_are_deduped_against_the_prose_and_themselves() -> None:
     """The same node mentioned twice, or mentioned AND pasted, must not consume
     two of the eight anchor slots."""
     shared = uuid.uuid4()
     other = uuid.uuid4()
 
-    plan = plan_query(f"why is {shared} hot?", mentions=[shared, shared, other])
+    plan = await _plan(f"why is {shared} hot?", mentions=[shared, shared, other])
 
     assert plan.scope.anchor_entity_ids == [shared, other]
 
 
-def test_mentions_stay_bounded() -> None:
+async def test_mentions_stay_bounded() -> None:
     """SEC-H3: the anchor cap bounds DB work, so it must bind the new input too —
     a client is not trusted to respect the request-schema limit."""
-    plan = plan_query("look at these", mentions=[uuid.uuid4() for _ in range(50)])
+    plan = await _plan("look at these", mentions=[uuid.uuid4() for _ in range(50)])
 
     assert len(plan.scope.anchor_entity_ids) == 8
 
 
-def test_plan_is_deterministic_and_bounded() -> None:
+async def test_plan_is_deterministic_and_bounded() -> None:
     query = f"telemetry glitch near {ANCHOR} during the last run"
-    first, second = plan_query(query), plan_query(query)
+    first, second = await _plan(query), await _plan(query)
     assert first == second
-    assert first.k <= 20
+    # Retrieval k is build_context's now (P1-T1), still under its hard cap.
+    assert DEFAULT_K <= MAX_K == 20
     assert first.budget is not None and first.budget.max_tokens is not None
 
 
@@ -182,12 +201,13 @@ async def test_runner_hands_the_model_fenced_context_and_verifies_sources(
     assert "context_graph" in flat and "context_error" in flat
 
 
-def test_plan_caps_anchors_and_entities_against_hostile_queries() -> None:
-    # SEC-H3: an 8000-char message full of UUIDs must bound DB work.
+async def test_plan_caps_anchors_and_entities_against_hostile_queries() -> None:
+    # SEC-H3: an 8000-char message full of UUIDs must bound DB work — the turn's one graph
+    # pull is capped at 60 entities whatever the tier (P1-T1).
     flood = " ".join(str(uuid.uuid4()) for _ in range(300))
-    plan = plan_query(f"explain {flood}")
+    plan = await _plan(f"explain {flood}")
     assert len(plan.scope.anchor_entity_ids) == 8
-    assert plan.budget.max_entities == 200
+    assert plan.budget.max_entities == 60
 
 
 async def test_telemetry_citations_survive_verification() -> None:

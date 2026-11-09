@@ -11,13 +11,31 @@ ingested-content strings ride as DATA in `data`, never as control instructions.
 
 import enum
 import json
-from collections.abc import Mapping
-from typing import Any, Self
+from collections.abc import Mapping, Sequence
+from typing import Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict
 
 from solus_api.agent.tools import ToolCall, ToolResult
-from solus_api.agent.tools.untrusted import redact_value
+from solus_api.agent.tools.untrusted import redact_text, redact_value
+
+#: The bounds of a `research_sources` frame, defined ONCE: agent/research.py takes its title and
+#: query limits from here, and the desktop validator (researchSources.ts) drops the whole payload
+#: for a title or query past them. A frame cuts to them AFTER it masks, because masking can grow a
+#: value (`token=[RED` becomes `token=[REDACTED]`). 400 is the search tool's own query ceiling.
+RESEARCH_TITLE_CAP: Final = 160
+RESEARCH_QUESTION_CAP: Final = 400
+#: The bounds of a `reasoning` frame (SOLUSDEV-321 P7), defined ONCE: agent/reasoning_frame.py
+#: refuses a block past them and the desktop validator (solStream.ts) drops a frame past them. The
+#: frame cuts to them after it masks, like the research frame.
+REASONING_ITEMS_CAP: Final = 12
+REASONING_TEXT_CAP: Final = 200
+REASONING_PROPOSING_CAP: Final = 400
+
+
+def _masked(text: str, cap: int) -> str:
+    """Model or ingested prose masked token by token, then cut to `cap` (masking can grow it)."""
+    return redact_text(text)[:cap]
 
 
 class AgentEventType(enum.StrEnum):
@@ -36,14 +54,32 @@ class AgentEventType(enum.StrEnum):
     #: SOLUSDEV-252 S5: a tool produced a viewable artifact (a diagram, a read
     #: document). A REFERENCE — id, uri, media type — never bytes.
     ARTIFACT = "artifact"
+    #: SOLUSDEV-321 P1-T2: the turn was answered by Solus code from the project's facts
+    #: (the first tier), with no model call; it precedes that answer's `message`.
+    ANSWER_SOURCE = "answer_source"
+    #: SOLUSDEV-321 P1-T3: the turn reached a server-owned ceiling (tool calls, model calls,
+    #: web calls, a round's input tokens, rounds); it precedes the closing round, which has no
+    #: tools, so the turn still ends in a `message`.
+    BUDGET_REACHED = "budget_reached"
+    #: SOLUSDEV-321 P1-T5: the web sources a turn's research found. The desktop never receives a
+    #: tool's value, so its source pills ride this frame, right after the `research` tool result.
+    RESEARCH_SOURCES = "research_sources"
+    #: SOLUSDEV-321 P7: what SOL weighed before it proposes a change — the `<reasoning>` block it
+    #: wrote, parsed out of its text (agent/reasoning_frame.py); it precedes the round's calls.
+    REASONING = "reasoning"
     MESSAGE = "message"
     ERROR = "error"
     DONE = "done"
 
 
+#: Who answered a turn that names it: `graph` is the first tier (agent/deterministic.py).
+AnswerSource = Literal["graph"]
+
+
 #: Tools whose successful result may carry an artifact reference. Fixed by Solus
 #: code: a result shaped like an artifact from any other tool emits nothing.
-ARTIFACT_TOOLS: frozenset[str] = frozenset({"make_diagram"})
+#: `render_view` carries one only when the person asked to see the render (SOLUSDEV-321 P5).
+ARTIFACT_TOOLS: frozenset[str] = frozenset({"make_diagram", "render_view"})
 _ARTIFACT_KEYS = ("artifact_id", "uri", "media_type")
 
 
@@ -61,14 +97,34 @@ class AgentEvent(BaseModel):
         return cls(type=AgentEventType.TOKEN, data={"text": text})
 
     @classmethod
-    def context_used(cls, *, sections: list[dict[str, Any]], truncated: bool, dropped: int) -> Self:
+    def context_used(
+        cls,
+        *,
+        sections: list[dict[str, Any]],
+        truncated: bool,
+        dropped: int,
+        layers: list[dict[str, Any]],
+        anchors: list[dict[str, str]],
+        anchors_dropped: list[dict[str, str]],
+    ) -> Self:
         """The turn's context manifest (SOLUSDEV-233): one frame at turn start
         naming each assembled section by kind/citation/tokens. Section TEXT is
         deliberately absent — prompt internals never cross the wire; the
-        citation is the same verified provenance surface `message` carries."""
+        citation is the same verified provenance surface `message` carries.
+        SOLUSDEV-321 P0-T4: `layers` names every context layer in prompt order
+        ({layer, tokens, sections, empty_reason}), `anchors` where SOL looked and
+        why ({id, reason}), `anchors_dropped` what never reached the scope
+        ({id, reason, cause})."""
         return cls(
             type=AgentEventType.CONTEXT_USED,
-            data={"sections": sections, "truncated": truncated, "dropped": dropped},
+            data={
+                "sections": sections,
+                "truncated": truncated,
+                "dropped": dropped,
+                "layers": layers,
+                "anchors": anchors,
+                "anchors_dropped": anchors_dropped,
+            },
         )
 
     @classmethod
@@ -153,6 +209,103 @@ class AgentEvent(BaseModel):
         )
 
     @classmethod
+    def answer_source(
+        cls,
+        source: AnswerSource,
+        *,
+        sources: tuple[str, ...] = (),
+        citations: tuple[str, ...] = (),
+    ) -> Self:
+        """The answer's envelope (SOLUSDEV-321 P1-T2): who answered (`graph`, the first tier),
+        the fact sources it read (`config`, `telemetry`, …) and the citations it was built from
+        — Solus-authored ids over fixed kinds, never model text. The route stores it on the
+        assistant turn (`attrs.answer_source`, `attrs.sources`, `attrs.citations`)."""
+        return cls(
+            type=AgentEventType.ANSWER_SOURCE,
+            data={"source": source, "sources": list(sources), "citations": list(citations)},
+        )
+
+    @classmethod
+    def budget_reached(cls, limit: str, used: int, cap: int) -> Self:
+        """A ceiling the turn reached (SOLUSDEV-321 P1-T3): which (`limit`: `tool_calls`,
+        `model_calls`, `web_searches`, `web_fetches`, `input_tokens` or `model_rounds`), what the
+        turn used and the cap it was held to. Counts only — Solus-authored, never model text. At
+        most one a turn; the closing round and the `message` follow."""
+        return cls(
+            type=AgentEventType.BUDGET_REACHED, data={"limit": limit, "used": used, "cap": cap}
+        )
+
+    @classmethod
+    def research_sources(
+        cls,
+        *,
+        call_id: str,
+        question: str,
+        cached: bool,
+        searches: int,
+        pages: int,
+        sources: Sequence[Mapping[str, Any]],
+    ) -> Self:
+        """The sources a turn's web research found (SOLUSDEV-321 P1-T5): the call it answers, the
+        (redacted) query, whether the cache answered, what THIS turn spent (`searches` and `pages`
+        are 0 for a cached answer) and each source as `{url, title, fetched}`. The desktop renders
+        them as inert pills; the route stores the whole payload on the assistant turn. Page text is
+        written by other people, so the payload is redacted like any tool value — and the prose
+        fields (the query and each title) token by token first, since `redact_value` judges a
+        string whole and a credential inside a sentence would pass it. Both are then cut to
+        `RESEARCH_QUESTION_CAP` / `RESEARCH_TITLE_CAP` — after masking, which can grow a value; the
+        other bounds (a URL, twenty sources) are the digest's own, proved where it is read."""
+        return cls(
+            type=AgentEventType.RESEARCH_SOURCES,
+            data=redact_value(
+                {
+                    "call_id": call_id,
+                    "question": redact_text(question)[:RESEARCH_QUESTION_CAP],
+                    "cached": cached,
+                    "searches": searches,
+                    "pages": pages,
+                    "sources": [
+                        {
+                            **source,
+                            "title": redact_text(str(source.get("title", "")))[:RESEARCH_TITLE_CAP],
+                        }
+                        for source in sources
+                    ],
+                }
+            ),
+        )
+
+    @classmethod
+    def reasoning(
+        cls,
+        considered: Sequence[str],
+        ruled_out: Sequence[Mapping[str, str]],
+        proposing: str,
+    ) -> Self:
+        """What SOL weighed before it proposes a change (SOLUSDEV-321 P7): what it considered,
+        what it ruled out and why (`{what, why}`), and what it proposes. Model text that
+        agent/reasoning_frame.py parsed out of the reply and held to its shape, so each string is
+        masked token by token and cut to its bound after masking. The desktop draws it as plain
+        text above the proposal's card; nothing on the server reads it back — it picks no tool,
+        mode, scope or permission."""
+        return cls(
+            type=AgentEventType.REASONING,
+            data={
+                "considered": [
+                    _masked(item, REASONING_TEXT_CAP) for item in considered[:REASONING_ITEMS_CAP]
+                ],
+                "ruled_out": [
+                    {
+                        "what": _masked(row["what"], REASONING_TEXT_CAP),
+                        "why": _masked(row["why"], REASONING_TEXT_CAP),
+                    }
+                    for row in ruled_out[:REASONING_ITEMS_CAP]
+                ],
+                "proposing": _masked(proposing, REASONING_PROPOSING_CAP),
+            },
+        )
+
+    @classmethod
     def message(
         cls, content: str, role: str = "assistant", citations: tuple[str, ...] = ()
     ) -> Self:
@@ -172,6 +325,25 @@ class AgentEvent(BaseModel):
     @classmethod
     def done(cls, **fields: Any) -> Self:
         return cls(type=AgentEventType.DONE, data=dict(fields))
+
+
+def persisted_answer(event: AgentEvent) -> dict[str, Any]:
+    """The assistant-turn attrs a frame carries, and {} for any other frame: an `answer_source`
+    frame's `answer_source`, `sources`, `citations` (SOLUSDEV-321 P1-T2), a `budget_reached`
+    frame's `budget_reached` = {limit, used, cap} (P1-T3), a `research_sources` frame's whole
+    payload as `research_sources` (P1-T5), so a reload shows the same source pills. The route
+    merges them into the turn's attrs whichever runner streamed the frame."""
+    if event.type is AgentEventType.ANSWER_SOURCE:
+        return {
+            "answer_source": event.data["source"],
+            "sources": event.data["sources"],
+            "citations": event.data["citations"],
+        }
+    if event.type is AgentEventType.BUDGET_REACHED:
+        return {"budget_reached": dict(event.data)}
+    if event.type is AgentEventType.RESEARCH_SOURCES:
+        return {"research_sources": dict(event.data)}
+    return {}
 
 
 def format_sse(event: AgentEvent) -> str:

@@ -101,3 +101,79 @@ async def test_single_flight_fails_closed_when_the_store_is_broken() -> None:
     with pytest.raises(ConnectorError) as caught:
         await single_flight(Broken(), "f", ttl_seconds=10)
     assert caught.value.code == "single_flight_unavailable"
+
+
+class _HangingStore(InMemoryCacheStore):
+    """A stalled Redis: every read, write and delete waits forever."""
+
+    async def get(self, key: str) -> str | None:
+        await asyncio.Event().wait()
+        return None
+
+    async def set(self, key: str, value: str, ttl_seconds: int) -> None:
+        await asyncio.Event().wait()
+
+    async def delete(self, key: str) -> None:
+        await asyncio.Event().wait()
+
+
+async def test_a_hanging_store_is_a_miss_for_the_turn_path_caches(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """M13: the project card and research caches bound every store await by the fan-out's
+    timeout. A stalled store reads as a miss, a put or an invalidation is skipped, and each is one
+    warning line — the SOL turn never hangs on its cache."""
+    import uuid
+
+    from solus_api.agent.project_card import ProjectCard, ProjectCardCache
+    from solus_api.agent.research import ResearchCache, ResearchDigest, Source
+    from solus_api.graph import graph_changed_fanout
+
+    monkeypatch.setattr(graph_changed_fanout, "CALLBACK_TIMEOUT_SECONDS", 0.05)
+    project_id = uuid.uuid4()
+    card = ProjectCard(name="p", robots=(), sources=(), solus={}, subsections={})
+    digest = ResearchDigest(sources=[Source(url="https://x.example", title="x", fetched=False)])
+    cards, research = ProjectCardCache(_HangingStore()), ResearchCache(_HangingStore())
+
+    async with asyncio.timeout(2):
+        assert await cards.get(project_id) is None
+        await cards.put(project_id, card)
+        await cards.invalidate(project_id)
+        assert await research.get(project_id, "q") is None
+        await research.put(project_id, "q", digest)
+
+    logged = [r.getMessage() for r in caplog.records]
+    assert sum("timed out" in m or "TimeoutError" in m for m in logged) == 5, logged
+
+
+class _DownStore(InMemoryCacheStore):
+    """A store that refuses every call, as a Redis that went away does."""
+
+    async def get(self, key: str) -> str | None:
+        raise ConnectionError("redis went away")
+
+    async def set(self, key: str, value: str, ttl_seconds: int) -> None:
+        raise ConnectionError("redis went away")
+
+    async def delete(self, key: str) -> None:
+        raise ConnectionError("redis went away")
+
+
+async def test_a_down_store_is_a_miss_for_the_card_cache_as_for_research(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Round 2, new issue 8: the card cache treats ANY store error as a miss or a skipped write,
+    the way `ResearchCache` does — never a failed turn — with one warning naming the cache."""
+    import uuid
+
+    from solus_api.agent.project_card import ProjectCard, ProjectCardCache
+
+    cards, project_id = ProjectCardCache(_DownStore()), uuid.uuid4()
+    card = ProjectCard(name="p", robots=(), sources=(), solus={}, subsections={})
+
+    assert await cards.get(project_id) is None
+    await cards.put(project_id, card)
+    await cards.invalidate(project_id)
+
+    logged = [r.getMessage() for r in caplog.records]
+    assert sum("project card" in m and "ConnectionError" in m for m in logged) == 3, logged
