@@ -51,7 +51,7 @@ function borderFor(state?: ConnectionState): string {
   return 'var(--bd)'
 }
 
-function TileMark({ integration }: { integration: Integration }): React.JSX.Element {
+export function TileMark({ integration }: { integration: Integration }): React.JSX.Element {
   const logo = integrationLogo(integration.id)
   return (
     <span

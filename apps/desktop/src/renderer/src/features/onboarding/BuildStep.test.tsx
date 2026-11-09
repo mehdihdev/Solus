@@ -83,6 +83,32 @@ describe('BuildStep — linked workspace (real sync progress)', () => {
     expect(useOnboardingStore.getState().buildEntityCount).toBe(226)
   })
 
+  it('draws the graph from the REAL synced sources only, in their domain colours (SOLUSDEV-323)', async () => {
+    linkWorkspace()
+    const lines: BuildLine[] = [
+      {
+        name: 'fw',
+        sourceType: 'github',
+        detail: '40 entities · 3 relations',
+        state: 'ok',
+        entities: 40
+      },
+      { name: 'board', sourceType: 'kicad', detail: 'Bad netlist header', state: 'failed' }
+    ]
+    mockedRun.mockImplementation(async (deps) => {
+      deps.onLines(lines)
+      return { lines, entityCount: 40 }
+    })
+    await act(async () => {
+      render(<BuildStep onComplete={vi.fn()} />)
+    })
+    const nodes = screen.getAllByTestId('ob-graph-node')
+    expect(nodes.length).toBeGreaterThan(1)
+    // Only the synced GitHub source draws; the failed KiCad source adds nothing.
+    for (const n of nodes) expect(n.getAttribute('data-domain')).toBe('sw')
+    expect(screen.getByText(/FIRST THING TO TRY/)).toBeInTheDocument()
+  })
+
   it('shows an honest done state when the project has no sources', async () => {
     linkWorkspace()
     mockedRun.mockResolvedValue({ lines: [] })

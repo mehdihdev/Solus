@@ -3,6 +3,8 @@ import {
   useOnboardingStore,
   connectedCount,
   canBuildModel,
+  toOnboardingStep,
+  ONBOARDING_STEP_LABELS,
   type BuildLine,
   type ConnectionState
 } from './onboardingStore'
@@ -148,3 +150,32 @@ function registerBuildStateTests(): void {
     expect(s.buildEntityCount).toBeNull()
   })
 }
+
+describe('SOLUSDEV-323 step helpers', () => {
+  beforeEach(() => useOnboardingStore.getState().reset())
+
+  it('toOnboardingStep clamps into the six-step flow', () => {
+    expect(toOnboardingStep(-1)).toBe(0)
+    expect(toOnboardingStep(3.7)).toBe(3)
+    expect(toOnboardingStep(9)).toBe(5)
+  })
+
+  it('labels the six steps in flow order', () => {
+    expect(ONBOARDING_STEP_LABELS).toEqual([
+      'Meet',
+      'Project',
+      'Voice',
+      'Access',
+      'Connect',
+      'Build'
+    ])
+  })
+
+  it('landingHint starts off, can be set, and reset clears it', () => {
+    expect(useOnboardingStore.getState().landingHint).toBe(false)
+    useOnboardingStore.getState().setLandingHint(true)
+    expect(useOnboardingStore.getState().landingHint).toBe(true)
+    useOnboardingStore.getState().reset()
+    expect(useOnboardingStore.getState().landingHint).toBe(false)
+  })
+})

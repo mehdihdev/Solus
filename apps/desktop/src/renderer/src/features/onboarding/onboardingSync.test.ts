@@ -8,13 +8,12 @@ import {
 } from './onboardingSync'
 
 describe('step mapping', () => {
-  it('maps indices to server names and back', () => {
-    expect(stepIndexToName(0)).toBe('about')
-    expect(stepIndexToName(1)).toBe('connect')
-    expect(stepIndexToName(2)).toBe('build')
-    expect(stepNameToIndex('about')).toBe(0)
-    expect(stepNameToIndex('connect')).toBe(1)
-    expect(stepNameToIndex('build')).toBe(2)
+  it('maps the six flow indices to server names and back (SOLUSDEV-323)', () => {
+    const names = ['meet', 'about', 'voice', 'access', 'connect', 'build'] as const
+    names.forEach((name, i) => {
+      expect(stepIndexToName(i as 0 | 1 | 2 | 3 | 4 | 5)).toBe(name)
+      expect(stepNameToIndex(name)).toBe(i)
+    })
   })
 
   it('treats done as no resumable step', () => {
@@ -38,12 +37,30 @@ describe('hydrateOnboarding', () => {
       data_collection_consent: false,
       onboarding_step: 'connect'
     })
-    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 1 })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 4 })
   })
 
   it('degrades to offline when the API is unreachable (dev bypass)', async () => {
     const fetchSettings = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
     expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'offline' })
+  })
+
+  it('resumes a saved "about" at Meet — it is also the fresh-user column default', async () => {
+    const fetchSettings = vi.fn().mockResolvedValue({
+      sol_mode: 'guide',
+      data_collection_consent: false,
+      onboarding_step: 'about'
+    })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 0 })
+  })
+
+  it('resumes the new walkthrough steps exactly', async () => {
+    const fetchSettings = vi.fn().mockResolvedValue({
+      sol_mode: 'guide',
+      data_collection_consent: false,
+      onboarding_step: 'access'
+    })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 3 })
   })
 
   it('treats an unknown server step as a fresh start', async () => {

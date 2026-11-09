@@ -10,6 +10,7 @@ import { OverlayWindow } from '../features/overlay/OverlayWindow'
 import { SolWindow } from '../features/sol/SolWindow'
 import { ExtensionWindowRoot } from '../features/extensions/pageview/ExtensionWindowRoot'
 import { WorkspaceShell } from '../features/workspace/WorkspaceShell'
+import { SolLandingHint } from '../features/onboarding/SolLandingHint'
 import { Spinner } from '../components/ui/Spinner'
 import { useAuthStore } from '../store/authStore'
 
@@ -36,7 +37,13 @@ function RootRoute(): React.JSX.Element {
   if (status === 'loading') return <Splash />
   if (status === 'unauthenticated') return <LandingPage />
   if (!onboarded) return <Navigate to="/onboarding" replace />
-  return <WorkspaceShell />
+  return (
+    <>
+      <WorkspaceShell />
+      {/* SOLUSDEV-323 Land: the one-time SOL hint right after onboarding. */}
+      <SolLandingHint />
+    </>
+  )
 }
 
 /** Guard for the post-login onboarding flow: must be authed and not yet onboarded. */

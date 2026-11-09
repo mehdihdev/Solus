@@ -38,7 +38,7 @@ describe('AppRoutes guards', () => {
     renderAt('/')
     // Onboarding hydrates its server-side step first (FND-08), then renders.
     expect(
-      await screen.findByRole('heading', { name: 'What are you building?' })
+      await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })
     ).toBeInTheDocument()
   })
 
@@ -66,7 +66,7 @@ describe('AppRoutes guards', () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: false })
     renderAt('/onboarding')
     expect(
-      await screen.findByRole('heading', { name: 'What are you building?' })
+      await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })
     ).toBeInTheDocument()
   })
 

@@ -9,7 +9,22 @@ import {
 } from '../../lib/api/resources'
 import type { OnboardingStep } from './onboardingStore'
 
-const STEP_NAMES: readonly OnboardingStepName[] = ['about', 'connect', 'build']
+// Flow order (SOLUSDEV-323, docs/wireflows/onboarding.md). Index = OnboardingStep.
+const STEP_NAMES: readonly OnboardingStepName[] = [
+  'meet',
+  'about',
+  'voice',
+  'access',
+  'connect',
+  'build'
+]
+
+/** The server column defaults to `about`, so a fresh user and one saved at the
+ *  Project step look the same — both resume at Meet, one click earlier. */
+function resumeIndex(name: string): OnboardingStep {
+  if (name === 'about') return 0
+  return stepNameToIndex(name) ?? 0
+}
 
 export function stepIndexToName(step: OnboardingStep): OnboardingStepName {
   return STEP_NAMES[step]
@@ -37,7 +52,7 @@ export async function hydrateOnboarding(
   try {
     const settings = await fetchSettings()
     if (settings.onboarding_step === 'done') return { status: 'done' }
-    return { status: 'resume', step: stepNameToIndex(settings.onboarding_step) ?? 0 }
+    return { status: 'resume', step: resumeIndex(settings.onboarding_step) }
   } catch {
     return { status: 'offline' }
   }

@@ -1,4 +1,4 @@
-// Onboarding step 2 — the context-model build view. De-simulated in
+// Onboarding step 6 — the context-model build view (graph panel: SOLUSDEV-323). De-simulated in
 // SOLUSDEV-152: the log shows REAL per-source sync state (via buildProgress /
 // the SOLUSDEV-100 sync helpers) and the summary shows the real entity count
 // from the graph. When the workspace never linked (offline/dev bypass) the
@@ -8,6 +8,8 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
+import { Mono } from '../../components/ui/Mono'
+import { BuildGraph } from './BuildGraph'
 import { getSyncs, listEntities, listSources } from '../../lib/api/resources'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useOnboardingStore, type BuildLine } from './onboardingStore'
@@ -59,45 +61,75 @@ export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
   }, [linked, projectId, resetBuild, setBuildLog, finishBuild])
 
   return (
-    <div style={{ width: 560 }}>
-      <h2 style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em' }}>
-        {buildDone ? 'Your workspace is ready' : 'Checking your sources'}
-      </h2>
-      <p style={{ color: 'var(--mut)', fontSize: 13.5, marginTop: 8 }}>
-        {summaryFor(buildDone, buildLog, buildEntityCount)}
-      </p>
-      {buildLog.length > 0 && (
-        <Card pad={0} style={{ marginTop: 24, fontFamily: 'var(--font-mono)' }}>
-          {buildLog.map((line, i) => (
-            <BuildLogRow key={`${line.name}-${i}`} line={line} />
-          ))}
-        </Card>
-      )}
-      {!buildDone && (
-        <div
-          style={{
-            display: 'flex',
-            gap: 10,
-            marginTop: 24,
-            fontSize: 11,
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--acc)',
-            alignItems: 'center'
-          }}
+    <div style={{ display: 'flex', gap: 28, flex: 1, minHeight: 0 }}>
+      <BuildGraph lines={buildLog} />
+      <div style={{ width: 320, flex: 'none', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <p
+          className="ob-rise ob-d2"
+          style={{ margin: 0, color: 'var(--mut)', fontSize: 13, lineHeight: 1.55 }}
         >
-          <Spinner size={11} /> reading sync progress…
-        </div>
-      )}
-      {buildDone && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24 }}>
-          <Button kind="primary" size="lg" onClick={onComplete}>
-            Open workspace <Icons.arrowR size={14} />
-          </Button>
-        </div>
-      )}
+          {summaryFor(buildDone, buildLog, buildEntityCount)}
+        </p>
+        {buildLog.length > 0 && (
+          <Card pad={0} className="ob-rise ob-d3" style={{ fontFamily: 'var(--font-mono)' }}>
+            {buildLog.map((line, i) => (
+              <BuildLogRow key={`${line.name}-${i}`} line={line} />
+            ))}
+          </Card>
+        )}
+        {!buildDone && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 10,
+              fontSize: 11,
+              fontFamily: 'var(--font-mono)',
+              color: 'var(--acc)',
+              alignItems: 'center'
+            }}
+          >
+            <Spinner size={11} /> reading sync progress…
+          </div>
+        )}
+        {buildDone && <FinishCard onComplete={onComplete} />}
+      </div>
     </div>
   )
 }
+
+function FinishCard({ onComplete }: { onComplete: () => void }): React.JSX.Element {
+  return (
+    <div className="ob-rise" style={{ marginTop: 'auto' }}>
+      <Card pad={0} style={{ borderColor: 'color-mix(in srgb, var(--acc) 35%, var(--bd))' }}>
+        <div style={{ padding: '14px 16px' }}>
+          <Mono size={9} color="var(--acc)">
+            FIRST THING TO TRY
+          </Mono>
+          <div style={{ fontSize: 13, lineHeight: 1.55, marginTop: 6 }}>
+            Open the tool you’re working in, double-tap{' '}
+            <kbd className="ob-key" style={KBD}>
+              ctrl
+            </kbd>{' '}
+            and ask me what you’re looking at.
+          </div>
+        </div>
+      </Card>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
+        <Button kind="primary" size="lg" onClick={onComplete}>
+          Open workspace <Icons.arrowR size={14} />
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+const KBD = {
+  minWidth: 0,
+  height: 20,
+  padding: '0 6px',
+  fontSize: 10,
+  boxShadow: '0 2px 0 var(--bd)'
+} as const
 
 /** Honest summary line: the real graph count, or the real absence of one. */
 function summaryFor(
@@ -129,7 +161,15 @@ function BuildLogRow({ line }: { line: BuildLine }): React.JSX.Element {
         <LineIndicator state={line.state} />
         {line.name}
       </span>
-      <span style={{ color: lineDetailColor(line.state), textAlign: 'right' }}>{line.detail}</span>
+      <span
+        className={line.state === 'pending' ? 'ob-sheen' : undefined}
+        style={{
+          color: line.state === 'pending' ? undefined : lineDetailColor(line.state),
+          textAlign: 'right'
+        }}
+      >
+        {line.detail}
+      </span>
     </div>
   )
 }

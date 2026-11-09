@@ -61,39 +61,107 @@ function setupOnboarding(): void {
   vi.mocked(buildProgress.runBuildProgress).mockResolvedValue({ lines: [] })
 }
 
-describe('Onboarding flow — navigation', () => {
+/** Walk from Meet to the given heading through the real buttons. */
+async function walkTo(target: 'project' | 'voice' | 'access' | 'connect'): Promise<void> {
+  await userEvent.click(screen.getByRole('button', { name: /Let’s set up/ }))
+  if (target === 'project') return
+  await userEvent.click(screen.getByRole('button', { name: /Continue|Skip — name it later/ }))
+  if (target === 'voice') return
+  await userEvent.click(screen.getByRole('button', { name: /^Use (Guide|Expert)/ }))
+  if (target === 'access') return
+  await userEvent.click(screen.getByRole('button', { name: /continue/i }))
+}
+
+describe('Onboarding flow — SOL walks you in (SOLUSDEV-323)', () => {
   beforeEach(setupOnboarding)
 
-  it('opens on the About step', async () => {
+  it('opens on Meet with SOL introducing itself', async () => {
     await renderOnboarding()
-    expect(screen.getByRole('heading', { name: 'What are you building?' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
     expect(screen.getByText('MAYA@STRIDER.DEV')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Step 1 of 6' })).toBeInTheDocument()
   })
 
-  it('offers no template robots — real sources are the only path', async () => {
+  it('walks Meet → Project → Voice → Access → Connect, persisting each step', async () => {
     await renderOnboarding()
+    await walkTo('project')
+    expect(screen.getByRole('heading', { name: 'What are you building?' })).toBeInTheDocument()
+    expect(sync.persistOnboardingStep).toHaveBeenLastCalledWith('about')
+    await userEvent.click(screen.getByRole('button', { name: /Skip — name it later/ }))
+    expect(screen.getByRole('heading', { name: 'How should I talk to you?' })).toBeInTheDocument()
+    expect(sync.persistOnboardingStep).toHaveBeenLastCalledWith('voice')
+    await userEvent.click(screen.getByRole('button', { name: /^Use Guide/ }))
+    expect(
+      screen.getByRole('heading', { name: 'Want me to see what you see?' })
+    ).toBeInTheDocument()
+    expect(sync.persistOnboardingStep).toHaveBeenLastCalledWith('access')
+    await userEvent.click(screen.getByRole('button', { name: /continue/i }))
+    expect(screen.getByRole('heading', { name: 'Plug in your tools.' })).toBeInTheDocument()
+    expect(sync.persistOnboardingStep).toHaveBeenLastCalledWith('connect')
+    expect(screen.getByText('0 CONNECTED · 2+ RECOMMENDED')).toBeInTheDocument()
+  })
+
+  it('Back returns to the previous step', async () => {
+    await renderOnboarding()
+    await walkTo('voice')
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(screen.getByRole('heading', { name: 'What are you building?' })).toBeInTheDocument()
+  })
+
+  it('Skip setup finishes onboarding from any step after Meet', async () => {
+    await renderOnboarding()
+    expect(screen.queryByRole('button', { name: 'Skip setup' })).toBeNull()
+    await walkTo('project')
+    await userEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
+    await vi.waitFor(() => expect(useAuthStore.getState().onboarded).toBe(true))
+    expect(sync.persistOnboardingStep).toHaveBeenCalledWith('done')
+  })
+})
+
+describe('Onboarding flow — Project step', () => {
+  beforeEach(setupOnboarding)
+
+  it('records the project description and previews the real project name', async () => {
+    await renderOnboarding()
+    await walkTo('project')
+    await userEvent.type(screen.getByLabelText('Project description'), 'Strider quadruped. ROS 2')
+    expect(useOnboardingStore.getState().description).toBe('Strider quadruped. ROS 2')
+    // The same name provisioning will create (deriveProjectName).
+    expect(screen.getByTestId('ob-project-name')).toHaveTextContent('Strider quadruped')
+  })
+
+  it('lights the worlds it hears as you type', async () => {
+    await renderOnboarding()
+    await walkTo('project')
+    const software = screen.getByText('Software').closest('[data-on]')
+    expect(software).toHaveAttribute('data-on', 'false')
+    await userEvent.type(screen.getByLabelText('Project description'), 'STM32 firmware')
+    expect(software).toHaveAttribute('data-on', 'true')
+    expect(screen.getByText('Mechanical').closest('[data-on]')).toHaveAttribute('data-on', 'false')
+  })
+
+  it('an example only fills the description — no template project (SOLUSDEV-152)', async () => {
+    await renderOnboarding()
+    await walkTo('project')
+    await userEvent.click(screen.getByRole('button', { name: 'Robot arm' }))
+    expect(useOnboardingStore.getState().description).toMatch(/robot arm/i)
+    expect(provisioning.ensureWorkspace).not.toHaveBeenCalled()
     expect(screen.queryByText(/template robot/i)).toBeNull()
-    expect(screen.queryByText('Quadruped')).toBeNull()
-    expect(screen.queryByText(/STARTING POINT/)).toBeNull()
   })
+})
 
-  it('records the project description', async () => {
-    await renderOnboarding()
-    await userEvent.type(screen.getByLabelText('Project description'), 'a quadruped')
-    expect(useOnboardingStore.getState().description).toBe('a quadruped')
-  })
+describe('Onboarding flow — Voice step', () => {
+  beforeEach(setupOnboarding)
 
-  it('lets the user choose Expert SOL mode (ADR-016)', async () => {
+  it('lets the user choose Expert SOL mode and previews the terse answer (ADR-016)', async () => {
     await renderOnboarding()
-    await userEvent.click(screen.getByRole('radio', { name: 'Expert' }))
+    await walkTo('voice')
+    expect(screen.getByRole('radio', { name: /Guide/ })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText(/CONCEPT · I²C ADDRESSES/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('radio', { name: /Expert/ }))
     expect(useSettingsStore.getState().solMode).toBe('Expert')
-  })
-
-  it('Continue advances to the Connect step', async () => {
-    await renderOnboarding()
-    await userEvent.click(screen.getByRole('button', { name: /Continue/ }))
-    expect(screen.getByRole('heading', { name: 'Connect your tools' })).toBeInTheDocument()
-    expect(screen.getByText('0 OF 2 CONNECTED (2+ RECOMMENDED)')).toBeInTheDocument()
+    expect(screen.queryByText(/CONCEPT · I²C ADDRESSES/)).toBeNull()
+    expect(screen.getByRole('button', { name: /^Use Expert/ })).toBeInTheDocument()
   })
 })
 
@@ -108,32 +176,32 @@ describe('Onboarding flow — build + provisioning', () => {
     })
     useOnboardingStore.getState().setDescription('Strider quadruped')
     await renderOnboarding()
-    await userEvent.click(screen.getByRole('button', { name: /Continue/ }))
+    await walkTo('connect')
     await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
 
     expect(provisioning.ensureWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ description: 'Strider quadruped', solMode: 'Guide' })
     )
-    // The async provision result lands in the workspace store.
     await vi.waitFor(() => {
       expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p1', name: 'Strider' })
     })
     expect(useWorkspaceStore.getState().linked).toBe(true)
+    expect(sync.persistOnboardingStep).toHaveBeenLastCalledWith('build')
   })
 
   it('completes the build honestly with no fabricated log when offline', async () => {
     await renderOnboarding()
-    await userEvent.click(screen.getByRole('button', { name: /Continue/ }))
+    await walkTo('connect')
     await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
 
     await vi.waitFor(() => expect(useOnboardingStore.getState().buildDone).toBe(true))
-    // Unlinked workspace: no API reads, no invented numbers.
     expect(buildProgress.runBuildProgress).not.toHaveBeenCalled()
     expect(useOnboardingStore.getState().buildLog).toEqual([])
-    expect(screen.queryByText(/247 nodes/)).toBeNull()
+    expect(screen.queryAllByTestId('ob-graph-node')).toHaveLength(0)
 
     await userEvent.click(screen.getByRole('button', { name: /Open workspace/ }))
     expect(useAuthStore.getState().onboarded).toBe(true)
+    expect(useOnboardingStore.getState().landingHint).toBe(true)
   })
 })
 
@@ -141,14 +209,14 @@ describe('Onboarding flow — server-persisted resume (FND-08)', () => {
   beforeEach(setupOnboarding)
 
   it('resumes mid-flow at the server-saved step after a reload', async () => {
-    vi.mocked(sync.hydrateOnboarding).mockResolvedValue({ status: 'resume', step: 1 })
+    vi.mocked(sync.hydrateOnboarding).mockResolvedValue({ status: 'resume', step: 4 })
     render(
       <MemoryRouter>
         <Onboarding />
       </MemoryRouter>
     )
-    expect(await screen.findByRole('heading', { name: 'Connect your tools' })).toBeInTheDocument()
-    expect(useOnboardingStore.getState().step).toBe(1)
+    expect(await screen.findByRole('heading', { name: 'Plug in your tools.' })).toBeInTheDocument()
+    expect(useOnboardingStore.getState().step).toBe(4)
   })
 
   it('sends a server-side-done user straight to the workspace', async () => {
@@ -161,18 +229,11 @@ describe('Onboarding flow — server-persisted resume (FND-08)', () => {
     await vi.waitFor(() => {
       expect(useAuthStore.getState().onboarded).toBe(true)
     })
-    // Never renders the flow — the user lands on the homepage route instead.
-    expect(screen.queryByRole('heading', { name: 'What are you building?' })).toBeNull()
-  })
-
-  it('persists each step transition', async () => {
-    await renderOnboarding()
-    await userEvent.click(screen.getByRole('button', { name: /Continue/ }))
-    expect(sync.persistOnboardingStep).toHaveBeenCalledWith('connect')
+    expect(screen.queryByRole('heading', { name: 'Hi — I’m SOL.' })).toBeNull()
   })
 
   it('persists done on completion', async () => {
-    useOnboardingStore.getState().setStep(2)
+    useOnboardingStore.getState().setStep(5)
     await renderOnboarding()
     await vi.waitFor(() => expect(useOnboardingStore.getState().buildDone).toBe(true))
     await userEvent.click(screen.getByRole('button', { name: /Open workspace/ }))
@@ -185,20 +246,14 @@ describe('Onboarding flow — StrictMode', () => {
   beforeEach(setupOnboarding)
 
   it('finishes the build under StrictMode double-mounting', async () => {
-    // Regression: the Build step must re-run its progress read on every mount
-    // (StrictMode cleanup cancels the first run) or it never completes.
-    useOnboardingStore.getState().setStep(2)
+    useOnboardingStore.getState().setStep(5)
     await renderOnboarding(true)
     await vi.waitFor(() => expect(useOnboardingStore.getState().buildDone).toBe(true))
     expect(screen.getByRole('button', { name: /Open workspace/ })).toBeInTheDocument()
   })
 
   it('hydrates past the splash under StrictMode double-mounting', async () => {
-    // Regression: a once-only ref guard + cancelled-cleanup combination left
-    // the second StrictMode mount with no hydration and an eternal spinner.
     await renderOnboarding(true)
-    expect(
-      await screen.findByRole('heading', { name: 'What are you building?' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
   })
 })

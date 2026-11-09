@@ -54,8 +54,8 @@ A reload or another machine resumes at the saved step; an unreachable API runs t
    - Outside the desktop app (browser preview) the step shows one line: these live in the desktop app.
      Footer: "Change any of this in Settings › SOL" · **Continue** (or **Not now — continue** while
      screen access is off).
-5. **Connect** (`connect`). SOL: "Plug in your tools." plus a suggestion line from the Project step's
-   worlds. Stage: the live catalog as tiles on an ellipse around a small orb (up to 8; further tiles
+5. **Connect** (`connect`). SOL: "Plug in your tools." The stage opens with a suggestion line from the Project
+   step's worlds ("From what you told me, start with GitHub and KiCad."). Stage: the live catalog as tiles on an ellipse around a small orb (up to 8; further tiles
    in a grid below). Each tile: logo/monogram, name, live status (connect wizard state), and
    `SUGGESTED` when its domain was heard. Clicking opens the real connect wizard (or local-bridge
    guidance). A connected tile glows in its domain colour and a wire draws from the orb to it.
@@ -63,9 +63,11 @@ A reload or another machine resumes at the saved step; an unreachable API runs t
    graph** (enabled at 2+). Connections never gate the workspace (FND-08).
 6. **Build** (`build`). SOL: "Building your graph." Stage: the graph panel (nodes in the domain
    colours of the REAL sources, edges drawing in, capped for legibility) and one row per real source
-   whose detail is the real sync state (shimmer while pending → "Synced"/error). Done: the summary
-   line, a _First thing to try_ card ("double-tap ctrl and ask …") and **Open workspace**. No
-   sources: "Nothing to index yet — connect tools anytime from Sources." Nothing is fabricated.
+   whose detail is the real sync state (shimmer while pending → the real entity/relation counts or
+   the real error). Done: the summary line (real entity count), a _First thing to try_ card
+   ("double-tap ctrl and ask …") and **Open workspace**. No sources: the graph panel reads "Your
+   graph draws itself here as your sources sync." and the summary says no sources are syncing yet.
+   Nothing is fabricated.
 7. **Land.** Open workspace persists `done`, navigates home and shows the one-time SOL hint pill
    ("I'm here whenever — double-tap ctrl from any app", dismissable, auto-hides).
 

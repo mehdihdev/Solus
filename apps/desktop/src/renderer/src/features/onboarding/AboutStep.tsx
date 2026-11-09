@@ -1,112 +1,156 @@
-// Onboarding step 0 — "What are you building?" A project description plus the
-// SOL-mode pick (API.md §5; ADR-016 SOL mode is a universal setting). The
-// template-robot path was removed in SOLUSDEV-152: Solus only builds the graph
-// from real connected sources, never from a fabricated reference project.
+// Onboarding step 2 — Project (server step `about`; SOLUSDEV-323,
+// docs/wireflows/onboarding.md §2). The description, example sentences that
+// only fill it (never a template project — SOLUSDEV-152), the worlds SOL hears
+// in it, and the exact name provisioning will give the project.
 import { Button } from '../../components/ui/Button'
+import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
-import { Segmented } from '../../components/ui/Segmented'
 import { Icons } from '../../components/ui/icons.constants'
-import type { SolMode } from '../../store/settingsStore'
+import { DOMAINS, hearDomains, heardCount } from './domainHearing'
+import { deriveProjectName } from './provisioning'
+import { StepFooter } from './StepFooter'
+
+export const EXAMPLE_DESCRIPTIONS = [
+  {
+    label: 'Quadruped',
+    text: 'A 12-DOF quadruped for outdoor inspection. STM32 firmware, custom BLDC drivers, ROS 2 on a Jetson.'
+  },
+  {
+    label: 'Robot arm',
+    text: 'A 6-axis desk robot arm with a 3D-printed gripper, Onshape CAD, ESP32 servos and a teleop app.'
+  },
+  {
+    label: 'FSAE BMS',
+    text: 'An FSAE battery management board in KiCad with CAN telemetry to the pit laptop.'
+  }
+] as const
 
 interface AboutStepProps {
   description: string
   onDescription: (value: string) => void
-  solMode: SolMode
-  onSolMode: (mode: SolMode) => void
-  onContinue: () => void
+  onNext: () => void
+  onBack: () => void
 }
 
 export function AboutStep({
   description,
   onDescription,
-  solMode,
-  onSolMode,
-  onContinue
+  onNext,
+  onBack
 }: AboutStepProps): React.JSX.Element {
+  const hasText = description.trim().length > 0
   return (
-    <div style={{ width: 660 }}>
-      <h2 style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em' }}>
-        What are you building?
-      </h2>
-      <p style={{ color: 'var(--mut)', fontSize: 13.5, marginTop: 8, lineHeight: 1.55 }}>
-        Solus uses this to name your project and tune what it looks for.
-      </p>
-      <ProjectDescription value={description} onChange={onDescription} />
-
-      <DividerLabel label="HOW SHOULD SOL TALK TO YOU?" />
-      <SolModeRow solMode={solMode} onSolMode={onSolMode} />
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 28 }}>
-        <Button kind="primary" size="lg" onClick={onContinue}>
-          Continue <Icons.arrowR size={14} />
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function ProjectDescription({
-  value,
-  onChange
-}: {
-  value: string
-  onChange: (value: string) => void
-}): React.JSX.Element {
-  return (
-    <textarea
-      aria-label="Project description"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder="A 12-DOF quadruped for outdoor inspection. STM32 firmware, custom BLDC drivers, ROS 2 on a Jetson…"
+    <div
       style={{
-        width: '100%',
-        boxSizing: 'border-box',
-        height: 84,
-        marginTop: 18,
-        background: 'var(--sur)',
-        color: 'var(--tx)',
-        border: '1px solid var(--bd)',
-        borderRadius: 3,
-        padding: '12px 14px',
-        fontSize: 13.5,
-        fontFamily: 'var(--font-ui)',
-        resize: 'none',
-        outline: 'none',
-        lineHeight: 1.5
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'center',
+        gap: 20,
+        flex: 1
       }}
-    />
-  )
-}
-
-function SolModeRow({
-  solMode,
-  onSolMode
-}: {
-  solMode: SolMode
-  onSolMode: (mode: SolMode) => void
-}): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
-      <Segmented
-        options={['Guide', 'Expert'] as const}
-        value={solMode}
-        onChange={onSolMode}
-        ariaLabel="SOL mode"
-      />
-      <span style={{ fontSize: 12, color: 'var(--mut)', lineHeight: 1.5 }}>
-        {solMode === 'Guide'
-          ? 'Explains its reasoning and teaches as it works. Switch any time in settings.'
-          : 'Terse, leads with the answer. Switch any time in settings.'}
-      </span>
+    >
+      <div className="ob-rise ob-d2">
+        <label htmlFor="ob-description">
+          <Mono size={9.5}>YOUR ROBOT, IN A SENTENCE</Mono>
+        </label>
+        <textarea
+          id="ob-description"
+          aria-label="Project description"
+          className="ob-textarea"
+          value={description}
+          onChange={(e) => onDescription(e.target.value)}
+          placeholder="A 12-DOF quadruped for outdoor inspection. STM32 firmware, custom BLDC drivers, ROS 2 on a Jetson…"
+          style={{
+            display: 'block',
+            width: '100%',
+            boxSizing: 'border-box',
+            height: 112,
+            marginTop: 10,
+            background: 'var(--sur)',
+            color: 'var(--tx)',
+            border: '1px solid var(--bd)',
+            borderRadius: 6,
+            padding: '14px 16px',
+            fontSize: 15,
+            lineHeight: 1.55,
+            fontFamily: 'var(--font-ui)',
+            resize: 'none',
+            outline: 'none'
+          }}
+        />
+      </div>
+      <Examples onPick={onDescription} />
+      <WorldsCard description={description} />
+      <StepFooter onBack={onBack} className="ob-rise ob-d5">
+        <Button kind="primary" size="lg" onClick={onNext}>
+          {hasText ? 'Continue' : 'Skip — name it later'} <Icons.arrowR size={14} />
+        </Button>
+      </StepFooter>
     </div>
   )
 }
 
-function DividerLabel({ label }: { label: string }): React.JSX.Element {
+function Examples({ onPick }: { onPick: (text: string) => void }): React.JSX.Element {
   return (
-    <div style={{ display: 'flex', gap: 8, marginTop: 26, alignItems: 'center' }}>
-      <Mono size={9.5}>{label}</Mono>
-      <div style={{ flex: 1, height: 1, background: 'var(--bd)' }} />
+    <div
+      className="ob-rise ob-d3"
+      style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
+    >
+      <span style={{ fontSize: 12, color: 'var(--mut)', marginRight: 4 }}>Or start from</span>
+      {EXAMPLE_DESCRIPTIONS.map((ex) => (
+        <button key={ex.label} type="button" className="ob-example" onClick={() => onPick(ex.text)}>
+          {ex.label}
+        </button>
+      ))}
     </div>
+  )
+}
+
+function WorldsCard({ description }: { description: string }): React.JSX.Element {
+  const heard = hearDomains(description)
+  const count = heardCount(heard)
+  const hasText = description.trim().length > 0
+  return (
+    <Card pad={0} className="ob-rise ob-d4">
+      <div style={{ padding: '18px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Mono size={9.5}>WORLDS I’M HEARING</Mono>
+          <Mono size={9.5} color={count ? 'var(--acc)' : 'var(--mut)'}>
+            {count ? `${count} OF 4` : 'TYPE TO START'}
+          </Mono>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+          {DOMAINS.map((d) => (
+            <span
+              key={d.key}
+              className="ob-chip"
+              data-on={heard[d.key]}
+              style={{ '--ob-c': d.color } as React.CSSProperties}
+            >
+              <span className="ob-chip-dot" />
+              {d.label}
+            </span>
+          ))}
+        </div>
+        <div
+          style={{
+            marginTop: 16,
+            paddingTop: 14,
+            borderTop: '1px solid var(--bd)',
+            display: 'flex',
+            gap: 10,
+            alignItems: 'baseline'
+          }}
+        >
+          <Mono size={9.5}>PROJECT NAME</Mono>
+          <span
+            data-testid="ob-project-name"
+            style={{ fontSize: 14, fontWeight: 500, color: hasText ? 'var(--tx)' : 'var(--mut)' }}
+          >
+            {deriveProjectName(description)}
+          </span>
+        </div>
+      </div>
+    </Card>
   )
 }

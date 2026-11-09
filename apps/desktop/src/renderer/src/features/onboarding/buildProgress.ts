@@ -46,13 +46,17 @@ export async function runBuildProgress(
 
   let lines: readonly BuildLine[] = sources.map((source) => ({
     name: source.name,
+    sourceType: source.type,
     detail: 'Checking sync…',
     state: 'pending' as const
   }))
   deps.onLines(lines)
   if (sources.length === 0) return { lines }
 
-  const resolveLine = (index: number, resolved: Pick<BuildLine, 'detail' | 'state'>): void => {
+  const resolveLine = (
+    index: number,
+    resolved: Pick<BuildLine, 'detail' | 'state' | 'entities'>
+  ): void => {
     lines = lines.map((line, i) => (i === index ? { ...line, ...resolved } : line))
     deps.onLines(lines)
   }
@@ -71,7 +75,7 @@ async function resolveSourceSync(
   deps: BuildProgressDeps,
   projectId: string,
   source: Source
-): Promise<Pick<BuildLine, 'detail' | 'state'>> {
+): Promise<Pick<BuildLine, 'detail' | 'state' | 'entities'>> {
   try {
     const syncs = await deps.api.getSyncs(projectId, source.id)
     let sync = latestSync(syncs)
@@ -81,7 +85,7 @@ async function resolveSourceSync(
       if (!sync) return { detail: 'Sync still running — see Sources later', state: 'idle' }
     }
     if (sync.status === 'failed') return { detail: syncErrorMessage(sync), state: 'failed' }
-    return { detail: describeSucceeded(sync), state: 'ok' }
+    return { detail: describeSucceeded(sync), state: 'ok', entities: sync.entities_created }
   } catch (error) {
     return { detail: messageFrom(error, 'Sync status unavailable.'), state: 'failed' }
   }
