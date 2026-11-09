@@ -128,6 +128,10 @@ export interface SolWindowManagerDeps {
   allWindows(): ReadonlyArray<Pick<SolWindowHandle, 'isDestroyed' | 'webContents'>>
   /** The clock for the resume window (tests use fake timers). */
   now?(): number
+  /** True when one of the app's windows has focus (Solus is the active app). */
+  appActive?(): boolean
+  /** Hand focus back to the previously active app (macOS: app.hide()). */
+  yieldFocus?(): void
 }
 
 export interface SolWindowManager {
@@ -184,6 +188,8 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   let summonGate: (() => Promise<void>) | null = null
   let summoning = false
   let frontApp: { value: SolFrontApp | null } | null = null
+  // Summoned over another app: a hand dismissal returns there, not to Solus.
+  let returnFocus = false
   const alive = (): boolean => current !== null && !current.isDestroyed()
   const cue = (event: SolPillEvent): void => {
     if (alive()) current?.webContents.send(SOL_WINDOW_CHANNELS.pill, event)
@@ -196,7 +202,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   /** Cue the renderer's exit animation; hide when the bounded wait ends — a
    *  dead or slow renderer cannot keep the pill up. Every caller but blur is a
    *  close by hand, so it also unpins. */
-  const hide = (): void => {
+  const hide = (byHand = true): void => {
     if (!alive() || !current?.isVisible() || leaving !== null) return
     pinned = false
     cue({ kind: 'leaving' })
@@ -205,6 +211,9 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       if (!alive() || !current?.isVisible()) return
       current.hide()
       hiddenAt = now()
+      // Hiding the key window leaves Solus active, so macOS raises the main
+      // window. A blur already moved focus elsewhere; a hand hide yields it.
+      if (byHand && returnFocus) deps.yieldFocus?.()
     }, SOL_PILL_EXIT_MS)
   }
 
@@ -215,7 +224,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     pending = null
     hiddenAt = null
     win.on('blur', () => {
-      if (!busy && !pinned && current === win) hide()
+      if (!busy && !pinned && current === win) hide(false)
     })
     // A drag (the renderer's -webkit-app-region handle) re-homes and pins the pill.
     win.on('moved', () => {
@@ -265,6 +274,8 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
    *  is shown or takes focus; a summon while it runs is coalesced. */
   const open = (opts?: { near?: Point }): void => {
     const near = opts?.near ?? deps.screen.getCursorScreenPoint()
+    // Sampled before the pill shows (after, the pill itself is the active window).
+    if (!(alive() && current?.isVisible())) returnFocus = !(deps.appActive?.() ?? true)
     const gate = summonGate
     if (gate === null) return show(near)
     if (summoning) return
@@ -289,7 +300,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       if (alive() && current?.isVisible() && leaving === null) hide()
       else open()
     },
-    hide,
+    hide: () => hide(),
     resize(next) {
       if (!alive() || current === null) return
       // A drag still in progress (macOS sends 'moved' only when it ends) pins too.

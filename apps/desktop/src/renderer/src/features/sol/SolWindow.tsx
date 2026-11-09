@@ -183,7 +183,7 @@ function useReportHeight(ref: React.RefObject<HTMLDivElement | null>, cap: numbe
     if (!el || typeof ResizeObserver === 'undefined') return
     let sent = -1
     let room = -1
-    const observer = new ResizeObserver(() => {
+    const measure = (): void => {
       const { report, chrome } = measurePill(el)
       // Only on change: writing it re-lays-out the observed subtree.
       const nextRoom = Math.max(0, Math.floor(cap - chrome))
@@ -194,9 +194,20 @@ function useReportHeight(ref: React.RefObject<HTMLDivElement | null>, cap: numbe
       if (report === sent) return
       sent = report
       void getDesktopSolBridge()?.resize(report)
-    })
+    }
+    const observer = new ResizeObserver(measure)
     observer.observe(el)
-    return () => observer.disconnect()
+    // A fresh summon resets the window to the collapsed height; if the content
+    // is the same height as before, no resize fires, so report it again.
+    const off = getDesktopSolBridge()?.onPill?.((event) => {
+      if (event.kind !== 'summoned' || event.resume) return
+      sent = -1
+      measure()
+    })
+    return () => {
+      observer.disconnect()
+      off?.()
+    }
   }, [ref, cap])
 }
 

@@ -192,6 +192,31 @@ describe('SolWindow pill sizing and busy signal', () => {
     }
   })
 
+  it('re-reports an unchanged height on a fresh summon, since main resets the window to collapsed', async () => {
+    let observed: ResizeObserverCallback | null = null
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: ResizeObserverCallback) {
+          observed = cb
+        }
+        observe = vi.fn()
+        disconnect = vi.fn()
+      }
+    )
+    try {
+      await mount()
+      const pill = document.querySelector('.sol-pill') as HTMLElement
+      vi.spyOn(pill, 'getBoundingClientRect').mockReturnValue({ height: 140 } as DOMRect)
+      act(() => observed?.([], {} as ResizeObserver))
+      vi.mocked(bridge.resize).mockClear()
+      act(() => bridge.pushPill({ kind: 'summoned', resume: false }))
+      expect(bridge.resize).toHaveBeenCalledWith(140)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('is busy while a turn streams, so a click elsewhere does not hide it', async () => {
     await mount()
     expect(bridge.setBusy).toHaveBeenLastCalledWith(false)

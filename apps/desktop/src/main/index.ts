@@ -915,6 +915,12 @@ function createAppSolWindows(): SolWindowManager {
     // The main window only (the manager adds the SOL window itself). Never the
     // checkout window (remote Stripe content) nor extension windows (third-party
     // bundles) — sol:state is for the app's own renderers (security M2).
-    allWindows: () => (mainWindow ? [mainWindow] : [])
+    allWindows: () => (mainWindow ? [mainWindow] : []),
+    appActive: () => BrowserWindow.getFocusedWindow() !== null,
+    // macOS raises the main window when the pill hides; app.hide() returns to
+    // the app the pill was summoned over instead (Windows/Linux need nothing).
+    yieldFocus: () => {
+      if (process.platform === 'darwin') app.hide()
+    }
   })
 }
