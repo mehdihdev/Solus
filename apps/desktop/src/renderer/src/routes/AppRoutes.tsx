@@ -1,7 +1,7 @@
 // App routing + auth guards (API.md §5 frontend routes; hash history in Electron).
 import type { ReactNode } from 'react'
 import { useEffect } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { AuthShell } from '../features/auth/AuthShell'
 import { StarterPage } from '../features/auth/StarterPage'
 import { rememberedLaunchSize, requestWindowSize } from '../features/auth/starterWindow'
@@ -50,9 +50,12 @@ function useFullWindow(active: boolean): void {
 function RootRoute(): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
   const onboarded = useAuthStore((s) => s.onboarded)
+  const { key } = useLocation()
   useFullWindow(status === 'authenticated')
   if (status === 'loading') return <Splash />
-  if (status === 'unauthenticated') return <Navigate to="/welcome" replace />
+  // Keyed by location: a navigation to `/` that lands while this redirect is
+  // pending remounts it, so it fires again instead of leaving `/` blank.
+  if (status === 'unauthenticated') return <Navigate key={key} to="/welcome" replace />
   if (!onboarded || isOnboardingReplay()) return <Navigate to="/onboarding" replace />
   return (
     <>

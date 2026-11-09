@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, act, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { WorkspaceShell } from './WorkspaceShell'
 import { useShellStore } from './shellStore'
 import { useAuthStore } from '../../store/authStore'
@@ -585,6 +585,24 @@ describe('WorkspaceShell — nothing carries across a project switch (SOLUSDEV-2
     expect(useShellStore.getState().lastMain).toBe('workspace')
     expect(document.querySelector('[data-screen-label="Workspace"]')).not.toBeNull()
     expect(screen.queryByRole('button', { name: /back/i })).toBeNull()
+  })
+
+  it('sends a signed-out user straight to the compact starter (SOLUSDEV-323)', async () => {
+    // Navigating to `/` here raced RootRoute's own redirect and stranded the
+    // window on a blank `/`; the shell goes to /welcome itself.
+    function Where(): React.JSX.Element {
+      return <div data-testid="where">{useLocation().pathname}</div>
+    }
+    render(
+      <MemoryRouter>
+        <Routes>
+          <Route path="/" element={<WorkspaceShell />} />
+          <Route path="*" element={<Where />} />
+        </Routes>
+      </MemoryRouter>
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(screen.getByTestId('where')).toHaveTextContent('/welcome'))
   })
 
   it('clears the retained graph snapshots on sign-out, like the focus cache (WS-01)', async () => {

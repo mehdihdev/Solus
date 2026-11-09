@@ -594,9 +594,12 @@ function createWindow(): void {
   win.webContents.setWindowOpenHandler(externalOpenHandler((url) => shell.openExternal(url)))
   // Security review (SOLUSDEV-323): the main window never leaves the Solus
   // renderer — its preload and privileged IPC must not reach another origin.
-  win.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(rendererBase())) event.preventDefault()
-  })
+  // Anchored: `http://localhost:5173.evil.test` must not pass as the dev server.
+  const keepInRenderer = (event: Electron.Event, url: string): void => {
+    if (!isAppRendererUrl(url, rendererBase())) event.preventDefault()
+  }
+  win.webContents.on('will-navigate', keepInRenderer)
+  win.webContents.on('will-redirect', keepInRenderer)
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.

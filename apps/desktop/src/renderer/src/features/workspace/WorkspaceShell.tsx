@@ -143,7 +143,9 @@ function useShellNavigation(): ShellNavigation {
     useExtensionsStore.getState().reset()
     // Pins are this user's account state; the next user must not inherit them.
     usePinsStore.getState().reset()
-    navigate('/')
+    // SOLUSDEV-323: straight to the compact starter. Navigating to `/` raced
+    // RootRoute's own redirect and could strand the window on a blank `/`.
+    navigate('/welcome', { replace: true })
   }
   return {
     route,
