@@ -33,6 +33,8 @@ import {
   type OnboardingStep
 } from './onboardingStore'
 import { endOnboardingReplay, isOnboardingReplay } from './onboardingReplay'
+import { getDesktopPlatform } from '../../lib/desktopBridge'
+import { MAC_TRAFFIC_LIGHT_INSET } from '../workspace/TitleBar'
 import { ensureWorkspace } from './provisioning'
 import { SolLines } from './SolLines'
 import { StepDots } from './StepDots'
@@ -277,8 +279,14 @@ function OnboardingHeader({
   userEmail?: string
   onSkip?: () => void
 }): React.JSX.Element {
+  // The window has no native title bar (hiddenInset): this row clears the
+  // macOS traffic lights and drags the window, like the workspace TitleBar.
+  const inset = getDesktopPlatform() === 'darwin' ? 'mac' : 'none'
   return (
     <header
+      data-testid="ob-header"
+      data-inset={inset}
+      className="app-drag"
       style={{
         height: 64,
         flex: 'none',
@@ -286,6 +294,7 @@ function OnboardingHeader({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '0 32px',
+        paddingLeft: inset === 'mac' ? MAC_TRAFFIC_LIGHT_INSET : 32,
         borderBottom: '1px solid var(--bd)'
       }}
     >
@@ -302,6 +311,7 @@ function OnboardingHeader({
           alignItems: 'center',
           gap: 14
         }}
+        className="app-no-drag"
       >
         {userEmail && <Mono size={9.5}>{userEmail.toUpperCase()}</Mono>}
         {onSkip && (

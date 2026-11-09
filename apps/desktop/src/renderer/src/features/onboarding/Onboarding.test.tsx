@@ -305,3 +305,28 @@ describe('Onboarding flow — dev replay (pnpm dev:onboarding)', () => {
     expect(isOnboardingReplay()).toBe(false)
   })
 })
+
+describe('Onboarding header — window chrome', () => {
+  beforeEach(setupOnboarding)
+  const w = window as unknown as { solus?: { platform?: string } }
+  afterEach(() => {
+    delete w.solus
+  })
+
+  it('clears the macOS traffic lights and drags the window, controls excluded', async () => {
+    w.solus = { platform: 'darwin' }
+    await renderOnboarding()
+    const header = screen.getByTestId('ob-header')
+    expect(header).toHaveAttribute('data-inset', 'mac')
+    expect(header).toHaveClass('app-drag')
+    await walkTo('project')
+    expect(
+      screen.getByRole('button', { name: 'Skip setup' }).closest('.app-no-drag')
+    ).not.toBeNull()
+  })
+
+  it('keeps the plain inset off macOS', async () => {
+    await renderOnboarding()
+    expect(screen.getByTestId('ob-header')).toHaveAttribute('data-inset', 'none')
+  })
+})

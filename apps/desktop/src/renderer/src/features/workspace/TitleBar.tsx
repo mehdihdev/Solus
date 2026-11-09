@@ -7,7 +7,7 @@ import { getDesktopPlatform } from '../../lib/desktopBridge'
 
 export const TITLE_BAR_HEIGHT = 44
 /** Room for the macOS traffic lights (x 16 + three 12px lights with 8px gaps). */
-const MAC_TRAFFIC_LIGHT_INSET = 84
+export const MAC_TRAFFIC_LIGHT_INSET = 84
 const PLAIN_INSET = 14
 
 export function TitleBar({ children }: { children: ReactNode }): React.JSX.Element {
