@@ -33,6 +33,7 @@ import { ProcessStrip } from './ProcessStrip'
 import { CommandApprovalContext, useCommandShortcut } from './commandHotkey'
 import { Composer, type ComposerSend } from './Composer'
 import { PillPanel } from './PillPanel'
+import { newestPendingCommand, PillTakeover, useTakeoverFocusReturn } from './PillTakeover'
 import { SolMarkdown } from './Markdown'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { PendingConfirmation } from '../../lib/api/solStream'
@@ -214,26 +215,25 @@ function UserRow({
  *  not re-registered on every transcript render (SOLUSDEV-317). */
 function ParkedConfirmation({
   pending,
-  onDecide,
-  pill
+  onDecide
 }: {
   pending: PendingConfirmation
   onDecide: SolChat['decide']
-  pill: boolean
 }): React.JSX.Element {
   const { confirmationId } = pending
   const decide = useCallback(
     (decision: ConfirmationDecision) => onDecide(confirmationId, decision),
     [onDecide, confirmationId]
   )
-  return <ConfirmationCard pending={pending} onDecide={decide} variant={pill ? 'pill' : 'card'} />
+  return <ConfirmationCard pending={pending} onDecide={decide} />
 }
 
 /** One card per parked action. A turn can park several since SOLUSDEV-168,
  *  and each is approved on its own — approving a batch would suspend the
  *  staleness re-check that makes "what you saw is what runs" true. The pill
  *  (SOLUSDEV-319) groups the non-command ones into a PlanCard that still
- *  decides them one by one; command cards always keep their own card. */
+ *  decides them one by one; its command cards take over the pill instead
+ *  (PillTakeover), so the thread does not show them. */
 function Confirmations({
   confirmations,
   reasoning,
@@ -246,8 +246,9 @@ function Confirmations({
   onDecide: SolChat['decide']
   onShowMe?: () => void
 }): React.JSX.Element {
-  const planned = onShowMe ? confirmations.filter((c) => commandHeader(c) === null) : []
-  const cards = confirmations.filter((c) => !planned.includes(c))
+  const pill = onShowMe !== undefined
+  const planned = pill ? confirmations.filter((c) => commandHeader(c) === null) : []
+  const cards = pill ? [] : confirmations
   return (
     <>
       {planned.map((step) => (
@@ -263,11 +264,7 @@ function Confirmations({
       {cards.map((confirmation) => (
         <Fragment key={confirmation.confirmationId}>
           <ReasoningBlock reasoning={reasoning} confirmationId={confirmation.confirmationId} />
-          <ParkedConfirmation
-            pending={confirmation}
-            onDecide={onDecide}
-            pill={onShowMe !== undefined}
-          />
+          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
         </Fragment>
       ))}
     </>
@@ -550,27 +547,46 @@ interface SurfaceParts {
   strip: React.ReactNode
   composer: React.ReactNode
   pillTop?: React.ReactNode
+  /** Pill: the pending command card that takes the pill over, or null. */
+  takeover?: PendingConfirmation | null
+  onDecide?: SolChat['decide']
+}
+
+/** The pill: the usual stack, or a pending command card holding all of it. */
+function PillSurface(p: SurfaceParts): React.JSX.Element {
+  const stackRef = useRef<HTMLDivElement>(null)
+  const active = p.takeover != null
+  useTakeoverFocusReturn(active, stackRef)
+  const panelOpen = p.hasThread || Boolean(p.regionCard) || Boolean(p.pillTop)
+  return (
+    <div
+      ref={stackRef}
+      className="sol-pill-stack"
+      data-takeover={active ? 'on' : 'off'}
+      onKeyDownCapture={p.shortcut.onKeyDownCapture}
+    >
+      <div className="sol-pill-normal" inert={active} aria-hidden={active || undefined}>
+        <div className="sol-pill-normal-inner">
+          {panelOpen && (
+            <PillPanel>
+              {p.pillTop}
+              {p.hasThread && p.thread}
+              {p.regionCard}
+            </PillPanel>
+          )}
+          {p.strip}
+          {p.composer}
+        </div>
+      </div>
+      {p.onDecide && <PillTakeover pending={p.takeover ?? null} onDecide={p.onDecide} />}
+    </div>
+  )
 }
 
 /** SOLUSDEV-319: the pill stacks a panel (opened only when it has content)
  *  over the bar; the panel and page layouts are one column. */
 function Surface(p: SurfaceParts): React.JSX.Element {
-  if (p.layout === 'pill') {
-    const panelOpen = p.hasThread || Boolean(p.regionCard) || Boolean(p.pillTop)
-    return (
-      <div className="sol-pill-stack" onKeyDownCapture={p.shortcut.onKeyDownCapture}>
-        {panelOpen && (
-          <PillPanel>
-            {p.pillTop}
-            {p.hasThread && p.thread}
-            {p.regionCard}
-          </PillPanel>
-        )}
-        {p.strip}
-        {p.composer}
-      </div>
-    )
-  }
+  if (p.layout === 'pill') return <PillSurface {...p} />
   return (
     <div
       onKeyDownCapture={p.shortcut.onKeyDownCapture}
@@ -656,6 +672,8 @@ export function SolChat({
           <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
         }
         pillTop={pillTop}
+        takeover={layout === 'pill' ? newestPendingCommand(chat.items) : null}
+        onDecide={decideInMode}
         composer={
           <Composer
             streaming={chat.streaming}

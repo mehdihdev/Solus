@@ -237,6 +237,101 @@ body {
   min-height: 0;
   flex: 0 1 auto;
 }
+/* SOLUSDEV-319: a pending command card takes the pill over (PillTakeover.tsx).
+   The usual surfaces fold away (their row collapses to nothing, fading and
+   settling down into the bar's place) while the card unrolls upward out of
+   where the bar was; on decision the card folds away and the surfaces unroll
+   back. Rows animate via grid-template-rows, so heights stay fluid. */
+.sol-pill-normal {
+  --pill-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  flex: 0 1 auto;
+  transform-origin: 50% 100%;
+  transition:
+    grid-template-rows 520ms var(--pill-ease),
+    opacity 320ms ease,
+    transform 520ms var(--pill-ease),
+    filter 320ms ease;
+}
+.sol-pill-normal-inner {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sol-pill-stack[data-takeover='on'] .sol-pill-normal {
+  grid-template-rows: minmax(0, 0fr);
+  opacity: 0;
+  transform: translateY(8px) scale(0.97);
+  filter: blur(2px);
+  transition:
+    grid-template-rows 460ms var(--pill-ease),
+    opacity 200ms ease,
+    transform 460ms var(--pill-ease),
+    filter 200ms ease;
+}
+.sol-pill-stack[data-takeover='on'] .sol-pill-normal-inner {
+  overflow: hidden;
+}
+.sol-pill-takeover {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+  flex: 0 1 auto;
+  outline: none;
+  transform-origin: 50% 100%;
+  animation: sol-pill-takeover-in 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sol-pill-takeover-inner {
+  min-height: 0;
+}
+.sol-pill-takeover .cmd-card {
+  /* The card IS the pill now: the pill's own surface, and no second entrance. */
+  background: color-mix(in srgb, var(--sur) 94%, transparent);
+  box-shadow:
+    0 14px 36px color-mix(in srgb, var(--bg) 70%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--bg) 60%, transparent);
+  animation: none;
+}
+.sol-pill-takeover[data-leaving] {
+  animation: sol-pill-takeover-out 320ms cubic-bezier(0.4, 0, 0.6, 1) both;
+}
+.sol-pill-takeover[data-leaving] .sol-pill-takeover-inner {
+  overflow: hidden;
+}
+@keyframes sol-pill-takeover-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.94);
+    clip-path: inset(72% -48px -48px -48px round 14px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    clip-path: inset(-48px -48px -48px -48px round 14px);
+  }
+}
+@keyframes sol-pill-takeover-out {
+  to {
+    grid-template-rows: minmax(0, 0fr);
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sol-pill-normal,
+  .sol-pill-stack[data-takeover='on'] .sol-pill-normal,
+  .sol-pill-takeover,
+  .sol-pill-takeover[data-leaving] {
+    transition: none;
+    animation: none;
+    filter: none;
+    transform: none;
+  }
+}
 .sol-pill > .sol-window-status,
 .sol-pill-bar {
   flex-shrink: 0;
