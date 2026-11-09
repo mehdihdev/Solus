@@ -179,6 +179,19 @@ async def test_onboarding_step_defaults_and_round_trips(
     assert resp.json()["data"]["onboarding_step"] == "done"
 
 
+async def test_onboarding_step_accepts_the_sol_walkthrough_steps(
+    client: AsyncClient, alice_headers: dict[str, str]
+) -> None:
+    """SOLUSDEV-323: the redesigned flow saves meet/voice/access too, so a
+    reload resumes on the exact step (docs/wireflows/onboarding.md)."""
+    for step in ("meet", "about", "voice", "access", "connect"):
+        resp = await client.patch(
+            "/api/v1/users/me/settings", json={"onboarding_step": step}, headers=alice_headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["onboarding_step"] == step
+
+
 async def test_onboarding_step_rejects_unknown_value(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
