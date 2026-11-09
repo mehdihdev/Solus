@@ -276,6 +276,52 @@
   background: color-mix(in srgb, var(--acc) 7%, var(--sur));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 12%, transparent);
 }
+/* Project name: reads as the name line, becomes a field on hover and focus. */
+.ob-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  margin: -6px 0;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  outline: none;
+  cursor: text;
+  text-overflow: ellipsis;
+  transition:
+    border-color 0.25s var(--ob-ease),
+    background 0.25s var(--ob-ease),
+    box-shadow 0.25s var(--ob-ease);
+}
+.ob-name-input:hover {
+  border-color: var(--bd);
+  background: var(--sur);
+}
+.ob-name-input:focus {
+  border-color: var(--acc);
+  background: var(--sur);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 14%, transparent);
+}
+.ob-name-reset {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 99px;
+  border: 1px solid var(--bd);
+  background: transparent;
+  color: var(--mut);
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+.ob-name-reset:hover {
+  color: var(--tx);
+  border-color: var(--acc);
+}
 .ob-textarea {
   transition:
     border-color 0.3s,

@@ -34,7 +34,7 @@ import {
 import { endOnboardingReplay, isOnboardingReplay } from './onboardingReplay'
 import { getDesktopPlatform, setDesktopWindowChrome } from '../../lib/desktopBridge'
 import { MAC_TRAFFIC_LIGHT_INSET } from '../workspace/TitleBar'
-import { ensureWorkspace } from './provisioning'
+import { ensureWorkspace, projectNameFor } from './provisioning'
 import { SolLines } from './SolLines'
 import { StepDots } from './StepDots'
 import { VoiceStep } from './VoiceStep'
@@ -108,6 +108,7 @@ function useOnboardingFlow(): OnboardingFlow {
     goTo(BUILD_STEP)
     void ensureWorkspace({
       description: store.description,
+      name: projectNameFor(store.description, store.projectName),
       solMode,
       existing: { teamId: workspace.teamId, project: workspace.project }
     }).then((result) => {
@@ -219,6 +220,8 @@ interface StageProps {
 function Stage(p: StageProps): React.JSX.Element {
   const solMode = useSettingsStore((s) => s.solMode)
   const setSolMode = useSettingsStore((s) => s.setSolMode)
+  const projectName = useOnboardingStore((s) => s.projectName)
+  const setProjectName = useOnboardingStore((s) => s.setProjectName)
   const onSolMode = (mode: SolMode): void => {
     setSolMode(mode)
     void persistSolMode(mode) // saved at once — Skip setup must not lose it
@@ -240,6 +243,8 @@ function Stage(p: StageProps): React.JSX.Element {
         <AboutStep
           description={p.description}
           onDescription={p.onDescription}
+          projectName={projectName}
+          onProjectName={setProjectName}
           onNext={p.next}
           onBack={p.back}
         />

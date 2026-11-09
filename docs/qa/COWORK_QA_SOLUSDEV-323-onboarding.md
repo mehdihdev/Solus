@@ -33,11 +33,20 @@ Governing spec: `docs/wireflows/onboarding.md`. Mark each row ✅ / ❌ and note
 3. [ ] Type `STM32 firmware` → the **Software** chip lights up blue with a small pop; the counter reads
        `1 OF 4`; the orb on the left breathes faster.
 4. [ ] Click the **Quadruped** example → the textarea fills; all four chips light; `4 OF 4`.
-5. [ ] The **PROJECT NAME** line shows the first sentence ("A 12-DOF quadruped for outdoor
-       inspection"). Remember it — section F checks the real project gets this exact name.
-6. [ ] Clicking an example creates nothing (no project appears anywhere yet).
-7. [ ] **Back** returns to Meet; **Let's set up** returns here with the text kept.
-8. [ ] Click **Continue** → Voice.
+5. [ ] The **PROJECT NAME** field shows the first sentence ("A 12-DOF quadruped for outdoor
+       inspection").
+6. [ ] Click the name field, replace it with `Strider MK2` → a **Use description** button appears;
+       typing more in the description no longer changes the name. Click **Use description** → the
+       name follows the description again. Rename it to `Strider MK2` once more and remember it —
+       section F checks the real project gets this exact name.
+7. [ ] Clear the name field entirely → it shows the description's name as grey placeholder text;
+       the project will get that name.
+8. [ ] Rename, then click an example → the name follows the new description.
+9. [ ] Clicking an example creates nothing (no project appears anywhere yet).
+10. [ ] Go on to Connect (the project is created there), come **Back** to Project, rename it, then
+        finish → the workspace's project carries the new name.
+11. [ ] **Back** returns to Meet; **Let's set up** returns here with the text and name kept.
+12. [ ] Click **Continue** → Voice.
 
 ## C. Voice (step 3)
 
@@ -102,7 +111,7 @@ Governing spec: `docs/wireflows/onboarding.md`. Mark each row ✅ / ❌ and note
        edges drawing in; failed or empty sources draw nothing.
 4. [ ] Summary line: "N entities in your graph, from your synced sources." (real number).
 5. [ ] The _FIRST THING TO TRY_ card and **Open workspace** appear when done.
-6. [ ] **Open workspace** → the workspace opens; the project is named exactly as in B.5; a pill rises
+6. [ ] **Open workspace** → the workspace opens; the project is named exactly as in B.6; a pill rises
        at the bottom centre: "I'm here whenever — double-tap ctrl from any app." with **Dismiss**.
 7. [ ] **Dismiss** hides it; reload → it does not return. Without dismissing it hides after ~9 s.
 

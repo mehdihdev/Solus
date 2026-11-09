@@ -63,6 +63,8 @@ describe('ConnectStep — workspace bootstrap', () => {
     })
     expect(mockedEnsure).toHaveBeenCalledWith({
       description: '',
+      // The Project step's name (derived here: nothing typed) — SOLUSDEV-323.
+      name: 'My first robot',
       solMode: 'Guide',
       existing: { teamId: 't1', project: { id: 'p1', name: 'X' } }
     })

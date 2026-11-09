@@ -134,7 +134,30 @@ describe('Onboarding flow — Project step', () => {
     await userEvent.type(screen.getByLabelText('Project description'), 'Strider quadruped. ROS 2')
     expect(useOnboardingStore.getState().description).toBe('Strider quadruped. ROS 2')
     // The same name provisioning will create (deriveProjectName).
-    expect(screen.getByTestId('ob-project-name')).toHaveTextContent('Strider quadruped')
+    expect(screen.getByLabelText('Project name')).toHaveValue('Strider quadruped')
+  })
+
+  it('lets the user edit the project name, which then stops following the description', async () => {
+    await renderOnboarding()
+    await walkTo('project')
+    await userEvent.type(screen.getByLabelText('Project description'), 'Strider quadruped')
+    const name = screen.getByLabelText('Project name')
+    await userEvent.clear(name)
+    await userEvent.type(name, 'Strider MK2')
+    expect(useOnboardingStore.getState().projectName).toBe('Strider MK2')
+    await userEvent.type(screen.getByLabelText('Project description'), '. ROS 2')
+    expect(name).toHaveValue('Strider MK2')
+  })
+
+  it('an example puts the name back to following the description', async () => {
+    await renderOnboarding()
+    await walkTo('project')
+    await userEvent.type(screen.getByLabelText('Project name'), ' custom')
+    await userEvent.click(screen.getByRole('button', { name: 'FSAE BMS' }))
+    expect(useOnboardingStore.getState().projectName).toBeNull()
+    expect(screen.getByLabelText('Project name')).toHaveValue(
+      'An FSAE battery management board in KiCad with CAN telemetry to the pit laptop'
+    )
   })
 
   it('lights the worlds it hears as you type', async () => {
@@ -204,7 +227,11 @@ describe('Onboarding flow — build + provisioning', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Skip for now' }))
 
     expect(provisioning.ensureWorkspace).toHaveBeenCalledWith(
-      expect.objectContaining({ description: 'Strider quadruped', solMode: 'Guide' })
+      expect.objectContaining({
+        description: 'Strider quadruped',
+        name: 'Strider quadruped',
+        solMode: 'Guide'
+      })
     )
     await vi.waitFor(() => {
       expect(useWorkspaceStore.getState().project).toMatchObject({ id: 'p1', name: 'Strider' })

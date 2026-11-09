@@ -78,6 +78,8 @@ export interface BuildLine {
 export interface OnboardingState {
   step: OnboardingStep
   description: string
+  /** The project name the user typed; null = follow the description. */
+  projectName: string | null
   connections: Record<string, ConnectionState>
   buildLog: readonly BuildLine[]
   buildDone: boolean
@@ -88,6 +90,7 @@ export interface OnboardingState {
 
   setStep: (step: OnboardingStep) => void
   setDescription: (description: string) => void
+  setProjectName: (name: string | null) => void
   /** Replace a source's connection state wholesale (real-connect flow). */
   setConnection: (id: string, state: ConnectionState) => void
   /** Mark a source's connect attempt as failed with a message. */
@@ -116,6 +119,7 @@ export function canBuildModel(connections: Record<string, ConnectionState>): boo
 const INITIAL = {
   step: 0 as OnboardingStep,
   description: '',
+  projectName: null as string | null,
   connections: {} as Record<string, ConnectionState>,
   buildLog: [] as readonly BuildLine[],
   buildDone: false,
@@ -128,6 +132,7 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   setStep: (step) => set({ step }),
   setDescription: (description) => set({ description }),
+  setProjectName: (projectName) => set({ projectName }),
 
   setConnection: (id, state) => set((s) => ({ connections: { ...s.connections, [id]: state } })),
 

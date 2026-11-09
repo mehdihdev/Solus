@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { deriveProjectName, provisionWorkspace, ensureWorkspace } from './provisioning'
+import {
+  deriveProjectName,
+  provisionWorkspace,
+  ensureWorkspace,
+  projectNameFor
+} from './provisioning'
 import * as resources from '../../lib/api/resources'
 import { ApiError } from '../../lib/api/envelope.types'
 
@@ -10,6 +15,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     getMe: vi.fn(),
     getProject: vi.fn(),
     createProject: vi.fn(),
+    updateProject: vi.fn(),
     updateSolMode: vi.fn()
   }
 })
@@ -18,6 +24,7 @@ const mockedGetMe = vi.mocked(resources.getMe)
 const mockedGetProject = vi.mocked(resources.getProject)
 const mockedCreateProject = vi.mocked(resources.createProject)
 const mockedUpdateSolMode = vi.mocked(resources.updateSolMode)
+const mockedUpdateProject = vi.mocked(resources.updateProject)
 
 describe('deriveProjectName', () => {
   it('uses the first sentence of the description', () => {
@@ -182,5 +189,80 @@ describe('ensureWorkspace', () => {
     mockedGetMe.mockRejectedValue(new Error('Failed to fetch'))
     const result = await ensureWorkspace({ description: 'x', solMode: 'Guide' })
     expect(result.linked).toBe(false)
+  })
+})
+
+describe('projectNameFor (editable name — SOLUSDEV-323)', () => {
+  it('follows the description until the user types a name', () => {
+    expect(projectNameFor('Strider quadruped. ROS 2', null)).toBe('Strider quadruped')
+  })
+
+  it('uses the typed name, trimmed', () => {
+    expect(projectNameFor('Strider quadruped', '  Strider MK2 ')).toBe('Strider MK2')
+  })
+
+  it('falls back to the description when the typed name is blank', () => {
+    expect(projectNameFor('Strider quadruped', '   ')).toBe('Strider quadruped')
+    expect(projectNameFor('', '')).toBe('My first robot')
+  })
+
+  it('caps a typed name at the same 80 characters', () => {
+    expect(projectNameFor('', 'x'.repeat(200))).toHaveLength(80)
+  })
+})
+
+describe('ensureWorkspace with a chosen name', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('creates the project with the chosen name', async () => {
+    mockedGetMe.mockResolvedValue(personalUser('a@b.dev'))
+    mockedCreateProject.mockResolvedValue(createdProject('Strider MK2'))
+    mockedUpdateSolMode.mockResolvedValue({})
+
+    await ensureWorkspace({ description: 'Strider', name: 'Strider MK2', solMode: 'Guide' })
+    expect(mockedCreateProject).toHaveBeenCalledWith('t1', {
+      name: 'Strider MK2',
+      description: 'Strider'
+    })
+  })
+
+  it('renames the project made earlier in the flow when the name has changed', async () => {
+    mockedGetProject.mockResolvedValue({ id: 'p1', name: 'Strider' } as never)
+    mockedUpdateProject.mockResolvedValue({ id: 'p1', name: 'Strider MK2' } as never)
+
+    const result = await ensureWorkspace({
+      description: 'Strider',
+      name: 'Strider MK2',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'p1', name: 'Strider' } }
+    })
+    expect(mockedUpdateProject).toHaveBeenCalledWith('p1', { name: 'Strider MK2' })
+    expect(result.project).toEqual({ id: 'p1', name: 'Strider MK2' })
+    expect(mockedCreateProject).not.toHaveBeenCalled()
+  })
+
+  it('leaves the project alone when the name is unchanged', async () => {
+    mockedGetProject.mockResolvedValue({ id: 'p1', name: 'Strider' } as never)
+    await ensureWorkspace({
+      description: 'Strider',
+      name: 'Strider',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'p1', name: 'Strider' } }
+    })
+    expect(mockedUpdateProject).not.toHaveBeenCalled()
+  })
+
+  it('keeps the project under its old name when the rename fails', async () => {
+    mockedGetProject.mockResolvedValue({ id: 'p1', name: 'Strider' } as never)
+    mockedUpdateProject.mockRejectedValue(new Error('Failed to fetch'))
+    const result = await ensureWorkspace({
+      description: 'Strider',
+      name: 'Strider MK2',
+      solMode: 'Guide',
+      existing: { teamId: 't1', project: { id: 'p1', name: 'Strider' } }
+    })
+    expect(result).toEqual({ linked: true, teamId: 't1', project: { id: 'p1', name: 'Strider' } })
   })
 })

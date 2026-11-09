@@ -13,7 +13,7 @@ import { ConnectRing } from './ConnectRing'
 import { hearDomains, suggestedIntegrations } from './domainHearing'
 import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 import { useOnboardingStore, connectedCount, canBuildModel } from './onboardingStore'
-import { ensureWorkspace } from './provisioning'
+import { ensureWorkspace, projectNameFor } from './provisioning'
 import { StepFooter } from './StepFooter'
 import { useCatalogConnect } from './useCatalogConnect'
 
@@ -24,12 +24,14 @@ interface ConnectStepProps {
 
 function useEnsureWorkspaceOnMount(): void {
   const description = useOnboardingStore((s) => s.description)
+  const projectName = useOnboardingStore((s) => s.projectName)
   const solMode = useSettingsStore((s) => s.solMode)
   const workspace = useWorkspaceStore()
   useEffect(() => {
     let cancelled = false
     void ensureWorkspace({
       description,
+      name: projectNameFor(description, projectName),
       solMode,
       existing: { teamId: workspace.teamId, project: workspace.project }
     }).then((result) => {

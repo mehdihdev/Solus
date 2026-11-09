@@ -37,8 +37,11 @@ A reload or another machine resumes at the saved step; an unreachable API runs t
      is created from them);
    - **Worlds I'm hearing**: four domain chips (Software, Electrical, Mechanical, Runtime) that light
      up as the text mentions them. A keyword heuristic, phrased as hearing — never "detected";
-   - **Project name**: the name the project WILL get (`deriveProjectName`, the same function
-     provisioning uses).
+   - **Project name**: an editable field holding the name the project WILL get. It follows the
+     description (`deriveProjectName`) until the user types in it; then their name sticks (trimmed,
+     80 chars max; blank falls back to the description), with a **Use description** reset. Picking
+     an example resets it to follow. If Connect already created the project, the build renames it
+     (`PATCH /projects/{id}`, best-effort).
      Primary: **Continue** (or **Skip — name it later** while empty).
 3. **Voice** (`voice`). SOL: "How should I talk to you?" Stage: two choice cards, **Guide** and
    **Expert** (radio semantics, the `sol_mode` setting, ADR-016), and a preview card answering one

@@ -1,13 +1,14 @@
 // Onboarding step 2 — Project (server step `about`; SOLUSDEV-323,
 // docs/wireflows/onboarding.md §2). The description, example sentences that
 // only fill it (never a template project — SOLUSDEV-152), the worlds SOL hears
-// in it, and the exact name provisioning will give the project.
+// in it, and the project name — derived from the description until the user
+// types their own.
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { Icons } from '../../components/ui/icons.constants'
 import { DOMAINS, hearDomains, heardCount } from './domainHearing'
-import { deriveProjectName } from './provisioning'
+import { deriveProjectName, projectNameFor } from './provisioning'
 import { StepFooter } from './StepFooter'
 
 export const EXAMPLE_DESCRIPTIONS = [
@@ -28,6 +29,9 @@ export const EXAMPLE_DESCRIPTIONS = [
 interface AboutStepProps {
   description: string
   onDescription: (value: string) => void
+  /** The name the user typed; null = follow the description. */
+  projectName: string | null
+  onProjectName: (name: string | null) => void
   onNext: () => void
   onBack: () => void
 }
@@ -35,6 +39,8 @@ interface AboutStepProps {
 export function AboutStep({
   description,
   onDescription,
+  projectName,
+  onProjectName,
   onNext,
   onBack
 }: AboutStepProps): React.JSX.Element {
@@ -79,8 +85,17 @@ export function AboutStep({
           }}
         />
       </div>
-      <Examples onPick={onDescription} />
-      <WorldsCard description={description} />
+      <Examples
+        onPick={(text) => {
+          onDescription(text)
+          onProjectName(null) // a fresh description: the name follows it again
+        }}
+      />
+      <WorldsCard
+        description={description}
+        projectName={projectName}
+        onProjectName={onProjectName}
+      />
       <StepFooter onBack={onBack} className="ob-rise ob-d5">
         <Button kind="primary" size="lg" onClick={onNext}>
           {hasText ? 'Continue' : 'Skip — name it later'} <Icons.arrowR size={14} />
@@ -106,7 +121,17 @@ function Examples({ onPick }: { onPick: (text: string) => void }): React.JSX.Ele
   )
 }
 
-function WorldsCard({ description }: { description: string }): React.JSX.Element {
+interface WorldsCardProps {
+  description: string
+  projectName: string | null
+  onProjectName: (name: string | null) => void
+}
+
+function WorldsCard({
+  description,
+  projectName,
+  onProjectName
+}: WorldsCardProps): React.JSX.Element {
   const heard = hearDomains(description)
   const count = heardCount(heard)
   const hasText = description.trim().length > 0
@@ -139,18 +164,54 @@ function WorldsCard({ description }: { description: string }): React.JSX.Element
             borderTop: '1px solid var(--bd)',
             display: 'flex',
             gap: 10,
-            alignItems: 'baseline'
+            alignItems: 'center'
           }}
         >
-          <Mono size={9.5}>PROJECT NAME</Mono>
-          <span
-            data-testid="ob-project-name"
-            style={{ fontSize: 14, fontWeight: 500, color: hasText ? 'var(--tx)' : 'var(--mut)' }}
-          >
-            {deriveProjectName(description)}
-          </span>
+          <ProjectNameField
+            description={description}
+            projectName={projectName}
+            onProjectName={onProjectName}
+            muted={!hasText && projectName === null}
+          />
         </div>
       </div>
     </Card>
+  )
+}
+
+const PROJECT_NAME_MAX = 80
+
+/** The project's name: follows the description until typed in; blank falls back to it. */
+function ProjectNameField({
+  description,
+  projectName,
+  onProjectName,
+  muted
+}: WorldsCardProps & { muted: boolean }): React.JSX.Element {
+  const derived = deriveProjectName(description)
+  const edited = projectName !== null && projectNameFor(description, projectName) !== derived
+  return (
+    <>
+      <label htmlFor="ob-project-name" style={{ flex: 'none' }}>
+        <Mono size={9.5}>PROJECT NAME</Mono>
+      </label>
+      <input
+        id="ob-project-name"
+        data-testid="ob-project-name"
+        aria-label="Project name"
+        className="ob-name-input"
+        value={projectName ?? derived}
+        placeholder={derived}
+        maxLength={PROJECT_NAME_MAX}
+        spellCheck={false}
+        onChange={(e) => onProjectName(e.target.value)}
+        style={{ color: muted ? 'var(--mut)' : 'var(--tx)' }}
+      />
+      {edited && (
+        <button type="button" className="ob-name-reset" onClick={() => onProjectName(null)}>
+          Use description
+        </button>
+      )}
+    </>
   )
 }
