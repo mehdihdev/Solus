@@ -601,6 +601,17 @@ function registerWindowStateBroadcastsTests(): void {
     expect(h.others[0].sent).toHaveLength(1)
   })
 
+  it('pushSummoned tells the app windows a summon happened, never the SOL window (SOLUSDEV-323)', () => {
+    const h = harness()
+    const m = createSolWindowManager(h.deps)
+    m.open()
+    m.pushSummoned(42)
+    expect(h.others[0].sent).toEqual([
+      { channel: SOL_WINDOW_CHANNELS.summoned, payload: { at: 42 } }
+    ])
+    expect(h.windows[0].sent).toEqual([])
+  })
+
   it('broadcast sends any app push (the DriveStatus) to the same targets as the state', () => {
     const h = harness()
     const m = createSolWindowManager(h.deps)

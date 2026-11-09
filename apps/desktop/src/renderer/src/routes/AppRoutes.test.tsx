@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AppRoutes } from './AppRoutes'
 import { useAuthStore } from '../store/authStore'
+import { endOnboardingReplay, startOnboardingReplay } from '../features/onboarding/onboardingReplay'
 
 // SOLUSDEV-252 S3: the SOL window guards its own auth; the routes test only
 // proves the route mounts it (and that the retired #/orb is gone).
@@ -28,18 +29,17 @@ describe('AppRoutes guards', () => {
     })
   })
 
-  it('shows the landing page to unauthenticated users at /', () => {
+  it('shows the compact starter to unauthenticated users at /', () => {
     renderAt('/')
-    expect(screen.getByText('Your robot is one system.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /Your robot is one system/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument()
   })
 
   it('redirects authenticated-but-not-onboarded users to onboarding', async () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: false })
     renderAt('/')
     // Onboarding hydrates its server-side step first (FND-08), then renders.
-    expect(
-      await screen.findByRole('heading', { name: 'What are you building?' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
   })
 
   it('shows the workspace shell (landing on Home) to onboarded users', () => {
@@ -65,9 +65,22 @@ describe('AppRoutes guards', () => {
   it('lets a not-yet-onboarded user reach /onboarding', async () => {
     useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.dev' }, onboarded: false })
     renderAt('/onboarding')
-    expect(
-      await screen.findByRole('heading', { name: 'What are you building?' })
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
+  })
+
+  it('dev replay sends an already-onboarded user back through onboarding', async () => {
+    startOnboardingReplay()
+    try {
+      useAuthStore.setState({
+        status: 'authenticated',
+        user: { email: 'a@b.dev' },
+        onboarded: true
+      })
+      renderAt('/')
+      expect(await screen.findByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
+    } finally {
+      endOnboardingReplay()
+    }
   })
 
   it('redirects signed-in users away from /login', () => {

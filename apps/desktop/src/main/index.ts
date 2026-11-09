@@ -22,6 +22,14 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import dockIcon from '../../build/icon.png?asset'
+import { TRAFFIC_LIGHTS, WINDOW_CHROME_CHANNEL, applyWindowChrome } from './windowChrome'
+import {
+  FULL_MIN,
+  WINDOW_SIZE_CHANNEL,
+  WindowSizer,
+  createRevealGate,
+  createWindowSizeHandler
+} from './windowSize'
 import {
   awaitGithubCallback,
   awaitOAuthCallback,
@@ -145,6 +153,11 @@ async function openAppStoreUrl(url: string): Promise<{ ok: boolean }> {
 // The app's own renderer window — the only legitimate sender for privileged
 // IPC (billing), and the parent for the checkout window.
 let mainWindow: BrowserWindow | null = null
+// SOLUSDEV-323: compact signed-out window ↔ full workspace, and the reveal gate.
+let mainWindowSizer: WindowSizer | null = null
+let mainWindowReveal: { ready: () => void; sized: () => void } | null = null
+/** How long a fresh window waits for the page's first size before showing anyway. */
+const FIRST_SIZE_WAIT_MS = 700
 // Extension windows (SOLUSDEV-235): closed on sign-out and with the main window.
 let extensionWindows: ExtensionWindowManager | null = null
 let hardwareSources: HardwareSources | null = null
@@ -532,14 +545,16 @@ function createWindow(): void {
   // Create the browser window.
   mainWindow = new BrowserWindow({
     ...initialWindowSize(),
-    minWidth: 900,
-    minHeight: 600,
+    minWidth: FULL_MIN.width,
+    minHeight: FULL_MIN.height,
     show: false,
+    // SOLUSDEV-323: the theme's dark ground behind the page while the window grows.
+    backgroundColor: '#0A0C0F',
     autoHideMenuBar: true,
     // SOLUSDEV-235: the renderer owns the title row (project pill), so on macOS the
     // native bar collapses to the traffic lights, vertically centred in that 44px row.
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 16, y: 16 } }
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: TRAFFIC_LIGHTS.title }
       : {}),
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -549,12 +564,23 @@ function createWindow(): void {
   })
   const win = mainWindow
 
+  mainWindowSizer = new WindowSizer(win, {
+    platform: process.platform,
+    workArea: (bounds) => screen.getDisplayMatching(bounds).workArea,
+    defaultFull: initialWindowSize
+  })
+  const reveal = createRevealGate(() => {
+    if (!win.isDestroyed()) win.show()
+  }, FIRST_SIZE_WAIT_MS)
+  mainWindowReveal = reveal
   win.on('ready-to-show', () => {
-    win.show()
+    reveal.ready()
   })
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null
+      mainWindowSizer = null
+      mainWindowReveal = null
       hardwareSources?.setToken(null)
       hardwareSources?.setProject(null)
       machineReporter?.setToken(null)
@@ -566,6 +592,14 @@ function createWindow(): void {
 
   // Renderer anchors reach the OS browser only over https (SOLUSDEV-235 / H2).
   win.webContents.setWindowOpenHandler(externalOpenHandler((url) => shell.openExternal(url)))
+  // Security review (SOLUSDEV-323): the main window never leaves the Solus
+  // renderer — its preload and privileged IPC must not reach another origin.
+  // Anchored: `http://localhost:5173.evil.test` must not pass as the dev server.
+  const keepInRenderer = (event: Electron.Event, url: string): void => {
+    if (!isAppRendererUrl(url, rendererBase())) event.preventDefault()
+  }
+  win.webContents.on('will-navigate', keepInRenderer)
+  win.webContents.on('will-redirect', keepInRenderer)
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
@@ -745,7 +779,10 @@ function restartSolHotkeys(
           }
         : {}),
       isQuiet: () => drive?.isQuiet() ?? false,
-      onSummon: () => windows.toggle(),
+      onSummon: () => {
+        windows.toggle()
+        windows.pushSummoned(Date.now())
+      },
       onToggleMode: () => void settings.toggleMode(),
       onRegion: (region) => void onRegion(region),
       onStatus,
@@ -794,6 +831,20 @@ function registerProjectFolderHandlers(): void {
 /** Settings › About (SOLUSDEV-318): the app version. No arguments, no secrets. */
 function registerAppInfoHandlers(): void {
   ipcMain.handle('app:version', (event) => (isMainRendererSender(event) ? app.getVersion() : null))
+  // SOLUSDEV-323: each screen centres the macOS lights in its own header.
+  ipcMain.on(WINDOW_CHROME_CHANNEL, (event, kind: unknown) => {
+    if (!isMainRendererSender(event)) return
+    applyWindowChrome(BrowserWindow.fromWebContents(event.sender), kind, process.platform)
+  })
+  // SOLUSDEV-323: the screen names its size; main animates the main window to it.
+  ipcMain.handle(
+    WINDOW_SIZE_CHANNEL,
+    createWindowSizeHandler({
+      isMainSender: isMainRendererSender,
+      sizer: () => mainWindowSizer,
+      onSized: () => mainWindowReveal?.sized()
+    })
+  )
 }
 
 function registerBillingHandlers(): void {

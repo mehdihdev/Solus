@@ -40,7 +40,10 @@ export const SOL_WINDOW_CHANNELS = {
   region: 'sol:region',
   /** SOLUSDEV-319 slice 4 (sol-drive.md §2.2) main → the SOL window only: the
    *  front-app summon snapshot (`SolFrontApp | null`), on every change. */
-  frontApp: 'sol:front-app'
+  frontApp: 'sol:front-app',
+  /** SOLUSDEV-323: main → the app windows only: a hotkey summon happened
+   *  (`{ at }`, epoch ms) — onboarding's "try it now" practice listens. */
+  summoned: 'sol:summoned'
 } as const
 
 /** SOLUSDEV-319: a re-summon within this long of a hide resumes the same

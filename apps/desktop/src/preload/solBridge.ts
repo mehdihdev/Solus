@@ -51,6 +51,8 @@ export interface SolBridge {
   /** SOLUSDEV-319 slice 4 (sol-drive.md §2.2): the front-app summon snapshot —
    *  SOL window only; null when none (drive off, cleared, nothing in front). */
   onFrontApp?(handler: (front: SolFrontApp | null) => void): () => void
+  /** SOLUSDEV-323: a hotkey summon happened (epoch ms). */
+  onSummoned(handler: (at: number) => void): () => void
 }
 
 const isFrontAppPush = (raw: unknown): raw is SolFrontApp | null =>
@@ -94,6 +96,9 @@ export function isDriveStatus(raw: unknown): raw is DriveStatus {
     (raw.agent === null || (DRIVE_AGENT_STATES as readonly unknown[]).includes(raw.agent))
   )
 }
+
+const isSummoned = (raw: unknown): raw is { at: number } =>
+  isRecord(raw) && typeof raw.at === 'number' && Number.isFinite(raw.at)
 
 export function isSolRegion(raw: unknown): raw is SolRegionPayload {
   if (!isRecord(raw)) return false
@@ -167,7 +172,8 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     onState: (handler) => subscribe(c.state, isSolState, handler),
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler),
     onPill: (handler) => subscribe(c.pill, isSolPillEvent, handler),
-    onFrontApp: (handler) => subscribe(c.frontApp, isFrontAppPush, handler)
+    onFrontApp: (handler) => subscribe(c.frontApp, isFrontAppPush, handler),
+    onSummoned: (handler) => subscribe(c.summoned, isSummoned, (m) => handler(m.at))
   }
 }
 

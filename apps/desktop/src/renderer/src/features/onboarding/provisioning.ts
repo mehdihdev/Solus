@@ -7,6 +7,7 @@ import {
   getMe,
   getProject,
   createProject,
+  updateProject,
   updateSolMode,
   personalTeam
 } from '../../lib/api/resources'
@@ -24,6 +25,29 @@ export function deriveProjectName(description: string): string {
   return sentence.length > MAX_NAME_LENGTH
     ? `${sentence.slice(0, MAX_NAME_LENGTH).trim()}…`
     : sentence
+}
+
+/**
+ * The name the project gets: the one the user typed (trimmed, capped), else
+ * the one derived from the description. `typed` null = never edited. Pure.
+ */
+export function projectNameFor(description: string, typed: string | null): string {
+  const name = typed?.trim() ?? ''
+  return name ? name.slice(0, MAX_NAME_LENGTH).trim() : deriveProjectName(description)
+}
+
+/** Rename a project made earlier in the flow; best-effort, keeps the old name on failure. */
+async function renamed(
+  project: { id: string; name: string },
+  name: string | undefined
+): Promise<{ id: string; name: string }> {
+  if (!name || name === project.name) return project
+  try {
+    const updated = await updateProject(project.id, { name })
+    return { id: project.id, name: updated.name }
+  } catch {
+    return project
+  }
 }
 
 /**
@@ -56,6 +80,8 @@ export interface ProvisionResult {
 
 export interface ProvisionInput {
   description: string
+  /** The project name the user settled on (see projectNameFor); absent = derive it. */
+  name?: string
   solMode: SolMode
   /**
    * The workspace already resolved earlier in the flow (e.g. on entering the
@@ -78,18 +104,20 @@ export interface ProvisionInput {
  */
 export async function ensureWorkspace({
   description,
+  name: chosenName,
   solMode,
   existing
 }: ProvisionInput): Promise<ProvisionResult> {
   if (existing?.project && (await stillExists(existing.project.id))) {
-    return { linked: true, teamId: existing.teamId ?? undefined, project: existing.project }
+    const project = await renamed(existing.project, chosenName)
+    return { linked: true, teamId: existing.teamId ?? undefined, project }
   }
   try {
     const me = await getMe()
     const team = personalTeam(me)
     if (!team) return { linked: false, error: 'No team available for this account' }
 
-    const name = deriveProjectName(description)
+    const name = chosenName || deriveProjectName(description)
     const project = await createProject(team.team_id, {
       name,
       description: description || undefined

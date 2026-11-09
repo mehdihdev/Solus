@@ -65,6 +65,10 @@ interface SolusWindow {
     folder?: FolderBridge
     /** `process.platform` of the host, so the renderer can inset for native window controls. */
     platform?: string
+    /** SOLUSDEV-323: centre the macOS lights in the current screen's header. */
+    setWindowChrome?: (kind: 'title' | 'onboarding') => void
+    /** SOLUSDEV-323: compact starter ↔ full window; resolves once the resize settles. */
+    setWindowSize?: (request: DesktopWindowSizeRequest) => Promise<boolean>
     extensions?: ExtensionsBridge
     hosted?: HostedBridge
     sol?: SolBridge
@@ -109,6 +113,25 @@ export function getDesktopExtensionsBridge(): ExtensionsBridge | null {
 /** Host platform under Electron ('darwin', 'win32', 'linux'); null in a plain browser. */
 export function getDesktopPlatform(): string | null {
   return (window as SolusWindow).solus?.platform ?? null
+}
+
+/** SOLUSDEV-323: the main window's size per screen (main owns the bounds). */
+export type DesktopWindowSize = 'starter' | 'auth' | 'full'
+
+export interface DesktopWindowSizeRequest {
+  size: DesktopWindowSize
+  animate?: boolean
+  background?: string
+}
+
+/** Ask main to resize the main window; resolves once it settles (at once outside Electron). */
+export async function setDesktopWindowSize(request: DesktopWindowSizeRequest): Promise<void> {
+  await (window as SolusWindow).solus?.setWindowSize?.(request)
+}
+
+/** Ask main to centre the macOS lights in this screen's header; no-op outside Electron. */
+export function setDesktopWindowChrome(kind: 'title' | 'onboarding'): void {
+  ;(window as SolusWindow).solus?.setWindowChrome?.(kind)
 }
 
 export function getDesktopHostedBridge(): HostedBridge | null {

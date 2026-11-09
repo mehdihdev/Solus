@@ -4,6 +4,8 @@ import { createOrbOverlayBridge } from './orbOverlayBridge'
 import { createSolBridge } from './solBridge'
 import { createDiagnosticsBridge } from './diagnosticsBridge'
 import { EXT_CHANNELS } from '../main/extensions/extensions.constants'
+import { WINDOW_CHROME_CHANNEL, type WindowChrome } from '../main/windowChrome'
+import { WINDOW_SIZE_CHANNEL, type WindowSizeRequest } from '../main/windowSize'
 import type {
   ExtDevLoadResult,
   ExtInstallRequest,
@@ -187,6 +189,11 @@ const solus = {
   ...api,
   // SOLUSDEV-235: the renderer draws the title row; on macOS it must inset for the traffic lights.
   platform: process.platform,
+  // SOLUSDEV-323: centre the macOS lights in this screen's header (main validates).
+  setWindowChrome: (kind: WindowChrome): void => ipcRenderer.send(WINDOW_CHROME_CHANNEL, kind),
+  // SOLUSDEV-323: compact starter ↔ full window; resolves once the resize settles.
+  setWindowSize: (request: WindowSizeRequest): Promise<boolean> =>
+    ipcRenderer.invoke(WINDOW_SIZE_CHANNEL, request),
   orbOverlay: createOrbOverlayBridge(ipcRenderer),
   sol: createSolBridge(ipcRenderer),
   // SOLUSDEV-311: error reporting to main (validated, scrubbed and logged there).

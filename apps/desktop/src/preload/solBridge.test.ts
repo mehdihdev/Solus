@@ -130,6 +130,34 @@ describe('pushes', () => {
   })
 })
 
+describe('summoned push (SOLUSDEV-323)', () => {
+  it('delivers a well-formed summon and unsubscribes', () => {
+    const f = fakeIpc()
+    const b = createSolBridge(f.ipc)
+    const seen: number[] = []
+    const off = b.onSummoned((at) => seen.push(at))
+    f.emit(SOL_WINDOW_CHANNELS.summoned, { at: 7 })
+    expect(seen).toEqual([7])
+    off()
+    expect(f.count(SOL_WINDOW_CHANNELS.summoned)).toBe(0)
+  })
+
+  it('drops a malformed summon', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const f = fakeIpc()
+      const b = createSolBridge(f.ipc)
+      const handler = vi.fn()
+      b.onSummoned(handler)
+      f.emit(SOL_WINDOW_CHANNELS.summoned, { at: 'now' })
+      f.emit(SOL_WINDOW_CHANNELS.summoned, null)
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
 describe('pill motion cues (SOLUSDEV-319)', () => {
   it('delivers summoned / leaving, drops anything else, and unsubscribes', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})

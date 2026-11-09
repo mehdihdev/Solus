@@ -1,0 +1,148 @@
+/* SOLUSDEV-323: the compact signed-out window. Layout is fluid so it stays
+   centred while main animates the window; every animation is transform /
+   opacity / filter only, and reduced motion makes all of it instant. */
+
+.auth-shell {
+  background: radial-gradient(
+      420px 320px at 50% 16%,
+      color-mix(in srgb, var(--acc) 8%, transparent),
+      transparent 70%
+    ),
+    var(--bg);
+}
+
+.auth-shell-header {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 16px;
+}
+
+.auth-shell-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 40px 20px;
+  /* No scrollbar flicker while the window grows around a taller screen. */
+  scrollbar-width: none;
+}
+.auth-shell-main::-webkit-scrollbar {
+  display: none;
+}
+
+.auth-shell-column {
+  width: 100%;
+  max-width: 380px;
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.auth-shell-orb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The brand fades away as the orb shrinks onto a form. */
+.auth-shell-brand {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.24em;
+  color: var(--mut);
+  transition:
+    opacity 0.5s var(--ob-ease),
+    transform 0.5s var(--ob-ease);
+}
+.auth-shell-orb[data-state='small'] .auth-shell-brand,
+.auth-shell-orb[data-state='listening'] .auth-shell-brand {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.auth-shell-footer {
+  flex: none;
+  padding: 11px 16px;
+  border-top: 1px solid var(--bd);
+  text-align: center;
+}
+
+/* Signing in: the content lifts away before the window grows. */
+@keyframes auth-leave {
+  to {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+    filter: blur(4px);
+  }
+}
+.auth-leave {
+  animation: auth-leave 0.22s var(--ob-ease) forwards;
+  pointer-events: none;
+}
+.auth-shell[data-leaving='true'] .auth-shell-footer {
+  transition: opacity 0.22s ease;
+  opacity: 0;
+}
+
+/* CODE → PCB → CAD → ROBOT: a pulse runs along each wire. */
+.auth-chain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.auth-chain-world {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--mut);
+}
+.auth-chain-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 99px;
+}
+@keyframes auth-flow {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.auth-chain-wire {
+  position: relative;
+  width: 18px;
+  height: 1px;
+  background: var(--bd);
+  overflow: hidden;
+}
+.auth-chain-wire::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--acc), transparent);
+  animation: auth-flow 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-leave,
+  .auth-chain-wire::after {
+    animation: none;
+  }
+  .auth-leave {
+    opacity: 0;
+  }
+  .auth-shell-brand {
+    transition: none;
+  }
+}

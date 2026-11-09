@@ -70,7 +70,13 @@ function registerBuildResultsTests(): void {
     const result = await runBuildProgress({ api, onLines, sleep: noSleep }, 'p1')
 
     expect(result.lines).toEqual([
-      { name: 'strider-fw', detail: '214 entities · 12 relations', state: 'ok' }
+      {
+        name: 'strider-fw',
+        sourceType: 'github',
+        detail: '214 entities · 12 relations',
+        state: 'ok',
+        entities: 214
+      }
     ])
     // First batch is the pending snapshot, later batches resolve it.
     expect(batches[0][0].state).toBe('pending')
@@ -90,8 +96,10 @@ function registerBuildResultsTests(): void {
 
     expect(result.lines[0]).toEqual({
       name: 'strider-fw',
+      sourceType: 'github',
       detail: '47 entities · 16 relations',
-      state: 'ok'
+      state: 'ok',
+      entities: 47
     })
     expect(getSyncs.mock.calls.length).toBeGreaterThan(1)
   })
@@ -106,6 +114,7 @@ function registerBuildResultsTests(): void {
 
     expect(result.lines[0]).toEqual({
       name: 'strider-fw',
+      sourceType: 'github',
       detail: 'Bad netlist header',
       state: 'failed'
     })
@@ -121,6 +130,7 @@ function registerBuildReadFailuresTests(): void {
 
     expect(result.lines[0]).toEqual({
       name: 'strider-fw',
+      sourceType: 'github',
       detail: 'No sync recorded yet',
       state: 'idle'
     })

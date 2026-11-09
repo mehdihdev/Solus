@@ -1,8 +1,8 @@
 // Login screen, ported from LoginPage in TestDesign/app/auth.jsx.
-// Adds a magic-link option (ADR-009). Routes to the root on success, which
-// decides between onboarding and the workspace home.
+// Adds a magic-link option (ADR-009). On success AuthShell grows the window
+// and routes to the root, which decides between onboarding and the workspace.
 import { useState } from 'react'
-import { useNavigate, type NavigateFunction } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Field } from '../../components/ui/Field'
 import { Icons } from '../../components/ui/icons.constants'
@@ -11,7 +11,7 @@ import { GithubButton } from './GithubButton'
 import { validateEmail, validatePassword } from './validation'
 import { useAuthStore } from '../../store/authStore'
 
-function useLoginForm(navigate: NavigateFunction): {
+function useLoginForm(): {
   email: string
   setEmail: (value: string) => void
   password: string
@@ -43,11 +43,8 @@ function useLoginForm(navigate: NavigateFunction): {
     setBusy(true)
     const result = await signIn(email, password)
     setBusy(false)
-    if (result.error) {
-      setError(result.error)
-      return
-    }
-    navigate('/')
+    // On success AuthShell grows the window and carries the user on.
+    if (result.error) setError(result.error)
   }
 
   const magicLink = async (): Promise<void> => {
@@ -65,11 +62,7 @@ function useLoginForm(navigate: NavigateFunction): {
     setMagicSent(true)
   }
 
-  const authorizeGitHub = async (): Promise<{ error?: string }> => {
-    const result = await signInWithGitHub()
-    if (!result.error) navigate('/')
-    return result
-  }
+  const authorizeGitHub = (): Promise<{ error?: string }> => signInWithGitHub()
 
   return {
     email,
@@ -87,12 +80,13 @@ function useLoginForm(navigate: NavigateFunction): {
 
 export function LoginPage(): React.JSX.Element {
   const navigate = useNavigate()
-  const form = useLoginForm(navigate)
+  const form = useLoginForm()
   return (
     <AuthCard
+      caption="SOL · WELCOME BACK"
       title="Welcome back"
-      sub="Sign in to your Solus workspace"
-      onWordmarkClick={() => navigate('/')}
+      sub="I’ll reopen your workspace right where you left it."
+      onBack={() => navigate('/welcome')}
       footer={
         <AuthFooterLink
           prompt="New to Solus?"

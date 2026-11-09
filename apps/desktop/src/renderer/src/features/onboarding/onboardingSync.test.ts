@@ -4,17 +4,17 @@ import {
   stepIndexToName,
   stepNameToIndex,
   hydrateOnboarding,
-  persistOnboardingStep
+  persistOnboardingStep,
+  persistSolMode
 } from './onboardingSync'
 
 describe('step mapping', () => {
-  it('maps indices to server names and back', () => {
-    expect(stepIndexToName(0)).toBe('about')
-    expect(stepIndexToName(1)).toBe('connect')
-    expect(stepIndexToName(2)).toBe('build')
-    expect(stepNameToIndex('about')).toBe(0)
-    expect(stepNameToIndex('connect')).toBe(1)
-    expect(stepNameToIndex('build')).toBe(2)
+  it('maps the six flow indices to server names and back (SOLUSDEV-323)', () => {
+    const names = ['meet', 'about', 'voice', 'access', 'connect', 'build'] as const
+    names.forEach((name, i) => {
+      expect(stepIndexToName(i as 0 | 1 | 2 | 3 | 4 | 5)).toBe(name)
+      expect(stepNameToIndex(name)).toBe(i)
+    })
   })
 
   it('treats done as no resumable step', () => {
@@ -38,12 +38,30 @@ describe('hydrateOnboarding', () => {
       data_collection_consent: false,
       onboarding_step: 'connect'
     })
-    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 1 })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 4 })
   })
 
   it('degrades to offline when the API is unreachable (dev bypass)', async () => {
     const fetchSettings = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'))
     expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'offline' })
+  })
+
+  it('resumes a saved "about" at Meet — it is also the fresh-user column default', async () => {
+    const fetchSettings = vi.fn().mockResolvedValue({
+      sol_mode: 'guide',
+      data_collection_consent: false,
+      onboarding_step: 'about'
+    })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 0 })
+  })
+
+  it('resumes the new walkthrough steps exactly', async () => {
+    const fetchSettings = vi.fn().mockResolvedValue({
+      sol_mode: 'guide',
+      data_collection_consent: false,
+      onboarding_step: 'access'
+    })
+    expect(await hydrateOnboarding(fetchSettings)).toEqual({ status: 'resume', step: 3 })
   })
 
   it('treats an unknown server step as a fresh start', async () => {
@@ -66,5 +84,44 @@ describe('persistOnboardingStep', () => {
   it('never throws when the API is down (best-effort)', async () => {
     const update = vi.fn().mockRejectedValue(new Error('down'))
     await expect(persistOnboardingStep('done', update)).resolves.toBeUndefined()
+  })
+})
+
+describe('persistence ordering (SOLUSDEV-323 review)', () => {
+  it('writes steps in call order even when an earlier write is slower', async () => {
+    const landed: string[] = []
+    let releaseFirst: () => void = () => undefined
+    const update = vi.fn((step: string) =>
+      step === 'voice'
+        ? new Promise<void>((resolve) => {
+            releaseFirst = () => {
+              landed.push(step)
+              resolve()
+            }
+          })
+        : Promise.resolve().then(() => void landed.push(step))
+    )
+    const first = persistOnboardingStep('voice', update)
+    const second = persistOnboardingStep('done', update)
+    await Promise.resolve()
+    expect(update).toHaveBeenCalledTimes(1)
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(landed).toEqual(['voice', 'done'])
+  })
+
+  it('a failed write does not block the next one', async () => {
+    const update = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined)
+    await persistOnboardingStep('voice', update)
+    await persistOnboardingStep('access', update)
+    expect(update).toHaveBeenLastCalledWith('access')
+  })
+})
+
+describe('persistSolMode (SOLUSDEV-323 review)', () => {
+  it('sends the mode and swallows an offline failure', async () => {
+    const update = vi.fn().mockRejectedValue(new Error('offline'))
+    await expect(persistSolMode('Expert', update)).resolves.toBeUndefined()
+    expect(update).toHaveBeenCalledWith('Expert')
   })
 })

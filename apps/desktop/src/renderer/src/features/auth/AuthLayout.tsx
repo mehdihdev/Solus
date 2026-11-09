@@ -1,96 +1,68 @@
-// Auth doorway chrome, ported from AuthChrome + AuthCard in TestDesign/app/auth.jsx.
+// Auth form card (SOLUSDEV-323): the content of a compact signed-out screen.
+// AuthShell owns the window chrome and SOL's orb; this is the caption, the
+// title, the form and its footer, with Back to the starter.
 import type { CSSProperties, ReactNode } from 'react'
-import { Card } from '../../components/ui/Card'
-import { Wordmark } from '../../components/ui/Wordmark'
 import { Button } from '../../components/ui/Button'
+import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
 
-const APP_VERSION = 'v0.9'
-
-export function AuthChrome({ children }: { children: ReactNode }): React.JSX.Element {
-  return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: 'var(--bg)',
-        color: 'var(--tx)',
-        fontFamily: 'var(--font-ui)',
-        display: 'flex',
-        flexDirection: 'column'
-      }}
-    >
-      <div
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 9.5,
-          letterSpacing: '0.14em',
-          color: 'var(--mut)',
-          borderBottom: '1px solid var(--bd)',
-          padding: '7px 28px',
-          display: 'flex',
-          justifyContent: 'space-between'
-        }}
-      >
-        <span>SOLUS // CROSS-DOMAIN INTEGRITY FOR ROBOTICS TEAMS</span>
-        <span>{APP_VERSION}</span>
-      </div>
-      {children}
-    </div>
-  )
-}
-
 interface AuthCardProps {
+  /** SOL's mono caption above the title, e.g. `SOL · WELCOME BACK`. */
+  caption?: string
   title: string
   sub: string
   children: ReactNode
   footer: ReactNode
-  onWordmarkClick?: () => void
+  onBack?: () => void
 }
 
 export function AuthCard({
+  caption = 'SOL',
   title,
   sub,
   children,
   footer,
-  onWordmarkClick
+  onBack
 }: AuthCardProps): React.JSX.Element {
   return (
-    <AuthChrome>
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 24
-        }}
-      >
-        <div style={{ width: 380 }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-            <Wordmark onClick={onWordmarkClick} />
-          </div>
-          <Card pad={28}>
-            <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</div>
-            <div
-              style={{
-                fontSize: 12.5,
-                color: 'var(--mut)',
-                marginTop: 4,
-                marginBottom: 22,
-                lineHeight: 1.5
-              }}
-            >
-              {sub}
-            </div>
-            {children}
-          </Card>
-          <div style={{ textAlign: 'center', marginTop: 16, fontSize: 12.5, color: 'var(--mut)' }}>
-            {footer}
-          </div>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {onBack && (
+        <button
+          type="button"
+          aria-label="Back"
+          onClick={onBack}
+          className="interactive"
+          style={{
+            alignSelf: 'flex-start',
+            marginBottom: 14,
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            fontSize: 12.5,
+            color: 'var(--mut)',
+            cursor: 'pointer'
+          }}
+        >
+          ← Back
+        </button>
+      )}
+      <div style={{ textAlign: 'center', marginBottom: 22 }}>
+        <Mono size={9.5} color="var(--acc)">
+          {caption}
+        </Mono>
+        <h1 style={{ margin: '8px 0 0', fontSize: 22, fontWeight: 600, letterSpacing: '-0.02em' }}>
+          {title}
+        </h1>
+        <div style={{ fontSize: 13, color: 'var(--mut)', marginTop: 6, lineHeight: 1.55 }}>
+          {sub}
         </div>
       </div>
-    </AuthChrome>
+      {children}
+      <div style={{ textAlign: 'center', marginTop: 18, fontSize: 12.5, color: 'var(--mut)' }}>
+        {footer}
+      </div>
+    </div>
   )
 }
 

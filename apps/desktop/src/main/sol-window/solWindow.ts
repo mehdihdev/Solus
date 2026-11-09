@@ -155,6 +155,8 @@ export interface SolWindowManager {
   /** Send one app push (e.g. SOL_WINDOW_CHANNELS.driveStatus) to the same
    *  targets as the state: the app's own renderers and the SOL window. */
   broadcast(channel: string, payload: unknown): void
+  /** SOLUSDEV-323: a hotkey summon happened — to the app windows only. */
+  pushSummoned(at: number): void
   /** False when no SOL window is open. Queued until the renderer is mounted. */
   pushRegion(payload: SolRegionPayload): boolean
   /** The SOL renderer's first state request proves it is mounted: flush a
@@ -318,6 +320,12 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       broadcast(SOL_WINDOW_CHANNELS.state, state)
     },
     broadcast,
+    pushSummoned(at) {
+      for (const w of deps.allWindows()) {
+        if (w === current || w.isDestroyed()) continue
+        w.webContents.send(SOL_WINDOW_CHANNELS.summoned, { at })
+      }
+    },
     pushRegion(payload) {
       if (!alive() || current === null) return false
       if (ready) current.webContents.send(SOL_WINDOW_CHANNELS.region, payload)

@@ -398,7 +398,15 @@ export function updateSolMode(mode: SolMode, client: ApiClient = api): Promise<u
   })
 }
 
-export type OnboardingStepName = 'about' | 'connect' | 'build' | 'done'
+/** Flow order (SOLUSDEV-323): meet → about → voice → access → connect → build → done. */
+export type OnboardingStepName =
+  | 'meet'
+  | 'about'
+  | 'voice'
+  | 'access'
+  | 'connect'
+  | 'build'
+  | 'done'
 
 export interface UserSettings {
   sol_mode: ApiSolMode

@@ -39,12 +39,15 @@ export interface FakeSolBridge extends SolBridge {
   pushRegion: (r: SolRegionPayload) => void
   /** SOLUSDEV-319: drive main's pill motion cues (summoned / leaving). */
   pushPill: (e: SolPillEvent) => void
+  /** SOLUSDEV-323: simulate main's hotkey-summon push. */
+  pushSummoned: (at: number) => void
 }
 
 export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge {
   let stateHandler: ((s: SolState) => void) | null = null
   let regionHandler: ((r: SolRegionPayload) => void) | null = null
   let pillHandler: ((e: SolPillEvent) => void) | null = null
+  let summonHandler: ((at: number) => void) | null = null
   return {
     getState: vi.fn(async () => state),
     setMode: vi.fn(async () => state),
@@ -79,6 +82,13 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
         pillHandler = null
       }
     }),
+    onSummoned: vi.fn((handler: (at: number) => void) => {
+      summonHandler = handler
+      return () => {
+        summonHandler = null
+      }
+    }),
+    pushSummoned: (at) => summonHandler?.(at),
     pushState: (s) => stateHandler?.(s),
     pushPill: (e) => pillHandler?.(e),
     pushRegion: (r) => regionHandler?.(r)

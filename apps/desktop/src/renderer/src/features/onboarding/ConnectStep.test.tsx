@@ -63,6 +63,8 @@ describe('ConnectStep — workspace bootstrap', () => {
     })
     expect(mockedEnsure).toHaveBeenCalledWith({
       description: '',
+      // The Project step's name (derived here: nothing typed) — SOLUSDEV-323.
+      name: 'My first robot',
       solMode: 'Guide',
       existing: { teamId: 't1', project: { id: 'p1', name: 'X' } }
     })
@@ -129,7 +131,7 @@ describe('ConnectStep — KiCad export routing (SOLUSDEV-100)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     expect(await screen.findByText('Altium')).toBeInTheDocument()
-    expect(screen.getByText(/OF 3 CONNECTED/)).toBeInTheDocument()
+    expect(screen.getByText(/0 CONNECTED/)).toBeInTheDocument()
   })
 })
 
@@ -192,7 +194,7 @@ describe('ConnectStep — skip path (FND-08)', () => {
     await act(async () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
-    expect(screen.getByRole('button', { name: /Build workspace/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Build my graph/ })).toBeDisabled()
   })
 
   it('hides Skip once the recommended sources are connected', async () => {
@@ -202,7 +204,7 @@ describe('ConnectStep — skip path (FND-08)', () => {
       render(<ConnectStep onBuild={vi.fn()} />)
     })
     expect(screen.queryByRole('button', { name: 'Skip for now' })).toBeNull()
-    expect(screen.getByRole('button', { name: /Build workspace/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /Build my graph/ })).toBeEnabled()
   })
 })
 
@@ -331,3 +333,79 @@ function registerConnectorReadinessTests(): void {
     expect(screen.getByRole('button', { name: 'Connect GitHub' })).toBeInTheDocument()
   })
 }
+
+describe('ConnectStep — the ring (SOLUSDEV-323)', () => {
+  beforeEach(reset)
+
+  it('marks the tool whose world the description mentions as SUGGESTED', async () => {
+    useOnboardingStore.getState().setDescription('STM32 firmware for a quadruped')
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    const github = screen.getByText('GitHub').closest('[data-tile]')
+    const kicad = screen.getByText('KiCad').closest('[data-tile]')
+    expect(github).toHaveTextContent('SUGGESTED')
+    expect(kicad).not.toHaveTextContent('SUGGESTED')
+    expect(screen.getByText(/start with GitHub/)).toBeInTheDocument()
+  })
+
+  it('draws a wire from SOL to each connected tool only', async () => {
+    useOnboardingStore.getState().setConnection('github', { phase: 'done' })
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    expect(screen.getAllByTestId('ob-wire')).toHaveLength(1)
+    expect(screen.getByText('GitHub').closest('[data-tile]')).toHaveAttribute(
+      'data-connected',
+      'true'
+    )
+    expect(screen.getByText('1 CONNECTED · 2+ RECOMMENDED')).toBeInTheDocument()
+  })
+
+  it('reads READY at two connected', async () => {
+    useOnboardingStore.getState().setConnection('github', { phase: 'done' })
+    useOnboardingStore.getState().setConnection('kicad', { phase: 'done' })
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} />)
+    })
+    expect(screen.getByText('2 CONNECTED — READY')).toBeInTheDocument()
+  })
+
+  it('offers Back when given one', async () => {
+    const onBack = vi.fn()
+    await act(async () => {
+      render(<ConnectStep onBuild={vi.fn()} onBack={onBack} />)
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(onBack).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ConnectStep — narrow stage (SOLUSDEV-323 review #1)', () => {
+  beforeEach(reset)
+
+  it('falls back to the grid when the ring cannot fit, keeping every tool reachable', async () => {
+    class NarrowObserver {
+      constructor(private readonly cb: ResizeObserverCallback) {}
+      observe(): void {
+        this.cb(
+          [{ contentRect: { width: 380 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', NarrowObserver)
+    try {
+      await act(async () => {
+        render(<ConnectStep onBuild={vi.fn()} />)
+      })
+      expect(document.querySelector('[data-tile]')).toBeNull()
+      expect(screen.getByText('GitHub')).toBeInTheDocument()
+      expect(screen.getByText('KiCad')).toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

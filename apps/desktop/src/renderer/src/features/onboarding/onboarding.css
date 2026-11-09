@@ -1,0 +1,541 @@
+/* SOLUSDEV-323: onboarding motion (docs/wireflows/onboarding.md §Motion).
+   Transform/opacity/filter keyframes only — the Ember Pill perf rule.
+   Colours are tokens; under reduced motion everything is instant. */
+
+.ob-root {
+  --ob-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ob-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ob-glow: color-mix(in srgb, var(--acc) 55%, transparent);
+}
+
+/* --- Enter ---------------------------------------------------------------- */
+@keyframes ob-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+@keyframes ob-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ob-rise {
+  animation: ob-rise 0.7s var(--ob-ease) both;
+}
+.ob-d1 {
+  animation-delay: 0.08s;
+}
+.ob-d2 {
+  animation-delay: 0.16s;
+}
+.ob-d3 {
+  animation-delay: 0.26s;
+}
+.ob-d4 {
+  animation-delay: 0.36s;
+}
+.ob-d5 {
+  animation-delay: 0.48s;
+}
+.ob-fade {
+  animation: ob-fade 0.6s ease both;
+}
+
+/* --- The orb -------------------------------------------------------------- */
+@keyframes ob-ignite {
+  0% {
+    transform: scale(0.15);
+    opacity: 0;
+    filter: blur(8px);
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes ob-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+@keyframes ob-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes ob-ping {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+.ob-orb {
+  position: relative;
+  flex: none;
+  width: 132px;
+  height: 132px;
+  transition:
+    width 0.9s var(--ob-ease),
+    height 0.9s var(--ob-ease);
+  animation: ob-ignite 1.1s var(--ob-ease) both;
+}
+.ob-orb[data-state='big'] {
+  width: 176px;
+  height: 176px;
+}
+.ob-orb[data-state='small'],
+.ob-orb[data-state='working'] {
+  width: 104px;
+  height: 104px;
+}
+.ob-orb[data-size='hub'] {
+  width: 72px;
+  height: 72px;
+}
+/* SOLUSDEV-323: the compact signed-out window's orb (after the state rules so
+   it wins): big on the starter, small over a form, between while leaving. */
+.ob-orb[data-size='compact'] {
+  width: 120px;
+  height: 120px;
+}
+.ob-orb[data-size='compact'][data-state='small'] {
+  width: 64px;
+  height: 64px;
+}
+.ob-orb[data-size='compact'][data-state='listening'] {
+  width: 92px;
+  height: 92px;
+}
+.ob-orb-halo,
+.ob-orb-ring,
+.ob-orb-core {
+  position: absolute;
+  border-radius: 50%;
+}
+.ob-orb-halo {
+  inset: 0;
+  background: conic-gradient(
+    from 0deg,
+    transparent,
+    color-mix(in srgb, var(--acc) 42%, transparent),
+    transparent 38%,
+    color-mix(in srgb, var(--acc) 22%, transparent),
+    transparent 72%
+  );
+  filter: blur(12px);
+  animation: ob-spin 9s linear infinite;
+}
+.ob-orb-ring {
+  inset: 8%;
+  border: 1px solid color-mix(in srgb, var(--acc) 35%, transparent);
+  animation: ob-ping 3.4s ease-out infinite;
+}
+.ob-orb-core {
+  inset: 20%;
+  background: radial-gradient(
+    circle at 35% 30%,
+    color-mix(in srgb, var(--acc) 35%, white) 0%,
+    var(--acc) 42%,
+    color-mix(in srgb, var(--acc) 55%, black) 82%
+  );
+  box-shadow:
+    0 0 40px var(--ob-glow),
+    0 0 120px color-mix(in srgb, var(--acc) 22%, transparent);
+  animation: ob-breathe 4.4s ease-in-out infinite;
+}
+.ob-orb[data-state='listening'] .ob-orb-core {
+  animation-duration: 1.3s;
+}
+.ob-orb[data-state='listening'] .ob-orb-ring {
+  animation-duration: 1.4s;
+}
+.ob-orb[data-state='working'] .ob-orb-core {
+  animation-duration: 0.9s;
+}
+.ob-orb[data-state='working'] .ob-orb-halo {
+  animation-duration: 2.2s;
+}
+.ob-dot {
+  display: inline-block;
+  flex: none;
+  border-radius: 99px;
+  background: radial-gradient(
+    circle at 35% 30%,
+    color-mix(in srgb, var(--acc) 35%, white),
+    var(--acc) 45%,
+    color-mix(in srgb, var(--acc) 55%, black) 85%
+  );
+  box-shadow: 0 0 12px var(--ob-glow);
+}
+
+/* --- Progress rail -------------------------------------------------------- */
+.ob-seg {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--bd);
+  overflow: hidden;
+}
+.ob-seg-fill {
+  height: 100%;
+  background: var(--acc);
+  transform-origin: 0 50%;
+  transition: transform 0.7s var(--ob-ease);
+}
+
+/* --- Chips, choices, keys ------------------------------------------------- */
+@keyframes ob-pop {
+  0% {
+    transform: scale(0.9);
+  }
+  55% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.ob-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--bd);
+  color: var(--mut);
+  font-size: 12px;
+  transition:
+    color 0.45s var(--ob-ease),
+    border-color 0.45s var(--ob-ease),
+    background 0.45s var(--ob-ease);
+}
+.ob-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--bd);
+  transition: background 0.45s var(--ob-ease);
+}
+.ob-chip[data-on='true'] {
+  color: var(--tx);
+  border-color: var(--ob-c);
+  background: color-mix(in srgb, var(--ob-c) 12%, transparent);
+  animation: ob-pop 0.5s var(--ob-spring);
+}
+.ob-chip[data-on='true'] .ob-chip-dot {
+  background: var(--ob-c);
+  box-shadow: 0 0 10px var(--ob-c);
+}
+.ob-example {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 99px;
+  border: 1px solid var(--bd);
+  background: var(--sur);
+  color: var(--mut);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition:
+    color 0.25s var(--ob-ease),
+    border-color 0.25s var(--ob-ease),
+    transform 0.25s var(--ob-ease);
+}
+.ob-example:hover {
+  color: var(--tx);
+  border-color: var(--acc);
+  transform: translateY(-1px);
+}
+.ob-choice {
+  text-align: left;
+  padding: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--bd);
+  background: var(--sur);
+  color: var(--tx);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition:
+    border-color 0.35s var(--ob-ease),
+    background 0.35s var(--ob-ease),
+    box-shadow 0.35s var(--ob-ease);
+}
+.ob-choice:hover {
+  border-color: color-mix(in srgb, var(--mut) 45%, var(--bd));
+}
+.ob-choice[aria-checked='true'] {
+  border-color: var(--acc);
+  background: color-mix(in srgb, var(--acc) 7%, var(--sur));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 12%, transparent);
+}
+/* Project name: reads as the name line, becomes a field on hover and focus. */
+.ob-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  margin: -6px 0;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  outline: none;
+  cursor: text;
+  text-overflow: ellipsis;
+  transition:
+    border-color 0.25s var(--ob-ease),
+    background 0.25s var(--ob-ease),
+    box-shadow 0.25s var(--ob-ease);
+}
+.ob-name-input:hover {
+  border-color: var(--bd);
+  background: var(--sur);
+}
+.ob-name-input:focus {
+  border-color: var(--acc);
+  background: var(--sur);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 14%, transparent);
+}
+.ob-name-reset {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 99px;
+  border: 1px solid var(--bd);
+  background: transparent;
+  color: var(--mut);
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+.ob-name-reset:hover {
+  color: var(--tx);
+  border-color: var(--acc);
+}
+.ob-textarea {
+  transition:
+    border-color 0.3s,
+    box-shadow 0.3s;
+}
+.ob-textarea:focus {
+  border-color: var(--acc) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--acc) 14%, transparent);
+}
+.ob-cap[data-on='true'] {
+  border-color: color-mix(in srgb, var(--acc) 55%, var(--bd));
+}
+@keyframes ob-press {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  25%,
+  60% {
+    transform: translateY(3px);
+  }
+  45% {
+    transform: translateY(0);
+  }
+}
+.ob-key {
+  min-width: 52px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 5px;
+  background: var(--sur2);
+  border: 1px solid var(--bd);
+  box-shadow: 0 3px 0 var(--bd);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--tx);
+}
+.ob-key[data-pressed='true'] {
+  animation: ob-press 1s var(--ob-ease) both;
+}
+.ob-key[data-pressed='true'] + .ob-key[data-pressed='true'] {
+  animation-delay: 0.12s;
+}
+
+/* --- Connect ring --------------------------------------------------------- */
+@keyframes ob-grow {
+  from {
+    transform: rotate(var(--ob-a)) scaleX(0);
+  }
+  to {
+    transform: rotate(var(--ob-a)) scaleX(1);
+  }
+}
+.ob-wire {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 1.5px;
+  border-radius: 2px;
+  transform-origin: 0 50%;
+  transform: rotate(var(--ob-a));
+  background: linear-gradient(90deg, var(--ob-glow), var(--ob-c));
+  animation: ob-grow 0.8s var(--ob-ease) both;
+}
+.ob-tile {
+  transition:
+    border-color 0.4s var(--ob-ease),
+    box-shadow 0.4s var(--ob-ease),
+    transform 0.35s var(--ob-spring);
+}
+.ob-tile:hover {
+  transform: translateY(-3px);
+}
+.ob-tile[data-connected='true'] {
+  border-color: var(--ob-c);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--ob-c) 18%, transparent),
+    0 0 28px color-mix(in srgb, var(--ob-c) 18%, transparent);
+}
+
+/* --- Build graph ---------------------------------------------------------- */
+@keyframes ob-node-in {
+  0% {
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+  }
+  70% {
+    transform: translate(-50%, -50%) scale(1.25);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes ob-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.ob-node {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 99px;
+  background: var(--ob-c);
+  box-shadow: 0 0 14px var(--ob-c);
+  transform: translate(-50%, -50%);
+  animation: ob-node-in 0.6s var(--ob-spring) both;
+}
+.ob-edge {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ob-draw 0.7s var(--ob-ease) both;
+}
+@keyframes ob-sheen {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.ob-sheen {
+  background: linear-gradient(90deg, var(--mut) 0%, var(--tx) 50%, var(--mut) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ob-sheen 1.6s linear infinite;
+}
+
+/* --- Landing hint pill ---------------------------------------------------- */
+@keyframes ob-pill-up {
+  0% {
+    transform: translateX(-50%) translateY(40px) scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: translateX(-50%) translateY(-4px) scale(1.02);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-50%) translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.ob-pill {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 6px 0 7px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--sur) 92%, transparent);
+  border: 1px solid var(--bd);
+  box-shadow: 0 18px 50px color-mix(in srgb, black 50%, transparent);
+  animation: ob-pill-up 0.7s var(--ob-spring) 0.4s both;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ob-root *,
+  .ob-root *::before,
+  .ob-root *::after,
+  .ob-rise,
+  .ob-fade,
+  .ob-orb,
+  .ob-orb-halo,
+  .ob-orb-ring,
+  .ob-orb-core,
+  .ob-chip,
+  .ob-key,
+  .ob-wire,
+  .ob-tile,
+  .ob-node,
+  .ob-edge,
+  .ob-sheen,
+  .ob-pill,
+  .ob-seg-fill,
+  .ob-choice {
+    animation: none !important;
+    transition: none !important;
+  }
+  .ob-edge {
+    stroke-dashoffset: 0;
+  }
+  .ob-sheen {
+    color: var(--mut);
+    background: none;
+  }
+}

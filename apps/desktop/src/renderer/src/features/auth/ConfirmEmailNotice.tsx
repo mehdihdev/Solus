@@ -63,6 +63,7 @@ export function ConfirmEmailNotice({
 
   return (
     <AuthCard
+      caption="SOL · CHECK YOUR EMAIL"
       title="Confirm your email"
       sub={`We sent a confirmation link to ${email}. Click it and you'll be signed in here automatically.`}
       footer={

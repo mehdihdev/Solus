@@ -101,7 +101,11 @@ class SettingsUpdate(StrictModel):
     # ADR-011: data collection is consent-gated; this is the opt-in/out switch.
     data_collection_consent: bool | None = None
     # FND-08 onboarding state machine; persisted so resume works anywhere.
-    onboarding_step: Literal["about", "connect", "build", "done"] | None = None
+    # Flow order (SOLUSDEV-323, docs/wireflows/onboarding.md). "about" stays the
+    # column default, so a fresh user and one saved at the Project step read the same.
+    onboarding_step: (
+        Literal["meet", "about", "voice", "access", "connect", "build", "done"] | None
+    ) = None
 
 
 class TeamSettings(StrictModel):

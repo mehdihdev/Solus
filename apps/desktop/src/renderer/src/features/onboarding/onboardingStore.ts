@@ -5,7 +5,25 @@ import { create } from 'zustand'
 import type { IntegrationAccessModes, SelectableItem } from '../../lib/api/resources'
 import { MIN_SOURCES_TO_BUILD } from './integrations.constants'
 
-export type OnboardingStep = 0 | 1 | 2
+/** Index into the flow: Meet, Project, Voice, Access, Connect, Build (SOLUSDEV-323). */
+export type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5
+
+/** The progress-rail labels, in flow order. */
+export const ONBOARDING_STEP_LABELS = [
+  'Meet',
+  'Project',
+  'Voice',
+  'Access',
+  'Connect',
+  'Build'
+] as const
+
+export const LAST_ONBOARDING_STEP: OnboardingStep = 5
+
+/** Clamp any number into a valid step. Pure. */
+export function toOnboardingStep(n: number): OnboardingStep {
+  return Math.max(0, Math.min(LAST_ONBOARDING_STEP, Math.trunc(n))) as OnboardingStep
+}
 
 /**
  * Machine-readable position of a busy connect flow, emitted by the flow
@@ -49,21 +67,30 @@ export type BuildLineState = 'pending' | 'ok' | 'failed' | 'idle'
 /** One real source's sync status shown on the Build step. */
 export interface BuildLine {
   readonly name: string
+  /** The source's connector type (`github`, `kicad`, …) — colours the Build graph. */
+  readonly sourceType?: string
   readonly detail: string
   readonly state: BuildLineState
+  /** Entities the latest successful sync created (ok lines only). */
+  readonly entities?: number
 }
 
 export interface OnboardingState {
   step: OnboardingStep
   description: string
+  /** The project name the user typed; null = follow the description. */
+  projectName: string | null
   connections: Record<string, ConnectionState>
   buildLog: readonly BuildLine[]
   buildDone: boolean
   /** Real entity count from the graph after the build, or null if unknown. */
   buildEntityCount: number | null
+  /** SOLUSDEV-323 Land: show the one-time SOL hint pill on the workspace. */
+  landingHint: boolean
 
   setStep: (step: OnboardingStep) => void
   setDescription: (description: string) => void
+  setProjectName: (name: string | null) => void
   /** Replace a source's connection state wholesale (real-connect flow). */
   setConnection: (id: string, state: ConnectionState) => void
   /** Mark a source's connect attempt as failed with a message. */
@@ -75,6 +102,7 @@ export interface OnboardingState {
   finishBuild: (entityCount?: number) => void
   /** Restart the build progress state (used when the Build step (re)mounts). */
   resetBuild: () => void
+  setLandingHint: (show: boolean) => void
   reset: () => void
 }
 
@@ -91,10 +119,12 @@ export function canBuildModel(connections: Record<string, ConnectionState>): boo
 const INITIAL = {
   step: 0 as OnboardingStep,
   description: '',
+  projectName: null as string | null,
   connections: {} as Record<string, ConnectionState>,
   buildLog: [] as readonly BuildLine[],
   buildDone: false,
-  buildEntityCount: null as number | null
+  buildEntityCount: null as number | null,
+  landingHint: false
 }
 
 export const useOnboardingStore = create<OnboardingState>((set) => ({
@@ -102,6 +132,7 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
 
   setStep: (step) => set({ step }),
   setDescription: (description) => set({ description }),
+  setProjectName: (projectName) => set({ projectName }),
 
   setConnection: (id, state) => set((s) => ({ connections: { ...s.connections, [id]: state } })),
 
@@ -116,5 +147,6 @@ export const useOnboardingStore = create<OnboardingState>((set) => ({
   setBuildLog: (lines) => set({ buildLog: lines }),
   finishBuild: (entityCount) => set({ buildDone: true, buildEntityCount: entityCount ?? null }),
   resetBuild: () => set({ buildLog: [], buildDone: false, buildEntityCount: null }),
+  setLandingHint: (landingHint) => set({ landingHint }),
   reset: () => set({ ...INITIAL, connections: {}, buildLog: [] })
 }))

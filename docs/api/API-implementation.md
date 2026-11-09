@@ -210,7 +210,8 @@ the **sole owner of a shared team** — transfer ownership first.
 
 `data_collection_consent` is the ADR-011 opt-in/out switch (default **false**; see §9 —
 events are recorded only while consented). `onboarding_step`
-(`about|connect|build|done`) is the FND-08 resume point. `sol_custom_instruction`
+(`meet|about|voice|access|connect|build|done`, flow order; SOLUSDEV-323 added `meet`, `voice`,
+`access` — `docs/wireflows/onboarding.md`) is the FND-08 resume point. `sol_custom_instruction`
 (SOLUSDEV-233) is the user's standing preference note for SOL — 500 chars max; it
 reaches the prompt only as a fenced data block, never as instruction text (§7).
 
