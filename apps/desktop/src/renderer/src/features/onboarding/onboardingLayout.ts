@@ -6,6 +6,24 @@ import type { Domain } from './domainHearing'
 /** The ring shows at most this many tiles; the rest go in the grid below it. */
 export const RING_MAX = 8
 
+/** Ring tile width, px (ConnectRing renders tiles this wide). */
+export const RING_TILE_WIDTH = 160
+const RING_RX = 250
+/** Below this radius the tiles crowd the hub — use the grid instead. */
+const RING_MIN_RX = 170
+const RING_EDGE = 8
+
+/**
+ * The ring's horizontal radius for a stage `width` px wide (null = not measured
+ * yet → the full radius), shrunk so the outermost tiles stay inside the stage;
+ * null when even the smallest ring would not fit (render the grid instead).
+ */
+export function ringRadiusFor(width: number | null): number | null {
+  if (width === null) return RING_RX
+  const rx = Math.min(RING_RX, Math.floor(width / 2 - RING_TILE_WIDTH / 2 - RING_EDGE))
+  return rx < RING_MIN_RX ? null : rx
+}
+
 export interface RingOptions {
   /** Ellipse radii from the hub, px. */
   rx?: number

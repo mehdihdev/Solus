@@ -4,10 +4,12 @@
 import {
   getSettings,
   updateOnboardingStep,
+  updateSolMode,
   type OnboardingStepName,
   type UserSettings
 } from '../../lib/api/resources'
 import type { OnboardingStep } from './onboardingStore'
+import type { SolMode } from '../../store/settingsStore'
 
 // Flow order (SOLUSDEV-323, docs/wireflows/onboarding.md). Index = OnboardingStep.
 const STEP_NAMES: readonly OnboardingStepName[] = [
@@ -58,15 +60,34 @@ export async function hydrateOnboarding(
   }
 }
 
-/** Persist a step transition. Best-effort: an API failure never blocks the UI. */
-export async function persistOnboardingStep(
+// Writes go out one at a time, in call order: a slow earlier PATCH must never
+// land after `done` and re-show onboarding on another machine.
+let persistQueue: Promise<void> = Promise.resolve()
+
+/** Persist a step transition. Best-effort and ordered: an API failure never blocks the UI. */
+export function persistOnboardingStep(
   step: OnboardingStepName,
   update: (step: OnboardingStepName) => Promise<unknown> = updateOnboardingStep
 ): Promise<void> {
+  persistQueue = persistQueue.then(async () => {
+    try {
+      await update(step)
+    } catch {
+      // Offline / dev bypass — local flow carries on; the step re-persists on
+      // the next transition that succeeds.
+    }
+  })
+  return persistQueue
+}
+
+/** Persist the Voice choice (ADR-016 `sol_mode`) right away. Best-effort. */
+export async function persistSolMode(
+  mode: SolMode,
+  update: (mode: SolMode) => Promise<unknown> = updateSolMode
+): Promise<void> {
   try {
-    await update(step)
+    await update(mode)
   } catch {
-    // Offline / dev bypass — local flow carries on; the step re-persists on
-    // the next transition that succeeds.
+    // Offline / dev bypass — the local setting stands; provisioning re-sends it.
   }
 }

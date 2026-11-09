@@ -24,7 +24,12 @@ vi.mock('./provisioning', async (importOriginal) => {
 // here it defaults to the offline path so the flow behaves like dev bypass.
 vi.mock('./onboardingSync', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./onboardingSync')>()
-  return { ...actual, hydrateOnboarding: vi.fn(), persistOnboardingStep: vi.fn() }
+  return {
+    ...actual,
+    hydrateOnboarding: vi.fn(),
+    persistOnboardingStep: vi.fn(),
+    persistSolMode: vi.fn()
+  }
 })
 
 // The Build step reads real sync progress; its own tests cover the API. Here
@@ -58,6 +63,7 @@ function setupOnboarding(): void {
   vi.mocked(provisioning.ensureWorkspace).mockResolvedValue({ linked: false })
   vi.mocked(sync.hydrateOnboarding).mockResolvedValue({ status: 'offline' })
   vi.mocked(sync.persistOnboardingStep).mockResolvedValue(undefined)
+  vi.mocked(sync.persistSolMode).mockResolvedValue(undefined)
   vi.mocked(buildProgress.runBuildProgress).mockResolvedValue({ lines: [] })
 }
 
@@ -79,7 +85,7 @@ describe('Onboarding flow — SOL walks you in (SOLUSDEV-323)', () => {
     await renderOnboarding()
     expect(screen.getByRole('heading', { name: 'Hi — I’m SOL.' })).toBeInTheDocument()
     expect(screen.getByText('MAYA@STRIDER.DEV')).toBeInTheDocument()
-    expect(screen.getByRole('navigation', { name: 'Step 1 of 6' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Step 1 of 6' })).toBeInTheDocument()
   })
 
   it('walks Meet → Project → Voice → Access → Connect, persisting each step', async () => {
@@ -162,6 +168,23 @@ describe('Onboarding flow — Voice step', () => {
     expect(useSettingsStore.getState().solMode).toBe('Expert')
     expect(screen.queryByText(/CONCEPT · I²C ADDRESSES/)).toBeNull()
     expect(screen.getByRole('button', { name: /^Use Expert/ })).toBeInTheDocument()
+    // Saved to the server at once — Skip setup must not lose it (review #3).
+    expect(sync.persistSolMode).toHaveBeenCalledWith('Expert')
+  })
+
+  it('moves between the voices with the arrow keys (radio group, roving focus)', async () => {
+    await renderOnboarding()
+    await walkTo('voice')
+    const guide = screen.getByRole('radio', { name: /Guide/ })
+    const expert = screen.getByRole('radio', { name: /Expert/ })
+    expect(guide).toHaveAttribute('tabindex', '0')
+    expect(expert).toHaveAttribute('tabindex', '-1')
+    guide.focus()
+    await userEvent.keyboard('{ArrowRight}')
+    expect(useSettingsStore.getState().solMode).toBe('Expert')
+    expect(expert).toHaveFocus()
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(useSettingsStore.getState().solMode).toBe('Guide')
   })
 })
 

@@ -188,25 +188,29 @@ function SummonRow({
       <div style={BODY}>
         {practiced
           ? 'That’s it — I’m one double-tap away, in any app.'
-          : 'Double-tap Ctrl in any app. Try it now.'}
+          : note
+            ? 'Double-tap Ctrl in any app.'
+            : 'Double-tap Ctrl in any app. Try it now.'}
       </div>
+      {note && <div style={NOTE}>{note}</div>}
       <div
         style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}
       >
-        {/* Keyed by summon count so each real summon replays the press. */}
-        <span key={summons} style={{ display: 'inline-flex', gap: 8 }}>
-          <span className="ob-key" data-pressed={practiced}>
-            ctrl
+        {/* The practice needs a working hook; keyed by summon count so each real summon replays the press. */}
+        {!note && (
+          <span key={summons} style={{ display: 'inline-flex', gap: 8, marginRight: 8 }}>
+            <span className="ob-key" data-pressed={practiced}>
+              ctrl
+            </span>
+            <span className="ob-key" data-pressed={practiced}>
+              ctrl
+            </span>
           </span>
-          <span className="ob-key" data-pressed={practiced}>
-            ctrl
-          </span>
-        </span>
-        <Button kind="ghost" size="sm" onClick={onShowMe} style={{ marginLeft: 8 }}>
+        )}
+        <Button kind="ghost" size="sm" onClick={onShowMe}>
           Show me
         </Button>
       </div>
-      {note && <div style={NOTE}>{note}</div>}
     </Row>
   )
 }

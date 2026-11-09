@@ -1,6 +1,7 @@
 // Onboarding step 3 — Voice (SOLUSDEV-323, docs/wireflows/onboarding.md §3):
 // the SOL tone (ADR-016 `sol_mode`) shown rather than described — one fixed
 // question answered in the chosen voice. Static, Solus-authored copy.
+import { useRef } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
@@ -24,12 +25,37 @@ interface VoiceStepProps {
   onBack: () => void
 }
 
+const NEXT_KEYS = new Set(['ArrowRight', 'ArrowDown'])
+const PREV_KEYS = new Set(['ArrowLeft', 'ArrowUp'])
+
+/** Arrow keys move the choice and focus together (ARIA radio group, roving tabindex). */
+function useRovingRadios(
+  solMode: SolMode,
+  onSolMode: (mode: SolMode) => void
+): {
+  refs: React.MutableRefObject<(HTMLButtonElement | null)[]>
+  onKeyDown: (e: React.KeyboardEvent) => void
+} {
+  const refs = useRef<(HTMLButtonElement | null)[]>([])
+  const onKeyDown = (e: React.KeyboardEvent): void => {
+    const step = NEXT_KEYS.has(e.key) ? 1 : PREV_KEYS.has(e.key) ? -1 : 0
+    if (step === 0) return
+    e.preventDefault()
+    const current = CHOICES.findIndex((c) => c.mode === solMode)
+    const next = (current + step + CHOICES.length) % CHOICES.length
+    onSolMode(CHOICES[next].mode)
+    refs.current[next]?.focus()
+  }
+  return { refs, onKeyDown }
+}
+
 export function VoiceStep({
   solMode,
   onSolMode,
   onNext,
   onBack
 }: VoiceStepProps): React.JSX.Element {
+  const radios = useRovingRadios(solMode, onSolMode)
   return (
     <div
       style={{
@@ -43,15 +69,20 @@ export function VoiceStep({
       <div
         role="radiogroup"
         aria-label="SOL mode"
+        onKeyDown={radios.onKeyDown}
         className="ob-rise ob-d2"
         style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}
       >
-        {CHOICES.map((c) => (
+        {CHOICES.map((c, i) => (
           <button
             key={c.mode}
+            ref={(el) => {
+              radios.refs.current[i] = el
+            }}
             type="button"
             role="radio"
             aria-checked={solMode === c.mode}
+            tabIndex={solMode === c.mode ? 0 : -1}
             className="ob-choice"
             onClick={() => onSolMode(c.mode)}
           >

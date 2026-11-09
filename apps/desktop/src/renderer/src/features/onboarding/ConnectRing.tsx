@@ -2,6 +2,7 @@
 // live catalog on an ellipse round a small orb. A connected tool glows in its
 // domain colour and a wire draws in from the orb. Past RING_MAX, the rest sit
 // in the ordinary grid below. Tiles only launch the real connect flows.
+import { useEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
@@ -9,12 +10,11 @@ import { ConnectTile, TileMark } from './ConnectTile'
 import { domainForIntegration, DOMAINS } from './domainHearing'
 import type { CatalogEntry } from './integrationCatalog'
 import { OnboardingOrb } from './OnboardingOrb'
-import { RING_MAX, ringSlots } from './onboardingLayout'
+import { RING_MAX, RING_TILE_WIDTH, ringRadiusFor, ringSlots } from './onboardingLayout'
 import type { ConnectionState } from './onboardingStore'
 import type { CatalogConnect } from './useCatalogConnect'
 
 const RING_HEIGHT = 440
-const TILE_WIDTH = 160
 
 function colorFor(id: string): string {
   const domain = domainForIntegration(id)
@@ -33,61 +33,80 @@ interface ConnectRingProps {
   suggested: ReadonlySet<string>
 }
 
+/** The element's content width, live (null until measured / without ResizeObserver). */
+function useWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = useState<number | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, width]
+}
+
 export function ConnectRing({ connect, suggested }: ConnectRingProps): React.JSX.Element {
-  const ring = connect.catalog.slice(0, RING_MAX)
-  const rest = connect.catalog.slice(RING_MAX)
-  const slots = ringSlots(ring.length)
+  const [measureRef, width] = useWidth()
+  const rx = ringRadiusFor(width)
+  // Too narrow for any ring: every tool goes in the grid, still fully reachable.
+  const ring = rx === null ? [] : connect.catalog.slice(0, RING_MAX)
+  const rest = rx === null ? connect.catalog : connect.catalog.slice(RING_MAX)
+  const slots = ringSlots(ring.length, { rx: rx ?? undefined })
   const anyConnected = ring.some((e) => connect.connections[e.id]?.phase === 'done')
   return (
-    <>
-      <div style={{ position: 'relative', height: RING_HEIGHT, flex: 'none' }}>
-        {ring.map((entry, i) =>
-          connect.connections[entry.id]?.phase === 'done' ? (
-            <div
-              key={`wire-${entry.id}`}
-              data-testid="ob-wire"
-              className="ob-wire"
-              style={
-                {
-                  width: slots[i].wireLength,
-                  '--ob-a': `${slots[i].wireAngle}deg`,
-                  '--ob-c': colorFor(entry.id)
-                } as React.CSSProperties
-              }
-            />
-          ) : null
-        )}
-        <div
-          style={{
-            position: 'absolute',
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -50%)'
-          }}
-        >
-          <OnboardingOrb state={anyConnected ? 'listening' : 'idle'} size="hub" />
-        </div>
-        {ring.map((entry, i) => (
+    <div ref={measureRef} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {ring.length > 0 && (
+        <div style={{ position: 'relative', height: RING_HEIGHT, flex: 'none' }}>
+          {ring.map((entry, i) =>
+            connect.connections[entry.id]?.phase === 'done' ? (
+              <div
+                key={`wire-${entry.id}`}
+                data-testid="ob-wire"
+                className="ob-wire"
+                style={
+                  {
+                    width: slots[i].wireLength,
+                    '--ob-a': `${slots[i].wireAngle}deg`,
+                    '--ob-c': colorFor(entry.id)
+                  } as React.CSSProperties
+                }
+              />
+            ) : null
+          )}
           <div
-            key={entry.id}
             style={{
               position: 'absolute',
-              left: `calc(50% + ${slots[i].x}px)`,
-              top: `calc(50% + ${slots[i].y}px)`,
-              transform: 'translate(-50%, -50%)',
-              width: TILE_WIDTH
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)'
             }}
           >
-            <RingTile
-              entry={entry}
-              state={connect.connections[entry.id]}
-              suggested={suggested.has(entry.id)}
-              unavailable={connect.unavailableReason(entry)}
-              onOpen={() => connect.open(entry)}
-            />
+            <OnboardingOrb state={anyConnected ? 'listening' : 'idle'} size="hub" />
           </div>
-        ))}
-      </div>
+          {ring.map((entry, i) => (
+            <div
+              key={entry.id}
+              style={{
+                position: 'absolute',
+                left: `calc(50% + ${slots[i].x}px)`,
+                top: `calc(50% + ${slots[i].y}px)`,
+                transform: 'translate(-50%, -50%)',
+                width: RING_TILE_WIDTH
+              }}
+            >
+              <RingTile
+                entry={entry}
+                state={connect.connections[entry.id]}
+                suggested={suggested.has(entry.id)}
+                unavailable={connect.unavailableReason(entry)}
+                onOpen={() => connect.open(entry)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
       {rest.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           {rest.map((entry) => (
@@ -101,7 +120,7 @@ export function ConnectRing({ connect, suggested }: ConnectRingProps): React.JSX
           ))}
         </div>
       )}
-    </>
+    </div>
   )
 }
 
@@ -164,6 +183,7 @@ function RingTile({
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap'
         }}
+        title={unavailable ?? statusFor(entry, state)}
       >
         {unavailable ?? statusFor(entry, state)}
       </div>

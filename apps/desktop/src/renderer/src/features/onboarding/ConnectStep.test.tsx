@@ -378,3 +378,32 @@ describe('ConnectStep — the ring (SOLUSDEV-323)', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('ConnectStep — narrow stage (SOLUSDEV-323 review #1)', () => {
+  beforeEach(reset)
+
+  it('falls back to the grid when the ring cannot fit, keeping every tool reachable', async () => {
+    class NarrowObserver {
+      constructor(private readonly cb: ResizeObserverCallback) {}
+      observe(): void {
+        this.cb(
+          [{ contentRect: { width: 380 } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        )
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', NarrowObserver)
+    try {
+      await act(async () => {
+        render(<ConnectStep onBuild={vi.fn()} />)
+      })
+      expect(document.querySelector('[data-tile]')).toBeNull()
+      expect(screen.getByText('GitHub')).toBeInTheDocument()
+      expect(screen.getByText('KiCad')).toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

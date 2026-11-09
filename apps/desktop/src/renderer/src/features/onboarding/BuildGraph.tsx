@@ -29,7 +29,7 @@ export function BuildGraph({ lines }: { lines: readonly BuildLine[] }): React.JS
     <div
       className="ob-rise ob-d1"
       style={{
-        flex: 1,
+        flex: '3 1 320px',
         minHeight: 360,
         position: 'relative',
         overflow: 'hidden',

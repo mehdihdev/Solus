@@ -27,7 +27,8 @@ Saved step names (server): `meet → about → voice → access → connect → 
 A reload or another machine resumes at the saved step; an unreachable API runs the flow locally.
 
 1. **Meet** (`meet`). SOL: "Hi — I'm SOL." Stage: three cards — _Reads your whole robot_, _Sees what
-   you're stuck on_, _Does the clicking — with your OK_ — and **Let's set up**.
+   you're stuck on_, _Catches what breaks between worlds_ (cross-domain checks — the product core; the
+   mouse-and-keyboard pitch joins when the ADR-041 drive bridge ships) — and **Let's set up**.
 2. **Project** (`about`). SOL: "What are you building?" Stage:
    - the description textarea (`aria-label="Project description"`);
    - **Or start from** example chips that fill the textarea (examples, not template robots — nothing

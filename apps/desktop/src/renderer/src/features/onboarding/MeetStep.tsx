@@ -19,8 +19,8 @@ const CARDS = [
   },
   {
     icon: <PointerGlyph />,
-    title: 'Does the clicking — with your OK',
-    body: 'In Build mode I show a plan, you approve each step, and I carry it out. Esc stops me instantly.'
+    title: 'Catches what breaks between worlds',
+    body: 'A moved pin, an address clash, a part that no longer fits — I flag cross-domain conflicts before they reach the robot.'
   }
 ] as const
 

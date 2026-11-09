@@ -13,12 +13,19 @@ function fillFor(index: number, step: number): number {
 
 export function StepDots({ step }: { step: number }): React.JSX.Element {
   return (
-    <nav
+    <ol
       aria-label={`Step ${step + 1} of ${ONBOARDING_STEP_LABELS.length}`}
-      style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}
+      style={{
+        display: 'flex',
+        gap: 10,
+        alignItems: 'flex-start',
+        listStyle: 'none',
+        margin: 0,
+        padding: 0
+      }}
     >
       {ONBOARDING_STEP_LABELS.map((label, i) => (
-        <div
+        <li
           key={label}
           aria-current={i === step ? 'step' : undefined}
           style={{ width: SEGMENT_WIDTH, display: 'flex', flexDirection: 'column', gap: 8 }}
@@ -29,8 +36,8 @@ export function StepDots({ step }: { step: number }): React.JSX.Element {
           <Mono size={9.5} color={i <= step ? 'var(--tx)' : 'var(--mut)'}>
             {label}
           </Mono>
-        </div>
+        </li>
       ))}
-    </nav>
+    </ol>
   )
 }

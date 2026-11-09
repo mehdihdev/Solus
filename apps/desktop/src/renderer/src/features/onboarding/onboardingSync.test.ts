@@ -4,7 +4,8 @@ import {
   stepIndexToName,
   stepNameToIndex,
   hydrateOnboarding,
-  persistOnboardingStep
+  persistOnboardingStep,
+  persistSolMode
 } from './onboardingSync'
 
 describe('step mapping', () => {
@@ -83,5 +84,44 @@ describe('persistOnboardingStep', () => {
   it('never throws when the API is down (best-effort)', async () => {
     const update = vi.fn().mockRejectedValue(new Error('down'))
     await expect(persistOnboardingStep('done', update)).resolves.toBeUndefined()
+  })
+})
+
+describe('persistence ordering (SOLUSDEV-323 review)', () => {
+  it('writes steps in call order even when an earlier write is slower', async () => {
+    const landed: string[] = []
+    let releaseFirst: () => void = () => undefined
+    const update = vi.fn((step: string) =>
+      step === 'voice'
+        ? new Promise<void>((resolve) => {
+            releaseFirst = () => {
+              landed.push(step)
+              resolve()
+            }
+          })
+        : Promise.resolve().then(() => void landed.push(step))
+    )
+    const first = persistOnboardingStep('voice', update)
+    const second = persistOnboardingStep('done', update)
+    await Promise.resolve()
+    expect(update).toHaveBeenCalledTimes(1)
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(landed).toEqual(['voice', 'done'])
+  })
+
+  it('a failed write does not block the next one', async () => {
+    const update = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(undefined)
+    await persistOnboardingStep('voice', update)
+    await persistOnboardingStep('access', update)
+    expect(update).toHaveBeenLastCalledWith('access')
+  })
+})
+
+describe('persistSolMode (SOLUSDEV-323 review)', () => {
+  it('sends the mode and swallows an offline failure', async () => {
+    const update = vi.fn().mockRejectedValue(new Error('offline'))
+    await expect(persistSolMode('Expert', update)).resolves.toBeUndefined()
+    expect(update).toHaveBeenCalledWith('Expert')
   })
 })

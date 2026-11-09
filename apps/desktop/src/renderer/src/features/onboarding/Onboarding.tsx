@@ -11,7 +11,7 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Wordmark } from '../../components/ui/Wordmark'
 import { useAuthStore } from '../../store/authStore'
-import { useSettingsStore } from '../../store/settingsStore'
+import { useSettingsStore, type SolMode } from '../../store/settingsStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { switchWorkspaceProject } from '../workspace/projectSwitch'
 import { AboutStep } from './AboutStep'
@@ -20,7 +20,12 @@ import { BuildStep } from './BuildStep'
 import { ConnectStep } from './ConnectStep'
 import { MeetStep } from './MeetStep'
 import { OnboardingOrb, type OrbState } from './OnboardingOrb'
-import { hydrateOnboarding, persistOnboardingStep, stepIndexToName } from './onboardingSync'
+import {
+  hydrateOnboarding,
+  persistOnboardingStep,
+  persistSolMode,
+  stepIndexToName
+} from './onboardingSync'
 import { toOnboardingStep, useOnboardingStore, type OnboardingStep } from './onboardingStore'
 import { ensureWorkspace } from './provisioning'
 import { SolLines } from './SolLines'
@@ -115,8 +120,6 @@ function orbStateFor(step: OnboardingStep, hasDescription: boolean, buildDone: b
 export function Onboarding(): React.JSX.Element {
   const hydrated = useHydrate()
   const { store, goTo, beginBuild, finish } = useOnboardingFlow()
-  const solMode = useSettingsStore((s) => s.solMode)
-  const setSolMode = useSettingsStore((s) => s.setSolMode)
   const userEmail = useAuthStore((s) => s.user?.email)
   if (!hydrated) {
     return (
@@ -159,35 +162,66 @@ export function Onboarding(): React.JSX.Element {
           orb={orbStateFor(step, store.description.trim() !== '', store.buildDone)}
           step={step}
         />
-        <section
-          key={step}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: '64px 64px 40px',
-            display: 'flex',
-            flexDirection: 'column',
-            overflowY: 'auto'
-          }}
-        >
-          {step === 0 && <MeetStep onNext={next} />}
-          {step === 1 && (
-            <AboutStep
-              description={store.description}
-              onDescription={store.setDescription}
-              onNext={next}
-              onBack={back}
-            />
-          )}
-          {step === 2 && (
-            <VoiceStep solMode={solMode} onSolMode={setSolMode} onNext={next} onBack={back} />
-          )}
-          {step === 3 && <AccessStep onNext={next} onBack={back} />}
-          {step === 4 && <ConnectStep onBuild={beginBuild} onBack={back} />}
-          {step === BUILD_STEP && <BuildStep onComplete={() => void finish()} />}
-        </section>
+        <Stage
+          step={step}
+          description={store.description}
+          onDescription={store.setDescription}
+          next={next}
+          back={back}
+          beginBuild={beginBuild}
+          finish={finish}
+        />
       </main>
     </div>
+  )
+}
+
+interface StageProps {
+  step: OnboardingStep
+  description: string
+  onDescription: (value: string) => void
+  next: () => void
+  back: () => void
+  beginBuild: () => void
+  finish: () => Promise<void>
+}
+
+/** The right-hand stage: the current step's controls (keyed so each step rises in fresh). */
+function Stage(p: StageProps): React.JSX.Element {
+  const solMode = useSettingsStore((s) => s.solMode)
+  const setSolMode = useSettingsStore((s) => s.setSolMode)
+  const onSolMode = (mode: SolMode): void => {
+    setSolMode(mode)
+    void persistSolMode(mode) // saved at once — Skip setup must not lose it
+  }
+  return (
+    <section
+      key={p.step}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        padding: '64px clamp(28px, 4.5vw, 64px) 40px',
+        display: 'flex',
+        flexDirection: 'column',
+        overflowY: 'auto'
+      }}
+    >
+      {p.step === 0 && <MeetStep onNext={p.next} />}
+      {p.step === 1 && (
+        <AboutStep
+          description={p.description}
+          onDescription={p.onDescription}
+          onNext={p.next}
+          onBack={p.back}
+        />
+      )}
+      {p.step === 2 && (
+        <VoiceStep solMode={solMode} onSolMode={onSolMode} onNext={p.next} onBack={p.back} />
+      )}
+      {p.step === 3 && <AccessStep onNext={p.next} onBack={p.back} />}
+      {p.step === 4 && <ConnectStep onBuild={p.beginBuild} onBack={p.back} />}
+      {p.step === BUILD_STEP && <BuildStep onComplete={() => void p.finish()} />}
+    </section>
   )
 }
 
@@ -195,10 +229,10 @@ function SolColumn({ orb, step }: { orb: OrbState; step: OnboardingStep }): Reac
   return (
     <section
       style={{
-        width: 440,
+        width: 'clamp(300px, 32vw, 440px)',
         flex: 'none',
         boxSizing: 'border-box',
-        padding: '64px 48px 48px 56px',
+        padding: '64px clamp(28px, 3.5vw, 48px) 48px clamp(28px, 4vw, 56px)',
         display: 'flex',
         flexDirection: 'column',
         gap: 32,
@@ -250,7 +284,7 @@ function OnboardingHeader({
           gap: 14
         }}
       >
-        <Mono size={9.5}>{(userEmail ?? 'you@solus.dev').toUpperCase()}</Mono>
+        {userEmail && <Mono size={9.5}>{userEmail.toUpperCase()}</Mono>}
         {onSkip && (
           <Button kind="bare" size="sm" onClick={onSkip}>
             Skip setup

@@ -58,6 +58,17 @@ describe('onboarding.css', () => {
     }
   })
 
+  it('rests every positioned element correctly when animations are off', () => {
+    // Centring lives in the base rule, not only inside a keyframe (review #2).
+    expect(css).toMatch(/\.ob-pill \{[^}]*transform: translateX\(-50%\)/)
+    expect(css).toMatch(/\.ob-node \{[^}]*transform: translate\(-50%, -50%\)/)
+  })
+
+  it('ends the rise on filter: none, so no containing block is left behind', () => {
+    const rise = keyframes().find((k) => k.name === 'ob-rise')
+    expect(rise?.body).toMatch(/to \{[^}]*filter: none/)
+  })
+
   it('uses tokens, never raw hex colours', () => {
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })

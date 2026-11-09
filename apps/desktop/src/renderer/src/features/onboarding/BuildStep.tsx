@@ -22,10 +22,8 @@ interface BuildStepProps {
   onComplete: () => void
 }
 
-export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
-  const buildLog = useOnboardingStore((s) => s.buildLog)
-  const buildDone = useOnboardingStore((s) => s.buildDone)
-  const buildEntityCount = useOnboardingStore((s) => s.buildEntityCount)
+/** Read the REAL sync progress into the store; restarts on every effect run. */
+function useBuildProgressRead(): void {
   const setBuildLog = useOnboardingStore((s) => s.setBuildLog)
   const finishBuild = useOnboardingStore((s) => s.finishBuild)
   const resetBuild = useOnboardingStore((s) => s.resetBuild)
@@ -59,11 +57,25 @@ export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
       cancelled = true
     }
   }, [linked, projectId, resetBuild, setBuildLog, finishBuild])
+}
 
+export function BuildStep({ onComplete }: BuildStepProps): React.JSX.Element {
+  useBuildProgressRead()
+  const buildLog = useOnboardingStore((s) => s.buildLog)
+  const buildDone = useOnboardingStore((s) => s.buildDone)
+  const buildEntityCount = useOnboardingStore((s) => s.buildEntityCount)
   return (
-    <div style={{ display: 'flex', gap: 28, flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 28, flex: 1, minHeight: 0 }}>
       <BuildGraph lines={buildLog} />
-      <div style={{ width: 320, flex: 'none', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div
+        style={{
+          flex: '1 1 280px',
+          maxWidth: 360,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10
+        }}
+      >
         <p
           className="ob-rise ob-d2"
           style={{ margin: 0, color: 'var(--mut)', fontSize: 13, lineHeight: 1.55 }}

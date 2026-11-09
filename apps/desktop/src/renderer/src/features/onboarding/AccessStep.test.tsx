@@ -108,6 +108,9 @@ describe('AccessStep — summon practice', () => {
     mount(bridge)
     expect(await screen.findByText(/hotkeys are off/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Show me' })).toBeInTheDocument()
+    // The note replaces the practice: no key caps, no "Try it now".
+    expect(screen.queryByText('ctrl')).toBeNull()
+    expect(screen.queryByText(/Try it now/)).toBeNull()
   })
 
   it('stops listening when it unmounts', async () => {

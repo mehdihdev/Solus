@@ -1,6 +1,6 @@
 // SOLUSDEV-323: pure geometry for the Connect ring and the Build graph.
 import { describe, it, expect } from 'vitest'
-import { RING_MAX, graphFor, ringSlots } from './onboardingLayout'
+import { RING_MAX, graphFor, ringRadiusFor, ringSlots } from './onboardingLayout'
 
 describe('ringSlots', () => {
   it('places nothing for an empty catalog', () => {
@@ -75,5 +75,23 @@ describe('graphFor', () => {
   it('is deterministic for the same input', () => {
     const input = [{ domain: 'me' as const, entities: 12 }]
     expect(graphFor(input)).toEqual(graphFor(input))
+  })
+})
+
+describe('ringRadiusFor (fits the stage — SOLUSDEV-323 review)', () => {
+  it('uses the full radius when the stage is wide or not yet measured', () => {
+    expect(ringRadiusFor(null)).toBe(250)
+    expect(ringRadiusFor(1200)).toBe(250)
+  })
+
+  it('shrinks so the outermost tiles stay inside the stage', () => {
+    const rx = ringRadiusFor(560)
+    expect(rx).not.toBeNull()
+    // Tile centre ± half a tile width must stay within ±width/2.
+    expect((rx as number) + 80).toBeLessThanOrEqual(280)
+  })
+
+  it('gives up on the ring (grid instead) when the stage is too narrow', () => {
+    expect(ringRadiusFor(380)).toBeNull()
   })
 })
