@@ -9,6 +9,7 @@ import type { SolPillEvent, SolRegionPayload, SolState } from '../main/sol-windo
 import type { SolActionMode } from '../main/solSettings'
 import { DRIVE_AGENT_STATES, DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
 import { isSolFrontApp, type SolFrontApp } from '../main/drive/frontAppShape'
+import type { SolScreenPayload } from '../main/capture/summonShot'
 
 /** Structural slice of ipcRenderer — just what the bridge needs. */
 export interface SolBridgeIpc {
@@ -53,6 +54,9 @@ export interface SolBridge {
   onFrontApp?(handler: (front: SolFrontApp | null) => void): () => void
   /** SOLUSDEV-323: a hotkey summon happened (epoch ms). */
   onSummoned(handler: (at: number) => void): () => void
+  /** SOLUSDEV-324: the picture main took at summon — once; null when none,
+   *  when not asked from the pill, or on any failure. */
+  takeScreen?(): Promise<SolScreenPayload | null>
 }
 
 const isFrontAppPush = (raw: unknown): raw is SolFrontApp | null =>
@@ -100,17 +104,28 @@ export function isDriveStatus(raw: unknown): raw is DriveStatus {
 const isSummoned = (raw: unknown): raw is { at: number } =>
   isRecord(raw) && typeof raw.at === 'number' && Number.isFinite(raw.at)
 
+const isSource = (source: unknown): boolean =>
+  source === null ||
+  (isRecord(source) && typeof source.app === 'string' && typeof source.title === 'string')
+
+const hasSize = (raw: Record<string, unknown>): boolean =>
+  typeof raw.width === 'number' &&
+  typeof raw.height === 'number' &&
+  typeof raw.capturedAt === 'number'
+
 export function isSolRegion(raw: unknown): raw is SolRegionPayload {
   if (!isRecord(raw)) return false
-  const source = raw.source
   return (
     typeof raw.pngBase64 === 'string' &&
     typeof raw.contextPngBase64 === 'string' &&
-    typeof raw.width === 'number' &&
-    typeof raw.height === 'number' &&
-    typeof raw.capturedAt === 'number' &&
-    (source === null ||
-      (isRecord(source) && typeof source.app === 'string' && typeof source.title === 'string'))
+    hasSize(raw) &&
+    isSource(raw.source)
+  )
+}
+
+export function isSolScreen(raw: unknown): raw is SolScreenPayload {
+  return (
+    isRecord(raw) && typeof raw.jpegBase64 === 'string' && hasSize(raw) && isSource(raw.source)
   )
 }
 
@@ -173,7 +188,12 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
     onRegion: (handler) => subscribe(c.region, isSolRegion, handler),
     onPill: (handler) => subscribe(c.pill, isSolPillEvent, handler),
     onFrontApp: (handler) => subscribe(c.frontApp, isFrontAppPush, handler),
-    onSummoned: (handler) => subscribe(c.summoned, isSummoned, (m) => handler(m.at))
+    onSummoned: (handler) => subscribe(c.summoned, isSummoned, (m) => handler(m.at)),
+    takeScreen: () =>
+      ipc.invoke(c.takeScreen).then(
+        (raw) => (isSolScreen(raw) ? raw : null),
+        () => null
+      )
   }
 }
 

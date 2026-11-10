@@ -78,6 +78,7 @@ import {
 import { createSolSettings } from './solSettings'
 import { startDrive, type DriveHandle } from './drive/driveWiring'
 import { createScreenCapture, realScreenCaptureDeps, type Rect } from './capture/screenCapture'
+import { createSummonShot } from './capture/summonShot'
 import { createTray, paintDot, type SolTray } from './tray'
 import {
   detectPlatformBasics,
@@ -396,6 +397,11 @@ function startSol(): void {
     // §7 "off means no capture ever": gated inside captureRegion, not per caller.
     isEnabled: () => settings.get().screenIntelligence
   })
+  // SOLUSDEV-324: the picture taken at summon, for the next turn only.
+  const summonShot = createSummonShot({
+    capture,
+    cursor: () => screen.getCursorScreenPoint()
+  })
   let hotkeyStatus: HotkeyStatus | null = null
   let lastRegionRefused = false
   const state = (): SolState => {
@@ -411,6 +417,7 @@ function startSol(): void {
   }
   const windows = createAppSolWindows()
   solWindows = windows
+  windows.setSummonCapture(summonShot)
   const publish = (): void => {
     const snapshot = state()
     windows.pushState(snapshot)
@@ -420,6 +427,7 @@ function startSol(): void {
   settings.onChange((next) => {
     guideScopeGeneration += 1
     if (next.screenIntelligence) lastRegionRefused = false
+    else summonShot.clear()
     if (next.hotkeys !== hotkeysOn) {
       hotkeysOn = next.hotkeys
       runHotkeys()
@@ -441,7 +449,12 @@ function startSol(): void {
             .map((display) => ({ id: String(display.id), bounds: display.bounds })),
           read: readNativeWindowProperty
         }),
-      openCaptureSettings: () => openSystemSettingsPane(capture.capability().settingsUrl)
+      openCaptureSettings: () => openSystemSettingsPane(capture.capability().settingsUrl),
+      // Re-checked at take time: off means no pixels, whatever is held.
+      takeScreen: () => {
+        const shot = summonShot.take()
+        return settings.get().screenIntelligence ? shot : null
+      }
     },
     isSolSender
   )
@@ -926,6 +939,8 @@ function registerCompanionHandlers(): void {
     if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
       guideScopeGeneration += 1
       guideSignedIn = typeof token === 'string' && token.length > 0
+      // SOLUSDEV-324: the signed-out (or next) account never gets this screen.
+      if (!guideSignedIn) solWindows?.dropSummonCapture()
       sendAccessToken(token)
       hardwareSources?.setToken(token)
       machineReporter?.setToken(token)

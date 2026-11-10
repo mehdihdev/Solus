@@ -34,6 +34,8 @@ export const SOL_WINDOW_CHANNELS = {
    *  `summoned` (with `resume`: same chat kept) after a show, `leaving` just
    *  before main hides it (the renderer plays its exit animation). */
   pill: 'sol:pill',
+  /** SOLUSDEV-324: the pill takes main's summon picture (once) for a turn. */
+  takeScreen: 'sol:take-screen',
   /** main → every app renderer: the SolState snapshot. */
   state: 'sol:state',
   /** main → the SOL window only: a captured region. */
@@ -52,3 +54,7 @@ export const SOL_PILL_RESUME_MS = 5000
 /** SOLUSDEV-319: how long main waits for the renderer's exit animation before
  *  hiding the window (bounded, so a dead renderer cannot keep it up). */
 export const SOL_PILL_EXIT_MS = 180
+
+/** SOLUSDEV-324: the longest a summon waits for its screen picture before the
+ *  pill shows anyway (a slow capturer must never make SOL feel slow). */
+export const SUMMON_CAPTURE_WAIT_MS = 400

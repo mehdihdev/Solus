@@ -40,7 +40,12 @@ import type { PendingConfirmation } from '../../lib/api/solStream'
 import type { SolActionMode, SolScreenshot } from './solApi'
 import type { SolRegionPayload } from '../../../../main/sol-window/solWindow'
 import { selectSession, setForceConfirmation, useSolChatStore } from './solChatStore'
-import { regionToScreenshot, useSolActionMode, useSolWindowStore } from './solWindowStore'
+import {
+  regionToScreenshot,
+  takeSummonScreenshot,
+  useSolActionMode,
+  useSolWindowStore
+} from './solWindowStore'
 import {
   useSolChat,
   type ChatArtifact,
@@ -515,10 +520,15 @@ function useRegionSend(
   const region = useSolWindowStore((s) => s.region)
   const clearRegion = useSolWindowStore((s) => s.clearRegion)
   const sendWithRegion: ComposerSend = (text, mentions, thinkHarder) => {
-    const screenshot: SolScreenshot | undefined = region ? regionToScreenshot(region) : undefined
     const anchors = pageAnchorIds ? pageAnchors(pageAnchorIds) : {}
-    void chat
-      .send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
+    // A circled region wins; otherwise the picture taken at summon (SOLUSDEV-324).
+    const pixels: Promise<SolScreenshot | undefined> = region
+      ? Promise.resolve(regionToScreenshot(region))
+      : takeSummonScreenshot()
+    void pixels
+      .then((screenshot) =>
+        chat.send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
+      )
       .then((ok) => {
         if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
       })

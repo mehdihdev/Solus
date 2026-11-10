@@ -8,6 +8,7 @@ import { create } from 'zustand'
 import { getDesktopSolBridge, type SolBridge } from '../../lib/desktopBridge'
 import type { SolRegionPayload, SolState } from '../../../../main/sol-window/solWindow'
 import type { SolFrontApp } from '../../../../main/drive/frontAppShape'
+import type { SolScreenPayload } from '../../../../main/capture/summonShot'
 import type { SolActionMode, SolScreenshot } from './solApi'
 import { onAccountEnd } from './solSessionStore'
 
@@ -116,18 +117,44 @@ export function useSolActionMode(): {
 const SOURCE_APP_MAX = 128
 const SOURCE_TITLE_MAX = 256
 
+const capSource = (source: SolRegionPayload['source']): SolScreenshot['source'] =>
+  source && {
+    app: source.app.slice(0, SOURCE_APP_MAX),
+    title: source.title.slice(0, SOURCE_TITLE_MAX)
+  }
+
 /** The attached region as the turn's `screenshot` body (sol-window.md §8). */
 export function regionToScreenshot(region: SolRegionPayload): SolScreenshot {
-  const { source } = region
   return {
     media_type: 'image/png',
     data: region.pngBase64,
     width: region.width,
     height: region.height,
-    source: source && {
-      app: source.app.slice(0, SOURCE_APP_MAX),
-      title: source.title.slice(0, SOURCE_TITLE_MAX)
-    },
+    source: capSource(region.source),
     context: region.contextPngBase64
   }
+}
+
+/** SOLUSDEV-324: the summon picture as the turn's `screenshot` — the whole
+ *  screen is already the context, so none rides separately. */
+export function screenToScreenshot(shot: SolScreenPayload): SolScreenshot {
+  return {
+    media_type: 'image/jpeg',
+    data: shot.jpegBase64,
+    width: shot.width,
+    height: shot.height,
+    source: capSource(shot.source),
+    context: null
+  }
+}
+
+/** SOLUSDEV-324: with "SOL sees your screen" on, the picture main took at
+ *  summon (once). Null when off, outside the pill, or on any failure — a turn
+ *  is never lost to the picture. */
+export async function takeSummonScreenshot(
+  bridge: Pick<SolBridge, 'takeScreen'> | null = getDesktopSolBridge()
+): Promise<SolScreenshot | undefined> {
+  if (!useSolWindowStore.getState().state?.screenIntelligence || !bridge?.takeScreen) return
+  const shot = await bridge.takeScreen().catch(() => null)
+  return shot ? screenToScreenshot(shot) : undefined
 }

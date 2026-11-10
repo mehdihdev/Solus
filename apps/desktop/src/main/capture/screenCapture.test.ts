@@ -5,6 +5,10 @@ import { MAC_SCREEN_RECORDING_URL, type PlatformBasics } from '../platform/capab
 import {
   createScreenCapture,
   CONTEXT_MAX_WIDTH,
+  SCREEN_SHOT_FALLBACK_QUALITIES,
+  SCREEN_SHOT_JPEG_QUALITY,
+  SCREEN_SHOT_MAX_BYTES,
+  SCREEN_SHOT_MAX_WIDTH,
   type CaptureImage,
   type ScreenCaptureDeps
 } from './screenCapture'
@@ -27,7 +31,8 @@ function fakeImage(width: number, height: number, ops: string[] = []): FakeImage
       fakeImage(r.width, r.height, [...ops, `crop:${r.x},${r.y},${r.width},${r.height}`]),
     resize: (o) =>
       fakeImage(o.width, Math.round((height * o.width) / width), [...ops, `resize:${o.width}`]),
-    toPNG: () => Buffer.from(ops.join('|'))
+    toPNG: () => Buffer.from(ops.join('|')),
+    toJPEG: (quality) => Buffer.from([...ops, `jpeg:${quality}`].join('|'))
   }
 }
 
@@ -220,3 +225,89 @@ function registerCaptureFailuresTests(): void {
     expect(result.window).toBeNull()
   })
 }
+
+// SOLUSDEV-324: the summon picture (wireflow sol-window §D "SOL can take a
+// picture of your screen when you summon it") — the whole display under the
+// cursor, downscaled and JPEG-encoded so it always fits the API's caps.
+describe('captureScreen', () => {
+  it('asks the capturer for a thumbnail already capped at SCREEN_SHOT_MAX_WIDTH', async () => {
+    const getSources = vi.fn(deps().getSources)
+    const result = await createScreenCapture(deps({ getSources })).captureScreen({ x: 2000, y: 10 })
+    if ('reason' in result) throw new Error(result.message)
+    const size = getSources.mock.calls[0][0].thumbnailSize
+    expect(size.width).toBeLessThanOrEqual(SCREEN_SHOT_MAX_WIDTH)
+    // DISPLAY_B is 1440x900 DIP at 2x → 2880 px wide, capped, aspect kept.
+    expect(size).toEqual({ width: SCREEN_SHOT_MAX_WIDTH, height: 1200 })
+    expect(result).toMatchObject({ width: SCREEN_SHOT_MAX_WIDTH, height: 1200, display: 22 })
+    expect(result.jpeg.toString()).toBe(`jpeg:${SCREEN_SHOT_JPEG_QUALITY}`)
+    expect(result.window).toEqual({ app: 'kicad', title: 'main.kicad_sch' })
+  })
+
+  it('a display smaller than the cap is captured at its own pixel size', async () => {
+    const result = await createScreenCapture(deps()).captureScreen({ x: 10, y: 10 })
+    if ('reason' in result) throw new Error(result.message)
+    expect(result).toMatchObject({ width: 1920, height: 1080, display: 11 })
+  })
+
+  it('a thumbnail handed back larger than asked is downscaled to the cap', async () => {
+    const result = await createScreenCapture(
+      deps({
+        getSources: async () => [
+          { id: 'screen:22:0', display_id: '22', thumbnail: fakeImage(2880, 1800) }
+        ]
+      })
+    ).captureScreen({ x: 2000, y: 10 })
+    if ('reason' in result) throw new Error(result.message)
+    expect(result.jpeg.toString()).toBe(
+      `resize:${SCREEN_SHOT_MAX_WIDTH}|jpeg:${SCREEN_SHOT_JPEG_QUALITY}`
+    )
+    expect(result.width).toBe(SCREEN_SHOT_MAX_WIDTH)
+  })
+
+  it('a busy screen over the API cap is re-encoded lower; never sent over it', async () => {
+    const tried: number[] = []
+    const heavy = (fitsAt: number | null): CaptureImage => ({
+      ...fakeImage(1920, 1080),
+      toJPEG: (q) => {
+        tried.push(q)
+        return Buffer.alloc(fitsAt !== null && q <= fitsAt ? 10 : SCREEN_SHOT_MAX_BYTES + 1)
+      }
+    })
+    const at = (img: CaptureImage): ReturnType<ReturnType<typeof createScreenCapture>['captureScreen']> =>
+      createScreenCapture(
+        deps({ getSources: async () => [{ id: 's', display_id: '11', thumbnail: img }] })
+      ).captureScreen({ x: 0, y: 0 })
+    const fits = await at(heavy(SCREEN_SHOT_FALLBACK_QUALITIES[0]))
+    if ('reason' in fits) throw new Error(fits.message)
+    expect(fits.jpeg.length).toBe(10)
+    expect(tried).toEqual([SCREEN_SHOT_JPEG_QUALITY, SCREEN_SHOT_FALLBACK_QUALITIES[0]])
+    await expect(at(heavy(null))).resolves.toMatchObject({ reason: 'error' })
+  })
+
+  it('setting off → disabled before any source work; no permission → needs-permission', async () => {
+    const getSources = vi.fn()
+    const off = await createScreenCapture(
+      deps({ getSources, isEnabled: () => false })
+    ).captureScreen({ x: 0, y: 0 })
+    expect(off).toMatchObject({ reason: 'disabled' })
+    const denied = await createScreenCapture(
+      deps({ getSources, getMediaAccessStatus: () => 'denied' }, MAC)
+    ).captureScreen({ x: 0, y: 0 })
+    expect(denied).toMatchObject({ reason: 'needs-permission' })
+    expect(getSources).not.toHaveBeenCalled()
+  })
+
+  it('a capturer failure is a value, warned without pixels, never a throw', async () => {
+    const warn = vi.fn()
+    const result = await createScreenCapture(
+      deps({
+        warn,
+        getSources: async () => {
+          throw new Error('boom')
+        }
+      })
+    ).captureScreen({ x: 0, y: 0 })
+    expect(result).toMatchObject({ reason: 'error' })
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
