@@ -625,15 +625,9 @@ function PillForm(p: PillFormProps): React.JSX.Element {
         {p.footerStart}
         {p.regionAttached && <RegionChip onDismiss={p.onDismissRegion} />}
         <span style={{ flex: 1 }} />
-        {/* The routing preview only while there is a message to route. */}
-        {p.classify.preview && (
-          <ClassifyIndicator
-            preview={p.classify.preview}
-            override={p.classify.override}
-            onOverride={p.classify.setOverride}
-            onReset={p.classify.resetOverride}
-          />
-        )}
+        {/* SOLUSDEV-324: no routing preview here — the wireflow's 30 px footer has
+            no room for it (it squeezed the row onto two lines mid-typing). The
+            page composer keeps it; Think harder below is the pill's override. */}
         <PillToggle
           label="Think harder"
           checked={p.classify.override.thinkHarder}

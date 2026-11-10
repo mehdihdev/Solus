@@ -595,6 +595,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
   font-size: 10.5px;
   color: var(--mut);
 }
