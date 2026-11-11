@@ -126,6 +126,15 @@ it('keeps the baseline flag a list row and a detail summary carry', async () => 
   vi.mocked(api.request).mockResolvedValue({ summary: marked, manifest })
   expect((await getRun('p', id)).summary).toEqual(marked)
 })
+it('reads a simulated run (origin sim) and its pinned flag', async () => {
+  const sim = { ...summary, origin: 'sim', pinned: true }
+  vi.mocked(api.request).mockResolvedValue({ runs: [sim], next_cursor: null })
+  expect((await listRuns('p')).runs[0]).toEqual(sim)
+  vi.mocked(api.request).mockResolvedValue({ summary: sim, manifest })
+  expect((await getRun('p', id)).summary).toEqual(sim)
+  vi.mocked(api.request).mockResolvedValue({ runs: [{ ...summary, origin: 'dream' }], next_cursor: null })
+  await expect(listRuns('p')).rejects.toThrow()
+})
 it('reads a summary without a baseline key, as start, import and a live stop send it', async () => {
   vi.mocked(api.request).mockResolvedValue(summary)
   const started = await startRun('p', { robot_id: id, session_id: id, name: 'Run' })

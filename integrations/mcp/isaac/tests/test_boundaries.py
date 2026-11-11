@@ -6,28 +6,33 @@ import os
 import sys
 import threading
 import types
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[4]))
 from integrations.mcp.isaac.solus import actions, scene, server, worker
 
+#: An MCP SDK decorator factory: `server.list_tools()` / `server.call_tool()` return a decorator.
+Decorator = Callable[[Callable[..., Any]], Any]
 
-def make_service_type(tmp_path, captured):
+
+def make_service_type(tmp_path: Path, captured: dict[str, Any]) -> type[Any]:
     class Service:
-        def __init__(self, path):
+        def __init__(self, path: Path) -> None:
             assert path == tmp_path
 
-        def call(self, name, args):
+        def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
             if name == "uncertain":
                 raise actions.MutationUnverifiedError(2)
             if name == "invalid":
                 raise ValueError("private")
             return {"ok": True}
 
-        def close(self):
+        def close(self) -> None:
             captured["closed"] = True
 
     return Service
@@ -35,35 +40,35 @@ def make_service_type(tmp_path, captured):
 
 @pytest.mark.parametrize("cancel", [False, True])
 def test_sdk_transport_preserves_uncertainty_sanitizes_errors_and_closes(
-    tmp_path, monkeypatch, cancel
-):
-    captured = {}
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cancel: bool
+) -> None:
+    captured: dict[str, Any] = {}
 
     service_type = make_service_type(tmp_path, captured)
 
     class SDK:
-        def __init__(self, name):
+        def __init__(self, name: str) -> None:
             assert name == "solus-isaac"
 
-        def list_tools(self):
+        def list_tools(self) -> Decorator:
             return lambda fn: captured.setdefault("list", fn)
 
-        def call_tool(self, **kwargs):
+        def call_tool(self, **kwargs: Any) -> Decorator:
             assert kwargs == {"validate_input": False}
             return lambda fn: captured.setdefault("call", fn)
 
-        def create_initialization_options(self):
+        def create_initialization_options(self) -> None:
             return None
 
-        async def run(self, *args):
-            assert len(await captured["list"]()) == 8
+        async def run(self, *args: Any) -> None:
+            assert len(await captured["list"]()) == 16
             for name in ("status", "invalid", "uncertain"):
                 captured[name] = json.loads((await captured["call"](name, {})).content[0].text)
             if cancel:
                 raise asyncio.CancelledError
 
     @asynccontextmanager
-    async def transport():
+    async def transport() -> AsyncIterator[tuple[object, object]]:
         yield object(), object()
 
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", str(tmp_path))
@@ -77,27 +82,35 @@ def test_sdk_transport_preserves_uncertainty_sanitizes_errors_and_closes(
         asyncio.run(server.serve())
     assert captured["closed"]
     assert captured["status"] == {"ok": True}
-    assert captured["invalid"] == {"ok": False, "reason": "isaac_operation_refused"}
+    assert captured["invalid"] == {
+        "ok": False,
+        "code": "isaac_operation_refused",
+        "reason": "isaac_operation_refused",
+    }
     assert captured["uncertain"]["execution_started"] is True
 
 
-def test_worker_bootstrap_binds_workspace_journal_and_closes_descriptors(tmp_path, monkeypatch):
-    observed = {}
+def test_worker_bootstrap_binds_workspace_journal_and_closes_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, Any] = {}
 
     class App:
-        def __init__(self, config, **kwargs):
+        def __init__(self, config: dict[str, Any], **kwargs: Any) -> None:
             assert config["headless"] is True
 
-        def close(self):
+        def close(self) -> None:
             observed["closed"] = True
 
     class Engine:
         generation = 0
 
-        def __init__(self, native, assets, cwd, *, revision_store):
+        def __init__(
+            self, native: object, assets: Path, cwd: Path, *, revision_store: object
+        ) -> None:
             observed["store"] = revision_store
 
-        def status(self):
+        def status(self) -> dict[str, Any]:
             return {"loaded": False}
 
     monkeypatch.setitem(sys.modules, "isaacsim", types.SimpleNamespace(SimulationApp=App))
@@ -130,48 +143,50 @@ def test_worker_bootstrap_binds_workspace_journal_and_closes_descriptors(tmp_pat
         os.close(read_reply)
 
 
-def test_sdk_requires_absolute_workspace(monkeypatch):
+def test_sdk_requires_absolute_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SOLUS_MCP_WORKSPACE", "relative")
     with pytest.raises(ValueError):
         asyncio.run(server.serve())
 
 
 @asynccontextmanager
-async def empty_transport():
+async def empty_transport() -> AsyncIterator[tuple[object, object]]:
     yield object(), object()
 
 
-def test_cancelled_sdk_request_closes_owned_session(tmp_path, monkeypatch):
-    captured = {}
+def test_cancelled_sdk_request_closes_owned_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
     started = threading.Event()
     released = threading.Event()
 
     class Service:
-        def __init__(self, path):
+        def __init__(self, path: Path) -> None:
             pass
 
-        def call(self, name, args):
+        def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
             started.set()
             released.wait(2)
             return {"ok": True}
 
-        def close(self):
+        def close(self) -> None:
             released.set()
 
     class SDK:
-        def __init__(self, name):
+        def __init__(self, name: str) -> None:
             pass
 
-        def list_tools(self):
+        def list_tools(self) -> Decorator:
             return lambda fn: fn
 
-        def call_tool(self, **kwargs):
+        def call_tool(self, **kwargs: Any) -> Decorator:
             return lambda fn: captured.setdefault("call", fn)
 
-        def create_initialization_options(self):
+        def create_initialization_options(self) -> None:
             return None
 
-        async def run(self, *args):
+        async def run(self, *args: Any) -> None:
             task = asyncio.create_task(captured["call"]("run_routine", {}))
             while not started.is_set():
                 await asyncio.sleep(0.001)

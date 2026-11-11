@@ -48,6 +48,7 @@ from solus_api.agent.command_gate import (
 from solus_api.agent.command_outcome import command_outcome_text, output_tail
 from solus_api.agent.command_output import STREAMING_TOOLS
 from solus_api.agent.command_policy import classify
+from solus_api.agent.dynamic_gate import needs_card, registered_tool
 from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.preview_refusal import PreviewRefusal
 from solus_api.agent.tools.exec import run_tool
@@ -530,9 +531,12 @@ async def request_confirmation(
     Returning None means "not gated, dispatch normally" — so a runner's whole
     integration is: park, or invoke. The caller commits.
     """
-    descriptor = next((d for d in registry.list() if d.name == call.tool), None)
-    if descriptor is None or not descriptor.requires_confirmation:
+    # The tool OBJECT: the static flag is on its descriptor, the per-call hook
+    # (SOLUSDEV-322 P2-T2) on the object itself. `needs_card` fails closed.
+    tool = registered_tool(registry, call.tool)
+    if tool is None or not await needs_card(tool, call.args):
         return None
+    descriptor = tool.descriptor
     scope = _ParkScope(project_id, team_id, user_id, conversation_id)
     refused_early = await _refused_before_preview(session, descriptor, call, scope)
     if refused_early is not None:

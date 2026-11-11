@@ -57,9 +57,12 @@ def test_read_file_text_binary_and_cap(tmp_path: Path) -> None:
 
 
 def test_write_file_atomic_create_dirs_and_cap(tmp_path: Path) -> None:
-    plan = actions.plan_write_file(tmp_path, "sub/dir/f.txt", "hi", create_dirs=True)
+    fingerprint = actions.plan_write_file(tmp_path, "sub/dir/f.txt", "hi", create_dirs=True)[
+        "fingerprint"
+    ]
+    assert isinstance(fingerprint, str)
     out = actions.write_file(
-        tmp_path, "sub/dir/f.txt", "hi", create_dirs=True, expected_fingerprint=plan["fingerprint"]
+        tmp_path, "sub/dir/f.txt", "hi", create_dirs=True, expected_fingerprint=fingerprint
     )
     assert out["path"] == "sub/dir/f.txt"
     assert out["bytes_written"] == 2

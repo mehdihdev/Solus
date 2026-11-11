@@ -20,7 +20,7 @@ from typing import Any
 from mcp.types import CallToolResult, TextContent
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from solus_companion.config import DEFAULT_VERSION_BINARIES
+from solus_companion.config import DEFAULT_VERSION_BINARIES, VERSION_ARGV
 from solus_companion.machine import actions, code_reader
 from solus_companion.machine.actions import MachineActionError
 
@@ -253,17 +253,23 @@ class MachineServer:
             exe = self._which(name)
             if exe is None:
                 continue  # absent is omitted, never invented
-            try:
-                raw = await asyncio.to_thread(
-                    self._capture, [exe, "--version"], VERSION_PROBE_TIMEOUT
-                )
-            except Exception:  # noqa: BLE001 - one broken binary never hides the others
-                logger.warning("tool_versions: %s --version failed", name)
-                continue
-            line = redact_version_line(_version_line(raw) or "")
+            line = await self._probe_version(name, exe)
             if line:
                 found[name] = line
         return {"tool_versions": found}
+
+    async def _probe_version(self, name: str, exe: str) -> str:
+        """Each `VERSION_ARGV` variant in order; the first non-empty redacted line wins."""
+        for args in VERSION_ARGV.get(name, (("--version",),)):
+            try:
+                raw = await asyncio.to_thread(self._capture, [exe, *args], VERSION_PROBE_TIMEOUT)
+            except Exception:  # noqa: BLE001 - one broken binary never hides the others
+                logger.warning("tool_versions: %s %s failed", name, " ".join(args))
+                return ""
+            line = redact_version_line(_version_line(raw) or "")
+            if line:
+                return line
+        return ""
 
 
 _HANDLERS: dict[str, Handler] = {

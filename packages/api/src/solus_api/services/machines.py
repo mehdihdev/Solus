@@ -22,6 +22,7 @@ from solus_api.core.errors import APIError
 from solus_api.graph import kinds
 from solus_api.graph.edges import write_edge
 from solus_api.models import Domain, GraphEntity, SolusSection, User
+from solus_api.services.machine_simulators import derive_simulators
 from solus_api.services.solus_graph import SolusGraph, lock_project
 
 logger = logging.getLogger("solus.services.machines")
@@ -112,7 +113,8 @@ async def upsert_machine(
 ) -> GraphEntity:
     """Idempotent: a second call updates the machine's attrs in place and bumps `version`
     only when something changed. `tool_versions` REPLACES the stored dict when the
-    companion answered (an uninstalled tool disappears); None keeps the last report."""
+    companion answered (an uninstalled tool disappears); None keeps the last report. The
+    derived `simulators` facts (SOLUSDEV-322) follow the same rule, from the same answer."""
     await lock_project(session, project_id)
     machine = await find_machine(session, project_id, companion_id)
     if machine is not None and machine.attrs.get("owner_user_id") != str(user_id):
@@ -126,12 +128,14 @@ async def upsert_machine(
     member = await ensure_member(session, project_id, user_id)
 
     prior: dict[str, Any] = machine.attrs if machine is not None else {}
+    versions: dict[str, str] = (
+        dict(tool_versions) if tool_versions is not None else prior.get("tool_versions", {})
+    )
     attrs = {
         **payload.model_dump(),
         "owner_user_id": str(user_id),
-        "tool_versions": (
-            dict(tool_versions) if tool_versions is not None else prior.get("tool_versions", {})
-        ),
+        "tool_versions": versions,
+        "simulators": derive_simulators(versions),
         "devices": prior.get("devices", []),
         "flash_history": prior.get("flash_history", []),
         "recent_commands": prior.get("recent_commands", []),

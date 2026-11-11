@@ -138,8 +138,15 @@ class TelemetryPlumbing:
             devices[device_id] = now
 
     async def ingest(
-        self, project_id: UUID, packet: TelemetryPacket, *, session_id: UUID | None = None
+        self,
+        project_id: UUID,
+        packet: TelemetryPacket,
+        *,
+        session_id: UUID | None = None,
+        source: str | None = None,
     ) -> IngestResult:
+        """`source` is the session's provider tag (server-side, never a packet's claim): under it
+        the resolver also reads a part's `sim_aliases`; None resolves by `external_ref` alone."""
         if self.capture_sink is not None:
             try:
                 self.capture_sink(project_id, session_id, packet)
@@ -147,7 +154,7 @@ class TelemetryPlumbing:
                 logger.warning(
                     "run capture sink failed: project=%s error=%s", project_id, type(exc).__name__
                 )
-        entity_id = await self._resolver.resolve(project_id, packet.device_id)
+        entity_id = await self._resolver.resolve(project_id, packet.device_id, source=source)
         self._observe_device(project_id, packet.device_id)
         if packet.device_id in self._observed_devices.get(project_id, {}):
             self._observed_entities[(project_id, packet.device_id)] = entity_id

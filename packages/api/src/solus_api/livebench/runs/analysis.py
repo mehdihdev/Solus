@@ -12,6 +12,7 @@ from numpy.typing import NDArray
 
 from solus_api.graph import kinds
 from solus_api.graph.packet import TelemetryPacket
+from solus_api.livebench.findings.envelopes import convert_unit
 from solus_api.livebench.findings.rules.rule_base import still_window
 from solus_api.livebench.findings.sim_control import (
     SimControl,
@@ -27,21 +28,8 @@ from solus_api.livebench.runs.models import (
 )
 from solus_api.livebench.scene.part_bindings import JointRange, finite_number
 
-
-def _convert(value: float, source: str | None, target: str | None) -> float | None:
-    if source is None or target is None:
-        return None
-    if source == target:
-        return value
-    scales = {
-        ("rad", "deg"): 180 / math.pi,
-        ("deg", "rad"): math.pi / 180,
-        ("mA", "A"): 0.001,
-        ("A", "mA"): 1000.0,
-    }
-    factor = scales.get((source, target))
-    converted = value * factor if factor is not None else None
-    return converted if converted is not None and math.isfinite(converted) else None
+#: The one scale table (`envelopes.convert_unit`), shared with the window evaluator.
+_convert = convert_unit
 
 
 def _observations(

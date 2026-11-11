@@ -61,6 +61,11 @@ exclude = [
 module = ["pgvector.*", "asyncpg", "OCP.*", "msgpack", "mujoco", "ujson"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# Isaac Sim runtime modules, imported lazily by the isaac fork's solus/scene.py; never installed here.
+module = ["isaacsim.*", "omni", "omni.*", "pxr", "pxr.*"]
+ignore_missing_imports = true
+
 # mcap ships a layout mypy maps to two module names ("mcap" and "mcap.__init__"),
 # aborting the whole run. Skip following into it; its surface is typed at our
 # call sites (livebench/telemetry/mcap_*.py).

@@ -174,21 +174,23 @@ def _mate_relations(
         if a is None or b is None or a == b:
             recorder.record(label(record.feature_id), "mate endpoint is not a node of this export")
             continue
+        properties: dict[str, Any] = {
+            "mate_type": record.mate_type,
+            "feature_id": record.feature_id,
+            "evidence": [
+                EdgeEvidence(kind=EvidenceKind.MATE, ref=record.feature_id).model_dump(mode="json")
+            ],
+            "matrix_cell": MatrixCell.MECHANICAL_MECHANICAL.value,
+        }
+        if record.frame is not None:
+            # The mate connector frame (SOLUSDEV-322): what model generation turns into a joint.
+            properties = {**properties, "mate_frame": record.frame.as_attr()}
         relations.append(
             RelationOut(
                 from_key=_scoped(a, scope),
                 to_key=_scoped(b, scope),
                 type=MATES_WITH,
-                properties={
-                    "mate_type": record.mate_type,
-                    "feature_id": record.feature_id,
-                    "evidence": [
-                        EdgeEvidence(kind=EvidenceKind.MATE, ref=record.feature_id).model_dump(
-                            mode="json"
-                        )
-                    ],
-                    "matrix_cell": MatrixCell.MECHANICAL_MECHANICAL.value,
-                },
+                properties=properties,
             )
         )
     return relations

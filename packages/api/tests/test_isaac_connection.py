@@ -100,6 +100,7 @@ async def setup_route(
     from conftest import me
     from solus_api.agent.tools.isaac_tools import build_isaac_tools
     from solus_api.routers import isaac_connection
+    from solus_api.simulation.sessions_ledger import SessionsLedger
     from test_hardware_router import _hw_project
 
     project, team = await _hw_project(client, headers)
@@ -128,7 +129,10 @@ async def setup_route(
         assert (user_id, team_id, project_id) == scope
         assert registry.get(*scope) is current
         return build_isaac_tools(
-            sessionmaker, project_id, {tool.descriptor.name: cast(Tool, tool) for tool in native}
+            sessionmaker,
+            project_id,
+            {tool.descriptor.name: cast(Tool, tool) for tool in native},
+            ledger=SessionsLedger(sessionmaker),
         )
 
     monkeypatch.setattr(isaac_connection, "_owned_isaac_tools", owned)

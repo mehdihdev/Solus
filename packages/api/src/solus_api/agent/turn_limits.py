@@ -18,7 +18,7 @@ GUIDE_TOOL_CALLS: Final = 8
 #: caller that has not measured it: the transport's mode-only `turn_limits(mode)` and tests. The
 #: runner always measures its own turn's (`fixed_tokens=`), so its cap follows the tool inventory
 #: it really sends and this default is never what a model turn is held to. It is the part as
-#: re-measured in SOLUSDEV-321 P5 fix 1 (M3) from packages/api with `uv run python`:
+#: re-measured (last: SOLUSDEV-319 and SOLUSDEV-322 merged) from packages/api with `uv run python`:
 #: `build_sol_registry(async_sessionmaker(), project_id, user_id=…, team_id=…,
 #: secret_store=InMemorySecretStore(), connectors=ConnectorRegistry(), systems=<a SolSystems>,
 #: artifact_store, enqueue, presence_service, companion_deployment_service and scene_enqueue
@@ -26,10 +26,11 @@ GUIDE_TOOL_CALLS: Final = 8
 #: `estimate_tokens(system_prompt(SolMode.GUIDE, None, None, with_screenshot=True,
 #: action_mode=ActionMode.DO, nonce=…))` plus
 #: `estimate_tokens(tools_text(tool_specs(model_visible(registry.list()), nonce=…)))`, rounded up
-#: to the next 1,000. Last re-measured for SOLUSDEV-319 (64 tools): 1,671 + 11,926 = 13,597.
+#: to the next 1,000. Last re-measured after the SOLUSDEV-322 merge of main (67 in-process tools,
+#: SOLUSDEV-319 drive/front-app notes + SOLUSDEV-322 simulation note): 14,461.
 #: `tests/test_sol_turn_limits.py` re-measures it and fails when the default no longer covers
 #: the measurement or sits more than 2,000 tokens above it.
-FIXED_PROMPT_TOKENS: Final = 14_000
+FIXED_PROMPT_TOKENS: Final = 15_000
 
 
 @dataclass(frozen=True, slots=True)

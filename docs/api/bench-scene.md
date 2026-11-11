@@ -110,3 +110,16 @@ per-binding observed microversion and refresh_status. A failed sync/ambiguous oc
 OCCT/oversized geometry preserves previous mesh with an explicit stale/error state. Geometry
 updates preserve scene model ID, placement key, link/joint structure and still-valid confirmed
 mappings. No inferred motion or name-based source association.
+
+### Regeneration of generated simulation models (SOLUSDEV-322 P6-T2)
+
+`cad_refresh.complete(..., enqueue=)` runs after the bound models are refreshed. For each refreshed
+scene it reads `simulation/model_job.regeneration_requests`: every `simulation_model` with
+`origin="system"` and `attrs.scene_model_id` = the scene whose `attrs.cad_microversion` differs
+from the scene's `source_revision` yields one `run_generate_sim_model` request
+(`{project_id, robot_id, name, requested_by, source_entity_id}` from the model's own attrs), queued
+by name under the id `run_generate_sim_model:<project>:<sha1(request)>` so a request still waiting
+is never queued twice. The worker passes `pool_enqueue(ctx["redis"])`; without a queue nothing is
+queued and the refresh completes as before. The old model is never deleted or edited by the hook:
+the job registers the new definition beside it (a same definition is reused). A queue failure is
+logged and never fails the refresh.

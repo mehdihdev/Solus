@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+# Fixture CLI for classic `gzserver`. Recorded from Classic 11.15.1 (conda env solus-gz-classic)
+# on 2026-11-09: `gzserver --version` prints the banner on STDOUT and exits 255.
+import sys
+
+if sys.argv[1:] == ["--version"]:
+    print("Gazebo multi-robot simulator, version 11.15.1")
+    sys.exit(255)
+sys.stderr.write("fixture gzserver: unhandled argv\n")
+sys.exit(255)

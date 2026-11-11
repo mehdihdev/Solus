@@ -96,6 +96,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
 #: SOLUSDEV-320: the fixed developer tools `machine.tool_versions` asks `--version` of.
 #: Resolved with `shutil.which` at call time; an absent one is omitted, never invented.
+#: SOLUSDEV-322 adds the simulator binaries (mirrored by the API's TOOL_VERSION_BINARIES).
 DEFAULT_VERSION_BINARIES: tuple[str, ...] = (
     "python3",
     "node",
@@ -107,7 +108,22 @@ DEFAULT_VERSION_BINARIES: tuple[str, ...] = (
     "uv",
     "pip",
     "conda",
+    "gz",
+    "ign",
+    "gazebo",
+    "gzserver",
+    "ngspice",
+    "nvidia-smi",
 )
+#: SOLUSDEV-322: argv variants (after the executable) tried in order per binary; the first
+#: non-empty line wins. Binaries not listed here get `("--version",)` only. `gz`/`ign` print
+#: the installed simulator's version only through their `sim`/`gazebo` subcommand; only `gz`
+#: falls back to `--version` (classic Gazebo 11 ships a `gz` whose `--version` names the
+#: simulator) — `ign --version` is the ign-tools version, so a plugin-less `ign` is omitted.
+VERSION_ARGV: Mapping[str, tuple[tuple[str, ...], ...]] = {
+    "gz": (("sim", "--versions"), ("--version",)),
+    "ign": (("gazebo", "--versions"),),
+}
 _LOCAL_HOSTS = frozenset(DEFAULT_ALLOWED_HOSTS)
 
 # The bridge WS path (bridge-protocol.md §8); the artifact upload origin and

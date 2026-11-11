@@ -58,6 +58,19 @@ _COMPLETE_PREVIEW_TOOLS: Final = frozenset(
         "isaac.set_joint_limits",
         "isaac.set_sensor_pose",
         "isaac.run_routine",
+        # SOLUSDEV-322 P4-T2: the user's own stages (agent/tools/isaac_tools.py).
+        "isaac.open_stage",
+        "isaac.spawn_at",
+        "isaac.control",
+        "isaac.save_stage",
+        # SOLUSDEV-322 P3-T4: the gazebo writers (agent/tools/gazebo_tools.py).
+        "gazebo.open_world",
+        "gazebo.spawn",
+        "gazebo.set_joint_targets",
+        "gazebo.control",
+        "gazebo.run_routine",
+        "gazebo.stop",
+        "gazebo.save_world",
     }
 )
 _DRY_RUN_TOOLS: Final = _COMPLETE_PREVIEW_TOOLS | frozenset(

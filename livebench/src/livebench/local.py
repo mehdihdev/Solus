@@ -21,6 +21,7 @@ import asyncio
 import dataclasses
 import importlib.util
 import logging
+import os
 import re
 import shutil
 from collections import Counter
@@ -28,7 +29,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from solus_api.hardware.config import (
@@ -47,6 +48,7 @@ from livebench.recognition.passive import (
     binding_key,
     enumerate_usb_serial,
 )
+from livebench.sim.gazebo_family import family_on_disk
 from livebench.telemetry.stream_live import PacketStreamLiveConnection
 
 if TYPE_CHECKING:
@@ -115,10 +117,11 @@ def available_simulators(
     find_spec: Callable[[str], object | None] = importlib.util.find_spec,
     which: Callable[[str], str | None] = shutil.which,
     isaac_root: Path = DEFAULT_ISAAC_ROOT,
+    env: Mapping[str, str] | None = None,
 ) -> list[SimulatorAvailability]:
     """Probe-only: no simulator module is imported to answer "is it here?"."""
     mujoco_present = find_spec("mujoco") is not None
-    gz = which("gz")
+    gazebo_family = _gazebo_family(which, os.environ if env is None else env)
     isaac_present = isaac_root.is_dir()
     return [
         SimulatorAvailability(
@@ -128,8 +131,17 @@ def available_simulators(
         ),
         SimulatorAvailability(
             kind="gazebo",
-            available=gz is not None,
-            reason=None if gz else "Gazebo is not installed (no `gz` CLI on PATH)",
+            available=gazebo_family is not None,
+            # SOLUSDEV-322: the family is named here only; which family SOL may drive comes
+            # from the machine's derived `simulators` attr, never from this process's probe.
+            reason=(
+                f"Gazebo detected ({gazebo_family} family)"
+                if gazebo_family
+                else (
+                    "Gazebo is not installed (no `gz`, `ign` or `gzserver` CLI under "
+                    "SOLUS_GAZEBO_PATH or on PATH)"
+                )
+            ),
         ),
         SimulatorAvailability(
             kind="isaac",
@@ -142,6 +154,23 @@ def available_simulators(
             ),
         ),
     ]
+
+
+#: Newest family first: a modern `gz` (Harmonic+), `ign` (Fortress), then classic Gazebo 11.
+_GAZEBO_FAMILY_BINARIES = (
+    ("gz", "gz"),
+    ("ign", "ignition"),
+    ("gzserver", "classic"),
+    ("gazebo", "classic"),
+)
+
+
+def _gazebo_family(which: Callable[[str], str | None], env: Mapping[str, str]) -> str | None:
+    """`SOLUS_GAZEBO_PATH` (where the session providers resolve binaries) is authoritative;
+    PATH is only a detection fallback (P8 finding F1). Looks at files, runs nothing."""
+    return family_on_disk(env) or next(
+        (family for exe, family in _GAZEBO_FAMILY_BINARIES if which(exe)), None
+    )
 
 
 def _by_id_map(by_id_dir: Path) -> dict[str, str]:
@@ -287,11 +316,27 @@ async def open_mujoco(
     return await asyncio.to_thread(build)
 
 
-async def open_gazebo(topics: list[str], *, project_id: UUID) -> PacketStreamLiveConnection:
-    """A Gazebo topic connection; raises `GazeboNotAvailableError` when gz is absent."""
+async def open_gazebo(
+    topics: list[str],
+    *,
+    project_id: UUID,
+    family: str | None = None,
+    world: str | None = None,
+    model: str | None = None,
+) -> PacketStreamLiveConnection:
+    """A Gazebo topic connection for the installed (or named) family; `world` + `model` add the
+    model's joint_state stream. Raises `GazeboNotAvailableError` when no binary is under
+    `SOLUS_GAZEBO_PATH`. The family probe runs subprocesses — off-loop."""
     from livebench.sim.connections import GazeboSimConnection
 
-    return GazeboSimConnection(topics, project_id=project_id)
+    if family is not None and family not in ("classic", "ignition", "gz"):
+        raise ValueError("unknown Gazebo family")
+    fam = cast("Literal['classic', 'ignition', 'gz'] | None", family)
+    return await asyncio.to_thread(
+        lambda: GazeboSimConnection(
+            topics, project_id=project_id, family=fam, world=world, model=model
+        )
+    )
 
 
 async def open_mcap(

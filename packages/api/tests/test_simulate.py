@@ -370,9 +370,9 @@ async def test_rung_2_and_4_are_gated(engine: AsyncEngine, monkeypatch: pytest.M
             "rung": 4,
             "target": full.name,
             "tool": routine,
-            "requires_confirmation": True,
+            "gate": "per call",
             "connected": True,
-            "status": f"call {routine}: it previews the run and asks the person first",
+            "status": f"call {routine}: it previews the run and its gate decides per call",
         }
         routed = await _simulate_call(registry, question=_question(part, "ripple_v"))
         assert routed["route"]["rung"] == 2 and routed["route"]["tool"] == "routing_x.run_routine"

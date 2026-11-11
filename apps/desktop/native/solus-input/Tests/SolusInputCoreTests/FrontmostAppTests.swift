@@ -87,6 +87,7 @@ final class AppPolicyTests: XCTestCase {
                    "com.teamviewer.TeamViewer", "com.philandro.anydesk", "com.realvnc.vncviewer", "tv.parsec.www",
                    "com.raycast.macos", "org.hammerspoon.Hammerspoon", "org.python.IDLE", "org.thonny.Thonny",
                    "io.balena.etcher", "org.raspberrypi.imagingutility",
+                   "org.mujoco.mujoco", "org.python.python",
                    "com.parallels.desktop.console", "org.virtualbox.app.VirtualBox", "com.p5sys.jump.mac.viewer",
                    "com.runningwithcrayons.Alfred", "com.stairways.keyboardmaestro.editor"] {
             XCTAssertTrue(DeniedApps.denies(id), id)

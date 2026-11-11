@@ -150,7 +150,7 @@ def test_input_tokens_cap_is_per_round_budget_plus_headroom(
     headroom = FIXED_PROMPT_TOKENS + limits.tool_calls * one_result
     assert (one_result, headroom) == (
         1_000,
-        {ActionMode.GUIDE: 21_000, ActionMode.DO: 37_000}[mode],
+        {ActionMode.GUIDE: 23_000, ActionMode.DO: 39_000}[mode],
     )
     assert limits.max_input_tokens == config.context_budget.total_for(tier) + headroom
 

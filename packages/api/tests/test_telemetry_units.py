@@ -50,3 +50,24 @@ async def test_device_recent_rejects_negative_limit_even_without_samples(resolve
     )
     with pytest.raises(ValueError, match="limit must be non-negative"):
         await plumbing.get_device_recent(project, "device", limit=-1)
+
+
+async def test_a_sim_sourced_packet_keeps_the_unit_it_emitted() -> None:
+    """Ingest never converts: a simulated joint's `rad` lands on the part as `rad`, whatever unit
+    the part's envelope states (the window evaluator converts at read, SOLUSDEV-322 P5-T2)."""
+    project, entity = uuid4(), uuid4()
+    plumbing = TelemetryPlumbing(
+        InMemoryTelemetryBuffer(), DictEntityResolver({(project, "world/arm/elbow"): entity})
+    )
+    packet = TelemetryPacket(
+        device_id="world/arm/elbow",
+        timestamp=datetime.now(UTC),
+        values={"position": 0.5},
+        units={"position": "rad"},
+    )
+
+    result = await plumbing.ingest(project, packet, source="sim-a")
+
+    assert result.entity_id == entity
+    (series,) = (await plumbing.get_recent_values(project, entity)).signals
+    assert [(s.value, s.unit) for s in series.points] == [(0.5, "rad")]

@@ -12,7 +12,7 @@ export interface RunSummary {
   robot_id: string
   session_id: string | null
   name: string
-  origin: 'live' | 'recorded' | 'synthetic'
+  origin: 'live' | 'recorded' | 'synthetic' | 'sim'
   status: 'running' | 'completed' | 'truncated' | 'interrupted'
   started_at: string
   ended_at: string | null
@@ -21,6 +21,7 @@ export interface RunSummary {
   artifact_id: string | null
   /** True for the run its robot's envelopes are learned from; start/import/live-stop omit it. */
   baseline?: boolean
+  pinned?: boolean
 }
 export interface RunPacket {
   device_id: string
@@ -84,7 +85,7 @@ export interface RunDetail {
   manifest: RunManifest
 }
 export interface RunFindings {
-  evidence_origin?: 'live' | 'recorded' | 'synthetic'
+  evidence_origin?: 'live' | 'recorded' | 'synthetic' | 'sim'
   findings: Array<{
     entity_id: string
     headline: string

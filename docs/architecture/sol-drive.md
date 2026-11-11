@@ -226,6 +226,12 @@ family matches `com.google.Chrome.canary`, `com.google.Chrome.beta` and Chrome's
 - **Python REPLs** (they run arbitrary code; same amendment): `org.python.IDLE`, `org.thonny.Thonny`.
 - **Disk imagers** (they write whole devices; same amendment): `io.balena.etcher`,
   `org.raspberrypi.imagingutility`.
+- **Simulator GUIs** (ADR-041 amendment 2026-11-10, SOLUSDEV-322: SOL reaches a simulator only through
+  the owned `gazebo.*`/`isaac.*` wrappers and the `sim_session` ledger, never by driving its window):
+  `org.mujoco.mujoco` (MuJoCo.app, the `simulate` viewer) and `org.python.python` (the python.org
+  framework process, which hosts the pip `mujoco.viewer` and the Gazebo python bindings). Gazebo's own
+  macOS binaries (`gz sim`, `gzclient`, `ign gazebo`) run unbundled and Isaac Sim ships for Linux and
+  Windows only, so both fall under the no-bundle-id rule above.
 - **Password managers and credential prompts:** `com.1password.1password`, `com.agilebits.onepassword7`,
   `com.bitwarden.desktop`, `com.dashlane.dashlanephonefinal` (Dashlane's macOS app is the Catalyst build of
   its iOS app and keeps that id), `com.lastpass.LastPass`, `org.keepassxc.keepassxc`,

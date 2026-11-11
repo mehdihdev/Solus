@@ -23,6 +23,8 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Final
 
+from solus_api.agent.dynamic_gate import registry_needs_card
+from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import (
     ToolCall,
     ToolDescriptor,
@@ -72,12 +74,17 @@ def build_mode_dispatch(
     mode: ActionMode,
     descriptors: Iterable[ToolDescriptor],
     dispatch: DispatchFn,
+    *,
+    registry: ToolRegistry | None = None,
 ) -> DispatchFn:
     """Wrap an already-gated dispatcher with the action-mode policy.
 
     GUIDE: calls to tools whose descriptor declares `requires_confirmation`
     (the CTR-03 mutation marker), and to `DIRECT_WRITE_TOOLS`, are refused
-    here — the wrapped dispatcher is never invoked for them. Everything else
+    here — the wrapped dispatcher is never invoked for them. With a `registry`,
+    a tool's per-call `needs_confirmation` hook (SOLUSDEV-322 P2-T2) is
+    consulted too, so an action that would card in Build is refused here
+    instead. Everything else
     flows through unchanged, including unknown tool names (the registry
     answers NOT_FOUND; unknown is not treated as read-only, it is treated as
     the dispatcher's problem).
@@ -89,8 +96,13 @@ def build_mode_dispatch(
     """
     mutating = DIRECT_WRITE_TOOLS | {d.name for d in descriptors if d.requires_confirmation}
 
+    async def guide_refuses(call: ToolCall) -> bool:
+        if call.tool in mutating:
+            return True
+        return registry is not None and await registry_needs_card(registry, call)
+
     async def mode_dispatch(call: ToolCall) -> ToolResult:
-        refused = mode is ActionMode.GUIDE and call.tool in mutating
+        refused = mode is ActionMode.GUIDE and await guide_refuses(call)
         result = mode_refusal(call) if refused else await dispatch(call)
         # §7 logging: identifiers, mode, and outcome only — never args/values.
         logger.info(

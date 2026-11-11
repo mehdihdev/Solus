@@ -11,7 +11,7 @@ import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -533,17 +533,11 @@ def create_sim_enqueue(app: "FastAPI") -> "SimEnqueue":
     the same request never queues twice while it waits, and the jobs keep no result
     (`keep_result=0`, `connectors/worker.py`), so a finished request may run again."""
 
-    async def enqueue_sim(job_name: str, project_id: str, request: dict[str, object]) -> str:
-        import json
-
+    async def enqueue_sim(job_name: str, project_id: str, request: dict[str, Any]) -> str:
         from solus_api.routers import sources
+        from solus_api.simulation.model_job import pool_enqueue
 
-        canonical = json.dumps(request, sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha1(canonical.encode(), usedforsecurity=False).hexdigest()[:12]
-        job_id = f"{job_name}:{project_id}:{digest}"
-        pool = await sources._arq_pool(app)
-        await pool.enqueue_job(job_name, request, _job_id=job_id)
-        return job_id
+        return await pool_enqueue(await sources._arq_pool(app))(job_name, project_id, request)
 
     return enqueue_sim
 

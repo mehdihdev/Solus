@@ -56,6 +56,7 @@ def test_available_simulators_reports_honestly() -> None:
             find_spec=lambda name: object() if name == "mujoco" else None,
             which=lambda name: None,
             isaac_root=Path("/nonexistent"),
+            env={},
         )
     }
     assert sims["mujoco"].available and sims["mujoco"].reason is None
@@ -78,6 +79,86 @@ def test_gazebo_available_when_gz_on_path(tmp_path: Path) -> None:
     # Isaac present is still NOT a startable session provider — honest, not fake.
     assert not sims["isaac"].available
     assert "direct script" in (sims["isaac"].reason or "") or "MCAP" in (sims["isaac"].reason or "")
+
+
+@pytest.mark.parametrize(
+    ("present", "family"),
+    [("gz", "gz"), ("ign", "ignition"), ("gzserver", "classic"), ("gazebo", "classic")],
+)
+def test_gazebo_row_names_the_detected_family(present: str, family: str) -> None:
+    sims = {
+        s.kind: s
+        for s in available_simulators(
+            find_spec=lambda name: None,
+            which=lambda name: f"/usr/bin/{name}" if name == present else None,
+            isaac_root=Path("/nonexistent"),
+            env={},
+        )
+    }
+    assert sims["gazebo"].available
+    assert family in (sims["gazebo"].reason or "")
+
+
+def _executable(bin_dir: Path, name: str) -> Path:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    exe = bin_dir / name
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_gazebo_detected_under_solus_gazebo_path_when_absent_from_path(tmp_path: Path) -> None:
+    """P8 finding F1: an API configured per the handoff (SOLUS_GAZEBO_PATH set, no Gazebo on
+    PATH) must not tell the user Gazebo is missing."""
+    bin_dir = tmp_path / "bin"
+    _executable(bin_dir, "gz")
+    sims = {
+        s.kind: s
+        for s in available_simulators(
+            find_spec=lambda name: None,
+            which=lambda name: None,
+            isaac_root=Path("/nonexistent"),
+            env={"SOLUS_GAZEBO_PATH": str(bin_dir)},
+        )
+    }
+    assert sims["gazebo"].available
+    assert "gz family" in (sims["gazebo"].reason or "")
+
+
+def test_solus_gazebo_path_wins_over_path_for_the_family_name(tmp_path: Path) -> None:
+    """The configured path is authoritative: classic under SOLUS_GAZEBO_PATH beats `gz` on PATH —
+    and classic's own `gz` (beside `gzserver`) is not mistaken for the Harmonic family."""
+    bin_dir = tmp_path / "classic"
+    _executable(bin_dir, "gz")
+    _executable(bin_dir, "gzserver")
+    sims = {
+        s.kind: s
+        for s in available_simulators(
+            find_spec=lambda name: None,
+            which=lambda name: "/usr/bin/gz" if name == "gz" else None,
+            isaac_root=Path("/nonexistent"),
+            env={"SOLUS_GAZEBO_PATH": str(bin_dir)},
+        )
+    }
+    assert sims["gazebo"].available
+    assert "classic family" in (sims["gazebo"].reason or "")
+
+
+def test_gazebo_miss_reason_names_both_search_places() -> None:
+    sims = {
+        s.kind: s
+        for s in available_simulators(
+            find_spec=lambda name: None,
+            which=lambda name: None,
+            isaac_root=Path("/nonexistent"),
+            env={},
+        )
+    }
+    assert not sims["gazebo"].available
+    assert sims["gazebo"].reason == (
+        "Gazebo is not installed "
+        "(no `gz`, `ign` or `gzserver` CLI under SOLUS_GAZEBO_PATH or on PATH)"
+    )
 
 
 def test_listing_never_imports_heavy_modules(monkeypatch: pytest.MonkeyPatch) -> None:

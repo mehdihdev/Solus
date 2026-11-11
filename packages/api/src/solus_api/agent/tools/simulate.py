@@ -231,8 +231,9 @@ class SimulationTools:
         return ToolDescriptor(
             name=SIMULATE,
             description=(
-                "Simulate ONE quantity of one entity in this project. Solus picks the "
-                "cheapest rung that can answer and says why. Rung 1 (closed-form code) runs "
+                "Simulate ONE quantity of one entity in this project; use it first whenever "
+                "a calculation can answer the question. Solus picks the cheapest rung that can "
+                "answer and says why. Rung 1 (closed-form code) runs "
                 "now and is recorded; a value inside its band climbs on its own. Rung 3 (the "
                 "mesh check, a circuit transient, a rigid-body trajectory) is queued as a job "
                 "that records its own result: read it later with get_sim_result. Rungs 2 and 4 "
@@ -712,7 +713,8 @@ def register_simulation_tools(
 ) -> None:
     """Add `get_sim_result`, a read, and, with the app's hub (every recorded run publishes
     through it, M69), `simulate` and the gated `apply_sim_change`. Which external targets are
-    connected is read off the gated tools registered before these: the bridge's."""
+    connected is read off the tools registered before these: the bridge's (connection is
+    registration, SOLUSDEV-322 P1-T3; each routine tool's gate decides per call)."""
     registry.register(
         bounded_read_tool(
             GET_SIM_RESULT,
@@ -726,14 +728,14 @@ def register_simulation_tools(
     if hub is None:
         return
     config = shipped_simulation()  # the fact store's own read: one cache of the bands
-    gated = frozenset(d.name for d in registry.list() if d.requires_confirmation)
+    registered = frozenset(d.name for d in registry.list())
     tools = SimulationTools(
         sessions,
         project_id,
         user_id=user_id,
         hub=hub,
         enqueue_sim=enqueue_sim,
-        external=ExternalProviders.of(config, gated=gated),
+        external=ExternalProviders.of(config, registered=registered),
         config=config,
     )
     registry.register(InProcessTool(tools.descriptor(), tools.simulate))

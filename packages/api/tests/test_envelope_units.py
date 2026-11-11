@@ -9,6 +9,7 @@ the ones `test_envelopes.py` builds its own with, imported from it.
 from __future__ import annotations
 
 import logging
+import math
 
 import pytest
 from solus_api.hardware.config import PartConfig, PartLimits
@@ -18,6 +19,7 @@ from solus_api.livebench.findings.envelopes import (
     QUANTITIES,
     Bound,
     canonical_unit,
+    convert_unit,
     envelope_line,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -241,6 +243,20 @@ def test_canonical_unit_has_one_spelling_per_unit() -> None:
     assert canonical_unit("m/s^2") == "m/s^2"
     assert canonical_unit("") is None and canonical_unit("   ") is None
     assert canonical_unit(None) is None
+
+
+def test_convert_unit_scales_known_pairs_and_refuses_the_rest() -> None:
+    """The one scale table the run analysis and the window evaluator convert with (SOLUSDEV-322
+    P5-T2): angles, angular rates and current; the same unit is identity; a pair it does not know,
+    a missing unit or a result that is not finite is None — never a guess."""
+    assert convert_unit(math.pi, "rad", "deg") == pytest.approx(180.0)
+    assert convert_unit(90.0, "deg", "rad") == pytest.approx(math.pi / 2)
+    assert convert_unit(1.0, "rad/s", "deg/s") == pytest.approx(math.degrees(1.0))
+    assert convert_unit(1500.0, "mA", "A") == pytest.approx(1.5)
+    assert convert_unit(2.5, "A", "A") == 2.5
+    assert convert_unit(1.0, "rad", "m") is None
+    assert convert_unit(1.0, None, "deg") is None and convert_unit(1.0, "rad", None) is None
+    assert convert_unit(math.inf, "rad", "deg") is None
 
 
 async def test_spellings_of_one_unit_are_one_unit_to_the_builder(db: AsyncSession) -> None:

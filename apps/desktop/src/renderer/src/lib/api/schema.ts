@@ -3018,6 +3018,28 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/projects/{project_id}/bench/runs/{run_id}/pin': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Pin Run
+     * @description Keep the run (SOLUSDEV-322 P5-T4): `attrs.pinned` is what sim-run retention reads to
+     *     leave a run alone. Idempotent; a run still running is refused as for `baseline`, since its
+     *     next checkpoint rewrites the whole record and the mark with it.
+     */
+    post: operations['pin_run_api_v1_projects__project_id__bench_runs__run_id__pin_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/projects/{project_id}/bench/runs/{run_id}/findings': {
     parameters: {
       query?: never
@@ -4884,7 +4906,11 @@ export interface components {
       /** Binding */
       binding: ('project' | 'window') | null
     }
-    /** GazeboSimConfig */
+    /**
+     * GazeboSimConfig
+     * @description Manual `topics`, or (SOLUSDEV-322 P3-T5) a `world` + `model` whose joint_state stream the
+     *     livebench source derives for the installed (or named) Gazebo `family`.
+     */
     GazeboSimConfig: {
       /**
        * @description discriminator enum property added by openapi-typescript
@@ -4892,7 +4918,13 @@ export interface components {
        */
       provider: 'gazebo'
       /** Topics */
-      topics: string[]
+      topics?: string[]
+      /** Family */
+      family?: ('classic' | 'ignition' | 'gz') | null
+      /** World */
+      world?: string | null
+      /** Model */
+      model?: string | null
       /**
        * Window Seconds
        * @default 1
@@ -6196,15 +6228,15 @@ export interface components {
       parent_link_entity_id: string
       /**
        * Kind
-       * @constant
+       * @enum {string}
        */
-      kind: 'contact'
+      kind: 'contact' | 'imu' | 'camera'
       /** Translation M */
       translation_m: number[]
       /** Orientation Wxyz */
       orientation_wxyz: number[]
       /** Radius M */
-      radius_m: number
+      radius_m?: number | null
     }
     /** SerialRealConfig */
     SerialRealConfig: {
@@ -6243,7 +6275,9 @@ export interface components {
       /** Data Collection Consent */
       data_collection_consent?: boolean | null
       /** Onboarding Step */
-      onboarding_step?: ('about' | 'connect' | 'build' | 'done') | null
+      onboarding_step?:
+        | ('meet' | 'about' | 'voice' | 'access' | 'connect' | 'build' | 'done')
+        | null
     }
     /** SimulationModel */
     SimulationModel: {
@@ -13405,6 +13439,40 @@ export interface operations {
     }
   }
   mark_baseline_api_v1_projects__project_id__bench_runs__run_id__baseline_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        run_id: string
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  pin_run_api_v1_projects__project_id__bench_runs__run_id__pin_post: {
     parameters: {
       query?: never
       header?: never

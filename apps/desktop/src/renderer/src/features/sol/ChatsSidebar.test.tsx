@@ -170,8 +170,10 @@ describe('menu positioning (code review M)', () => {
 describe('design template — groups and the ⌘N card', () => {
   it('groups rows under TODAY / THIS WEEK / EARLIER by last activity', async () => {
     const now = Date.now()
+    // Noon today, not "an hour ago": between 00:00 and 01:00 an hour ago is yesterday.
+    const noonToday = new Date(now).setHours(12, 0, 0, 0)
     listSolConversations.mockResolvedValue([
-      { ...conversation('c1', 'Fresh'), updated_at: new Date(now - 3600_000).toISOString() },
+      { ...conversation('c1', 'Fresh'), updated_at: new Date(noonToday).toISOString() },
       { ...conversation('c2', 'Midweek'), updated_at: new Date(now - 3 * 86400_000).toISOString() },
       { ...conversation('c3', 'Old'), updated_at: new Date(now - 30 * 86400_000).toISOString() }
     ])

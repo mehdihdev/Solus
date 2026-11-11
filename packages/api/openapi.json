@@ -2694,9 +2694,7 @@
     },
     "/api/v1/billing/packs": {
       "get": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "List Credit Packs",
         "description": "The credit packs available for purchase (ADR-024), from server config so the\nUI never hard-codes environment-specific Stripe Price ids. Price ids are not\nsecrets. Sorted by credit amount ascending. `usd` is the display price (whole\ndollars) when configured; the charged amount is always the Stripe Price.",
         "operationId": "list_credit_packs_api_v1_billing_packs_get",
@@ -2723,9 +2721,7 @@
     },
     "/api/v1/billing/checkout-session": {
       "post": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Create Checkout Session",
         "description": "Start a Stripe Checkout for a subscription plan or a credit pack, returning\nthe hosted redirect URL. The entitlement is applied by the webhook once Stripe\nconfirms payment \u2014 never from this request (SOLUSDEV-83 / ADR-024).",
         "operationId": "create_checkout_session_api_v1_billing_checkout_session_post",
@@ -2772,9 +2768,7 @@
     },
     "/api/v1/billing/summary": {
       "get": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Get Billing Summary",
         "description": "The caller's own billing read model (SOLUSDEV-236). Stripe trouble degrades the\nStripe-derived fields to null with a 200; it never produces a 502/503 here.",
         "operationId": "get_billing_summary_api_v1_billing_summary_get",
@@ -2799,9 +2793,7 @@
     },
     "/api/v1/billing/portal-session": {
       "post": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Create Portal Session",
         "description": "Open the Stripe-hosted billing portal (manage payment method, cancel,\nswitch plan), optionally deep-linked into the update/cancel flow. Requires an\nexisting Stripe customer (i.e. a prior checkout).",
         "operationId": "create_portal_session_api_v1_billing_portal_session_post",
@@ -2853,9 +2845,7 @@
     },
     "/api/v1/billing/academic": {
       "get": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Get Academic",
         "description": "The caller's academic status (none / pending / active / expired).",
         "operationId": "get_academic_api_v1_billing_academic_get",
@@ -2880,9 +2870,7 @@
     },
     "/api/v1/billing/academic/code": {
       "post": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Send Academic Code",
         "description": "Email a 6-digit code to an academic address (rate-limited; see the service).",
         "operationId": "send_academic_code_api_v1_billing_academic_code_post",
@@ -2927,9 +2915,7 @@
     },
     "/api/v1/billing/academic/verify": {
       "post": {
-        "tags": [
-          "billing"
-        ],
+        "tags": ["billing"],
         "summary": "Verify Academic Code",
         "description": "Check the code; on a match the caller's plan becomes Academic.",
         "operationId": "verify_academic_code_api_v1_billing_academic_verify_post",
@@ -5733,10 +5719,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "unassigned",
-                "all"
-              ],
+              "enum": ["unassigned", "all"],
               "type": "string",
               "default": "all",
               "title": "Ownership"
@@ -7349,10 +7332,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": [
-                    "part",
-                    "platform"
-                  ],
+                  "enum": ["part", "platform"],
                   "type": "string"
                 },
                 {
@@ -7416,10 +7396,7 @@
             "in": "path",
             "required": true,
             "schema": {
-              "enum": [
-                "part",
-                "platform"
-              ],
+              "enum": ["part", "platform"],
               "type": "string",
               "title": "Kind"
             }
@@ -8731,11 +8708,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "entities",
-                "solus",
-                "all"
-              ],
+              "enum": ["entities", "solus", "all"],
               "type": "string",
               "default": "all",
               "title": "Scope"
@@ -8871,12 +8844,7 @@
             "in": "query",
             "required": false,
             "schema": {
-              "enum": [
-                "open",
-                "acknowledged",
-                "dismissed",
-                "resolved"
-              ],
+              "enum": ["open", "acknowledged", "dismissed", "resolved"],
               "type": "string",
               "default": "open",
               "title": "Status"
@@ -8889,11 +8857,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": [
-                    "info",
-                    "warning",
-                    "critical"
-                  ],
+                  "enum": ["info", "warning", "critical"],
                   "type": "string"
                 },
                 {
@@ -11009,10 +10973,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": [
-                    "active",
-                    "ended"
-                  ],
+                  "enum": ["active", "ended"],
                   "type": "string"
                 },
                 {
@@ -11029,10 +10990,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "enum": [
-                    "sim",
-                    "real"
-                  ],
+                  "enum": ["sim", "real"],
                   "type": "string"
                 },
                 {
@@ -11680,6 +11638,64 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Mark Baseline Api V1 Projects  Project Id  Bench Runs  Run Id  Baseline Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/bench/runs/{run_id}/pin": {
+      "post": {
+        "summary": "Pin Run",
+        "description": "Keep the run (SOLUSDEV-322 P5-T4): `attrs.pinned` is what sim-run retention reads to\nleave a run alone. Idempotent; a run still running is refused as for `baseline`, since its\nnext checkpoint rewrites the whole record and the mark with it.",
+        "operationId": "pin_run_api_v1_projects__project_id__bench_runs__run_id__pin_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Pin Run Api V1 Projects  Project Id  Bench Runs  Run Id  Pin Post"
                 }
               }
             }
@@ -12381,9 +12397,7 @@
     },
     "/api/v1/panel/pair/start": {
       "post": {
-        "tags": [
-          "panel"
-        ],
+        "tags": ["panel"],
         "summary": "Pair Start",
         "description": "Begin a pairing. Grants nothing \u2014 it only mints a code to be approved.",
         "operationId": "pair_start_api_v1_panel_pair_start_post",
@@ -12433,9 +12447,7 @@
     },
     "/api/v1/panel/pair/poll": {
       "post": {
-        "tags": [
-          "panel"
-        ],
+        "tags": ["panel"],
         "summary": "Pair Poll",
         "description": "Exchange an approved device code for a panel token, exactly once.\n\nThe device code travels as a Bearer so this loop lands in a per-credential\nrate-limit bucket rather than the shared unauthenticated one.",
         "operationId": "pair_poll_api_v1_panel_pair_poll_post",
@@ -12462,9 +12474,7 @@
     },
     "/api/v1/panel/context": {
       "get": {
-        "tags": [
-          "panel"
-        ],
+        "tags": ["panel"],
         "summary": "Panel Context",
         "description": "Which Solus projects this user can see that track this Onshape document.\n\nResolved at REQUEST time from live membership rather than stored on the\nbinding: a document can appear in several projects, one Onshape account maps\nto many projects, and a stored answer would go stale the moment someone\nedits a source's document selection.\n\nZero matches is an empty list, never a 403 \u2014 a panel must not become an\nexistence oracle for other tenants' documents.",
         "operationId": "panel_context_api_v1_panel_context_get",
@@ -12532,9 +12542,7 @@
     },
     "/api/v1/panel/projects/{project_id}/parts": {
       "get": {
-        "tags": [
-          "panel"
-        ],
+        "tags": ["panel"],
         "summary": "Panel Parts",
         "description": "Parts Solus knows for this document/element, in this project.\n\nThe project the panel names carries NO authority: `get_project_context` is\ncalled directly with the user resolved from the binding, so a project the\nbinding cannot see 404s exactly as it would for any other caller. Calling it\nas a plain function (the `routers/bridge.py` precedent) means it never\ntouches the provisioning dependency.",
         "operationId": "panel_parts_api_v1_panel_projects__project_id__parts_get",
@@ -12605,9 +12613,7 @@
     },
     "/api/v1/toolkb/entries": {
       "post": {
-        "tags": [
-          "toolkb"
-        ],
+        "tags": ["toolkb"],
         "summary": "Submit Entry",
         "operationId": "submit_entry_api_v1_toolkb_entries_post",
         "security": [
@@ -12651,9 +12657,7 @@
         }
       },
       "get": {
-        "tags": [
-          "toolkb"
-        ],
+        "tags": ["toolkb"],
         "summary": "List Entries",
         "operationId": "list_entries_api_v1_toolkb_entries_get",
         "security": [
@@ -12793,9 +12797,7 @@
     },
     "/api/v1/toolkb/entries/{entry_id}/feedback": {
       "post": {
-        "tags": [
-          "toolkb"
-        ],
+        "tags": ["toolkb"],
         "summary": "Submit Feedback",
         "description": "TU-08: a user confirms or rejects a guidance step. Recomputes confidence\ndeterministically (a reject pulls down hard \u2014 precision over recall).",
         "operationId": "submit_feedback_api_v1_toolkb_entries__entry_id__feedback_post",
@@ -12854,9 +12856,7 @@
     },
     "/api/v1/toolkb/guides": {
       "get": {
-        "tags": [
-          "toolkb"
-        ],
+        "tags": ["toolkb"],
         "summary": "List Guides Route",
         "description": "Authored walkthroughs available for a tool+version (unresolved summary).",
         "operationId": "list_guides_route_api_v1_toolkb_guides_get",
@@ -12913,9 +12913,7 @@
     },
     "/api/v1/toolkb/guides/{guide_id}": {
       "get": {
-        "tags": [
-          "toolkb"
-        ],
+        "tags": ["toolkb"],
         "summary": "Get Guide Route",
         "description": "One walkthrough, each step resolved against the live KB.\n\nBoth narrations (guide/expert) are returned so the panel switches SOL mode\n(ADR-016) with no round-trip. Unavailable/tentative steps are marked, never\nfaked \u2014 the renderer degrades gracefully and never shows a confident wrong\npointer.",
         "operationId": "get_guide_route_api_v1_toolkb_guides__guide_id__get",
@@ -12973,9 +12971,7 @@
     },
     "/api/v1/corpus/manifest": {
       "get": {
-        "tags": [
-          "corpus"
-        ],
+        "tags": ["corpus"],
         "summary": "Get Manifest",
         "operationId": "get_manifest_api_v1_corpus_manifest_get",
         "responses": {
@@ -13001,9 +12997,7 @@
     },
     "/api/v1/corpus/search": {
       "get": {
-        "tags": [
-          "corpus"
-        ],
+        "tags": ["corpus"],
         "summary": "Search",
         "operationId": "search_api_v1_corpus_search_get",
         "security": [
@@ -13102,9 +13096,7 @@
     },
     "/api/v1/corpus/chunks/{chunk_id}": {
       "get": {
-        "tags": [
-          "corpus"
-        ],
+        "tags": ["corpus"],
         "summary": "Get Chunk",
         "operationId": "get_chunk_api_v1_corpus_chunks__chunk_id__get",
         "security": [
@@ -13151,9 +13143,7 @@
     },
     "/api/v1/webhooks/{provider}/{source_id}/{token}": {
       "post": {
-        "tags": [
-          "webhooks"
-        ],
+        "tags": ["webhooks"],
         "summary": "Provider Webhook",
         "operationId": "provider_webhook_api_v1_webhooks__provider___source_id___token__post",
         "parameters": [
@@ -13205,9 +13195,7 @@
     },
     "/api/v1/teams/{team_id}/github/install/start": {
       "post": {
-        "tags": [
-          "github-org"
-        ],
+        "tags": ["github-org"],
         "summary": "Install Start",
         "operationId": "install_start_api_v1_teams__team_id__github_install_start_post",
         "security": [
@@ -13263,9 +13251,7 @@
     },
     "/api/v1/teams/{team_id}/github/install/complete": {
       "post": {
-        "tags": [
-          "github-org"
-        ],
+        "tags": ["github-org"],
         "summary": "Install Complete",
         "operationId": "install_complete_api_v1_teams__team_id__github_install_complete_post",
         "security": [
@@ -13321,9 +13307,7 @@
     },
     "/api/v1/teams/{team_id}/github/installation": {
       "get": {
-        "tags": [
-          "github-org"
-        ],
+        "tags": ["github-org"],
         "summary": "Get Installation",
         "operationId": "get_installation_api_v1_teams__team_id__github_installation_get",
         "security": [
@@ -13369,9 +13353,7 @@
         }
       },
       "delete": {
-        "tags": [
-          "github-org"
-        ],
+        "tags": ["github-org"],
         "summary": "Delete Installation",
         "operationId": "delete_installation_api_v1_teams__team_id__github_installation_delete",
         "security": [
@@ -13419,9 +13401,7 @@
     },
     "/api/v1/teams/{team_id}/github/repos": {
       "get": {
-        "tags": [
-          "github-org-repos"
-        ],
+        "tags": ["github-org-repos"],
         "summary": "List Repos",
         "operationId": "list_repos_api_v1_teams__team_id__github_repos_get",
         "security": [
@@ -13512,9 +13492,7 @@
     },
     "/api/v1/teams/{team_id}/github/members": {
       "get": {
-        "tags": [
-          "github-org-members"
-        ],
+        "tags": ["github-org-members"],
         "summary": "List Org Members",
         "operationId": "list_org_members_api_v1_teams__team_id__github_members_get",
         "security": [
@@ -13591,9 +13569,7 @@
     },
     "/api/v1/webhooks/github/app": {
       "post": {
-        "tags": [
-          "github-app-webhooks"
-        ],
+        "tags": ["github-app-webhooks"],
         "summary": "Github App Webhook",
         "operationId": "github_app_webhook_api_v1_webhooks_github_app_post",
         "responses": {
@@ -13605,9 +13581,7 @@
     },
     "/api/v1/projects/{project_id}/events": {
       "get": {
-        "tags": [
-          "live"
-        ],
+        "tags": ["live"],
         "summary": "Project Events",
         "description": "Subscribe to this project's change stream.\n\nYields the project channel's frames \u2014 `graph.changed`, `layout.changed`,\n`sources.changed`, `project.updated`, `job.updated`, `access.revoked` and, on the local\nAPI only, `hardware.devices_changed` (SOLUSDEV-250). Ends with `access.revoked` when\nthe caller loses access.",
         "operationId": "project_events_api_v1_projects__project_id__events_get",
@@ -13652,9 +13626,7 @@
     },
     "/api/v1/users/me/events": {
       "get": {
-        "tags": [
-          "live"
-        ],
+        "tags": ["live"],
         "summary": "Account Events",
         "description": "Subscribe to the caller's own channel and every team channel they belong to.\n\nFirst event `ready` names the teams; it is sent again whenever membership changes the\nset. Ends with `access.revoked` if the account or token stops being valid.",
         "operationId": "account_events_api_v1_users_me_events_get",
@@ -15844,9 +15816,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "email"
-        ],
+        "required": ["email"],
         "title": "AcademicCodeCreate",
         "description": "POST /billing/academic/code (ADR-042). The domain rule is checked by the service so\nthe error code is specific (`not_academic_email`), not a generic validation error."
       },
@@ -15860,9 +15830,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "code"
-        ],
+        "required": ["code"],
         "title": "AcademicVerifyCreate",
         "description": "POST /billing/academic/verify: exactly six ASCII digits."
       },
@@ -15876,9 +15844,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "digest"
-        ],
+        "required": ["digest"],
         "title": "AcceptWiring"
       },
       "AcceptedRow": {
@@ -15919,17 +15885,12 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "row_id"
-        ],
+        "required": ["row_id"],
         "title": "AcceptedRow"
       },
       "ActionMode": {
         "type": "string",
-        "enum": [
-          "guide",
-          "do"
-        ],
+        "enum": ["guide", "do"],
         "title": "ActionMode",
         "description": "How SOL is allowed to act on this request: explain, or operate."
       },
@@ -15953,9 +15914,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "source_ids"
-        ],
+        "required": ["source_ids"],
         "title": "AdoptRequest",
         "description": "SOLUSDEV-242 (H2): the explicit, confirmed move of NAMED legacy sources\nto the caller's proved account. `confirm_access` is the caller accepting a\ngrant wider than a source ever recorded (shown in the confirmation)."
       },
@@ -15984,11 +15943,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "urdf_path",
-          "files",
-          "sha256"
-        ],
+        "required": ["urdf_path", "files", "sha256"],
         "title": "Asset"
       },
       "AttachIn": {
@@ -16019,10 +15974,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "entity_ids",
-          "category"
-        ],
+        "required": ["entity_ids", "category"],
         "title": "AttachIn"
       },
       "AttachmentIn": {
@@ -16043,9 +15995,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind"
-        ],
+        "required": ["kind"],
         "title": "AttachmentIn",
         "description": "A measurable attachment fact for classify/completion requests (MO-04):\nwhat kind of artifact and how many tokens it contributes."
       },
@@ -16053,10 +16003,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": [
-              "sim",
-              "real"
-            ],
+            "enum": ["sim", "real"],
             "title": "Mode"
           },
           "config": {
@@ -16100,10 +16047,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "mode",
-          "config"
-        ],
+        "required": ["mode", "config"],
         "title": "BenchSessionIn"
       },
       "BranchItem": {
@@ -16118,10 +16062,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "name",
-          "commit"
-        ],
+        "required": ["name", "commit"],
         "title": "BranchItem"
       },
       "BusMapEntry": {
@@ -16166,10 +16107,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "protocol",
-          "address"
-        ],
+        "required": ["protocol", "address"],
         "title": "BusMapEntry",
         "description": "`{protocol, address, part, model}` \u2014 servo ids, CAN node ids, autopilot\nsystem:component ids all fit one shape. Never a `servo_id` field."
       },
@@ -16188,10 +16126,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "mesh_key",
-          "source_entity_id"
-        ],
+        "required": ["mesh_key", "source_entity_id"],
         "title": "CadBinding"
       },
       "CadBindings": {
@@ -16212,10 +16147,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "expected_version",
-          "bindings"
-        ],
+        "required": ["expected_version", "bindings"],
         "title": "CadBindings"
       },
       "CadImport": {
@@ -16239,32 +16171,19 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_id",
-          "source_entity_id",
-          "expected_revision"
-        ],
+        "required": ["robot_id", "source_entity_id", "expected_revision"],
         "title": "CadImport"
       },
       "CalibrationMode": {
         "type": "string",
-        "enum": [
-          "degrees",
-          "range_0_100",
-          "range_m100_100",
-          "linear",
-          "raw"
-        ],
+        "enum": ["degrees", "range_0_100", "range_m100_100", "linear", "raw"],
         "title": "CalibrationMode"
       },
       "CheckoutSessionCreate": {
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "subscription",
-              "pack"
-            ],
+            "enum": ["subscription", "pack"],
             "title": "Kind"
           },
           "plan": {
@@ -16281,10 +16200,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "month",
-                  "year"
-                ]
+                "enum": ["month", "year"]
               },
               {
                 "type": "null"
@@ -16306,9 +16222,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind"
-        ],
+        "required": ["kind"],
         "title": "CheckoutSessionCreate",
         "description": "Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,\nmonth/year); `pack` needs a price_id that maps to a configured credit pack."
       },
@@ -16365,9 +16279,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "query"
-        ],
+        "required": ["query"],
         "title": "ClassifyRequest",
         "description": "MO-04 pre-flight preview input. `complexity`/`type` let the override UI\npreview a user's pick; extra fields (e.g. a raw model name) are rejected."
       },
@@ -16397,10 +16309,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "event_type",
-          "payload"
-        ],
+        "required": ["event_type", "payload"],
         "title": "ClientEvent"
       },
       "CompareIn": {
@@ -16430,19 +16339,12 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "baseline_id",
-          "candidate_id"
-        ],
+        "required": ["baseline_id", "candidate_id"],
         "title": "CompareIn"
       },
       "Complexity": {
         "type": "string",
-        "enum": [
-          "trivial",
-          "standard",
-          "hard"
-        ],
+        "enum": ["trivial", "standard", "hard"],
         "title": "Complexity",
         "description": "Routing tier, derived automatically by the Step-1 gateway \u2014 never supplied\nby the end user (see `router.derive_complexity`)."
       },
@@ -16526,9 +16428,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "config"
-        ],
+        "required": ["config"],
         "title": "ConfigIn"
       },
       "ConfirmIn": {
@@ -16615,28 +16515,20 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "target",
-          "accepted"
-        ],
+        "required": ["target", "accepted"],
         "title": "ConfirmIn"
       },
       "ConfirmationDecision": {
         "properties": {
           "decision": {
             "type": "string",
-            "enum": [
-              "approve",
-              "reject"
-            ],
+            "enum": ["approve", "reject"],
             "title": "Decision"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "decision"
-        ],
+        "required": ["decision"],
         "title": "ConfirmationDecision",
         "description": "Approve or reject one parked destructive action (SOLUS-ONS-A5).\n\nA decision and NOTHING ELSE. `StrictModel` forbids extra fields, so a body\ncarrying its own `args` is a 422 rather than a merge \u2014 the arguments that\nexecute are the stored ones the user was shown. That is the whole security\nproperty of the round-trip."
       },
@@ -16689,9 +16581,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "title"
-        ],
+        "required": ["title"],
         "title": "ConversationRename",
         "description": "SOLUSDEV-233: the sidebar rename action \u2014 a non-blank title, trimmed."
       },
@@ -16739,9 +16629,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "id"
-        ],
+        "required": ["id"],
         "title": "DocumentAdd",
         "description": "Track one more of the account's documents in this project (SOLUSDEV-241).\nThe id is validated by the CONNECTOR's own rule before it can reach a\nrequest path \u2014 the schema only bounds it."
       },
@@ -16825,9 +16713,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "config"
-        ],
+        "required": ["config"],
         "title": "EntityConfigIn"
       },
       "EntityHardwareConfig": {
@@ -16904,9 +16790,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "entity_id"
-        ],
+        "required": ["entity_id"],
         "title": "EntityHardwareConfig",
         "description": "One physical graph subject's configuration; driver aggregates are resolved at runtime."
       },
@@ -16939,24 +16823,12 @@
           },
           "why": {
             "type": "string",
-            "enum": [
-              "name_match",
-              "text_match",
-              "ref_match"
-            ],
+            "enum": ["name_match", "text_match", "ref_match"],
             "title": "Why"
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "kind",
-          "domain",
-          "name",
-          "snippet",
-          "score",
-          "why"
-        ],
+        "required": ["id", "kind", "domain", "name", "snippet", "score", "why"],
         "title": "EntityHit"
       },
       "EventBatch": {
@@ -16973,9 +16845,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "events"
-        ],
+        "required": ["events"],
         "title": "EventBatch"
       },
       "Evidence": {
@@ -17000,9 +16870,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "by"
-        ],
+        "required": ["by"],
         "title": "Evidence"
       },
       "ExcludedSupplier": {
@@ -17023,9 +16891,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "ExcludedSupplier"
       },
       "ExistingRobotTarget": {
@@ -17043,10 +16909,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "robot_id"
-        ],
+        "required": ["kind", "robot_id"],
         "title": "ExistingRobotTarget"
       },
       "ExpertiseOverride": {
@@ -17055,11 +16918,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "novice",
-                  "working",
-                  "expert"
-                ]
+                "enum": ["novice", "working", "expert"]
               },
               {
                 "type": "null"
@@ -17071,11 +16930,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "novice",
-                  "working",
-                  "expert"
-                ]
+                "enum": ["novice", "working", "expert"]
               },
               {
                 "type": "null"
@@ -17087,11 +16942,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "novice",
-                  "working",
-                  "expert"
-                ]
+                "enum": ["novice", "working", "expert"]
               },
               {
                 "type": "null"
@@ -17103,11 +16954,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "novice",
-                  "working",
-                  "expert"
-                ]
+                "enum": ["novice", "working", "expert"]
               },
               {
                 "type": "null"
@@ -17167,9 +17014,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "ExtractionAcceptanceEnvelope"
       },
       "ExtractionConfirm": {
@@ -17185,10 +17030,7 @@
           },
           "source_kind": {
             "type": "string",
-            "enum": [
-              "firmware",
-              "host_config"
-            ],
+            "enum": ["firmware", "host_config"],
             "title": "Source Kind"
           },
           "proposal_digest": {
@@ -17265,9 +17107,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "ExtractionProposalEnvelope"
       },
       "ExtractionRequest": {
@@ -17285,20 +17125,13 @@
           },
           "source_kind": {
             "type": "string",
-            "enum": [
-              "firmware",
-              "host_config"
-            ],
+            "enum": ["firmware", "host_config"],
             "title": "Source Kind"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "brain_id",
-          "source_ref",
-          "source_kind"
-        ],
+        "required": ["brain_id", "source_ref", "source_kind"],
         "title": "ExtractionRequest"
       },
       "ExtractionSelection": {
@@ -17330,10 +17163,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "row_index",
-          "name"
-        ],
+        "required": ["row_index", "name"],
         "title": "ExtractionSelection"
       },
       "FeedbackBody": {
@@ -17344,20 +17174,12 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "verdict"
-        ],
+        "required": ["verdict"],
         "title": "FeedbackBody"
       },
       "FieldProvenance": {
         "type": "string",
-        "enum": [
-          "library",
-          "repo",
-          "user",
-          "sol",
-          "detected"
-        ],
+        "enum": ["library", "repo", "user", "sol", "detected"],
         "title": "FieldProvenance",
         "description": "Who set a field. Layers apply library \u2192 repo \u2192 user \u2192 detected; SOL writes take the user\nslot; the record names who WON, never a merge of several."
       },
@@ -17375,10 +17197,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data",
-          "meta"
-        ],
+        "required": ["data", "meta"],
         "title": "FindingListOut"
       },
       "FindingOneOut": {
@@ -17388,9 +17207,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "FindingOneOut"
       },
       "FindingOut": {
@@ -17406,32 +17223,17 @@
           },
           "severity": {
             "type": "string",
-            "enum": [
-              "info",
-              "warning",
-              "critical"
-            ],
+            "enum": ["info", "warning", "critical"],
             "title": "Severity"
           },
           "source": {
             "type": "string",
-            "enum": [
-              "observer",
-              "checker",
-              "run_compare",
-              "sol",
-              "simulation"
-            ],
+            "enum": ["observer", "checker", "run_compare", "sol", "simulation"],
             "title": "Source"
           },
           "status": {
             "type": "string",
-            "enum": [
-              "open",
-              "acknowledged",
-              "dismissed",
-              "resolved"
-            ],
+            "enum": ["open", "acknowledged", "dismissed", "resolved"],
             "title": "Status"
           },
           "headline": {
@@ -17584,9 +17386,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "entity_id"
-        ],
+        "required": ["entity_id"],
         "title": "FocusIn",
         "description": "The workspace focus a page send carries: the entity the person is looking at and the\ntrail they came through (oldest first, the focus itself excluded). It rides every page\nsend, so ids in it that went stale are dropped rather than refused \u2014 see\n`turn_scope.plan_scope`."
       },
@@ -17649,10 +17449,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "project",
-                  "window"
-                ]
+                "enum": ["project", "window"]
               },
               {
                 "type": "null"
@@ -17688,8 +17485,45 @@
             },
             "type": "array",
             "maxItems": 32,
-            "minItems": 1,
             "title": "Topics"
+          },
+          "family": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["classic", "ignition", "gz"]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family"
+          },
+          "world": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "World"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]*$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
           "window_seconds": {
             "type": "number",
@@ -17701,11 +17535,9 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider",
-          "topics"
-        ],
-        "title": "GazeboSimConfig"
+        "required": ["provider"],
+        "title": "GazeboSimConfig",
+        "description": "Manual `topics`, or (SOLUSDEV-322 P3-T5) a `world` + `model` whose joint_state stream the\nlivebench source derives for the installed (or named) Gazebo `family`."
       },
       "GrantsIn": {
         "properties": {
@@ -17836,19 +17668,14 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_entity_id"
-        ],
+        "required": ["robot_entity_id"],
         "title": "HardwareConfig"
       },
       "HardwareEntityCreate": {
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "robot",
-              "part"
-            ],
+            "enum": ["robot", "part"],
             "title": "Kind"
           },
           "name": {
@@ -17902,10 +17729,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "name"
-        ],
+        "required": ["kind", "name"],
         "title": "HardwareEntityCreate"
       },
       "HardwareRealConfig": {
@@ -17930,10 +17754,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider",
-          "entity_id"
-        ],
+        "required": ["provider", "entity_id"],
         "title": "HardwareRealConfig"
       },
       "HostAttachment": {
@@ -17982,11 +17803,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "endpoint_id",
-          "machine_id",
-          "local_source_id"
-        ],
+        "required": ["endpoint_id", "machine_id", "local_source_id"],
         "title": "HostAttachment"
       },
       "HostConfirm": {
@@ -18131,9 +17948,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "HostProposalEnvelope"
       },
       "HostedExchange": {
@@ -18153,10 +17968,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "state",
-          "code"
-        ],
+        "required": ["state", "code"],
         "title": "HostedExchange",
         "description": "The desktop posts back what its loopback captured."
       },
@@ -18180,21 +17992,13 @@
           },
           "origin": {
             "type": "string",
-            "enum": [
-              "recorded",
-              "synthetic"
-            ],
+            "enum": ["recorded", "synthetic"],
             "title": "Origin"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_id",
-          "artifact_id",
-          "name",
-          "origin"
-        ],
+        "required": ["robot_id", "artifact_id", "name", "origin"],
         "title": "ImportIn"
       },
       "ImportModel": {
@@ -18217,10 +18021,7 @@
           },
           "format": {
             "type": "string",
-            "enum": [
-              "urdf",
-              "mjcf"
-            ],
+            "enum": ["urdf", "mjcf"],
             "title": "Format"
           },
           "meshes": {
@@ -18259,12 +18060,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_id",
-          "artifact_id",
-          "name",
-          "format"
-        ],
+        "required": ["robot_id", "artifact_id", "name", "format"],
         "title": "ImportModel"
       },
       "InstallBody": {
@@ -18287,9 +18083,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "grants"
-        ],
+        "required": ["grants"],
         "title": "InstallBody"
       },
       "InstallComplete": {
@@ -18327,20 +18121,13 @@
           },
           "setup_action": {
             "type": "string",
-            "enum": [
-              "install",
-              "update",
-              "request"
-            ],
+            "enum": ["install", "update", "request"],
             "title": "Setup Action"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "state",
-          "setup_action"
-        ],
+        "required": ["state", "setup_action"],
         "title": "InstallComplete"
       },
       "InstallStart": {
@@ -18391,7 +18178,7 @@
             "anyOf": [
               {
                 "type": "integer",
-                "maximum": 9.223372036854776e+18,
+                "maximum": 9.223372036854776e18,
                 "exclusiveMinimum": 0.0
               },
               {
@@ -18413,11 +18200,7 @@
           },
           "role": {
             "type": "string",
-            "enum": [
-              "admin",
-              "member",
-              "viewer"
-            ],
+            "enum": ["admin", "member", "viewer"],
             "title": "Role",
             "default": "member"
           }
@@ -18434,38 +18217,26 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "IsaacConnectionEnvelope"
       },
       "IsaacConnectionStatus": {
         "properties": {
           "bridge": {
             "type": "string",
-            "enum": [
-              "connected",
-              "unavailable"
-            ],
+            "enum": ["connected", "unavailable"],
             "title": "Bridge",
             "default": "unavailable"
           },
           "installation": {
             "type": "string",
-            "enum": [
-              "installed",
-              "unknown"
-            ],
+            "enum": ["installed", "unknown"],
             "title": "Installation",
             "default": "unknown"
           },
           "owned_session": {
             "type": "string",
-            "enum": [
-              "running",
-              "not_running",
-              "unknown"
-            ],
+            "enum": ["running", "not_running", "unknown"],
             "title": "Owned Session",
             "default": "unknown"
           },
@@ -18508,10 +18279,7 @@
           },
           "category": {
             "type": "string",
-            "enum": [
-              "raw_material",
-              "purchase"
-            ],
+            "enum": ["raw_material", "purchase"],
             "title": "Category"
           },
           "quantity": {
@@ -18523,13 +18291,7 @@
           },
           "state": {
             "type": "string",
-            "enum": [
-              "planned",
-              "ordered",
-              "received",
-              "installed",
-              "retired"
-            ],
+            "enum": ["planned", "ordered", "received", "installed", "retired"],
             "title": "State",
             "default": "planned"
           },
@@ -18597,10 +18359,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name",
-          "category"
-        ],
+        "required": ["name", "category"],
         "title": "ItemBody"
       },
       "JobKind": {
@@ -18618,13 +18377,7 @@
       },
       "JobStatus": {
         "type": "string",
-        "enum": [
-          "queued",
-          "running",
-          "succeeded",
-          "failed",
-          "cancelled"
-        ],
+        "enum": ["queued", "running", "succeeded", "failed", "cancelled"],
         "title": "JobStatus"
       },
       "Joint": {
@@ -18684,9 +18437,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "layout"
-        ],
+        "required": ["layout"],
         "title": "LayoutBody"
       },
       "LayoutSlotIn": {
@@ -18698,21 +18449,13 @@
           },
           "size": {
             "type": "string",
-            "enum": [
-              "compact",
-              "standard",
-              "wide",
-              "full"
-            ],
+            "enum": ["compact", "standard", "wide", "full"],
             "title": "Size"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "ref",
-          "size"
-        ],
+        "required": ["ref", "size"],
         "title": "LayoutSlotIn"
       },
       "LifecycleIn": {
@@ -18723,20 +18466,12 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "state"
-        ],
+        "required": ["state"],
         "title": "LifecycleIn"
       },
       "LifecycleState": {
         "type": "string",
-        "enum": [
-          "planned",
-          "ordered",
-          "received",
-          "installed",
-          "live"
-        ],
+        "enum": ["planned", "ordered", "received", "installed", "live"],
         "title": "LifecycleState"
       },
       "LocalFolderLink": {
@@ -18761,11 +18496,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "machine_id",
-          "machine_name",
-          "folder_name"
-        ],
+        "required": ["machine_id", "machine_name", "folder_name"],
         "title": "LocalFolderLink",
         "description": "Link THIS machine's working copy to the project (SOLUSDEV-249). The path\nnever travels: the companion scans its own workspace. `machine_id` is the\ncompanion instance id (`~/.solus/companion_id`)."
       },
@@ -18778,21 +18509,13 @@
           },
           "tool": {
             "type": "string",
-            "enum": [
-              "kicad",
-              "altium",
-              "vscode",
-              "system"
-            ],
+            "enum": ["kicad", "altium", "vscode", "system"],
             "title": "Tool"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "entity_id",
-          "tool"
-        ],
+        "required": ["entity_id", "tool"],
         "title": "LocalFolderOpen",
         "description": "Open one detected project in a tool on the source's machine (SOLUSDEV-249)."
       },
@@ -18819,11 +18542,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "hostname",
-          "os",
-          "arch"
-        ],
+        "required": ["hostname", "os", "arch"],
         "title": "MachineIn"
       },
       "Mapping": {
@@ -18844,10 +18563,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "expected_version",
-          "bindings"
-        ],
+        "required": ["expected_version", "bindings"],
         "title": "Mapping"
       },
       "McapSimConfig": {
@@ -18888,10 +18604,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider",
-          "mcap_path"
-        ],
+        "required": ["provider", "mcap_path"],
         "title": "McapSimConfig"
       },
       "MemberPreferences": {
@@ -18920,10 +18633,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "schema_version",
-          "shared"
-        ],
+        "required": ["schema_version", "shared"],
         "title": "MemberPreferences",
         "description": "`members/<uid.hex>` CONFIG: only the sections the member flagged as shared."
       },
@@ -18931,20 +18641,13 @@
         "properties": {
           "role": {
             "type": "string",
-            "enum": [
-              "owner",
-              "admin",
-              "member",
-              "viewer"
-            ],
+            "enum": ["owner", "admin", "member", "viewer"],
             "title": "Role"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "role"
-        ],
+        "required": ["role"],
         "title": "MemberRoleUpdate"
       },
       "MeshArtifact": {
@@ -18963,10 +18666,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "reference",
-          "artifact_id"
-        ],
+        "required": ["reference", "artifact_id"],
         "title": "MeshArtifact"
       },
       "MessageCreate": {
@@ -19159,9 +18859,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider"
-        ],
+        "required": ["provider"],
         "title": "MujocoSimConfig"
       },
       "NewRobotTarget": {
@@ -19187,9 +18885,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind"
-        ],
+        "required": ["kind"],
         "title": "NewRobotTarget"
       },
       "NoteBody": {
@@ -19203,9 +18899,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "title": "NoteBody"
       },
       "OAuthExchange": {
@@ -19225,10 +18919,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "state",
-          "code"
-        ],
+        "required": ["state", "code"],
         "title": "OAuthExchange",
         "description": "Desktop loopback flow: the app captured the code and posts it back with\nthe state from oauth/start, so the server can exchange it for a token."
       },
@@ -19304,11 +18995,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "threshold_breach",
-              "change_point",
-              "stream_gap"
-            ],
+            "enum": ["threshold_breach", "change_point", "stream_gap"],
             "title": "Kind"
           },
           "device_id": {
@@ -19347,12 +19034,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "device_id",
-          "signal",
-          "at"
-        ],
+        "required": ["kind", "device_id", "signal", "at"],
         "title": "ObserverEventIn",
         "description": "Wire shape of an edge-observer event (mirrors livebench's ObserverEvent)."
       },
@@ -19370,10 +19052,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data",
-          "meta"
-        ],
+        "required": ["data", "meta"],
         "title": "OutcomeListOut"
       },
       "OutcomeOut": {
@@ -19426,11 +19105,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "diverged",
-                  "quota",
-                  "no_preview"
-                ]
+                "enum": ["diverged", "quota", "no_preview"]
               },
               {
                 "type": "null"
@@ -19507,11 +19182,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "limit",
-          "has_next",
-          "next_cursor"
-        ],
+        "required": ["limit", "has_next", "next_cursor"],
         "title": "PageMeta",
         "description": "The \u00a71.4 meta block `page_meta` builds, as the response model typed routes share."
       },
@@ -19526,9 +19197,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "user_code"
-        ],
+        "required": ["user_code"],
         "title": "PanelLinkApprove",
         "description": "Reject unknown fields: this endpoint hands out a 90-day credential."
       },
@@ -19586,11 +19255,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "parent_id",
-          "expected_parent_id",
-          "version"
-        ],
+        "required": ["parent_id", "expected_parent_id", "version"],
         "title": "ParentIn"
       },
       "PartCalibration": {
@@ -19633,10 +19298,7 @@
           },
           "owner": {
             "type": "string",
-            "enum": [
-              "repo",
-              "solus"
-            ],
+            "enum": ["repo", "solus"],
             "title": "Owner",
             "default": "solus"
           }
@@ -19811,10 +19473,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name",
-          "category"
-        ],
+        "required": ["name", "category"],
         "title": "PartIn"
       },
       "PartLimits": {
@@ -19855,9 +19514,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "type"
-        ],
+        "required": ["type"],
         "title": "PhysicalRobotCreate"
       },
       "PhysicalRobotRename": {
@@ -19871,19 +19528,12 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "PhysicalRobotRename"
       },
       "PlanType": {
         "type": "string",
-        "enum": [
-          "basic",
-          "pro",
-          "enterprise",
-          "academic"
-        ],
+        "enum": ["basic", "pro", "enterprise", "academic"],
         "title": "PlanType"
       },
       "PlatformImportIn": {
@@ -19989,10 +19639,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "binding"
-        ],
+        "required": ["kind", "binding"],
         "title": "PortableTransportBinding"
       },
       "PortalSessionCreate": {
@@ -20001,10 +19648,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "update",
-                  "cancel"
-                ]
+                "enum": ["update", "cancel"]
               },
               {
                 "type": "null"
@@ -20088,29 +19732,19 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "target_id",
-          "artifact_id"
-        ],
+        "required": ["target_id", "artifact_id"],
         "title": "PrepareCompanionDeployment"
       },
       "PreparePresence": {
         "properties": {
           "profile_id": {
             "type": "string",
-            "enum": [
-              "uno_avr",
-              "nano_avr"
-            ],
+            "enum": ["uno_avr", "nano_avr"],
             "title": "Profile Id"
           },
           "kind": {
             "type": "string",
-            "enum": [
-              "heartbeat",
-              "probe",
-              "topology"
-            ],
+            "enum": ["heartbeat", "probe", "topology"],
             "title": "Kind"
           },
           "channel": {
@@ -20135,11 +19769,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "profile_id",
-          "kind",
-          "channel"
-        ],
+        "required": ["profile_id", "kind", "channel"],
         "title": "PreparePresence"
       },
       "ProcessInput": {
@@ -20178,10 +19808,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "process_id",
-          "prompt_seq"
-        ],
+        "required": ["process_id", "prompt_seq"],
         "title": "ProcessPrompt",
         "description": "Which waiting prompt woke the desktop: the process and its prompt number."
       },
@@ -20208,9 +19835,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "ProjectCreate"
       },
       "ProjectUpdate": {
@@ -20316,9 +19941,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "driver_id"
-        ],
+        "required": ["driver_id"],
         "title": "ProtocolBinding",
         "description": "The driver plugin by id plus its parameters \u2014 in config, not code."
       },
@@ -20342,9 +19965,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "by"
-        ],
+        "required": ["by"],
         "title": "ProvenanceRecord"
       },
       "RejectIn": {
@@ -20386,10 +20007,7 @@
           },
           "format": {
             "type": "string",
-            "enum": [
-              "urdf",
-              "mjcf"
-            ],
+            "enum": ["urdf", "mjcf"],
             "title": "Format"
           },
           "meshes": {
@@ -20480,12 +20098,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider",
-          "recording",
-          "driver_id",
-          "robot_entity_id"
-        ],
+        "required": ["provider", "recording", "driver_id", "robot_entity_id"],
         "title": "ReplayRealConfig",
         "description": "DEV ONLY (docs/api/bench-runs.md): a recorded capture replayed as one of the project's\nrobots. `recording` is a file under `Settings.bench_replay_root`; `driver_id` decodes it."
       },
@@ -20581,10 +20194,7 @@
           },
           "door": {
             "type": "string",
-            "enum": [
-              "workspace",
-              "bom"
-            ],
+            "enum": ["workspace", "bom"],
             "title": "Door",
             "default": "bom"
           },
@@ -20697,9 +20307,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "note"
-        ],
+        "required": ["note"],
         "title": "ResolveBody"
       },
       "ResolveEnvelope": {
@@ -20709,9 +20317,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "ResolveEnvelope"
       },
       "ResolveOut": {
@@ -20727,32 +20333,17 @@
           },
           "severity": {
             "type": "string",
-            "enum": [
-              "info",
-              "warning",
-              "critical"
-            ],
+            "enum": ["info", "warning", "critical"],
             "title": "Severity"
           },
           "source": {
             "type": "string",
-            "enum": [
-              "observer",
-              "checker",
-              "run_compare",
-              "sol",
-              "simulation"
-            ],
+            "enum": ["observer", "checker", "run_compare", "sol", "simulation"],
             "title": "Source"
           },
           "status": {
             "type": "string",
-            "enum": [
-              "open",
-              "acknowledged",
-              "dismissed",
-              "resolved"
-            ],
+            "enum": ["open", "acknowledged", "dismissed", "resolved"],
             "title": "Status"
           },
           "headline": {
@@ -20911,9 +20502,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "RevisionsEnvelope"
       },
       "RevisionsResponse": {
@@ -20954,12 +20543,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "supported",
-          "kind",
-          "items",
-          "next_page"
-        ],
+        "required": ["supported", "kind", "items", "next_page"],
         "title": "RevisionsResponse"
       },
       "RobotRealConfig": {
@@ -20984,10 +20568,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider",
-          "robot_entity_id"
-        ],
+        "required": ["provider", "robot_entity_id"],
         "title": "RobotRealConfig",
         "description": "A session from a Physical Robot's HardwareConfig (docs/api/hardware.md \u00a76)."
       },
@@ -21023,12 +20604,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_id",
-          "nodes",
-          "edges",
-          "roots"
-        ],
+        "required": ["robot_id", "nodes", "edges", "roots"],
         "title": "RobotTopology"
       },
       "RobotTopologyEnvelope": {
@@ -21038,19 +20614,12 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "RobotTopologyEnvelope"
       },
       "RouteType": {
         "type": "string",
-        "enum": [
-          "code",
-          "visual_log",
-          "long_context",
-          "general"
-        ],
+        "enum": ["code", "visual_log", "long_context", "general"],
         "title": "RouteType",
         "description": "Query kind, routed to the frontier model whose strength matches it. A REAL\nv1 input (not a no-op): e.g. Gemini-class models are strong for VISUAL_LOG /\nLONG_CONTEXT, Claude-class for CODE. `GENERAL` is the fallback when `type` is\nNone. Truly-specialist future models (e.g. spatial reasoning) get new members\nhere without touching routing code."
       },
@@ -21058,10 +20627,7 @@
         "properties": {
           "media_type": {
             "type": "string",
-            "enum": [
-              "image/png",
-              "image/jpeg"
-            ],
+            "enum": ["image/png", "image/jpeg"],
             "title": "Media Type"
           },
           "data": {
@@ -21118,10 +20684,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "media_type",
-          "data"
-        ],
+        "required": ["media_type", "data"],
         "title": "ScreenshotIn",
         "description": "SOLUSDEV-252 S3 (sol-window.md \u00a78): one screenshot on this turn.\n\n`data` is deliberately NOT length-capped here: a pydantic failure echoes the\noffending input back in the 422 body, and this field is megabytes of pixels.\n`agent/screen.py` caps it (3.5 MiB encoded, 2.5 MiB decoded) and sniffs the\nmagic bytes; the route turns its reason into a 422 that never echoes data."
       },
@@ -21140,10 +20703,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "app",
-          "title"
-        ],
+        "required": ["app", "title"],
         "title": "ScreenshotSource",
         "description": "Best-effort foreground window (sol-window.md \u00a76) \u2014 untrusted text, capped."
       },
@@ -21154,9 +20714,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "SearchEnvelope"
       },
       "SearchResponse": {
@@ -21213,9 +20771,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "candidate_id"
-        ],
+        "required": ["candidate_id"],
         "title": "SelectBody"
       },
       "Sensor": {
@@ -21230,7 +20786,7 @@
           },
           "kind": {
             "type": "string",
-            "const": "contact",
+            "enum": ["contact", "imu", "camera"],
             "title": "Kind"
           },
           "translation_m": {
@@ -21254,10 +20810,17 @@
             "title": "Orientation Wxyz"
           },
           "radius_m": {
-            "type": "number",
-            "title": "Radius M",
-            "ge": 0.001,
-            "le": 0.05
+            "anyOf": [
+              {
+                "type": "number",
+                "ge": 0.001,
+                "le": 0.05
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Radius M"
           }
         },
         "additionalProperties": false,
@@ -21267,8 +20830,7 @@
           "parent_link_entity_id",
           "kind",
           "translation_m",
-          "orientation_wxyz",
-          "radius_m"
+          "orientation_wxyz"
         ],
         "title": "Sensor"
       },
@@ -21358,9 +20920,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "provider"
-        ],
+        "required": ["provider"],
         "title": "SerialRealConfig"
       },
       "SettingsUpdate": {
@@ -21369,10 +20929,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "guide",
-                  "expert"
-                ]
+                "enum": ["guide", "expert"]
               },
               {
                 "type": "null"
@@ -21408,7 +20965,10 @@
               {
                 "type": "string",
                 "enum": [
+                  "meet",
                   "about",
+                  "voice",
+                  "access",
                   "connect",
                   "build",
                   "done"
@@ -21464,12 +21024,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "schema_version",
-          "asset",
-          "links",
-          "joints"
-        ],
+        "required": ["schema_version", "asset", "links", "joints"],
         "title": "SimulationModel"
       },
       "SimulationModelCreate": {
@@ -21486,10 +21041,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name",
-          "model"
-        ],
+        "required": ["name", "model"],
         "title": "SimulationModelCreate"
       },
       "SolusConfigEntryIn": {
@@ -21518,10 +21070,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "payload"
-        ],
+        "required": ["kind", "payload"],
         "title": "SolusConfigEntryIn",
         "description": "SOLUSDEV-252: `{kind: \"config\", payload}` \u2014 a code environment document, validated\nby the section's model (`validate_config_payload`). Lives beside the route rather than\nin `schemas.SolusEntryIn` so the W1 text/artifact shape is untouched."
       },
@@ -21529,10 +21078,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "text",
-              "artifact"
-            ],
+            "enum": ["text", "artifact"],
             "title": "Kind"
           },
           "subsection": {
@@ -21588,9 +21134,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind"
-        ],
+        "required": ["kind"],
         "title": "SolusEntryIn",
         "description": "POST /solus/{section}/entries (docs/api/solus.md): typed text, or an\nalready-uploaded artifact to file as a document node."
       },
@@ -21605,9 +21149,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "title": "SolusEntryPatch"
       },
       "SolusEntryPayloadPatch": {
@@ -21620,9 +21162,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "payload"
-        ],
+        "required": ["payload"],
         "title": "SolusEntryPayloadPatch",
         "description": "PATCH /solus/entries/{id}/payload (solus.md \u00a73.2): the whole typed metadata document,\nvalidated by the entry's (section, subsection) model."
       },
@@ -21678,11 +21218,7 @@
           },
           "why": {
             "type": "string",
-            "enum": [
-              "name_match",
-              "text_match",
-              "ref_match"
-            ],
+            "enum": ["name_match", "text_match", "ref_match"],
             "title": "Why"
           }
         },
@@ -21758,10 +21294,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "type",
-          "name"
-        ],
+        "required": ["type", "name"],
         "title": "SourceCreate",
         "description": "Connect a source directly (type + config; non-OAuth / token providers).\nOAuth providers use the integrations oauth/start flow instead."
       },
@@ -21804,9 +21337,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "SourceViewEnvelope"
       },
       "SourceViewPut": {
@@ -21820,9 +21351,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "branch"
-        ],
+        "required": ["branch"],
         "title": "SourceViewPut"
       },
       "SourceViewResponse": {
@@ -21834,12 +21363,7 @@
           },
           "status": {
             "type": "string",
-            "enum": [
-              "default",
-              "pending",
-              "ready",
-              "failed"
-            ],
+            "enum": ["default", "pending", "ready", "failed"],
             "title": "Status"
           },
           "source_id": {
@@ -21975,11 +21499,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "robot_id",
-          "session_id",
-          "name"
-        ],
+        "required": ["robot_id", "session_id", "name"],
         "title": "StartIn"
       },
       "SubjectOut": {
@@ -21999,11 +21519,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "id",
-          "kind",
-          "name"
-        ],
+        "required": ["id", "kind", "name"],
         "title": "SubjectOut"
       },
       "SubscriptionUpdate": {
@@ -22014,9 +21530,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "plan"
-        ],
+        "required": ["plan"],
         "title": "SubscriptionUpdate",
         "description": "Trial plan pick: self-serve plans only (enterprise is contact-sales)."
       },
@@ -22031,9 +21545,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "TeamCreate"
       },
       "TeamSettings": {
@@ -22102,9 +21614,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "packets"
-        ],
+        "required": ["packets"],
         "title": "TelemetryBatchIn"
       },
       "TelemetryChannel": {
@@ -22130,9 +21640,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "name"
-        ],
+        "required": ["name"],
         "title": "TelemetryChannel"
       },
       "ToolFamily": {
@@ -22193,11 +21701,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "id",
-          "source",
-          "target"
-        ],
+        "required": ["id", "source", "target"],
         "title": "TopologyEdge"
       },
       "TopologyEvidence": {
@@ -22303,10 +21807,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "source_namespace",
-          "source_ref"
-        ],
+        "required": ["source_namespace", "source_ref"],
         "title": "TopologyEvidence",
         "description": "One candidate association. None expresses unknown; incompatible candidates stay separate."
       },
@@ -22314,21 +21815,12 @@
         "properties": {
           "source_kind": {
             "type": "string",
-            "enum": [
-              "firmware",
-              "host_config",
-              "onboard",
-              "schematic"
-            ],
+            "enum": ["firmware", "host_config", "onboard", "schematic"],
             "title": "Source Kind"
           },
           "status": {
             "type": "string",
-            "enum": [
-              "success",
-              "unavailable",
-              "invalid"
-            ],
+            "enum": ["success", "unavailable", "invalid"],
             "title": "Status"
           },
           "rows": {
@@ -22352,10 +21844,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "source_kind",
-          "status"
-        ],
+        "required": ["source_kind", "status"],
         "title": "TopologyExtraction",
         "description": "One source adapter result; failed acquisition/validation is distinct from zero findings."
       },
@@ -22372,23 +21861,14 @@
           },
           "role": {
             "type": "string",
-            "enum": [
-              "brain",
-              "bus",
-              "device",
-              "part"
-            ],
+            "enum": ["brain", "bus", "device", "part"],
             "title": "Role"
           },
           "brain_kind": {
             "anyOf": [
               {
                 "type": "string",
-                "enum": [
-                  "host",
-                  "mcu",
-                  "onboard"
-                ]
+                "enum": ["host", "mcu", "onboard"]
               },
               {
                 "type": "null"
@@ -22451,11 +21931,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "id",
-          "name",
-          "role"
-        ],
+        "required": ["id", "name", "role"],
         "title": "TopologyNode"
       },
       "TopologyProvenance": {
@@ -22508,9 +21984,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "source_ref"
-        ],
+        "required": ["source_ref"],
         "title": "TopologyProvenance",
         "description": "A source observation and optional exact component/pin reference; not inferred wiring."
       },
@@ -22656,10 +22130,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "kind",
-          "binding"
-        ],
+        "required": ["kind", "binding"],
         "title": "TransportBinding",
         "description": "Binding identity: USB serial / BT address / MAC / IP. `last_seen_path` is informational\nonly \u2014 a port path is never binding (tty numbering swaps on re-enumeration)."
       },
@@ -22705,10 +22176,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data",
-          "meta"
-        ],
+        "required": ["data", "meta"],
         "title": "UsageTurnListOut"
       },
       "UsageTurnOut": {
@@ -22860,19 +22328,12 @@
           }
         },
         "type": "object",
-        "required": [
-          "loc",
-          "msg",
-          "type"
-        ],
+        "required": ["loc", "msg", "type"],
         "title": "ValidationError"
       },
       "Verdict": {
         "type": "string",
-        "enum": [
-          "confirm",
-          "reject"
-        ],
+        "enum": ["confirm", "reject"],
         "title": "Verdict",
         "description": "A human's judgement on a guidance entry (TU-08 feedback / TU-05 sharing).\n\nLives here, not in `feedback`, so the observation model can reference it\nwithout a circular import; `feedback` re-exports it for existing callers."
       },
@@ -22885,9 +22346,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "verified"
-        ],
+        "required": ["verified"],
         "title": "VerifiedPatch",
         "description": "\u00a75.4 body \u2014 one field, nothing else (`name`/`summary` come from the manifest)."
       },
@@ -22907,10 +22366,7 @@
           },
           "kind": {
             "type": "string",
-            "enum": [
-              "analog_input",
-              "digital_input"
-            ],
+            "enum": ["analog_input", "digital_input"],
             "title": "Kind"
           },
           "component_entity_id": {
@@ -22940,30 +22396,19 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "channel",
-          "pin",
-          "kind"
-        ],
+        "required": ["channel", "pin", "kind"],
         "title": "WiringInput"
       },
       "WiringRequest": {
         "properties": {
           "profile_id": {
             "type": "string",
-            "enum": [
-              "uno_avr",
-              "nano_avr"
-            ],
+            "enum": ["uno_avr", "nano_avr"],
             "title": "Profile Id"
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "typed",
-              "schematic",
-              "probe"
-            ],
+            "enum": ["typed", "schematic", "probe"],
             "title": "Mode"
           },
           "wiring": {
@@ -23001,10 +22446,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "profile_id",
-          "mode"
-        ],
+        "required": ["profile_id", "mode"],
         "title": "WiringRequest"
       },
       "WorkspaceLayoutData": {
@@ -23027,10 +22469,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "version",
-          "positions"
-        ],
+        "required": ["version", "positions"],
         "title": "WorkspaceLayoutData"
       },
       "WorkspaceLayoutInput": {
@@ -23054,10 +22493,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "version",
-          "positions"
-        ],
+        "required": ["version", "positions"],
         "title": "WorkspaceLayoutInput"
       },
       "WorkspaceLayoutResponse": {
@@ -23067,9 +22503,7 @@
           }
         },
         "type": "object",
-        "required": [
-          "data"
-        ],
+        "required": ["data"],
         "title": "WorkspaceLayoutResponse"
       },
       "WorkspacePosition": {
@@ -23089,10 +22523,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "x",
-          "y"
-        ],
+        "required": ["x", "y"],
         "title": "WorkspacePosition"
       },
       "solus_api__agent__tools__isaac_models__Binding": {
@@ -23109,10 +22540,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "entity_id",
-          "name"
-        ],
+        "required": ["entity_id", "name"],
         "title": "Binding"
       },
       "solus_api__livebench__scene__schemas__Binding": {
@@ -23142,11 +22570,7 @@
           },
           "unit": {
             "type": "string",
-            "enum": [
-              "rad",
-              "deg",
-              "m"
-            ],
+            "enum": ["rad", "deg", "m"],
             "title": "Unit"
           },
           "scale": {

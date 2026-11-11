@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+# Fixture CLI for the classic family. Recorded from Classic gzserver 11.15.1
+# (conda env solus-gz-classic) on 2026-11-09: the banner goes to stdout and the
+# process exits 255 — a non-zero exit with the banner IS the success case.
+import sys
+
+if sys.argv[1:] == ["--version"]:
+    sys.stdout.write(
+        "Gazebo multi-robot simulator, version 11.15.1\n"
+        "Copyright (C) 2012 Open Source Robotics Foundation.\n"
+        "Released under the Apache 2 License.\n"
+        "http://gazebosim.org\n\n\n"
+    )
+    sys.exit(255)
+sys.stderr.write("Invalid arguments\n")
+sys.exit(255)

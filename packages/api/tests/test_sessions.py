@@ -7,6 +7,7 @@ Route-level coverage (auth, cross-tenant 404s, config validation) lives in
 """
 
 import asyncio
+import logging
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -629,3 +630,117 @@ async def test_stop_waits_for_the_evaluator_only_within_its_bound(
     evaluator.release.set()
     assert evaluator.task is not None
     await evaluator.task
+
+
+class _SourceRecordingResolver:
+    """Keeps the `source` each lookup carried (SOLUSDEV-322 P5-T2)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    async def resolve(
+        self, project_id: uuid.UUID, device_id: str, *, source: str | None = None
+    ) -> uuid.UUID | None:
+        self.calls.append((device_id, source))
+        return None
+
+
+async def test_sim_session_tap_passes_its_provider_as_source() -> None:
+    """A sim session's packets resolve under its provider — the tag that lets the resolver read a
+    part's `sim_aliases` — and a real session's under none, whatever its provider is called."""
+    project = uuid.uuid4()
+    resolver = _SourceRecordingResolver()
+    manager = SessionManager(TelemetryPlumbing(InMemoryTelemetryBuffer(), resolver))
+    sim, real = FakeConn(), FakeConn()
+    await _start(manager, project, sim, mode="sim", provider="sim-provider-a")
+    await _start(manager, project, real, mode="real", provider="serial-driver")
+
+    await sim.drive(_packet("world/arm/elbow", 0.0, q=1.0))
+    await real.drive(_packet("usb:ARM/3", 0.0, q=1.0))
+
+    assert resolver.calls == [("world/arm/elbow", "sim-provider-a"), ("usb:ARM/3", None)]
+    await manager.aclose_all()
+
+
+# ── SOLUSDEV-322 P5-T3: a sim session adopts the robot of its resolved parts ───────────────
+
+
+class _Robots:
+    """A `robot_of_part` double: part → robot, counting lookups."""
+
+    def __init__(self, robots: dict[uuid.UUID, uuid.UUID | None]) -> None:
+        self.robots, self.calls = robots, list[uuid.UUID]()
+
+    async def __call__(self, project_id: uuid.UUID, part_id: uuid.UUID) -> uuid.UUID | None:
+        self.calls.append(part_id)
+        return self.robots.get(part_id)
+
+
+async def test_sim_session_adopts_the_robot_of_its_first_resolved_part_and_starts_the_evaluator() -> None:  # noqa: E501 # fmt: skip
+    project, robot, elbow, wrist = (uuid.uuid4() for _ in range(4))
+    evaluator, robots = _Evaluator(), _Robots({elbow: robot, wrist: robot})
+    manager, _ = _manager(
+        project,
+        resolved={"w/arm/elbow": elbow, "w/arm/wrist": wrist},
+        evaluator_factory=lambda view: evaluator,
+        robot_of_part=robots,
+    )
+    conn = FakeConn()
+    record = await _start(manager, project, conn, provider="sim-provider-a")
+    assert record.robot_entity_id is None and evaluator.views == []
+
+    await conn.drive(
+        _packet("stray", 0.5, x=1.0),  # unresolved: no lookup
+        _packet("w/arm/elbow", 1.0, **{"elbow.position": 0.1}),
+        _packet("w/arm/elbow", 2.0, **{"elbow.position": 0.2}),  # tried once, not again
+        _packet("w/arm/wrist", 3.0, **{"wrist.position": 0.3}),
+    )
+
+    (view,) = evaluator.views
+    assert (view.robot_entity_id, view.sim) == (robot, True)
+    assert manager.get(project, record.id).robot_entity_id == robot
+    assert robots.calls == [elbow, wrist]
+    assert view.parts == {
+        elbow: {"elbow.position": T0 + timedelta(seconds=1)},
+        wrist: {"wrist.position": T0 + timedelta(seconds=3)},
+    }
+    task = evaluator.task
+    assert task is not None and not task.done()
+    await manager.stop(project, record.id)
+    assert task.cancelled()
+
+
+async def test_sim_session_with_parts_of_two_robots_adopts_none_and_logs(caplog: Any) -> None:
+    project, robot_a, robot_b, elbow, other = (uuid.uuid4() for _ in range(5))
+    evaluator = _Evaluator()
+    manager, _ = _manager(
+        project,
+        resolved={"w/a/elbow": elbow, "w/b/elbow": other},
+        evaluator_factory=lambda view: evaluator,
+        robot_of_part=_Robots({elbow: robot_a, other: robot_b}),
+    )
+    conn = FakeConn()
+    record = await _start(manager, project, conn, provider="sim-provider-a")
+    with caplog.at_level(logging.WARNING, logger="solus_api.livebench.sessions"):
+        await conn.drive(
+            _packet("w/a/elbow", 1.0, **{"elbow.position": 0.1}),
+            _packet("w/b/elbow", 2.0, **{"elbow.position": 0.2}),
+            _packet("w/a/elbow", 3.0, **{"elbow.position": 0.3}),
+        )
+
+    assert manager.get(project, record.id).robot_entity_id is None
+    assert evaluator.task is not None and evaluator.task.cancelled()
+    (warning,) = [r for r in caplog.records if "two robots" in r.getMessage()]
+    assert str(record.id) in warning.getMessage()
+    await manager.aclose_all()
+
+
+async def test_a_real_session_never_looks_a_robot_up() -> None:
+    project, part = uuid.uuid4(), uuid.uuid4()
+    robots = _Robots({part: uuid.uuid4()})
+    manager, _ = _manager(project, resolved={"arm/1": part}, robot_of_part=robots)
+    conn = FakeConn()
+    record = await _start(manager, project, conn, mode="real", provider="robot")
+    await conn.drive(_packet("arm/1", 1.0, a=1.0))
+    assert robots.calls == [] and manager.get(project, record.id).robot_entity_id is None
+    await manager.aclose_all()

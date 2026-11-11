@@ -1281,6 +1281,8 @@ async def post_message(
                 routine_outcome=routine_outcome,
                 routine_start=turn_sync.start,
             ),
+            # SOLUSDEV-322 P2-T2: Guide consults a tool's per-call hook too.
+            registry=registry,
         ),
         executed_build_calls=routine_policy.executed_calls,
         systems=systems,

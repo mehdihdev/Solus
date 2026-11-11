@@ -1131,6 +1131,54 @@ class ProposalOutcome(UuidPkMixin, Base):
     )
 
 
+class SimSessionOwner(enum.StrEnum):
+    """Who started a simulator session: Solus itself (`sol`) or the person (`user`)."""
+
+    SOL = "sol"
+    USER = "user"
+
+
+class SimSession(UuidPkMixin, Base):
+    """One simulator session the API knows about (SOLUSDEV-322 P2-T1;
+    `simulation/sessions_ledger.py` is the one writer). A row Solus wrote when it started the
+    session proves ownership; an attached one never does. `provider` is a string: the ledger
+    names no simulator."""
+
+    __tablename__ = "sim_session"
+    __table_args__ = (
+        Index(
+            "uq_sim_session_live",
+            "project_id",
+            "provider",
+            "session_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index("ix_sim_session_project_provider_ended", "project_id", "provider", "ended_at"),
+    )
+
+    project_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(32))
+    session_id: Mapped[str] = mapped_column(String(128))
+    owner: Mapped[SimSessionOwner] = mapped_column(
+        _enum_column(SimSessionOwner, name="sim_session_owner")
+    )
+    #: The dispatching tool call that started it; None for an attached session or a card path.
+    started_by_call_id: Mapped[str | None] = mapped_column(String(128), default=None)
+    #: The world file/name or the stage path, vendor-free.
+    scene_ref: Mapped[str | None] = mapped_column(String(512), default=None)
+    #: The name the running simulator addresses the scene by, fixed when the row is written so a
+    #: routine's readback is keyed from the ledger, never from a companion result.
+    scene_name: Mapped[str | None] = mapped_column(String(128), default=None)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), default=None
+    )
+
+
 # --------------------------------------------------------------------- artifacts
 class Artifact(UuidPkMixin, TimestampMixin, SoftDeleteMixin, Base):
     """Registry row for a large/binary tool output (image, point cloud, screenshot).

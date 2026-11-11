@@ -48,6 +48,7 @@ class Controller:
                 "platform": platform.system(),
                 "architecture": platform.machine(),
                 "runtime_fingerprint": None,
+                "gui_attach": "unsupported",
             }
         paths = [
             self.runtime / "python.sh",
@@ -67,6 +68,9 @@ class Controller:
             "platform": platform.system(),
             "architecture": platform.machine(),
             "runtime_fingerprint": digest.hexdigest() if available else None,
+            # SOLUSDEV-322 P4-T1: a stage the user opened in their own Isaac GUI is never
+            # attached; only Solus-started headless sessions exist here.
+            "gui_attach": "unsupported",
         }
 
     def status(self) -> dict[str, Any]:

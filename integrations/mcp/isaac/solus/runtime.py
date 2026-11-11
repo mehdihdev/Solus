@@ -8,7 +8,21 @@ from pathlib import Path
 from typing import Any
 
 OPERATIONS = frozenset(
-    {"status", "load_model", "set_joint_limits", "set_sensor_pose", "run_routine", "stop"}
+    {
+        "status",
+        "load_model",
+        "set_joint_limits",
+        "set_sensor_pose",
+        "run_routine",
+        "stop",
+        # SOLUSDEV-322 P4-T1: the user's own stage
+        "open_stage",
+        "find_articulations",
+        "spawn_at",
+        "read_state",
+        "control",
+        "save_stage",
+    }
 )
 MAX_FRAME = 128 * 1024
 

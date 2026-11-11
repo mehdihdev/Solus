@@ -67,6 +67,7 @@ from solus_api.livebench.runs.capture import RunCaptureManager
 from solus_api.livebench.runs.router import router as bench_runs_router
 from solus_api.livebench.scene.router import router as bench_scene_router
 from solus_api.livebench.sessions import SessionManager, load_local
+from solus_api.livebench.sim_runs import part_robot_lookup
 from solus_api.models import Base
 from solus_api.orchestration.embeddings import build_embed_fn
 from solus_api.orchestration.gateway import complete, default_orchestration_config
@@ -501,6 +502,8 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
         # buffered telemetry, raising what the live-signal rules find. Built per session; the
         # artifact store (assigned below) is read when a session starts, for the baseline run.
         # P2-T6: its `on_raised` is the narrator bound to the session's owner (none: no owner).
+        # SOLUSDEV-322 P5-T3: a sim session adopts the robot of its first resolved part.
+        robot_of_part=part_robot_lookup(app.state.sessionmaker),
         evaluator_factory=lambda view: WindowEvaluator(
             telemetry_buffer,
             app.state.sessionmaker,

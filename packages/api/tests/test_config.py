@@ -323,11 +323,12 @@ def test_envelopes_defaults_apply_and_bad_values_are_rejected() -> None:
 
 def test_shipped_simulation_section_loads() -> None:
     """The ladder's bands and routing targets are data (SOLUSDEV-321 P4-T1). The shipped section
-    climbs at 0.8 of a limit, and its one external target is named here, never in code."""
+    climbs at 0.8 of a limit, and its external targets are named here, never in code."""
     simulation = load_orchestration_config().simulation
     assert (simulation.escalate_at, simulation.band("stress_mpa")) == (0.8, 0.8)
-    assert [(t.name, t.rung, t.quantities) for t in simulation.targets] == [
-        ("isaac", 4, ("joint_trajectory",))
+    assert [(t.name, t.rung, t.quantities, t.cost, t.fidelity) for t in simulation.targets] == [
+        ("isaac", 4, ("joint_trajectory",), 4, 4),
+        ("gazebo", 4, ("joint_trajectory",), 3, 3),
     ]
 
 

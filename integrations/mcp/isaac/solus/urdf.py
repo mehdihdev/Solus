@@ -5,9 +5,15 @@ from __future__ import annotations
 import math
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 from .models import Model, safe_path
+
+#: Graph-bound models carry STL only; a Solus-pushed `spawn_at` model may carry any mesh the
+#: store allows (SOLUSDEV-322 P4-T1).
+GRAPH_MESH_SUFFIXES = (".stl",)
+STORE_MESH_SUFFIXES = (".stl", ".dae", ".obj")
 
 _ALLOWED = {
     "robot",
@@ -146,8 +152,16 @@ def _parse_urdf(data: bytes) -> ET.Element:
         raise ValueError("invalid URDF XML") from error
 
 
-def validate_urdf(model: Model, root: Path) -> None:
-    robot = _parse_urdf((root / model.asset.urdf_path).read_bytes())
+def check_urdf(
+    data: bytes,
+    urdf_path: str,
+    files: Mapping[str, str],
+    *,
+    mesh_suffixes: tuple[str, ...] = GRAPH_MESH_SUFFIXES,
+) -> ET.Element:
+    """The structural half of :func:`validate_urdf`: bounded declarative XML, allowed elements,
+    attributes and values, every mesh a manifested relative file. Returns the parsed robot."""
+    robot = _parse_urdf(data)
     elements = list(robot.iter())
     if robot.tag != "robot" or len(elements) > 4096:
         raise ValueError("bounded robot URDF required")
@@ -158,15 +172,29 @@ def validate_urdf(model: Model, root: Path) -> None:
         _attribute_values(element)
         if element.tag == "mesh":
             filename = element.get("filename", "")
-            path = str(PurePosixPath(model.asset.urdf_path).parent / filename)
+            path = str(PurePosixPath(urdf_path).parent / filename)
             if (
                 not safe_path(filename)
                 or not safe_path(path)
-                or path not in model.asset.files
-                or not path.endswith(".stl")
+                or path not in files
+                or not path.lower().endswith(mesh_suffixes)
             ):
-                raise ValueError("only manifested relative STL meshes are supported")
-    _validate_topology(model, robot)
+                raise ValueError("only manifested relative meshes are supported")
+    return robot
+
+
+def movable_joint_names(robot: ET.Element) -> list[str]:
+    """Non-fixed joint names in document order (a checked robot's joints are unique)."""
+    return [
+        joint.get("name", "")
+        for joint in robot.findall("joint")
+        if joint.get("type", "fixed") != "fixed"
+    ]
+
+
+def validate_urdf(model: Model, root: Path) -> None:
+    data = (root / model.asset.urdf_path).read_bytes()
+    _validate_topology(model, check_urdf(data, model.asset.urdf_path, model.asset.files))
 
 
 def _attribute_values(element: ET.Element) -> None:

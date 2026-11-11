@@ -43,6 +43,7 @@ TOOL_VERSIONS_TOOL: Final = "machine.tool_versions"
 #: DEFAULT_VERSION_BINARIES`): any other key the bridge answers with is dropped.
 TOOL_VERSION_BINARIES: Final = frozenset(
     {"python3", "node", "git", "kicad-cli", "arduino-cli", "ros2", "docker", "uv", "pip", "conda"}
+    | {"gz", "ign", "gazebo", "gzserver", "ngspice", "nvidia-smi"}  # SOLUSDEV-322 simulators
 )
 _LINE_CAP: Final = 200
 _ABS_PATH_RE: Final = re.compile(r"(?:[A-Za-z]:\\|/)[^\s)]+")

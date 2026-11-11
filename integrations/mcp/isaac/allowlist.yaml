@@ -1,4 +1,7 @@
 server: isaac
+# `exposure: internal` (SOLUSDEV-322 P10, docs/contracts/bridge-protocol.md): the cloud accepts these
+# tools but registers none for the model; only the owned `isaac.*` wrappers in agent/tools are model-facing.
+exposure: internal
 tools:
   - name: probe
     requires_confirmation: false
@@ -36,3 +39,43 @@ tools:
     files_errors: true
     timeout_seconds: 55
     reason: Runs a finite joint_trajectory with explicit joint ranges and physical readback
+  # SOLUSDEV-322 P4-T1 — the user's own stages. Gated PER CALL by the API-side ownership
+  # ledger (docs/contracts/action-gate.md): no card inside a Solus-opened stage, a card
+  # otherwise; only save_stage (a write into the user's own file) is statically gated.
+  - name: list_stages
+    requires_confirmation: false
+    timeout_seconds: 20
+    reason: Read-only scan of the USD stage files under SOLUS_SIM_ROOTS; launches nothing
+  - name: open_stage
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 120
+    reason: Starts one owned headless Isaac session on the user's own stage, opened in place
+  - name: find_articulations
+    requires_confirmation: false
+    timeout_seconds: 30
+    reason: Read-only list of every articulation root in the owned session's stage
+  - name: spawn_at
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 165
+    reason: Inserts a verified Solus-pushed model at a pose into the owned session's stage
+  - name: read_state
+    requires_confirmation: false
+    timeout_seconds: 30
+    reason: Read-only joint, IMU, contact and camera state of the owned session
+  - name: control
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 60
+    reason: Pauses, plays, steps or resets physics inside the owned session
+  - name: save_stage
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 60
+    reason: saves the stage to the user's own file
+  - name: put_asset
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 30
+    reason: Stores one manifest-verified chunk of a Solus-generated model under the workspace

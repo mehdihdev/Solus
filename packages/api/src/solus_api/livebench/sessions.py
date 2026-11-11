@@ -97,6 +97,8 @@ class SessionView:
     robot_entity_id: UUID
     owner_user_id: UUID | None
     parts: Mapping[UUID, Mapping[str, datetime]]
+    #: SOLUSDEV-322 P5-T3: a simulated session — its findings say so in their evidence.
+    sim: bool = False
 
 
 class SessionEvaluator(Protocol):
@@ -189,6 +191,8 @@ class _Session:
     evaluator_task: asyncio.Task[None] | None = None
     #: robot sessions only: resolved part → channel → the event time the session first saw it
     parts: dict[UUID, dict[str, datetime]] = field(default_factory=dict)
+    #: sim sessions only (P5-T3): each resolved part looked up once → its robot, or None
+    tried_parts: dict[UUID, UUID | None] = field(default_factory=dict)
 
     def out(self, *, device_ids_kept: int) -> BenchSessionOut:
         if self.ended_at is not None:
@@ -246,10 +250,12 @@ class SessionManager:
         observer_factory: Callable[[], SessionObserver] | None = None,
         event_sink: Callable[[UUID, dict[str, Any]], None] | None = None,
         evaluator_factory: Callable[[SessionView], SessionEvaluator] | None = None,
+        robot_of_part: Callable[[UUID, UUID], Awaitable[UUID | None]] | None = None,
     ) -> None:
         self._plumbing = plumbing
         self._observer_factory = observer_factory
         self._evaluator_factory = evaluator_factory
+        self._robot_of_part = robot_of_part
         self._event_sink = event_sink
         self._cap = max_active_per_project
         self._device_ids_kept = device_ids_kept
@@ -364,7 +370,12 @@ class SessionManager:
             nonlocal observer
             if len(session.device_ids) < self._device_ids_kept:
                 session.device_ids.setdefault(packet.device_id)
-            result = await self._plumbing.ingest(project_id, packet, session_id=session.id)
+            result = await self._plumbing.ingest(
+                project_id,
+                packet,
+                session_id=session.id,
+                source=session.provider if session.mode == "sim" else None,
+            )
             if observer is not None and self._event_sink is not None:
                 try:
                     for event in observer.add(packet)[:128]:
@@ -376,10 +387,43 @@ class SessionManager:
                 session.unresolved += 1
             else:
                 session.ingested += 1
+                if session.mode == "sim":
+                    await self._adopt_robot(session, result.entity_id)
                 if session.robot_entity_id is not None:
                     self._note_part(session, result.entity_id, packet)
 
         return tap
+
+    async def _adopt_robot(self, session: _Session, part_id: UUID) -> None:
+        """P5-T3: a sim session binds to the robot of its first resolved part and starts the
+        evaluator; a part of a second robot un-binds it — one session judges one robot or none.
+        Each part is looked up once; a lookup that fails binds nothing."""
+        if self._robot_of_part is None or part_id in session.tried_parts:
+            return
+        session.tried_parts[part_id] = None
+        try:
+            robot = await self._robot_of_part(session.project_id, part_id)
+        except Exception:
+            logger.warning(
+                "robot lookup failed: project=%s session=%s", session.project_id, session.id
+            )
+            return
+        if robot is None:
+            return
+        session.tried_parts[part_id] = robot
+        robots = {found for found in session.tried_parts.values() if found is not None}
+        if len(robots) == 1 and session.robot_entity_id is None:
+            session.robot_entity_id = robot
+            session.evaluator_task = self._start_evaluator(session)
+        elif len(robots) > 1 and session.robot_entity_id is not None:
+            logger.warning(
+                "sim session streams parts of two robots; adopting none: project=%s session=%s",
+                session.project_id,
+                session.id,
+            )
+            session.robot_entity_id = None
+            await _stop_evaluator(session)
+            session.evaluator_task = None
 
     def _note_part(self, session: _Session, part_id: UUID, packet: TelemetryPacket) -> None:
         """Remember a resolved part's channels and the event time each began, bounded: at most
@@ -403,6 +447,7 @@ class SessionManager:
             robot_entity_id=session.robot_entity_id,
             owner_user_id=session.owner_user_id,
             parts=session.parts,
+            sim=session.mode == "sim",
         )
         return self._evaluator_factory(view).start(view)
 

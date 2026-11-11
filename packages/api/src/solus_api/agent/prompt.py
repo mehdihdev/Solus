@@ -233,6 +233,19 @@ _CITE_NOTE: Final = (
     "concrete suggested fix. Never invent a source token."
 )
 
+#: SOLUSDEV-322 P7-T1: how SOL reasons about simulation. ONE constant, in both registers and
+#: both action modes, right after the cite note, so the prompt stays byte-stable across turns.
+#: Vendor-free on purpose: the registry names the simulators, the prompt names the order.
+_SIMULATION_NOTE: Final = (
+    "Simulation order. First decide what the question needs. When a calculation answers it, "
+    "call simulate (rung 1) and stop there. Otherwise call sim.available and pick a provider: "
+    "the project's constraints/style entry first, then a connected simulator, then the cheaper "
+    "and only then the higher-fidelity one. Check its can_answer; when inputs are missing, "
+    "name each one and either offer sim.generate_model or ask the person. Then run, and label "
+    "the result with its provider, its model hash and what it leaves out. Prefer a session "
+    "Solus owns; attach to a running world only when asked to or pointed at one."
+)
+
 
 #: Solus-authored framing for the user's saved preference (SOLUSDEV-233). The
 #: preference itself arrives fenced as data below this note — it can style
@@ -391,7 +404,7 @@ def system_prompt(
     from solus_api.agent.front_app import route_note
 
     note = _GUIDE_NOTE if mode is SolMode.GUIDE else _EXPERT_NOTE
-    parts = [f"{_SYSTEM}\n\n{_CITE_NOTE}\n\n{note}"]
+    parts = [f"{_SYSTEM}\n\n{_CITE_NOTE}\n\n{_SIMULATION_NOTE}\n\n{note}"]
     register = register_line(expertise)
     if register is not None:
         parts.append(register)

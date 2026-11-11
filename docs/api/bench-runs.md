@@ -22,9 +22,11 @@ member role and verified identity. Unknown/foreign run/artifact/robot/session is
   gateway (TRIVIAL/GENERAL); no finding creation or altered numeric evidence; deterministic
   fallback when unavailable. Existingbudget/rate/auth checks apply.
 
-Run summaries include id, robot/session IDs, name, origin(live|recorded|synthetic), status
+Run summaries include id, robot/session IDs, name, origin(live|recorded|synthetic|sim), status
 (running|completed|truncated|interrupted), start/end timestamps, packetcount/dropcount, artifact
-reference when filed, and `baseline` (see Baseline).
+reference when filed, `baseline` (see Baseline) and `pinned` (see Pin). `origin: sim` is a run a
+simulator routine produced (see "Simulated runs"); `POST /runs/import` still takes only
+`recorded|synthetic`.
 Manifests schema_version1 contain captured timestamped numeric packets,
 sensor artifact references with timestamps, accepted part/device mapping and CONFIG/source/code/
 CAD revision snapshots. Require finite values, bounded identifiers/strings, strict unknown-field
@@ -56,6 +58,76 @@ change deterministicfindings, identities, numbers, scope or execute actions.
 - Every run read (the list, GET /runs/{run_id}, this route, the `get_run` tool) carries
   `baseline: bool`, true for the run its robot's envelopes are learned from. It is read from the
   record's `attrs.baseline`; the saved summary never carries it.
+
+## Pin (SOLUSDEV-322 P5-T4)
+
+- POST /runs/{run_id}/pin: no body. Marks the run kept (`attrs.pinned`): sim-run retention
+  (P7-T3) never deletes a pinned run's payload. Idempotent: pinning a pinned run changes
+  nothing. 200 run summary. Same auth as every run route (member, verified identity); an unknown,
+  foreign or deleted run is 404, and a run still running is 409 `run_active` (its next checkpoint
+  rewrites the record). There is no unpin.
+- Every run read carries `pinned: bool`, read from the record's `attrs.pinned` like `baseline`;
+  the saved summary never carries either flag.
+
+## Simulated runs (SOLUSDEV-322 P5-T4)
+
+A routine SOL runs inside a simulator session (`gazebo.run_routine`, `isaac.run_routine`) is
+filed as a run of the robot the model is bound to, through `livebench/sim_runs.py:record_sim_run`
+— the same store and manifest a capture uses, so the Runs list, GET /runs/{run_id}, compare and
+findings read it as any other run:
+
+- `origin: "sim"`, `status: "completed"`, no `session_id`; `name` is `<provider> <routine>`.
+- **The robot.** `simulation_model.attrs.robot_id` when the model names one; else the live robot
+  above any joint the provider's packets resolve to through the part's `sim_aliases`
+  (`sim.map_to_parts`, docs/api/simulation.md). No robot: nothing is recorded and the tool's
+  result says `run: null, run_reason: "no robot is bound to this model; map joints first"`.
+- **The manifest.** One packet per readback sample per joint, `device_id` as the provider names
+  the joint (`<world>/<model>/<joint>`; a graph-bound joint's entity id), values
+  `<joint>.position` (rad) and `<joint>.velocity` (rad/s), on the simulator's clock made relative
+  to the run's start; one `PartEvidence` per resolved joint (`position_signal`, `position_unit:
+  rad`); no sensors, no findings; and `manifest.sim`:
+
+  ```text
+  sim: {provider, family | null, version | null, model_sha256 | null, scene_ref | null, routine}
+  ```
+
+- **The record.** The final save also writes `attrs.sim` (the same object) and
+  `attrs.findings_linked: bool` (whether the manifest carries findings), so retention can read
+  them without loading the payload.
+- **The rung-4 fact.** `record_sim_result(subject = the robot, rung = 4)` with
+  `values.joint_trajectory = max |final - target|` rad over the joints the readback gives a
+  target for, `provenance.solver = "<provider> <family> <version>"`, inputs `model_sha256`,
+  `scene_ref`, `routine` and the per-joint `{target, final, error}`, and what the model leaves
+  out; the robot's `attrs.expected.joint_trajectory` then points at it (docs/api/simulation.md
+  §3). A readback without a target files the run and says why no fact was recorded.
+- **The tool's answer.** The routine result gains `run` (the run id or null), `sim_result_id`
+  (or null) and `run_reason` (null, or why one of them is missing). A readback the API cannot
+  read, or a filing that fails, is a reason there — the routine ran; nothing is raised.
+
+## Retention (SOLUSDEV-322 P7-T3)
+
+Simulated runs are cheap to make and large to keep, so their payloads age out; nothing else does.
+`livebench/runs/sim_run_retention.py:prune_sim_runs(session, store, *, now, keep_days=30,
+keep_newest=20)` runs as the worker cron `prune_sim_runs_job` daily at 03:17 UTC
+(`connectors/worker.py`; never at startup) and returns `PruneReport{deleted, kept}`:
+
+- **Candidates.** Live `bench_run` records with `attrs.summary.origin == "sim"`,
+  `summary.ended_at < now − keep_days`, not among the newest `keep_newest` runs of their robot
+  (by `ended_at`; a run still running counts as newest), with `attrs.pinned`, `attrs.baseline` and
+  `attrs.findings_linked` all falsy and `attrs.payload_deleted_at` unset. Everything else —
+  every `live`, `recorded` and `synthetic` run, every pinned or baseline run, every run whose
+  manifest carries findings — is never read as a candidate.
+- **What a prune does.** The run's checkpoint artifact (`attrs.checkpoint_id`, the manifest) is
+  soft-deleted (`retained = false`, `deleted_at`) and its bytes removed, under the project lock, one
+  commit per project; the record gains `attrs.payload_deleted_at` (the prune's clock, ISO 8601).
+  The record stays live: the Runs list and `GET /runs/{run_id}` still read its summary, `attrs.sim`
+  and `findings_linked` as written, so what a run was run with is never lost. Loading its
+  manifest (detail, compare, residual, `get_run` with the payload) answers 404 `not_found` for the
+  checkpoint from then on. The robot's rung-4 `sim_result` and `attrs.expected` are not touched.
+- **Idempotent.** A pruned run is no longer a candidate, so a second pass under the same clock
+  deletes nothing; pinning a run (`POST …/pin`) before its turn keeps its payload for good: the
+  candidates are read again `FOR UPDATE` under the project lock (same lock as `pin`/`baseline`),
+  so a keep flag committed between the candidate read and the lock is honoured, never overwritten.
 
 ## Findings on a run (SOLUSDEV-321 P2-T7)
 

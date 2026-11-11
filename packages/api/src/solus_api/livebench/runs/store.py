@@ -38,16 +38,26 @@ async def record(
 
 
 class RunRead(RunSummary):
-    """A run as the routes and the retrieval tool read it: its summary, and whether it is its
-    robot's baseline. The flag is the record's own attr (`POST …/baseline`), never part of a
-    saved summary (`save` and `new_record` leave it out)."""
+    """A run as the routes and the retrieval tool read it: its summary, whether it is its
+    robot's baseline and whether it is pinned. The flags are the record's own attrs
+    (`POST …/baseline`, `POST …/pin`), never part of a saved summary (`save` and `new_record`
+    leave them out)."""
 
     baseline: bool = False
+    pinned: bool = False
+
+
+#: The read-side flags a saved summary never carries.
+FLAGS: set[str] = {"baseline", "pinned"}
 
 
 def summary(entity: GraphEntity) -> RunRead:
     return RunRead.model_validate(
-        {**entity.attrs["summary"], "baseline": entity.attrs.get("baseline") is True}
+        {
+            **entity.attrs["summary"],
+            "baseline": entity.attrs.get("baseline") is True,
+            "pinned": entity.attrs.get("pinned") is True,
+        }
     )
 
 
@@ -126,9 +136,18 @@ async def save(
         )
         info.artifact_id = artifact.id
     entity.attrs = {
-        "summary": info.model_dump(mode="json", exclude={"baseline"}),
+        "summary": info.model_dump(mode="json", exclude=FLAGS),
         "checkpoint_id": str(artifact.id),
         "created_by": str(user_id),
+        # SOLUSDEV-322 P5-T4: what retention (P7-T3) reads without loading the manifest.
+        **(
+            {
+                "sim": manifest.sim.model_dump(mode="json") if manifest.sim else None,
+                "findings_linked": bool(manifest.findings),
+            }
+            if final
+            else {}
+        ),
     }
     if old_id:
         old = await session.scalar(
@@ -189,7 +208,7 @@ def new_record(project_id: UUID, info: RunSummary, user_id: UUID) -> GraphEntity
         origin="system",
         name=info.name,
         attrs={
-            "summary": info.model_dump(mode="json", exclude={"baseline"}),
+            "summary": info.model_dump(mode="json", exclude=FLAGS),
             "created_by": str(user_id),
         },
     )

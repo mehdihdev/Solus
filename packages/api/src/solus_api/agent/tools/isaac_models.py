@@ -1,4 +1,10 @@
-"""Strict graph bindings and bounded, generic joint trajectories."""
+"""Strict graph bindings, bounded joint trajectories and sweeps, and the user's own stages.
+
+SOLUSDEV-322 P4-T2: the SOL-visible shapes mirror the Isaac fork's `solus/models.py`. Every
+name that can reach argv or a USD prim path is a plain identifier (never an option, never path
+syntax); root-relative paths (`stage_ref`, `dest`) are plain components joined by ``/`` and are
+confined by the fork; `spawn_at` binds a graph `simulation_model` entity, never a digest.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,7 @@ import json
 import math
 import re
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -35,6 +41,14 @@ Number = Annotated[float, BeforeValidator(finite)]
 EntityId = Annotated[str, BeforeValidator(uuid_text)]
 Vec3 = Annotated[list[Annotated[Number, Field(ge=-10, le=10)]], Field(min_length=3, max_length=3)]
 Quat = Annotated[list[Number], Field(min_length=4, max_length=4)]
+_PART = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+_PRIM = r"[A-Za-z_][A-Za-z0-9_]*"
+Name = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")]
+RelPath = Annotated[str, Field(pattern=rf"^{_PART}(/{_PART}){{0,15}}$", max_length=512)]
+PrimPath = Annotated[str, Field(pattern=rf"^/{_PRIM}(/{_PRIM}){{0,31}}$", max_length=512)]
+MAX_ROUTINE_S: Final = 60
+MAX_TARGET_SPEED_RAD_S: Final = 0.25
+MAX_SENSORS_READ: Final = 8
 
 
 class Strict(BaseModel):
@@ -49,15 +63,17 @@ class Binding(Strict):
 class Sensor(Strict):
     entity_id: EntityId
     parent_link_entity_id: EntityId
-    kind: Literal["contact"]
+    kind: Literal["contact", "imu", "camera"]
     translation_m: Vec3
     orientation_wxyz: Quat
-    radius_m: Annotated[Number, Field(ge=0.001, le=0.05)]
+    radius_m: Annotated[Number, Field(ge=0.001, le=0.05)] | None = None  # contact only
 
     @model_validator(mode="after")
     def unit_quaternion(self) -> Self:
         if abs(math.sqrt(sum(v * v for v in self.orientation_wxyz)) - 1) > 1e-6:
             raise ValueError("unit quaternion required")
+        if self.kind == "contact" and self.radius_m is None:
+            raise ValueError("a contact sensor needs its sensing radius")
         return self
 
 
@@ -172,14 +188,37 @@ class Waypoint(Strict):
     positions: Annotated[list[Position], Field(min_length=1, max_length=16)]
 
 
+class Sweep(Strict):
+    """A triangle between two limits of ONE joint of an articulation in the user's own stage."""
+
+    articulation: PrimPath
+    joint: Name
+    lower: Number
+    upper: Number
+    speed_rad_s: Annotated[Number, Field(gt=0, le=MAX_TARGET_SPEED_RAD_S)]
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        if self.lower >= self.upper:
+            raise ValueError("ordered sweep range required")
+        return self
+
+
 class RoutineSpec(Strict):
-    routine: Literal["joint_trajectory"]
-    duration_s: Annotated[Number, Field(ge=1, le=30)]
-    joints: Annotated[list[Range], Field(min_length=1, max_length=16)]
-    waypoints: Annotated[list[Waypoint], Field(min_length=1, max_length=16)]
+    routine: Literal["joint_trajectory", "sweep"]
+    duration_s: Annotated[Number, Field(ge=1, le=MAX_ROUTINE_S)]
+    joints: Annotated[list[Range], Field(max_length=16)] = Field(default_factory=list)
+    waypoints: Annotated[list[Waypoint], Field(max_length=16)] = Field(default_factory=list)
+    sweep: Sweep | None = None
 
     @model_validator(mode="after")
     def exact_targets(self) -> Self:
+        if self.routine == "sweep":
+            if self.sweep is None or self.joints or self.waypoints:
+                raise ValueError("a sweep carries exactly its sweep spec")
+            return self
+        if self.sweep is not None or not self.joints or not self.waypoints:
+            raise ValueError("a joint trajectory carries joint ranges and waypoints")
         ids = {joint.joint_entity_id for joint in self.joints}
         if len(ids) != len(self.joints) or any(joint.lower >= joint.upper for joint in self.joints):
             raise ValueError("distinct ordered joint ranges required")
@@ -234,6 +273,57 @@ class Routine(Session, RoutineSpec):
     pass
 
 
+# --- the user's own stage (SOLUSDEV-322 P4-T2) ----------------------------------------------
+# Reads name the session only; stage actions carry `dry_run` like every other writer. The fork
+# adds `expected_scene_generation` (from `status`) and, for `spawn_at`, the resolved digest.
+
+
+class SessionRef(Strict):
+    session_id: EntityId
+
+
+class OpenStage(Start):
+    stage_ref: RelPath
+
+
+class FindArticulations(SessionRef):
+    pass
+
+
+class SpawnPose(Strict):
+    xyz: Vec3 = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    rpy: Vec3 = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+
+class SpawnAt(Session):
+    model_entity_id: EntityId
+    name: Name
+    pose: SpawnPose = Field(default_factory=SpawnPose)
+
+
+class ReadState(SessionRef):
+    articulation: PrimPath | None = None
+    sensors: Annotated[list[PrimPath], Field(max_length=MAX_SENSORS_READ)] = Field(
+        default_factory=list
+    )
+    camera_frame: bool = False
+
+
+class StageControl(Session):
+    action: Literal["pause", "play", "step", "reset"]
+    steps: Annotated[int, BeforeValidator(actual_integer), Field(ge=1, le=10_000)] = 1
+
+
+class SaveStage(Session):
+    dest: RelPath
+
+    @model_validator(mode="after")
+    def writable_suffix(self) -> Self:
+        if PurePosixPath(self.dest).suffix not in (".usd", ".usda", ".usdc"):
+            raise ValueError("a stage is saved as .usd, .usda or .usdc")
+        return self
+
+
 PUBLIC_MODELS: dict[str, type[Strict]] = {
     "probe": Empty,
     "status": Empty,
@@ -243,4 +333,13 @@ PUBLIC_MODELS: dict[str, type[Strict]] = {
     "set_joint_limits": JointLimits,
     "set_sensor_pose": SensorPose,
     "run_routine": Routine,
+    "list_stages": Empty,
+    "open_stage": OpenStage,
+    "find_articulations": FindArticulations,
+    "spawn_at": SpawnAt,
+    "read_state": ReadState,
+    "control": StageControl,
+    "save_stage": SaveStage,
 }
+#: Reads: no preview, no gate, passed to the fork as parsed.
+READ_ONLY: Final = frozenset({"probe", "status", "list_stages", "find_articulations", "read_state"})

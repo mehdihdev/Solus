@@ -11,7 +11,7 @@ from typing import Any, BinaryIO
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "solus"
-from .actions import MutationUnverifiedError
+from .actions import MutationUnverifiedError, RefusedError
 from .runtime import MAX_FRAME, validate_frame
 
 
@@ -43,7 +43,7 @@ def serve_frames(reader: BinaryIO, writer: BinaryIO, generation: str, engine: An
         else:
             try:
                 result = engine.dispatch(operation, arguments)
-            except MutationUnverifiedError as error:
+            except (MutationUnverifiedError, RefusedError) as error:
                 result = error.result
             except (ValueError, OSError, TimeoutError):
                 result = {

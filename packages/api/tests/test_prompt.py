@@ -717,3 +717,49 @@ def test_build_asks_for_one_reasoning_block_before_a_proposal_in_either_register
         again = system_prompt(mode, "Prefer metric.", action_mode=ActionMode.DO, nonce="n0")
         assert build == again
         assert "<reasoning>" not in system_prompt(mode, action_mode=ActionMode.GUIDE)
+
+
+# ------------------------------------------- SOLUSDEV-322 P7-T1: the simulation order
+
+
+def test_the_system_prompt_names_the_simulation_order() -> None:
+    """ONE Solus-authored constant, in both registers and both action modes, right after the
+    cite note: decide the question, calculate when a calculation answers, otherwise ask
+    sim.available, pick by the project's style entry, then a connected simulator, then cost and
+    fidelity; check can_answer; name missing inputs (offer sim.generate_model or ask); label the
+    result; prefer an owned session; attach only when asked. A constant, so the prompt stays
+    byte-stable across a conversation's turns (P0-T4) — and vendor-free, like the shared code."""
+    from solus_api.agent.modes import ActionMode
+    from solus_api.agent.prompt import _CITE_NOTE, _SIMULATION_NOTE
+
+    assert len(_SIMULATION_NOTE.splitlines()) <= 25
+    for key in (
+        "simulate",
+        "sim.available",
+        "constraints/style",
+        "connected simulator",
+        "can_answer",
+        "sim.generate_model",
+        "model hash",
+        "leaves out",
+        "attach",
+    ):
+        assert key in _SIMULATION_NOTE, key
+    assert not re.search(r"\b(isaac|gazebo|mujoco|ngspice)\b", _SIMULATION_NOTE, re.IGNORECASE)
+    for mode in (SolMode.GUIDE, SolMode.EXPERT):
+        for action in (ActionMode.GUIDE, ActionMode.DO):
+            text = system_prompt(mode, "Prefer metric.", action_mode=action, nonce="n0")
+            assert text.count(_SIMULATION_NOTE) == 1
+            cite, sim = text.index(_CITE_NOTE), text.index(_SIMULATION_NOTE)
+            assert cite < sim < text.index("Current action mode:") < text.index("<<<SOLUS-DATA n0 ")
+            assert text == system_prompt(mode, "Prefer metric.", action_mode=action, nonce="n0")
+
+
+def test_sim_tool_descriptions_say_when_to_use_them() -> None:
+    """Each owned sim tool advertises ONE sentence that names when SOL should reach for it."""
+    from solus_api.agent.tools import gazebo_tools, isaac_tools
+
+    for table in (gazebo_tools._DESCRIPTIONS, isaac_tools._DESCRIPTIONS):
+        for name, text in table.items():
+            assert text.endswith(".") and text.count(". ") == 0, (name, text)
+            assert "when " in text.lower(), (name, text)

@@ -1,0 +1,43 @@
+{
+  "_note": "authored from the public Onshape Assemblies API schema; not a live capture",
+  "rootAssembly": {
+    "documentMicroversion": "abc123def456",
+    "configuration": "default",
+    "instances": [
+      {"id": "MBase", "name": "Base <1>", "type": "Part"},
+      {"id": "MArm", "name": "Arm <1>", "type": "Part"}
+    ],
+    "features": [
+      {
+        "id": "elbow",
+        "featureType": "mate",
+        "suppressed": false,
+        "featureData": {
+          "mateType": "REVOLUTE",
+          "name": "Revolute 1",
+          "matedEntities": [
+            {
+              "matedOccurrence": ["MBase"],
+              "matedCS": {
+                "origin": [0.0, 0.0, 0.05],
+                "xAxis": [1.0, 0.0, 0.0],
+                "yAxis": [0.0, 1.0, 0.0],
+                "zAxis": [0.0, 0.0, 1.0]
+              }
+            },
+            {
+              "matedOccurrence": ["MArm"],
+              "matedCS": {
+                "origin": [0.0, 0.0, 0.0],
+                "xAxis": [1.0, 0.0, 0.0],
+                "yAxis": [0.0, 1.0, 0.0],
+                "zAxis": [0.0, 0.0, 1.0]
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "occurrences": []
+  }
+}

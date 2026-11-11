@@ -10,6 +10,10 @@ from typing import Any
 
 from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, AUTO_TOOLS, SYSTEM_SCOPE, auto_judge
 from solus_api.agent.confirmations import _build_preview, validate_tool_arguments
+
+# ADR-040 §5: a row with this label defers an owned routine to the card (one definition,
+# shared with the simulator wrappers' per-call hooks).
+from solus_api.agent.dynamic_gate import APPROVAL_REQUIRED_LABEL
 from solus_api.agent.modes import ActionMode
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
@@ -31,20 +35,6 @@ _ONSHAPE = frozenset(
         "onshape.create_revolute_mate",
     }
 )
-_ISAAC = frozenset(
-    {
-        "isaac.start",
-        "isaac.stop",
-        "isaac.load_model",
-        "isaac.set_joint_limits",
-        "isaac.set_sensor_pose",
-        "isaac.run_routine",
-    }
-)
-#: A preview row with this label means the tool itself demands a human approval
-#: for this call (ADR-040 §5). It can only make a call stricter: Build defers it
-#: to the card instead of running it automatically.
-APPROVAL_REQUIRED_LABEL = "Approval required"
 
 # Reviewed native schemas, canonical JSON SHA256. A fork schema change requires
 # review before automatic execution; it cannot expand its own authority.
@@ -65,7 +55,6 @@ def _canonical(value: Any) -> str:
 
 def register_owned_routine(tool: Tool, *, family: str) -> None:
     """Called only by trusted assembly, after scope and implementation binding."""
-    from solus_api.agent.tools.isaac_tools import IsaacTool
     from solus_api.agent.tools.machine_writes import MachineWriteTool
     from solus_api.bridge.tool import BridgeTool
     from solus_api.connectors.onshape_confirmation import ConfirmedOnshapeTool
@@ -74,7 +63,6 @@ def register_owned_routine(tool: Tool, *, family: str) -> None:
     name = tool.descriptor.name
     eligible = (
         (family == "onshape" and type(tool) is ConfirmedOnshapeTool and name in _ONSHAPE)
-        or (family == "isaac" and type(tool) is IsaacTool and name in _ISAAC)
         or (family == "machine" and type(tool) is MachineWriteTool and name == "machine.write_file")
         # §10.1/§11.2: the plan-snapshot `code.exec` and `code.process_input`
         # ONLY, never as a blanket routine — `prepare` re-judges every call

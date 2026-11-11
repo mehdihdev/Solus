@@ -459,7 +459,12 @@ async def complete(
     plan: RefreshPlan,
     sync_id: uuid.UUID | None,
     hub: Any | None,
+    *,
+    enqueue: Any | None = None,
 ) -> None:
+    """Materialize pending imports, refresh bound models, then (SOLUSDEV-322 P6-T2) re-queue the
+    generation of every system `simulation_model` whose `cad_microversion` is no longer a refreshed
+    scene's revision through `enqueue` (job name, project id, request). The old model stays."""
     if not plan.models and not plan.imports:
         return
     async with maker() as session:
@@ -483,21 +488,48 @@ async def complete(
                 await _error(maker, plan, model, "source_unavailable")
         except Exception:
             await _error(maker, plan, model, plan.capture.error or "geometry_refresh_failed")
+    if enqueue is not None:
+        await regenerate_models(maker, plan, enqueue)
     if hub is not None:
+        await _publish_refresh(hub, plan, sync_id)
+
+
+async def _publish_refresh(hub: Any, plan: RefreshPlan, sync_id: uuid.UUID | None) -> None:
+    try:
+        await hub.publish(
+            plan.project_id,
+            graph_changed_frame(
+                project_id=plan.project_id,
+                source_id=plan.source_id,
+                sync_id=sync_id,
+                counts=GraphChangeCounts(entities_updated=len(plan.models) + len(plan.imports)),
+                at=utcnow().isoformat(),
+            ),
+        )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "CAD geometry fanout failed project=%s", plan.project_id
+        )
+
+
+async def regenerate_models(
+    maker: async_sessionmaker[AsyncSession], plan: RefreshPlan, enqueue: Any
+) -> None:
+    """One generation job per stale system model of each refreshed scene (`complete`)."""
+    from solus_api.simulation.model_job import JOB, regeneration_requests
+
+    async with maker() as session:
+        requests = []
+        for model in plan.models:
+            scene = await session.get(GraphEntity, model.identity)
+            if scene is not None and scene.deleted_at is None:
+                requests.extend(await regeneration_requests(session, scene))
+    for request in requests:
         try:
-            await hub.publish(
-                plan.project_id,
-                graph_changed_frame(
-                    project_id=plan.project_id,
-                    source_id=plan.source_id,
-                    sync_id=sync_id,
-                    counts=GraphChangeCounts(entities_updated=len(plan.models) + len(plan.imports)),
-                    at=utcnow().isoformat(),
-                ),
-            )
+            await enqueue(JOB, str(plan.project_id), request)
         except Exception:
             logging.getLogger(__name__).warning(
-                "CAD geometry fanout failed project=%s", plan.project_id
+                "model regeneration not queued project=%s", plan.project_id, exc_info=True
             )
 
 

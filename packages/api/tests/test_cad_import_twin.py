@@ -43,7 +43,7 @@ from solus_api.orchestration.config import SimulationConfig
 from solus_api.simulation.providers.deterministic_robot import DeterministicRobot
 from solus_api.simulation.sim_capability import SimQuestion
 from solus_api.simulation.sim_ladder import LadderContext, propose_for
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 IDENTITY: Final = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
@@ -389,3 +389,42 @@ async def test_only_the_bounded_number_of_moving_mates_are_listed(
 
     assert [joint["name"] for joint in twin["candidate_joints"]] == ["Fm1"]
     assert any("first 1" in line for line in twin["warnings"])
+
+
+async def test_a_mate_frame_on_the_edge_places_the_candidate_axis_and_origin(
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-322 P6-T1/T2: the connector's `mate_frame` (src part's frame) is placed by that
+    part's transform; a candidate with a frame lacks nothing but its mass."""
+    service, robot, parts = await _arm(db)
+    frame = {
+        "origin_m": [0.0, 0.0, 0.05],
+        "x_axis": [1.0, 0.0, 0.0],
+        "y_axis": [0.0, 1.0, 0.0],
+        "z_axis": [0.0, 0.0, 1.0],
+    }
+    shoulder = _mate(parts["base"], parts["upper"], "REVOLUTE", "Fm1")
+    shoulder.attrs = {**shoulder.attrs, "mate_frame": frame}
+    wrist = _mate(parts["fore"], parts["upper"], "REVOLUTE", "Fm2")  # src `fore` sits 100 mm out
+    wrist.attrs = {**wrist.attrs, "mate_frame": frame}
+    db.add_all([shoulder, wrist, _mate(parts["upper"], parts["fore"], "SLIDER", "Fs1")])
+    await db.commit()
+
+    twin = await twin_of(service, _placed(parts), robot.id, library=LIBRARY)
+
+    first, second, third = twin["candidate_joints"]
+    assert (first["axis"], first["origin"]) == ([0.0, 0.0, 1.0], [0.0, 0.0, 0.05])
+    assert second["axis"] == [0.0, 0.0, 1.0]
+    assert second["origin"] == pytest.approx([0.1, 0.0, 0.05])
+    assert (third["axis"], third["origin"]) == ("unknown", "unknown")
+    assert [need["name"] for need in twin["missing"]] == ["mate_frame", "mass"]
+    # Every candidate framed: the mate frame is no longer missing.
+    await db.execute(
+        update(GraphEdge)
+        .where(GraphEdge.attrs["feature_id"].as_string() == "Fs1")
+        .values(attrs={"mate_type": "SLIDER", "feature_id": "Fs1", "mate_frame": frame})
+    )
+    await db.commit()
+    twin = await twin_of(service, _placed(parts), robot.id, library=LIBRARY)
+    assert [need["name"] for need in twin["missing"]] == ["mass"]
+    assert not any("mate frame" in line for line in twin["warnings"])

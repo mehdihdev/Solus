@@ -1,9 +1,11 @@
 """Explicit static CAD imports from scoped graph observations and normal sync exports.
 
-A CAD import's scene model is static (`joints: []`): the graph holds no mate frame. Beside it rides
-the bounded twin (`twin_of`, SOLUSDEV-321 P4-T4): the moving mates as candidate joints with their
-axis unknown, the robot's bus map as the actuated set, definition limits, sensor sites, and what
-it cannot state (the mate frame, the masses). It names no CAD vendor.
+A CAD import's scene model is static (`joints: []`): a mate is never a joint here. Beside it rides
+the bounded twin (`twin_of`, SOLUSDEV-321 P4-T4): the moving mates as candidate joints — their axis
+and origin placed from the edge's `mate_frame` when the connector read one (SOLUSDEV-322 P6-T1),
+unknown otherwise — the robot's bus map as the actuated set, definition limits, sensor sites, and
+what it cannot state (a missing mate frame, the masses). The generation job (`simulation/model_job`)
+turns the placed candidates into a model's joints. It names no CAD vendor.
 """
 
 from __future__ import annotations
@@ -291,9 +293,11 @@ async def twin_of(
     bus = await _bus_map(service, robot_id, warnings)
     by_part = {entry.part_entity_id: entry for entry in bus if entry.part_entity_id is not None}
     parts = _part_definitions(library, warnings) if by_part else {}
-    joints = await _candidate_joints(service, entities, by_part, parts, warnings)
+    placed = {leaf.id: matrix for leaf, matrix in leaves}
+    joints = await _candidate_joints(service, entities, placed, by_part, parts, warnings)
     warnings.append(MASS_WARNING)
-    lacking = ((MATE_FRAME,) if joints else ()) + (MASS,)
+    unframed = any(joint["axis"] == UNKNOWN for joint in joints)
+    lacking = ((MATE_FRAME,) if unframed else ()) + (MASS,)
     return {
         "candidate_joints": joints,
         "actuated": [_actuator(entry) for entry in bus],
@@ -336,6 +340,7 @@ def _fact_edges() -> Any:
 async def _candidate_joints(
     service: SceneService,
     entities: Mapping[uuid.UUID, GraphEntity],
+    placed: Mapping[uuid.UUID, list[float]],
     bus: Mapping[uuid.UUID, BusMapEntry],
     parts: Mapping[str, PartDefinition],
     warnings: list[str],
@@ -359,27 +364,55 @@ async def _candidate_joints(
     )
     if len(rows) > MAX_CANDIDATES:
         warnings.append(f"Only the first {MAX_CANDIDATES} moving CAD mates are listed.")
-    if rows:
+    candidates = [_candidate(edge, entities, placed, bus, parts) for edge in rows[:MAX_CANDIDATES]]
+    if any(joint["axis"] == UNKNOWN for joint in candidates):
         warnings.append(MATE_FRAME_WARNING)
-    return [_candidate(edge, entities, bus, parts) for edge in rows[:MAX_CANDIDATES]]
+    return candidates
+
+
+def placed_frame(frame: Any, matrix: list[float]) -> tuple[list[float], list[float]] | None:
+    """A `mates_with` edge's `attrs.mate_frame` (`{origin_m, x_axis, y_axis, z_axis}`, in the src
+    part's own frame) placed into the assembly frame by that part's transform: the joint axis (the
+    frame's z axis, rotated) and origin (metres). None when the attr is absent or malformed."""
+    if not isinstance(frame, dict):
+        return None
+    origin, z_axis = frame.get("origin_m"), frame.get("z_axis")
+    if not (
+        isinstance(origin, list)
+        and isinstance(z_axis, list)
+        and len(origin) == 3
+        and len(z_axis) == 3
+        and all(finite_number(v) is not None for v in [*origin, *z_axis])
+    ):
+        return None
+    axis = [sum(matrix[r * 4 + c] * z_axis[c] for c in range(3)) for r in range(3)]
+    if abs(math.sqrt(sum(v * v for v in axis)) - 1) > 1e-3:
+        return None
+    try:
+        placed = transform_mesh({"vertices": origin}, matrix)["vertices"]
+    except ValueError:  # placed past the coordinate bound: no frame is stated
+        return None
+    return [float(v) for v in axis], [float(v) for v in placed]
 
 
 def _candidate(
     edge: GraphEdge,
     entities: Mapping[uuid.UUID, GraphEntity],
+    placed: Mapping[uuid.UUID, list[float]],
     bus: Mapping[uuid.UUID, BusMapEntry],
     parts: Mapping[str, PartDefinition],
 ) -> dict[str, Any]:
     feature = edge.attrs.get("feature_id")
     named = feature[:64] if isinstance(feature, str) and feature else None
     driver = next((part for part in (edge.dst_id, edge.src_id) if part in bus), None)
+    frame = placed_frame(edge.attrs.get("mate_frame"), placed[edge.src_id])
     return {
         "name": named or f"mate-{edge.id.hex[:12]}",
         "type": MOVING_MATES[str(edge.attrs.get("mate_type")).upper()],
         "parent": str(edge.src_id),
         "child": str(edge.dst_id),
-        "axis": UNKNOWN,
-        "origin": UNKNOWN,
+        "axis": frame[0] if frame is not None else UNKNOWN,
+        "origin": frame[1] if frame is not None else UNKNOWN,
         "mate_feature_id": named,
         "actuated": driver is not None,
         "actuator": _actuator(bus[driver]) if driver is not None else None,

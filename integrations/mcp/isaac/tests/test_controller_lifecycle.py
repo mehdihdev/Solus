@@ -1,9 +1,7 @@
-"""Exercise controller ownership/deadlines over real pipes and a controlled child."""
+"""Exercise controller ownership/deadlines over real pipes and a controlled child (the
+`children` fixture in conftest.py)."""
 
-import io
-import os
 import signal
-import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -12,94 +10,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[4]))
 from integrations.mcp.isaac.solus.controller import Controller
+from integrations.mcp.isaac.tests.conftest import Children
 
 
-class Child:
-    def __init__(self, created, mode, argv, **kwargs):
-        from integrations.mcp.isaac.solus.worker import serve_frames
-
-        assert kwargs["stdin"] == subprocess.DEVNULL
-        assert kwargs["start_new_session"] is True
-        assert set(kwargs["env"]) == {"HOME", "PATH", "LANG", "TMPDIR"}
-        assert argv[1].endswith("/solus/worker.py")
-        self.pid = 43210
-        self.finished = threading.Event()
-        self.stop_event = threading.Event()
-        self.ignore_term = False
-        self.stdout = io.BytesIO(b"x" * 16384 + b"bounded-tail")
-        request = os.dup(int(argv[2]))
-        reply = os.dup(int(argv[3]))
-        generation = argv[4]
-
-        class Engine:
-            generation = 0
-
-            def status(self):
-                return {"loaded": False}
-
-            def dispatch(self, *args):
-                raise ValueError("refused")
-
-        def run():
-            with (
-                os.fdopen(request, "rb", buffering=0) as reader,
-                os.fdopen(reply, "wb", buffering=0) as writer,
-            ):
-                try:
-                    if mode["value"] == "eof":
-                        return
-                    if mode["value"] == "hang":
-                        self.stop_event.wait(3)
-                        return
-                    if mode["value"] == "bad_ready":
-                        writer.write(b'{"ready":true,"generation":"foreign"}\n')
-                        self.stop_event.wait(3)
-                        return
-                    serve_frames(reader, writer, generation, Engine())
-                finally:
-                    self.finished.set()
-
-        self.thread = threading.Thread(target=run, daemon=True)
-        created.append(self)
-        self.thread.start()
-
-    def poll(self):
-        return 0 if self.finished.is_set() else None
-
-    def wait(self, timeout):
-        if self.ignore_term and not self.stop_event.is_set():
-            raise subprocess.TimeoutExpired("owned worker", timeout)
-        if not self.finished.wait(timeout):
-            raise subprocess.TimeoutExpired("owned worker", timeout)
-        return 0
-
-
-@pytest.fixture
-def children(monkeypatch):
-    created = []
-    mode = {"value": "normal"}
-    signals = []
-
-    def child_factory(argv, **kwargs):
-        return Child(created, mode, argv, **kwargs)
-
-    def kill(pid, sig):
-        assert created and pid == created[-1].pid
-        signals.append(sig)
-        if sig == signal.SIGTERM and created[-1].ignore_term:
-            return
-        created[-1].stop_event.set()
-        created[-1].finished.set()
-
-    monkeypatch.setattr(subprocess, "Popen", child_factory)
-    monkeypatch.setattr(os, "killpg", kill)
-    yield created, mode, signals
-    for child in created:
-        child.stop_event.set()
-        child.thread.join(timeout=1)
-
-
-def test_start_exchange_and_stop_only_owned_child(tmp_path, children):
+def test_start_exchange_and_stop_only_owned_child(tmp_path: Path, children: Children) -> None:
     created, mode, signals = children
     controller = Controller(tmp_path)
     result = controller.start(dry_run=False)
@@ -115,7 +29,9 @@ def test_start_exchange_and_stop_only_owned_child(tmp_path, children):
 
 
 @pytest.mark.parametrize("mode_name", ["bad_ready", "eof", "hang"])
-def test_failed_startup_cleans_process_and_fds(tmp_path, children, monkeypatch, mode_name):
+def test_failed_startup_cleans_process_and_fds(
+    tmp_path: Path, children: Children, monkeypatch: pytest.MonkeyPatch, mode_name: str
+) -> None:
     created, mode, signals = children
     mode["value"] = mode_name
     original = Controller._read
@@ -127,13 +43,13 @@ def test_failed_startup_cleans_process_and_fds(tmp_path, children, monkeypatch, 
     assert controller.request_fd == controller.reply_fd == -1
 
 
-def test_disconnect_cancels_hung_startup(tmp_path, children):
+def test_disconnect_cancels_hung_startup(tmp_path: Path, children: Children) -> None:
     created, mode, signals = children
     mode["value"] = "hang"
     controller = Controller(tmp_path)
-    errors = []
+    errors: list[str] = []
 
-    def start():
+    def start() -> None:
         try:
             controller.start(dry_run=False)
         except ValueError as error:
@@ -154,7 +70,7 @@ def test_disconnect_cancels_hung_startup(tmp_path, children):
     assert controller.private is None and controller.closed
 
 
-def test_unresponsive_owned_child_gets_bounded_kill(tmp_path, children):
+def test_unresponsive_owned_child_gets_bounded_kill(tmp_path: Path, children: Children) -> None:
     created, mode, signals = children
     controller = Controller(tmp_path)
     result = controller.start(dry_run=False)

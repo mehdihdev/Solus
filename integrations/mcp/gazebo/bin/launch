@@ -1,0 +1,37 @@
+#!/bin/sh
+# Solus-owned fixed launcher. Dependencies are materialized only at install time.
+# The simulator's own environment crosses by NAME only (solus/env.allow, SOLUSDEV-322 Q4).
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
+PYTHON="${SOLUS_MCP_PYTHON:-}"
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then exit 78; fi
+WORKSPACE="${SOLUS_MCP_WORKSPACE:-}"
+if [ -z "$WORKSPACE" ]; then exit 78; fi
+# Path lists keep only non-empty absolute entries: an empty or relative element means the
+# cwd to ld.so(8) and the plugin loaders, and the cwd below is the cloned (untrusted) workspace.
+set -f
+abs_only() {
+  out=""
+  IFS=:
+  for entry in $1; do
+    case "$entry" in /*) out="${out:+$out:}$entry" ;; esac
+  done
+  unset IFS
+  printf '%s' "$out"
+}
+LD_LIBRARY_PATH=$(abs_only "${LD_LIBRARY_PATH:-}")
+export LD_LIBRARY_PATH
+GZ_CONFIG_PATH=$(abs_only "${GZ_CONFIG_PATH:-}")
+GZ_SIM_SYSTEM_PLUGIN_PATH=$(abs_only "${GZ_SIM_SYSTEM_PLUGIN_PATH:-}")
+GZ_SIM_RESOURCE_PATH=$(abs_only "${GZ_SIM_RESOURCE_PATH:-}")
+IGN_CONFIG_PATH=$(abs_only "${IGN_CONFIG_PATH:-}")
+IGN_GAZEBO_SYSTEM_PLUGIN_PATH=$(abs_only "${IGN_GAZEBO_SYSTEM_PLUGIN_PATH:-}")
+IGN_GAZEBO_RESOURCE_PATH=$(abs_only "${IGN_GAZEBO_RESOURCE_PATH:-}")
+GAZEBO_MODEL_PATH=$(abs_only "${GAZEBO_MODEL_PATH:-}")
+GAZEBO_PLUGIN_PATH=$(abs_only "${GAZEBO_PLUGIN_PATH:-}")
+GAZEBO_RESOURCE_PATH=$(abs_only "${GAZEBO_RESOURCE_PATH:-}")
+cd -- "$WORKSPACE"
+exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 SOLUS_MCP_WORKSPACE="$WORKSPACE" SOLUS_GAZEBO_PATH="${SOLUS_GAZEBO_PATH:-}" SOLUS_SIM_ROOTS="${SOLUS_SIM_ROOTS:-}" GZ_CONFIG_PATH="${GZ_CONFIG_PATH:-}" GZ_SIM_SYSTEM_PLUGIN_PATH="${GZ_SIM_SYSTEM_PLUGIN_PATH:-}" GZ_SIM_RESOURCE_PATH="${GZ_SIM_RESOURCE_PATH:-}" GZ_PARTITION="${GZ_PARTITION:-}" GZ_IP="${GZ_IP:-}" IGN_CONFIG_PATH="${IGN_CONFIG_PATH:-}" IGN_GAZEBO_SYSTEM_PLUGIN_PATH="${IGN_GAZEBO_SYSTEM_PLUGIN_PATH:-}" IGN_GAZEBO_RESOURCE_PATH="${IGN_GAZEBO_RESOURCE_PATH:-}" IGN_PARTITION="${IGN_PARTITION:-}" IGN_IP="${IGN_IP:-}" GAZEBO_MODEL_PATH="${GAZEBO_MODEL_PATH:-}" GAZEBO_PLUGIN_PATH="${GAZEBO_PLUGIN_PATH:-}" GAZEBO_RESOURCE_PATH="${GAZEBO_RESOURCE_PATH:-}" GAZEBO_MASTER_URI="${GAZEBO_MASTER_URI:-}" GAZEBO_IP="${GAZEBO_IP:-}" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" "$PYTHON" "$FORK_DIR/solus/gazebo_server.py"

@@ -409,7 +409,7 @@ def ladder_context(graph: GraphContext, facts: FactStore, *, queued: bool) -> La
 
 def ladder_providers(config: SimulationConfig) -> tuple[SimProvider, ...]:
     """Every provider the ladder ranks: each one Solus runs, then the yaml's external targets."""
-    return (*LOCAL_PROVIDERS, *ExternalProviders.of(config, gated=()).targets)
+    return (*LOCAL_PROVIDERS, *ExternalProviders.of(config, registered=()).targets)
 
 
 def available_targets(*, queued: bool, connected: Collection[str] = ()) -> frozenset[str]:

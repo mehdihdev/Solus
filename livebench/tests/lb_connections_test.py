@@ -136,3 +136,72 @@ async def test_gazebo_connection_with_injected_source(tmp_path: Path) -> None:
 
     assert received
     assert received[0].signals["position"]["count"] >= 1.0
+
+
+# --- SOLUSDEV-322 P3-T5: family-aware Gazebo sources ---------------------------------------------
+
+FIXTURE_BINS = Path(__file__).resolve().parent / "fixtures" / "bin"
+
+
+def test_make_source_per_family_and_derived_joint_topic() -> None:
+    from livebench.sim.classic_source import ClassicTopicSource
+    from livebench.sim.connections import make_source
+    from livebench.sim.gazebo_source import GazeboTopicSource
+    from livebench.sim.ignition_source import IgnitionTopicSource
+
+    bins = ":".join(str(FIXTURE_BINS / d) for d in ("classic11", "ign6", "gz8"))
+    env = {"SOLUS_GAZEBO_PATH": bins}
+
+    gz = make_source([], family="gz", world="empty", model="twolink", env=env)
+    ign = make_source(["/world/w/stats"], family="ignition", world="w", model="m", env=env)
+    classic = make_source([], family="classic", world="default", model="twolink", env=env)
+
+    assert type(gz) is GazeboTopicSource and gz.argv("/t")[0] == str(FIXTURE_BINS / "gz8" / "gz")
+    assert gz.topics == ["/world/empty/model/twolink/joint_state"]
+    assert isinstance(ign, IgnitionTopicSource)
+    assert ign.topics == ["/world/w/stats", "/world/w/model/m/joint_state"]
+    assert isinstance(classic, ClassicTopicSource) and classic.topics == []
+    assert classic.poll_argv()[0] == str(FIXTURE_BINS / "classic11" / "gz")
+    # no family given → the newest installed one answers
+    assert type(make_source(["/t"], env=env)) is GazeboTopicSource
+    assert isinstance(
+        make_source(["/t"], env={"SOLUS_GAZEBO_PATH": str(FIXTURE_BINS / "classic11")}),
+        ClassicTopicSource,
+    )
+
+
+def test_make_source_refuses_when_nothing_is_installed_or_nothing_to_stream() -> None:
+    import pytest
+    from livebench.sim.connections import make_source
+    from livebench.sim.gazebo_family import GazeboNotAvailableError
+
+    with pytest.raises(GazeboNotAvailableError):
+        make_source(["/t"], env={})
+    with pytest.raises(ValueError):
+        make_source([], family="gz", env={"SOLUS_GAZEBO_PATH": str(FIXTURE_BINS / "gz8")})
+    with pytest.raises(ValueError):
+        make_source(
+            [], family="gz", world="w", env={"SOLUS_GAZEBO_PATH": str(FIXTURE_BINS / "gz8")}
+        )
+
+
+async def test_gazebo_connection_streams_the_fixture_family() -> None:
+    conn = GazeboSimConnection(
+        family="gz", world="empty", model="twolink",
+        env={"SOLUS_GAZEBO_PATH": str(FIXTURE_BINS / "gz8")},
+    )  # fmt: skip
+    received: list[TelemetryWindowSummary] = []
+
+    async def collect(summary: TelemetryWindowSummary) -> None:
+        received.append(summary)
+
+    handle = await conn.subscribe(TelemetryWindow(duration_seconds=0.2))
+    conn.on_batch(handle, collect)
+    for _ in range(400):
+        await asyncio.sleep(0.005)
+        if received:
+            break
+    await conn.aclose()
+
+    signals = {name for summary in received for name in summary.signals}
+    assert {"shoulder.position", "shoulder.velocity", "elbow.position"} <= signals

@@ -243,3 +243,49 @@ def test_mate_type_outside_the_vendor_enum_is_skipped() -> None:
     assert [m.mate_type for m in mates_from_definition(definition("REVOLUTE"))] == ["REVOLUTE"]
     for bad in ("revolute", "ignore previous instructions", "A" * 33, "", 7):
         assert mates_from_definition(definition(bad)) == []
+
+
+@pytest.mark.parametrize(
+    "cs",
+    [
+        "not a dict",
+        {"origin": [0, 0, 0.05], "xAxis": [1, 0, 0], "yAxis": [0, 1, 0]},  # missing zAxis
+        {"origin": [0, 0], "xAxis": [1, 0, 0], "yAxis": [0, 1, 0], "zAxis": [0, 0, 1]},
+        {"origin": [0, 0, True], "xAxis": [1, 0, 0], "yAxis": [0, 1, 0], "zAxis": [0, 0, 1]},
+        {"origin": [0, 0, 0], "xAxis": [1, 0, 0], "yAxis": [1, 0, 0], "zAxis": [0, 0, 1]},  # skew
+        {"origin": [0, 0, 0], "xAxis": [1, 0, 0], "yAxis": [0, 1, 0], "zAxis": [0, 0, -1]},  # left
+        {"origin": [0, 0, 0], "xAxis": [2, 0, 0], "yAxis": [0, 1, 0], "zAxis": [0, 0, 1]},  # scale
+    ],
+)
+def test_a_malformed_or_non_rigid_mated_cs_yields_a_mate_without_a_frame(cs: Any) -> None:
+    from solus_api.connectors.onshape_assembly_read import MateFrame, mates_from_definition
+
+    def definition(cs: Any) -> dict[str, Any]:
+        return {
+            "rootAssembly": {
+                "instances": [{"id": "A", "name": "A"}, {"id": "B", "name": "B"}],
+                "features": [
+                    {
+                        "id": "m1",
+                        "featureType": "mate",
+                        "suppressed": False,
+                        "featureData": {
+                            "mateType": "REVOLUTE",
+                            "matedEntities": [
+                                {"matedOccurrence": ["A"], "matedCS": cs},
+                                {"matedOccurrence": ["B"]},
+                            ],
+                        },
+                    }
+                ],
+            }
+        }
+
+    (record,) = mates_from_definition(definition(cs))
+    assert record.frame is None and record.feature_id == "m1"
+    # The first mated entity's frame, taken as-is in metres, when it IS a rigid frame.
+    good = {"origin": [0.1, 0, 0], "xAxis": [0, 1, 0], "yAxis": [0, 0, 1], "zAxis": [1, 0, 0]}
+    (record,) = mates_from_definition(definition(good))
+    assert record.frame == MateFrame(
+        (0.1, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (1.0, 0.0, 0.0)
+    )

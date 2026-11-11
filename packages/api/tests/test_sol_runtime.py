@@ -19,6 +19,7 @@ from solus_api.agent.runtime import (
     MAX_TOOL_CALLS,
     AgentRunContext,
     ScaffoldRunner,
+    _internal_only,
     build_dispatch,
     build_sol_registry,
     parse_entity_ids,
@@ -272,12 +273,21 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
     # BridgeTools that agent/drive/wiring.py binds for one approved drive.step.
     # SOLUSDEV-321 P6 (R131): `ros_live.py`'s wrapper is the registered tool itself and invokes
     # only the one unconfirmed bridge read it wraps, inside the dispatch the gate already made.
+    # SOLUSDEV-322: `sim_available.py` calls at most two probe tool objects (`gazebo.probe`,
+    # `isaac.probe`) already registered, never the registry. A file is added here in the SAME
+    # commit that creates it, after review — never ahead of time. `gazebo_tools.py` (P3-T4)
+    # invokes only its privately scoped raw `gazebo.*` capabilities, like `isaac_tools.py`.
     adapters = {
+        "agent/tools/gazebo_tools.py",
         "agent/tools/isaac_tools.py",
         "agent/tools/machine_writes.py",
         "agent/drive/port.py",
         "agent/tools/ros_live.py",
+        "agent/tools/sim_available.py",
     }
+    # No pre-authorized holes: every exempted path must be a real, reviewed file.
+    missing = sorted(rel for rel in allowed | adapters if not (root / rel).is_file())
+    assert missing == [], f"allowlisted invoke site(s) that do not exist: {missing}"
 
     offenders = [
         f"{path.relative_to(root)}:{match}"
@@ -701,18 +711,28 @@ def _names(registry: Any) -> set[str]:
 
 
 @pytest.mark.parametrize("name", ["load_model", "unknown_internal_operation"])
+@pytest.mark.parametrize("internal", [True, False])
 async def test_isaac_internal_inventory_never_becomes_a_raw_tool(
-    engine: AsyncEngine, name: str
+    engine: AsyncEngine, name: str, internal: bool
 ) -> None:
+    """SOLUSDEV-322 P10: the raw spec is dropped by the allowlist's `exposure: internal` flag AND
+    by server name (defence in depth) — `_internal_only` is True either way, while the owned
+    wrappers (`_owned_server_tools` reads `session.inventory` directly) still register once."""
     from solus_api.bridge.allowlist import BridgeToolSpec
 
-    template = _machine_spec(name, gated=True)
-    spec = BridgeToolSpec(
-        server="isaac",
-        remote_name=name,
-        descriptor=template.descriptor.model_copy(update={"name": f"isaac.{name}"}),
-    )
-    bridge, scope = _bridge_with(spec)
+    specs = [
+        BridgeToolSpec(
+            server="isaac",
+            remote_name=remote,
+            descriptor=_machine_spec(remote, gated=True).descriptor.model_copy(
+                update={"name": f"isaac.{remote}"}
+            ),
+            internal=internal,
+        )
+        for remote in (name, "probe")
+    ]
+    assert all(_internal_only(spec) for spec in specs)
+    bridge, scope = _bridge_with(*specs)
     registry = build_sol_registry(
         async_sessionmaker(engine, expire_on_commit=False),
         scope[2],
@@ -720,7 +740,61 @@ async def test_isaac_internal_inventory_never_becomes_a_raw_tool(
         user_id=scope[0],
         team_id=scope[1],
     )
-    assert f"isaac.{name}" not in _names(registry)
+    names = [descriptor.name for descriptor in registry.list()]
+    assert f"isaac.{name}" not in names
+    assert names.count("isaac.probe") == 1
+
+
+@pytest.mark.parametrize("name", ["spawn", "put_asset", "unknown_internal_operation"])
+@pytest.mark.parametrize("internal", [True, False])
+async def test_raw_gazebo_inventory_never_becomes_a_tool(
+    engine: AsyncEngine, name: str, internal: bool
+) -> None:
+    """SOLUSDEV-322 P3-T4: a raw `gazebo.*` advert never reaches the registry; `spawn` arrives
+    only as the owned wrapper (graph-bound args, per-call hook), `put_asset` never at all.
+    P10: dropped by the allowlist's `exposure: internal` flag AND by server name."""
+    from solus_api.bridge.allowlist import BridgeToolSpec, requires_complete_preview
+
+    specs = [
+        BridgeToolSpec(
+            server="gazebo",
+            remote_name=remote,
+            descriptor=_machine_spec(remote, gated=False).descriptor.model_copy(
+                update={"name": f"gazebo.{remote}"}
+            ),
+            internal=internal,
+        )
+        for remote in (name, "probe")
+    ]
+    assert all(_internal_only(spec) for spec in specs)
+    bridge, scope = _bridge_with(*specs)
+    registry = build_sol_registry(
+        async_sessionmaker(engine, expire_on_commit=False),
+        scope[2],
+        bridge=bridge,
+        user_id=scope[0],
+        team_id=scope[1],
+    )
+    names = [descriptor.name for descriptor in registry.list()]
+    assert names.count("gazebo.probe") == 1
+    raw_spec = next(
+        t for t in bridge.get(*scope).inventory if t.descriptor.name == f"gazebo.{name}"
+    )
+    registered = next((t for t in registry.tools() if t.descriptor.name == f"gazebo.{name}"), None)
+    if name == "spawn":
+        assert registered is not None and registered is not raw_spec
+        assert set(registered.descriptor.params["properties"]) == {
+            "session_id",
+            "model_entity_id",
+            "name",
+            "pose",
+            "dry_run",
+        }
+        assert callable(getattr(registered, "needs_confirmation", None))
+        assert not registered.descriptor.requires_confirmation
+        assert requires_complete_preview("gazebo.spawn")
+    else:
+        assert registered is None, f"gazebo.{name} must never be a tool"
 
 
 async def test_isaac_registry_exposes_only_owned_graph_schema(engine: AsyncEngine) -> None:
@@ -746,7 +820,12 @@ async def test_isaac_registry_exposes_only_owned_graph_schema(engine: AsyncEngin
     )
     descriptors = {d.name: d for d in registry.list()}
     load = descriptors["isaac.load_model"]
-    assert load.requires_confirmation
+    # SOLUSDEV-322 P2-T3: gated per call by the ownership ledger (`needs_confirmation` hook on
+    # the registered object), not by the static flag the raw companion schema advertised.
+    assert not load.requires_confirmation
+    loaded_tool = next(t for t in registry.tools() if t.descriptor.name == "isaac.load_model")
+    assert callable(getattr(loaded_tool, "needs_confirmation", None))
+    assert getattr(loaded_tool, "_build_authority", None) is None
     assert set(load.params["properties"]) == {"session_id", "model_entity_id", "dry_run"}
     assert not descriptors["isaac.status"].requires_confirmation
     for name in (
@@ -756,8 +835,15 @@ async def test_isaac_registry_exposes_only_owned_graph_schema(engine: AsyncEngin
         "set_joint_limits",
         "set_sensor_pose",
         "run_routine",
+        # SOLUSDEV-322 P4-T2: the user's own stages.
+        "open_stage",
+        "spawn_at",
+        "control",
+        "save_stage",
     ):
         assert requires_complete_preview(f"isaac.{name}")
+    for name in ("list_stages", "find_articulations", "read_state"):
+        assert not requires_complete_preview(f"isaac.{name}"), "reads are never previewed"
 
 
 async def test_a_tool_that_returns_an_image_is_never_model_visible(engine: AsyncEngine) -> None:

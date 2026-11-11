@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+# Fixture CLI for the classic `gz` tool. Recorded from Classic 11.15.1 (conda env solus-gz-classic)
+# on 2026-11-09 against a headless `gzserver empty.world` with a two-link URDF spawned as `twolink`
+# (the same session as integrations/mcp/gazebo/tests/fixtures/bin/classic11/gz). The
+# `goo.gle/debug*` marker lines are what the conda protobuf build prints before every DebugString.
+# `gz --version` prints "Invalid arguments" on STDERR and exits 255 (so it never reads as `gz`).
+# Deliberate difference: an absent topic exits 0 after printing nothing instead of blocking.
+# SOLUS_FIXTURE_CHUNK_DELAY_S=<s> replays the block-buffered pipe shape of the real `gz model -i`:
+# the dump is written in 200-byte flushed chunks <s> seconds apart.
+import os
+import sys
+import time
+
+WORLD = "default"
+STATS = """goo.gle/debugonly
+sim_time {{
+  sec: {sec}
+  nsec: 458000000
+}}
+pause_time {{
+  sec: 0
+  nsec: 0
+}}
+real_time {{
+  sec: 7
+  nsec: 464878991
+}}
+paused: false
+iterations: 7458
+
+"""
+# `gz model -w default -m twolink -i`: gazebo.msgs.Model text format (links/visuals abridged).
+MODEL_INFO = """goo.gle/debugstr
+name: "twolink"
+id: 10
+is_static: false
+pose {
+  position {
+    x: 0.99933922516007612
+    y: 0.0031146534095398528
+    z: 0.049999999982770812
+  }
+  orientation {
+    x: -4.2843751774229355e-11
+    y: 4.6016408001306915e-12
+    z: 0.21866041033465702
+    w: 0.97580101708918077
+  }
+}
+joint {
+  name: "twolink::shoulder"
+  id: 26
+  angle: 1.5697520194514176
+  type: REVOLUTE
+  parent: "twolink::base"
+  parent_id: 11
+  child: "twolink::arm"
+  child_id: 16
+  axis1 {
+    xyz {
+      x: 0
+      y: 1
+      z: 0
+    }
+    limit_lower: -1.57
+    limit_upper: 1.57
+  }
+}
+joint {
+  name: "twolink::elbow"
+  id: 27
+  angle: 1.5464770391330855
+  type: REVOLUTE
+  parent: "twolink::arm"
+  parent_id: 16
+  child: "twolink::tip"
+  child_id: 21
+}
+link {
+  id: 11
+  name: "twolink::base"
+  self_collide: false
+  gravity: true
+}
+self_collide: false
+enable_wind: false
+
+"""
+
+
+def write_chunked(text: str) -> None:
+    delay = float(os.environ.get("SOLUS_FIXTURE_CHUNK_DELAY_S", "0"))
+    if not delay:
+        sys.stdout.write(text)
+        return
+    for start in range(0, len(text), 200):
+        sys.stdout.write(text[start : start + 200])
+        sys.stdout.flush()
+        time.sleep(delay)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if args[:2] == ["topic", "-e"] and len(args) == 3:
+        if args[2] == f"/gazebo/{WORLD}/world_stats":
+            sys.stdout.write(STATS.format(sec=7) + STATS.format(sec=8))
+        return 0
+    if args[:1] == ["model"] and "-i" in args and "-m" in args:
+        model = args[args.index("-m") + 1]
+        if model == "twolink":
+            write_chunked(MODEL_INFO)
+        else:
+            sys.stdout.write(f"Unable to get info on model[{model}] in the world[{WORLD}]\n")
+        return 0
+    sys.stderr.write("Invalid arguments\n")
+    return 255
+
+
+sys.exit(main())

@@ -1,0 +1,65 @@
+server: gazebo
+# `exposure: internal` (SOLUSDEV-322 P10, docs/contracts/bridge-protocol.md): the cloud accepts these
+# tools but registers none for the model; only the owned `gazebo.*` wrappers in agent/tools are model-facing.
+exposure: internal
+tools:
+  - name: probe
+    requires_confirmation: false
+    timeout_seconds: 20
+    reason: Read-only identity of the installed Gazebo families; launches nothing
+  - name: list_worlds
+    requires_confirmation: false
+    timeout_seconds: 20
+    reason: Read-only scan of the user's world files under SOLUS_SIM_ROOTS and running worlds
+  - name: open_world
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 120
+    reason: Starts one Solus-owned simulator process on the user's own world file
+  - name: attach
+    requires_confirmation: false
+    timeout_seconds: 20
+    reason: Read-only registration of a world the user started themselves
+  - name: list_models
+    requires_confirmation: false
+    timeout_seconds: 20
+    reason: Read-only models, links and joints of one registered world
+  - name: spawn
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 60
+    reason: Inserts a verified Solus-generated model into a registered world (per-call gate)
+  - name: joint_state
+    requires_confirmation: false
+    timeout_seconds: 30
+    reason: Read-only bounded window of joint positions and velocities
+  - name: set_joint_targets
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 20
+    reason: Sets bounded joint position targets inside a registered world (per-call gate)
+  - name: control
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 60
+    reason: Pauses, plays, steps or resets one registered world (per-call gate)
+  - name: run_routine
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 90
+    reason: Runs a finite bounded joint routine with readback (per-call gate)
+  - name: stop
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 30
+    reason: Stops only the simulator process this companion started (per-call gate)
+  - name: save_world
+    requires_confirmation: true
+    files_errors: true
+    timeout_seconds: 30
+    reason: writes the running world back into the user's own file
+  - name: put_asset
+    requires_confirmation: false
+    files_errors: true
+    timeout_seconds: 30
+    reason: stores one verified chunk of a Solus-generated model under .solus/sim/models

@@ -99,15 +99,15 @@ def _find_articulations(scene_name: str) -> list[Any]:
     ponytail: import-chain covers Isaac 5/6 module names; anything older is a
     documented non-goal. Validated by the human-run QA pass, not unit tests —
     Isaac's interpreter is not available to the suite."""
-    import omni.usd  # type: ignore[import-not-found]
-    from pxr import UsdPhysics  # type: ignore[import-not-found]
+    import omni.usd
+    from pxr import UsdPhysics
 
     try:
-        from isaacsim.core.prims import (  # type: ignore[import-not-found]
+        from isaacsim.core.prims import (
             SingleArticulation as ArticulationCls,
         )
     except ImportError:  # Isaac 5.x fallback
-        from omni.isaac.core.articulations import (  # type: ignore[import-not-found]
+        from omni.isaac.core.articulations import (
             Articulation as ArticulationCls,
         )
 
@@ -156,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     _require_safe_url(args.url)
 
-    from isaacsim import SimulationApp  # type: ignore[import-not-found]  # Isaac's python only
+    from isaacsim import SimulationApp  # Isaac's python only
 
     sim_app = SimulationApp({"headless": True})
     try:
@@ -164,7 +164,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.scene:
             omni.usd.get_context().open_stage(args.scene)
-        from isaacsim.core.api import World  # type: ignore[import-not-found]
+        from isaacsim.core.api import World
 
         world = World()
         world.reset()

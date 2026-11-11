@@ -67,14 +67,15 @@ const summaryCheck = shape({
   robot_id: uuid,
   session_id: nullable(uuid),
   name: text(120),
-  origin: oneOf('live', 'recorded', 'synthetic'),
+  origin: oneOf('live', 'recorded', 'synthetic', 'sim'),
   status: oneOf('running', 'completed', 'truncated', 'interrupted'),
   started_at: timestamp,
   ended_at: nullable(timestamp),
   packet_count: count(10000),
   drop_count: count(),
   artifact_id: nullable(uuid),
-  baseline: optional(oneOf(true, false))
+  baseline: optional(oneOf(true, false)),
+  pinned: optional(oneOf(true, false))
 })
 const dictionary =
   (max: number, keyCheck: Check, valueCheck: Check, min = 0): Check =>
@@ -179,7 +180,7 @@ const detailCheck: Check = (value) =>
   value.summary.robot_id === value.manifest.robot_id
 const scalar: Check = (value) => value === null || finite(value) || text(512, 0)(value)
 const findingFields = {
-  evidence_origin: optional(oneOf('live', 'recorded', 'synthetic')),
+  evidence_origin: optional(oneOf('live', 'recorded', 'synthetic', 'sim')),
   findings: array(
     256,
     shape({

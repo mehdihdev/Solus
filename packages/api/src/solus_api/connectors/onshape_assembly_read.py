@@ -12,12 +12,43 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from solus_api.connectors.contracts import ConnectorError
 from solus_api.connectors.onshape import ONSHAPE_ID_RE
-from solus_api.connectors.onshape_circle_geometry import _connector_frame, _poses
+from solus_api.connectors.onshape_circle_geometry import (
+    _connector_frame,
+    _poses,
+    _rigid,
+    _vector,
+)
 from solus_api.connectors.onshape_geometry import _contained_size_bound
 
 _FEATURE_ID = re.compile(r"[A-Za-z0-9_+/-]{1,64}")
 #: Onshape's own mate-type enum; anything else in `featureData.mateType` is untrusted text.
 _MATE_TYPE = re.compile(r"[A-Z_]{1,32}")
+
+
+_Triple = tuple[float, float, float]
+
+
+def _triple(values: list[float]) -> _Triple:
+    return values[0], values[1], values[2]
+
+
+@dataclass(frozen=True)
+class MateFrame:
+    """The mate connector frame of the FIRST mated entity (`matedEntities[0].matedCS`), in
+    metres, as Onshape reports it: a right-handed orthonormal basis plus an origin."""
+
+    origin_m: _Triple
+    x_axis: _Triple
+    y_axis: _Triple
+    z_axis: _Triple
+
+    def as_attr(self) -> dict[str, list[float]]:
+        return {
+            "origin_m": list(self.origin_m),
+            "x_axis": list(self.x_axis),
+            "y_axis": list(self.y_axis),
+            "z_axis": list(self.z_axis),
+        }
 
 
 @dataclass(frozen=True)
@@ -27,12 +58,14 @@ class MateRecord:
     Paths are instance NAMES joined by `/`, with Onshape's ` <n>` instance suffix spelled
     the way the STEP export spells repeated occurrences (`Peg <2>` → `Peg[1]`, `<1>` bare);
     `mechanical.build_mechanical_graph` resolves them against the exported node keys.
+    `frame` is absent when the definition carries no (rigid) `matedCS` — the "gap" case.
     """
 
     a_occurrence: str
     b_occurrence: str
     mate_type: str
     feature_id: str
+    frame: MateFrame | None = None
 
 
 def _instance_segment(name: Any) -> str | None:
@@ -69,6 +102,25 @@ def _mated_paths(feature: dict[str, Any], instances: dict[str, str]) -> list[str
     return paths
 
 
+def _mate_frame(feature: dict[str, Any]) -> MateFrame | None:
+    """`matedEntities[0].matedCS` as a `MateFrame`; anything malformed or non-rigid is no frame
+    (untrusted vendor data degrades to the gap case, never to an exception)."""
+    data = feature.get("featureData")
+    entities = data.get("matedEntities") if isinstance(data, dict) else None
+    first = entities[0] if isinstance(entities, list) and entities else None
+    cs = first.get("matedCS") if isinstance(first, dict) else None
+    if not isinstance(cs, dict):
+        return None
+    try:
+        origin = _vector(cs.get("origin"))
+        axes = [_vector(cs.get(key)) for key in ("xAxis", "yAxis", "zAxis")]
+        matrix = [value for i in range(3) for value in [*(axis[i] for axis in axes), origin[i]]]
+        _rigid([*matrix, 0, 0, 0, 1])
+    except ConnectorError:
+        return None
+    return MateFrame(_triple(origin), _triple(axes[0]), _triple(axes[1]), _triple(axes[2]))
+
+
 def mates_from_definition(payload: Any) -> list[MateRecord]:
     """Pure: the `mate` features of an assembly definition (`rootAssembly.features`, with
     or without `{message}` envelopes), suppressed ones and anything malformed skipped."""
@@ -102,7 +154,7 @@ def mates_from_definition(payload: Any) -> list[MateRecord]:
             or not _FEATURE_ID.fullmatch(feature_id)
         ):
             continue
-        records.append(MateRecord(paths[0], paths[1], mate_type, feature_id))
+        records.append(MateRecord(paths[0], paths[1], mate_type, feature_id, _mate_frame(feature)))
     return records
 
 

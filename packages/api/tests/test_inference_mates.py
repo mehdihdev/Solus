@@ -25,7 +25,11 @@ from solus_api.connectors.onshape import (
     _Target,
     mirrored_payload_key,
 )
-from solus_api.connectors.onshape_assembly_read import MateRecord, mates_from_definition
+from solus_api.connectors.onshape_assembly_read import (
+    MateFrame,
+    MateRecord,
+    mates_from_definition,
+)
 from solus_api.connectors.onshape_read_cache import (
     ReadScope,
     TurnReadMemo,
@@ -48,6 +52,13 @@ requires_occt: pytest.MarkDecorator = _onshape_tests.requires_occt
 
 DEFINITION: dict[str, Any] = json.loads(
     (Path(__file__).parent / "fixtures" / "inference" / "assembly_definition.json").read_text()
+)
+#: Authored from the public Onshape Assemblies API schema (`matedEntities[].matedCS`), not a
+#: live capture — no Onshape call is made anywhere in this suite.
+MATED_CS: dict[str, Any] = json.loads(
+    (
+        Path(__file__).parent / "fixtures" / "inference" / "assembly_definition_mated_cs.json"
+    ).read_text()
 )
 MICROVERSION = "abc123def456"
 MATE_PARAMS = {"includeMateFeatures": "true", "includeMateConnectors": "true"}
@@ -97,6 +108,54 @@ def test_mechanical_mapping_emits_mates_with_between_resolved_occurrences() -> N
     }
     assert errors == [SyncError(item="ghost", message="mate endpoint is not a node of this export")]
     assert not any(r.type == "mates_with" for r in build_mechanical_graph(model)[1])
+
+
+def test_mated_cs_becomes_mate_frame_on_the_edge() -> None:
+    records = mates_from_definition(MATED_CS)
+    assert records == [
+        MateRecord(
+            "Base",
+            "Arm",
+            "REVOLUTE",
+            "elbow",
+            MateFrame((0.0, 0.0, 0.05), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)),
+        )
+    ]
+    model = CadModel(
+        nodes=(
+            CadNode("Robot", "Robot", True),
+            CadNode("Robot/Base", "Base", False, "Robot"),
+            CadNode("Robot/Arm", "Arm", False, "Robot"),
+        )
+    )
+    _, relations, errors = build_mechanical_graph(model, scope="s", mates=records)
+    (edge,) = [r for r in relations if r.type == "mates_with"]
+    assert errors == []
+    assert (edge.from_key, edge.to_key) == ("s:Robot/Base", "s:Robot/Arm")
+    assert edge.properties["mate_frame"] == {
+        "origin_m": [0.0, 0.0, 0.05],
+        "x_axis": [1.0, 0.0, 0.0],
+        "y_axis": [0.0, 1.0, 0.0],
+        "z_axis": [0.0, 0.0, 1.0],
+    }
+
+
+def test_mate_without_cs_carries_no_frame() -> None:
+    records = mates_from_definition(DEFINITION)
+    assert all(record.frame is None for record in records)
+    model = CadModel(
+        nodes=(
+            CadNode("Bracket", "Bracket", True),
+            CadNode("Bracket/BasePlate", "BasePlate", False, "Bracket"),
+            CadNode("Bracket/PegPair", "PegPair", True, "Bracket"),
+            CadNode("Bracket/PegPair/Peg[0]", "Peg", False, "Bracket/PegPair"),
+            CadNode("Bracket/PegPair/Peg[1]", "Peg", False, "Bracket/PegPair"),
+        )
+    )
+    _, relations, _ = build_mechanical_graph(model, scope="s", mates=records)
+    mated = [r for r in relations if r.type == "mates_with"]
+    assert len(mated) == 2
+    assert all("mate_frame" not in r.properties for r in mated)
 
 
 def _mate_calls() -> list[Any]:

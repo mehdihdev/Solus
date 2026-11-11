@@ -177,8 +177,14 @@ has no causes; `platform_build` is a pin that holds but carries a local build ta
 the body above as the ONE `members/<uid.hex>` CONFIG; a second PUT replaces it in place
 (same id, `config_version` +1). `PUT …/members/me/machines/{companion_id}` (findings.md)
 additionally dispatches `machine.tool_versions` (→ `attrs.tool_versions`, replaced, version
-bumped only on change; keys limited to the companion's fixed binary list, each line cut at
-`from` with every absolute path redacted to `<path>` on both sides) and
+bumped only on change; keys limited to the companion's fixed binary list — the developer
+tools plus, since SOLUSDEV-322, the simulator binaries `gz`, `ign`, `gazebo`, `gzserver`,
+`ngspice`, `nvidia-smi`, where `gz` is asked `sim --versions` then `--version` and `ign` only
+`gazebo --versions` (an `ign` without the gazebo plugin is omitted) — each line cut at `from`
+with every absolute path redacted to
+`<path>` on both sides; the same answer also derives `attrs.simulators = {gazebo: {family, version}
+| null, nvidia_smi: bool, ngspice: version | null}`, `services/machine_simulators.py`, replaced
+with the raw map and kept when the companion did not answer) and
 `code.probe_environment` (→ the machine's `environment/software` CONFIG) over the caller's
 live bridge, both through the 10 s probe cache; without a bridge or the tools the PUT stores
 the body only and never fails.
@@ -250,7 +256,7 @@ project runs on. `payload` is a `CodeEnvironment` document, validated on every w
     { "name": "numpy", "version": "2.1.0" },
     { "name": "pyserial", "version": null }
   ],
-  "detected_on": { "os": "linux", "arch": "x86_64" },
+  "detected_on": { "os": "linux", "arch": "x64" },
   "provenance": "detected",
   "captured_at": "2026-09-07T10:00:00Z"
 }

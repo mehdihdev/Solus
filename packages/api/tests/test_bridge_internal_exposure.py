@@ -132,4 +132,6 @@ def test_the_real_drive_allowlist_is_internal_and_gates_act() -> None:
     assert "drive" in loaded.internal
     act = loaded.get("drive", "act")
     assert act is not None and act.requires_confirmation is True
-    assert loaded.internal == {"drive"}
+    # SOLUSDEV-322 P10: both sim companion servers are internal too; only their owned
+    # `gazebo.*` / `isaac.*` wrappers (agent/tools) are model-facing.
+    assert loaded.internal == {"drive", "gazebo", "isaac"}

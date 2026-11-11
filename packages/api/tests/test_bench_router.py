@@ -814,3 +814,71 @@ async def test_device_recent_only_labels_declared_session_channels(
     assert a["signals"][0]["display_role"] == "diagnostic"
     assert "display_role" not in a["signals"][1]
     assert "display_role" not in b["signals"][0]
+
+
+# --- SOLUSDEV-322 P3-T5: GazeboSimConfig family / world / model ----------------------------------
+
+
+def test_config_derives_topics_from_world_and_model() -> None:
+    from solus_api.livebench.bench_router import GazeboSimConfig
+
+    cfg = GazeboSimConfig(provider="gazebo", family="gz", world="empty", model="twolink")
+    assert cfg.topics == [] and cfg.family == "gz"
+    body = BenchSessionIn.model_validate(
+        {"mode": "sim", "config": {"provider": "gazebo", "world": "empty", "model": "twolink"}}
+    )
+    assert isinstance(body.config, GazeboSimConfig) and body.config.family is None
+    for bad in (
+        {"world": "empty"},  # model missing
+        {"model": "m"},  # world missing
+        {"world": "-w", "model": "m"},  # option-shaped
+        {"world": "a b", "model": "m"},  # text-format syntax
+        {"world": 'w"', "model": "m"},
+        {"family": "sdformat", "world": "w", "model": "m"},  # not a family
+    ):
+        with pytest.raises(ValidationError):
+            GazeboSimConfig.model_validate({"provider": "gazebo", **bad})
+
+
+def test_config_still_accepts_manual_topics() -> None:
+    from solus_api.livebench.bench_router import GazeboSimConfig
+
+    cfg = GazeboSimConfig(provider="gazebo", topics=["/model/pose"])
+    assert cfg.topics == ["/model/pose"] and cfg.family is None and cfg.world is None
+    with_model = GazeboSimConfig(provider="gazebo", topics=["/stats"], world="w", model="m")
+    assert with_model.topics == ["/stats"]
+    with pytest.raises(ValidationError):
+        GazeboSimConfig(provider="gazebo", topics=["-rf"])
+    with pytest.raises(ValidationError):
+        GazeboSimConfig(provider="gazebo")  # neither topics nor a model
+    with pytest.raises(ValidationError):
+        GazeboSimConfig(provider="gazebo", topics=[])
+
+
+async def test_gazebo_session_passes_family_world_model_to_the_local_opener(
+    client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal
+) -> None:
+    project_id = await _member_project(client, alice_headers)
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions",
+        json={
+            "mode": "sim",
+            "config": {
+                "provider": "gazebo",
+                "family": "classic",
+                "world": "default",
+                "model": "arm",
+            },
+        },
+        headers=alice_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert fake_local.opened[-1] == {
+        "kind": "gazebo",
+        "topics": [],
+        "project_id": uuid.UUID(project_id),
+        "family": "classic",
+        "world": "default",
+        "model": "arm",
+    }
+    assert resp.json()["data"]["label"] == "Gazebo default/arm"

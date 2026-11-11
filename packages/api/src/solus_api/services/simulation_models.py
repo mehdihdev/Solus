@@ -3,7 +3,8 @@
 import hashlib
 import json
 import uuid
-from typing import Annotated
+from collections.abc import Mapping
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from solus_contracts.relations import normalize_domain_pair
@@ -49,8 +50,18 @@ class SimulationModelService:
         self.session = session
 
     async def create(
-        self, project_id: uuid.UUID, body: SimulationModelCreate
+        self,
+        project_id: uuid.UUID,
+        body: SimulationModelCreate,
+        *,
+        origin: str = "manual",
+        extra_attrs: Mapping[str, Any] | None = None,
     ) -> tuple[GraphEntity, SimulationModel, bool]:
+        """Create the model, or return the existing one with the same name and definition.
+
+        SOLUSDEV-322 P6-T2: the generation job passes `origin="system"` and `extra_attrs` (its
+        robot, CAD revision, gaps and artifact ids) beside `attrs["simulation_model"]`; only the
+        definition is compared on a re-call, so regenerated attrs never make a rerun a 409."""
         # Serialize duplicate requests within the existing project transaction.
         project = await self.session.scalar(
             select(Project)
@@ -74,7 +85,7 @@ class SimulationModelService:
         if existing:
             if len(existing) != 1:
                 raise _conflict()
-            await self._validate(existing[0], project_id, body)
+            await self._validate(existing[0], project_id, body, origin)
             return existing[0], body.model, False
         components = await self._components(project_id, body.model)
         root = GraphEntity(
@@ -82,10 +93,10 @@ class SimulationModelService:
             project_id=project_id,
             kind="simulation_model",
             domain=Domain.SIMULATION,
-            origin="manual",
+            origin=origin,
             external_ref=reference,
             name=body.name,
-            attrs={"simulation_model": body.model.model_dump()},
+            attrs={**(extra_attrs or {}), "simulation_model": body.model.model_dump()},
         )
         self.session.add(root)
         await self.session.flush()
@@ -96,7 +107,7 @@ class SimulationModelService:
                 src_id=root.id,
                 dst_id=component.id,
                 relation_type="contains",
-                origin="manual",
+                origin=origin,
                 confidence=1.0,
                 evidence=[],
                 created_by=None,
@@ -124,15 +135,15 @@ class SimulationModelService:
         return rows
 
     async def _validate(
-        self, root: GraphEntity, project_id: uuid.UUID, body: SimulationModelCreate
+        self, root: GraphEntity, project_id: uuid.UUID, body: SimulationModelCreate, origin: str
     ) -> None:
         if (
             root.deleted_at is not None
-            or root.origin != "manual"
+            or root.origin != origin
             or root.domain != Domain.SIMULATION
             or root.kind != "simulation_model"
             or root.name != body.name
-            or root.attrs != {"simulation_model": body.model.model_dump()}
+            or root.attrs.get("simulation_model") != body.model.model_dump()
             or str(root.id) in body.model.entity_ids()
         ):
             raise _conflict()
@@ -153,7 +164,7 @@ class SimulationModelService:
             raise _conflict()
         if any(
             edge.relation_type != "contains"
-            or edge.origin != "manual"
+            or edge.origin != origin
             or edge.source_id is not None
             or edge.domain_pair != expected[edge.dst_id]
             for edge in edges

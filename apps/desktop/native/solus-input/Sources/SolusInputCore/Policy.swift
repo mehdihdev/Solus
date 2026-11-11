@@ -34,6 +34,12 @@ public enum DeniedApps {
         "com.teamviewer.TeamViewer", "com.philandro.anydesk", "com.realvnc.vncviewer", "tv.parsec.www",
         "com.raycast.macos", "org.hammerspoon.Hammerspoon", "org.python.IDLE", "org.thonny.Thonny",
         "io.balena.etcher", "org.raspberrypi.imagingutility",
+        // ADR-041 amendment 2026-11-10 (SOLUSDEV-322): simulator GUIs. SOL reaches a simulator
+        // only through the owned gazebo.*/isaac.* wrappers and the sim_session ledger, never by
+        // driving its window. MuJoCo.app (simulate) and the python.org framework process that
+        // hosts the pip `mujoco.viewer` and the Gazebo python bindings. Gazebo's own macOS
+        // binaries and Isaac Sim (Linux/Windows only) carry no bundle id, which is denied above.
+        "org.mujoco.mujoco", "org.python.python",
         // Password managers, credential and consent prompts
         "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
         "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "org.keepassxc.keepassxc",

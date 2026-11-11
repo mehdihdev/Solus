@@ -934,3 +934,24 @@ async def test_a_failing_tick_or_rule_is_logged_and_observation_goes_on(
     assert str(project) in tick_failed.getMessage() and tick_failed.exc_info is not None
     (rule_failed,) = [r for r in caplog.records if "rule failed" in r.getMessage()]
     assert "broken" in rule_failed.getMessage() and rule_failed.exc_info is not None
+
+
+async def test_findings_from_a_sim_session_carry_evidence_sim_true(engine: AsyncEngine) -> None:
+    """SOLUSDEV-322 P5-T3: a sim session's view says so, and every finding its tick raises carries
+    `evidence.sim = true` — same rules, same `source="observer"`, same session bucket."""
+    maker = _maker(engine)
+    project, arm = await _arm(maker)
+    servo3 = arm.parts[2]
+    buffer = _CountingBuffer()
+    await _stall(buffer, project, arm, 3, start=0.0, seconds=1.5)
+    view = SessionView(project, uuid.uuid4(), arm.robot, None, {servo3: _streams(3)}, sim=True)
+
+    raised = await _evaluator(maker, buffer).tick(view)
+
+    (stall,) = await _findings(maker, project)
+    assert raised == [stall.id]
+    assert (stall.attrs["source"], stall.attrs["evidence"]["sim"]) == ("observer", True)
+    assert stall.attrs["evidence"]["robot_id"] == str(arm.robot)
+
+    real = _session_view(project, arm, {servo3: _streams(3)})
+    assert real.sim is False

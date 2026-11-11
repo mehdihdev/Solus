@@ -67,6 +67,8 @@ def test_new_kinds_exist() -> None:
     assert kinds.ROS_NODE == "ros_node"
     assert kinds.ROS_TOPIC == "ros_topic"
     assert {kinds.ROS_NODE, kinds.ROS_TOPIC} <= kinds.ALL_KINDS
+    # SOLUSDEV-322 P6-T2: one generated joint of a simulation model, bound by the model
+    assert kinds.JOINT == "joint" and kinds.JOINT in kinds.ALL_KINDS
 
 
 def test_descriptor_kinds_are_the_nodes_that_describe_another_entity() -> None:

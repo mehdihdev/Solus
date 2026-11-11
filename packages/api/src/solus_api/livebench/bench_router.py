@@ -251,6 +251,7 @@ MAX_SESSION_SECONDS = 3600.0
 MAX_WINDOW_SECONDS = 60.0
 _RUNNER_ABSENT = "livebench is not installed on this server"
 _SIM_PROVIDERS = {"mujoco", "gazebo", "mcap-replay"}
+_GAZEBO_NAME = r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$"  # never option-shaped, never text-format syntax
 
 
 def _clean_topics(topics: list[str]) -> list[str]:
@@ -276,16 +277,30 @@ class MujocoSimConfig(BaseModel):
 
 
 class GazeboSimConfig(BaseModel):
+    """Manual `topics`, or (SOLUSDEV-322 P3-T5) a `world` + `model` whose joint_state stream the
+    livebench source derives for the installed (or named) Gazebo `family`."""
+
     model_config = ConfigDict(extra="forbid")
 
     provider: Literal["gazebo"]
-    topics: list[str] = Field(min_length=1, max_length=MAX_TOPICS)
+    topics: list[str] = Field(default_factory=list, max_length=MAX_TOPICS)
+    family: Literal["classic", "ignition", "gz"] | None = None
+    world: str | None = Field(default=None, pattern=_GAZEBO_NAME, max_length=64)
+    model: str | None = Field(default=None, pattern=_GAZEBO_NAME, max_length=64)
     window_seconds: float = Field(default=1.0, gt=0, le=MAX_WINDOW_SECONDS)
 
     @field_validator("topics")
     @classmethod
     def _bound_topics(cls, topics: list[str]) -> list[str]:
         return _clean_topics(topics)
+
+    @model_validator(mode="after")
+    def _topics_or_model(self) -> "GazeboSimConfig":
+        if (self.world is None) != (self.model is None):
+            raise ValueError("world and model go together")
+        if not self.topics and self.world is None:
+            raise ValueError("give topics, or a world and model")
+        return self
 
 
 class McapSimConfig(BaseModel):
@@ -479,11 +494,23 @@ def _session_opener(
 
         return open_mujoco, f"MuJoCo {cfg.scene_name}", None
     if isinstance(cfg, GazeboSimConfig):
+        gazebo_cfg = cfg
 
         async def open_gazebo() -> Any:
-            return await local.open_gazebo(list(cfg.topics), project_id=project_id)
+            return await local.open_gazebo(
+                list(gazebo_cfg.topics),
+                project_id=project_id,
+                family=gazebo_cfg.family,
+                world=gazebo_cfg.world,
+                model=gazebo_cfg.model,
+            )
 
-        return open_gazebo, f"Gazebo ({len(cfg.topics)} topic(s))", None
+        label = (
+            f"Gazebo {gazebo_cfg.world}/{gazebo_cfg.model}"
+            if gazebo_cfg.world
+            else f"Gazebo ({len(gazebo_cfg.topics)} topic(s))"
+        )
+        return open_gazebo, label, None
     if isinstance(cfg, McapSimConfig):
         mcap_path = _validated_mcap_path(settings, cfg.mcap_path)
 

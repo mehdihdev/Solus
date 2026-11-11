@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# Fixture for the classic GUI wrapper. Authored from RECON §2: the real
+# `gazebo --version` never exits (hung 120 s). Running it is a detector bug;
+# this fixture records the fact (to $SOLUS_FIXTURE_MARK) instead of hanging.
+import os
+import pathlib
+import sys
+
+mark = os.environ.get("SOLUS_FIXTURE_MARK")
+if mark:
+    pathlib.Path(mark).write_text("gazebo was run")
+sys.exit(1)

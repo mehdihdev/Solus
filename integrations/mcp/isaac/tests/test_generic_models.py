@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -10,7 +12,7 @@ from pydantic import ValidationError
 from integrations.mcp.isaac.solus.models import Model
 
 
-def fixture(count=1):
+def fixture(count: int = 1) -> dict[str, Any]:
     links = [{"entity_id": str(UUID(int=i + 1)), "name": f"segment_{i}"} for i in range(count + 1)]
     joints = [
         {
@@ -40,7 +42,7 @@ def fixture(count=1):
 
 
 @pytest.mark.parametrize("count", [1, 3])
-def test_distinct_models_need_no_builtin_robot(count):
+def test_distinct_models_need_no_builtin_robot(count: int) -> None:
     model = Model.model_validate(fixture(count))
     assert len(model.joints) == count
     assert model.sensors == []
@@ -49,7 +51,7 @@ def test_distinct_models_need_no_builtin_robot(count):
 @pytest.mark.parametrize(
     "change", ["legacy", "digest", "traversal", "duplicate", "foreign", "limits"]
 )
-def test_invalid_model_refused(change):
+def test_invalid_model_refused(change: str) -> None:
     data = fixture()
     if change == "legacy":
         data["schema_version"] = 1
@@ -67,7 +69,7 @@ def test_invalid_model_refused(change):
         Model.model_validate(data)
 
 
-def urdf(count=1):
+def urdf(count: int = 1) -> bytes:
     links = "".join(f'<link name="segment_{i}"/>' for i in range(count + 1))
     joints = "".join(
         f'<joint name="axis_{i}" type="revolute"><parent link="segment_{i}"/>'
@@ -78,7 +80,7 @@ def urdf(count=1):
     return f'<robot name="fixture">{links}{joints}</robot>'.encode()
 
 
-def materialized(tmp_path, data, content):
+def materialized(tmp_path: Path, data: dict[str, Any], content: bytes) -> tuple[Model, Path]:
     data["asset"]["files"] = {"robot.urdf": hashlib.sha256(content).hexdigest()}
     data["asset"]["sha256"] = hashlib.sha256(
         json.dumps(data["asset"]["files"], sort_keys=True, separators=(",", ":")).encode()
@@ -90,7 +92,7 @@ def materialized(tmp_path, data, content):
 
 
 @pytest.mark.parametrize("count", [1, 3])
-def test_private_copy_and_urdf_validation_for_two_robots(tmp_path, count):
+def test_private_copy_and_urdf_validation_for_two_robots(tmp_path: Path, count: int) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     model, source = materialized(tmp_path, fixture(count), urdf(count))
@@ -117,7 +119,7 @@ def test_private_copy_and_urdf_validation_for_two_robots(tmp_path, count):
         ),
     ],
 )
-def test_unsafe_or_graph_mismatched_urdf_refused(tmp_path, bad):
+def test_unsafe_or_graph_mismatched_urdf_refused(tmp_path: Path, bad: bytes) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     model, _ = materialized(tmp_path, fixture(), bad)
@@ -125,7 +127,7 @@ def test_unsafe_or_graph_mismatched_urdf_refused(tmp_path, bad):
         ActionEngine(None, tmp_path, tmp_path)._copy_model(model, tmp_path / "private")
 
 
-def test_intermediate_asset_symlink_refused(tmp_path):
+def test_intermediate_asset_symlink_refused(tmp_path: Path) -> None:
     from integrations.mcp.isaac.solus.assets import model_asset_directory
 
     elsewhere = tmp_path / "elsewhere"
@@ -136,7 +138,7 @@ def test_intermediate_asset_symlink_refused(tmp_path):
             pytest.fail("unsafe directory opened")
 
 
-def test_manifest_change_refused_before_import(tmp_path):
+def test_manifest_change_refused_before_import(tmp_path: Path) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     model, root = materialized(tmp_path, fixture(), urdf())
@@ -148,7 +150,7 @@ def test_manifest_change_refused_before_import(tmp_path):
 @pytest.mark.parametrize(
     "encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be"]
 )
-def test_encoded_dtd_cannot_bypass_declaration_guard(tmp_path, encoding):
+def test_encoded_dtd_cannot_bypass_declaration_guard(tmp_path: Path, encoding: str) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     document = '<!DOCTYPE robot [<!ENTITY alias "fixture">]>' + urdf().decode().replace(
@@ -159,7 +161,7 @@ def test_encoded_dtd_cannot_bypass_declaration_guard(tmp_path, encoding):
         ActionEngine(None, tmp_path, tmp_path)._copy_model(model, tmp_path / "private")
 
 
-def test_fifo_asset_refused_without_waiting_for_writer(tmp_path):
+def test_fifo_asset_refused_without_waiting_for_writer(tmp_path: Path) -> None:
     import os
     import subprocess
     import sys
@@ -185,7 +187,7 @@ for action in (
 
 
 @pytest.mark.parametrize("count", [1, 3])
-def test_native_and_cloud_schema_parity(count):
+def test_native_and_cloud_schema_parity(count: int) -> None:
     from solus_api.agent.tools.isaac_models import SimulationModel
 
     data = fixture(count)
@@ -195,7 +197,9 @@ def test_native_and_cloud_schema_parity(count):
 
 
 @pytest.mark.parametrize("count", [1, 3])
-def test_generic_trajectory_reports_tracking_without_object_claims(count):
+def test_generic_trajectory_reports_tracking_without_object_claims(
+    count: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from types import SimpleNamespace
 
     from integrations.mcp.isaac.solus.models import Routine
@@ -203,16 +207,21 @@ def test_generic_trajectory_reports_tracking_without_object_claims(count):
     from integrations.mcp.isaac.tests.test_models import routine
 
     scene = NativeScene(None)
-    scene.model = Model.model_validate(fixture(count))
-    scene.indices = {joint.entity_id: index for index, joint in enumerate(scene.model.joints)}
-    steps = []
-    scene._joint_limits = lambda index: [-1.0, 1.0]
-    scene.status = lambda: {
-        "positions_rad": {joint.entity_id: 0.05 if steps else 0.0 for joint in scene.model.joints}
-    }
+    model = Model.model_validate(fixture(count))
+    scene.model = model
+    scene.indices = {joint.entity_id: index for index, joint in enumerate(model.joints)}
+    steps: list[int] = []
+    monkeypatch.setattr(scene, "_joint_limits", lambda index: [-1.0, 1.0])
+    monkeypatch.setattr(
+        scene,
+        "status",
+        lambda: {
+            "positions_rad": {joint.entity_id: 0.05 if steps else 0.0 for joint in model.joints}
+        },
+    )
     scene.robot = SimpleNamespace(set_dof_position_targets=lambda *args, **kwargs: None)
     scene.sim = SimpleNamespace(step=lambda **kwargs: steps.append(1))
-    result = scene.run(Routine.model_validate(routine(scene.model)), lambda: False)
+    result = scene.run(Routine.model_validate(routine(model)), lambda: False)
     assert result["targets_reached"] is True
     assert set(result) == {
         "targets_reached",
@@ -234,7 +243,7 @@ def test_generic_trajectory_reports_tracking_without_object_claims(count):
         b'\xef\xbb\xbf<?xml version="1.0"?>',
     ],
 )
-def test_standard_utf8_xml_declarations_are_supported(tmp_path, declaration):
+def test_standard_utf8_xml_declarations_are_supported(tmp_path: Path, declaration: bytes) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     model, _ = materialized(tmp_path, fixture(), declaration + urdf())
@@ -249,7 +258,9 @@ def test_standard_utf8_xml_declarations_are_supported(tmp_path, declaration):
         b' <?xml version="1.0"?>',
     ],
 )
-def test_unsupported_or_misplaced_declarations_are_refused(tmp_path, declaration):
+def test_unsupported_or_misplaced_declarations_are_refused(
+    tmp_path: Path, declaration: bytes
+) -> None:
     from integrations.mcp.isaac.solus.actions import ActionEngine
 
     model, _ = materialized(tmp_path, fixture(), declaration + urdf())

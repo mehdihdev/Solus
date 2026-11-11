@@ -65,6 +65,7 @@ from solus_api.graph.live import LiveHub
 from solus_api.models import Job, JobStatus, Source, SourceStatus, SyncTrigger, ensure_utc, utcnow
 from solus_api.services.budgets import recompute_budgets
 from solus_api.services.connections import account_ref_for, onshape_application_for
+from solus_api.simulation.model_job import pool_enqueue
 from solus_api.storage import ArtifactStore
 from solus_api.storage.cad_store import build_cad_store
 
@@ -188,6 +189,7 @@ async def execute_source_sync(
     webhook_callback_base: str | None = None,
     artifact_store: ArtifactStore | None = None,
     label: CallLabel | None = None,
+    enqueue_jobs: Any | None = None,
 ) -> uuid.UUID | None:
     """Resolve the source's connector and run one sync. Returns the Sync id (or
     None if the source vanished before the run started).
@@ -266,6 +268,7 @@ async def execute_source_sync(
             hub,
             artifact_store,
             registry,
+            enqueue_jobs,
         )
 
     if store is None:
@@ -454,6 +457,7 @@ async def _run_with_scene(
     hub: Any | None,
     artifact_store: ArtifactStore | None,
     registry: ConnectorRegistry | None = None,
+    enqueue_jobs: Any | None = None,
 ) -> uuid.UUID | None:
     from solus_api.connectors.onshape import OnshapeConnector
     from solus_api.livebench.scene.cad_refresh import complete, prepare
@@ -478,7 +482,7 @@ async def _run_with_scene(
         registry,
     )
     if plan is not None:
-        await complete(sessionmaker, artifact_store, plan, result, hub)
+        await complete(sessionmaker, artifact_store, plan, result, hub, enqueue=enqueue_jobs)
     return result
 
 
@@ -990,6 +994,8 @@ async def sync_source(
                 ctx["settings"].public_api_base_url if "settings" in ctx else None
             ),
             label=_call_label(label),
+            # SOLUSDEV-322 P6-T2: a refreshed CAD scene re-queues its generated models.
+            enqueue_jobs=pool_enqueue(ctx["redis"]) if ctx.get("redis") is not None else None,
         )
     except ConnectorError as exc:
         if exc.code != "single_flight_busy":
@@ -1205,6 +1211,22 @@ async def prune_github_deliveries(ctx: dict[str, Any]) -> int:
         return 0
 
 
+async def prune_sim_runs_job(ctx: dict[str, Any]) -> int:
+    """ARQ cron (daily 03:17, SOLUSDEV-322 P7-T3): drop the payload of old, unpinned simulated
+    runs beyond each robot's newest 20 (`livebench/runs/sim_run_retention.py`).
+
+    Returns how many payloads went; never raises to ARQ (the next run retries)."""
+    from solus_api.livebench.runs.sim_run_retention import prune_sim_runs
+
+    try:
+        async with ctx["sessionmaker"]() as session:
+            report = await prune_sim_runs(session, ctx["artifact_store"], now=utcnow())
+            return report.deleted
+    except Exception as exc:  # noqa: BLE001 — logged; pruning is idempotent
+        logger.error("sim run retention failed: %s", type(exc).__name__)
+        return 0
+
+
 async def source_revision(
     ctx: dict[str, Any], source_id: str, user_id: str, generation: str
 ) -> None:
@@ -1303,6 +1325,7 @@ def build_worker_settings(settings: Settings) -> type:
     from solus_api.checkers.checker_trigger import run_matrix_checkers
     from solus_api.extensions.review import extension_review
     from solus_api.simulation.mesh_job import run_mesh_sim
+    from solus_api.simulation.model_job import run_generate_sim_model
     from solus_api.simulation.providers.mujoco_job import run_mujoco_sim
     from solus_api.simulation.providers.ngspice_provider import run_ngspice_sim
     from solus_api.sourcing.worker import sourcing_request
@@ -1337,6 +1360,9 @@ def build_worker_settings(settings: Settings) -> type:
             func(run_ngspice_sim, timeout=120, max_tries=1, keep_result=0),
             func(run_mujoco_sim, timeout=300, max_tries=1, keep_result=0),
             func(run_mesh_sim, timeout=120, max_tries=1, keep_result=0),
+            # SOLUSDEV-322 P6-T2: one model generation per approved card or CAD refresh; a
+            # second try would mint a second model.
+            func(run_generate_sim_model, timeout=300, max_tries=1, keep_result=0),
         ]
         cron_jobs = [
             # SOLUSDEV-167: was `minute=None`, which in arq means EVERY value —
@@ -1363,6 +1389,8 @@ def build_worker_settings(settings: Settings) -> type:
             cron(reconcile_stripe_subscriptions, minute={5}, run_at_startup=False),
             # SOLUSDEV-216: GitHub App webhook delivery-id retention.
             cron(prune_github_deliveries, minute={0}, run_at_startup=False),
+            # SOLUSDEV-322 P7-T3: daily sim-run payload retention.
+            cron(prune_sim_runs_job, hour={3}, minute={17}, run_at_startup=False),
         ]
         on_startup = _on_startup
         on_shutdown = _on_shutdown

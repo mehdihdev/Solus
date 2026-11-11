@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# Fixture CLI for the ignition family. `ign gazebo --versions` recorded from Fortress ign 6.16.0
+# (conda env solus-gz-fortress) on 2026-11-09. Every other shape is AUTHORED from the Harmonic
+# 8.15.0 recordings in ../replay_lib.py with ignition.msgs type names and SDF 1.9 (the conda
+# Fortress server did not start on this host: libabsl version mismatch).
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from replay_lib import replay_main  # noqa: E402
+
+sys.exit(replay_main("ignition.msgs", "gazebo", "6.16.0", "1.9"))

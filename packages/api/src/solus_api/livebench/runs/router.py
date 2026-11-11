@@ -373,6 +373,22 @@ async def mark_baseline(ctx: ProjectCtx, session: SessionDep, run_id: uuid.UUID)
     return envelope(store.summary(entity).model_dump(mode="json"))  # read again: now the baseline
 
 
+@router.post("/{run_id}/pin")
+async def pin_run(ctx: ProjectCtx, session: SessionDep, run_id: uuid.UUID) -> dict[str, Any]:
+    """Keep the run (SOLUSDEV-322 P5-T4): `attrs.pinned` is what sim-run retention reads to
+    leave a run alone. Idempotent; a run still running is refused as for `baseline`, since its
+    next checkpoint rewrites the whole record and the mark with it."""
+    require_role(ctx, Role.MEMBER)
+    await lock_project(session, ctx.project.id)
+    entity = await store.record(session, ctx.project.id, run_id)
+    if store.summary(entity).status == "running":
+        raise APIError(409, "run_active", "Stop the run before pinning it")
+    entity.attrs = {**entity.attrs, "pinned": True}
+    await session.commit()
+    logger.info("run pinned project=%s run=%s", ctx.project.id, run_id)
+    return envelope(store.summary(entity).model_dump(mode="json"))
+
+
 @router.get("/{run_id}/findings")
 async def get_findings(
     ctx: ProjectCtx, session: SessionDep, request: Request, run_id: uuid.UUID

@@ -152,6 +152,7 @@ async def test_put_creates_member_machine_and_contains_edge(
         "arch": "arm64",
         "owner_user_id": user_id,
         "tool_versions": {},
+        "simulators": {"gazebo": None, "nvidia_smi": False, "ngspice": None},
         "devices": [],
         "flash_history": [],
         "recent_commands": [],
@@ -368,6 +369,15 @@ async def test_put_survives_a_dead_bridge_and_a_malformed_probe(
     props = data["properties"]
     assert isinstance(props, dict) and props["tool_versions"] == VERSIONS
     assert await _machine_configs(db, project_b) == []
+
+
+def test_tool_version_binaries_mirror_the_companion_tuple() -> None:
+    # The companion is a workspace member; importing it is allowed in tests only.
+    from solus_api.routers.machines import TOOL_VERSION_BINARIES
+    from solus_companion.config import DEFAULT_VERSION_BINARIES
+
+    assert frozenset(DEFAULT_VERSION_BINARIES) == TOOL_VERSION_BINARIES
+    assert {"gz", "ign", "gazebo", "gzserver", "ngspice", "nvidia-smi"} <= TOOL_VERSION_BINARIES
 
 
 def test_versions_of_redacts_paths_and_keeps_only_the_fixed_binaries() -> None:

@@ -1,7 +1,7 @@
 """Strict portable recording format. Imported origins are claims, never live proof."""
 
 from datetime import datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import (
@@ -76,6 +76,19 @@ class RunFinding(StrictModel):
     last_seen: AwareDatetime
 
 
+class SimRunInfo(StrictModel):
+    """What a simulated run (`origin="sim"`, SOLUSDEV-322 P5-T4) was run with: the provider,
+    its family and version when the companion said, the graph model's asset hash, the world or
+    stage it ran in (root-relative, never an absolute path) and the routine as requested."""
+
+    provider: Text
+    family: Text | None = None
+    version: Text | None = None
+    model_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+    scene_ref: Text | None = None
+    routine: Annotated[dict[str, Any], Field(max_length=64)] = Field(default_factory=dict)
+
+
 class RunManifest(StrictModel):
     schema_version: Literal[1] = 1
     robot_id: UUID
@@ -86,6 +99,8 @@ class RunManifest(StrictModel):
     snapshots: list[RevisionSnapshot] = Field(default_factory=list, max_length=256)
     # Optional, so every manifest recorded before findings existed still loads.
     findings: list[RunFinding] = Field(default_factory=list, max_length=MAX_RUN_FINDINGS)
+    # Optional: only a simulated run carries it.
+    sim: SimRunInfo | None = None
 
     @model_validator(mode="after")
     def unique_parts(self) -> Self:
@@ -119,7 +134,7 @@ class RunSummary(StrictModel):
     robot_id: UUID
     session_id: UUID | None = None
     name: Annotated[str, Field(min_length=1, max_length=120)]
-    origin: Literal["live", "recorded", "synthetic"]
+    origin: Literal["live", "recorded", "synthetic", "sim"]
     status: Literal["running", "completed", "truncated", "interrupted"]
     started_at: datetime
     ended_at: datetime | None = None

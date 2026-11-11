@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from mcp.types import CallToolResult, TextContent
-from solus_companion.config import DEFAULT_VERSION_BINARIES, CompanionConfig
+from solus_companion.config import DEFAULT_VERSION_BINARIES, VERSION_ARGV, CompanionConfig
 from solus_companion.machine.server import (
     VERSION_LINE_CAP,
     VERSION_PROBE_TIMEOUT,
@@ -69,7 +69,14 @@ def test_config_default_binaries_are_the_fixed_tuple() -> None:
         "uv",
         "pip",
         "conda",
+        "gz",
+        "ign",
+        "gazebo",
+        "gzserver",
+        "ngspice",
+        "nvidia-smi",
     )
+    assert set(VERSION_ARGV) <= set(DEFAULT_VERSION_BINARIES)
 
 
 async def test_present_absent_timeout_and_garbage() -> None:
@@ -174,3 +181,60 @@ def test_binaries_resolve_only_through_absolute_path_entries(
     monkeypatch.setenv("PATH", os.pathsep.join([".", str(tmp_path)]))
     assert absolute_path_which("python3") == str(planted)
     assert MachineServer(None)._which is absolute_path_which
+
+
+# ------------------------------------------------------------------ SOLUSDEV-322 simulators
+
+GZ, IGN = "/opt/ros/jazzy/bin/gz", "/usr/bin/ign"
+
+
+def _sim_server(
+    answers: dict[tuple[str, ...], str | None], which: dict[str, str]
+) -> tuple[MachineServer, list[list[str]]]:
+    calls: list[list[str]] = []
+
+    def _capture(argv: list[str], timeout_seconds: float) -> str | None:
+        calls.append(argv)
+        return answers.get(tuple(argv))
+
+    server = MachineServer(
+        None, version_binaries=("gz", "ign", "gazebo"), which=which.get, capture=_capture
+    )
+    return server, calls
+
+
+async def test_gz_tries_sim_versions_then_falls_back_to_classic_version() -> None:
+    answers: dict[tuple[str, ...], str | None] = {
+        (GZ, "sim", "--versions"): None,  # gz-tools without the sim plugin on PATH
+        (GZ, "--version"): "Gazebo Tools, version 2.0.0\n",
+    }
+    server, calls = _sim_server(answers, {"gz": GZ})
+    result = await server.call_tool("tool_versions", {})
+    assert result.structuredContent == {"tool_versions": {"gz": "Gazebo Tools, version 2.0.0"}}
+    assert calls == [[GZ, "sim", "--versions"], [GZ, "--version"]]
+
+
+async def test_ign_uses_gazebo_versions() -> None:
+    server, calls = _sim_server({(IGN, "gazebo", "--versions"): "6.16.0\n"}, {"ign": IGN})
+    result = await server.call_tool("tool_versions", {})
+    assert result.structuredContent == {"tool_versions": {"ign": "6.16.0"}}
+    assert calls == [[IGN, "gazebo", "--versions"]]  # first non-empty line wins; no fallback run
+
+
+async def test_ign_without_the_gazebo_plugin_is_omitted_not_asked_version() -> None:
+    # `ign --version` prints the ign-tools version, not a simulator's (§0 row 25: no fallback).
+    answers: dict[tuple[str, ...], str | None] = {
+        (IGN, "gazebo", "--versions"): None,
+        (IGN, "--version"): "Ignition Tools, version 1.5.0\n",
+    }
+    server, calls = _sim_server(answers, {"ign": IGN})
+    result = await server.call_tool("tool_versions", {})
+    assert result.structuredContent == {"tool_versions": {}}
+    assert calls == [[IGN, "gazebo", "--versions"]]
+
+
+async def test_absent_simulator_binaries_are_omitted() -> None:
+    server, calls = _sim_server({}, {})
+    result = await server.call_tool("tool_versions", {})
+    assert result.structuredContent == {"tool_versions": {}}
+    assert calls == []

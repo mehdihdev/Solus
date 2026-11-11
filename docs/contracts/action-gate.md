@@ -44,7 +44,13 @@ this file is a bug.
 
 ## The flow
 
-1. SOL proposes a call to a tool whose descriptor sets `requires_confirmation`.
+1. SOL proposes a call to a tool whose descriptor sets `requires_confirmation`, or whose
+   per-call `needs_confirmation(args)` hook says so (SOLUSDEV-322 P2-T2, `agent/dynamic_gate.py`:
+   a duck-typed attribute on the tool object, consulted by the gate and by Guide mode; the static
+   flag wins without consulting it, and the hook fails closed — an exception or a timeout is a
+   card). A preview row labelled `Approval required` (ADR-040 §5, `dynamic_gate.APPROVAL_REQUIRED_LABEL`)
+   only ever makes a call stricter: Build's owned-routine policy defers it to the card, and the
+   simulator wrappers' hooks card it even on a session Solus owns.
 2. The gate **parks** it instead of running it: a `tool_confirmation` row is written with the
    exact `args`, a Solus-authored `summary`, and a `preview` diff. The turn streams a
    `tool_confirmation` event. A one-shot SSE stream cannot block for a click, so the action
@@ -232,6 +238,10 @@ goes to a human (CLAUDE.md §7).
 
 The user explicitly requested routine Build edits execute automatically. The
 mutation descriptor remains true, so Guide still structurally refuses writes.
+(SOLUSDEV-322 narrows this for simulator tools only: a sim tool whose static
+descriptor is ungated runs in Guide when its per-call `needs_confirmation`
+hook proves the session is Solus-owned; attached or unknown sessions are
+refused in Guide and carded in Build. See step 1 of the flow above.)
 The central dispatcher may execute only a trusted code-owned routine tool in
 Build mode after schema/authorization and complete fresh preview validation.
 This is a distinct audited Build authorization, never a fabricated human approval.

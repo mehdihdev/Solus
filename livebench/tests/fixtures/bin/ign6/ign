@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+# Fixture CLI for the ignition family (Fortress 6.16.0). AUTHORED from the Harmonic recordings in
+# ../gz_replay.py and the documented ignition.msgs schema (`ign topic -e --json-output` prints the
+# same JSON shape; RECON §2 verified the flag on Fortress 6.16.0 on 2026-11-09).
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from gz_replay import main  # noqa: E402
+
+sys.exit(main("gazebo", "6.16.0"))

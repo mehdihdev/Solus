@@ -314,9 +314,11 @@ simulation:
 
 What ships:
 
-- one target, `isaac`: rung 4, `domain: mechanical`, `quantities: [joint_trajectory]`, and
-  `cost` and `fidelity` of 4 each. It is the full-simulation integration that P4-T4 routes
-  through its gated `run_routine` tool. The name is a yaml string, never a name in code;
+- two rung-4 targets, both `domain: mechanical` with `quantities: [joint_trajectory]`, each the
+  full-simulation integration that P4-T4 routes through its `run_routine` tool. `isaac` has `cost`
+  and `fidelity` of 4; `gazebo` (SOLUSDEV-322 P1-T3) has 3 and 3, so when both are connected the
+  where-order ranks `gazebo` first on cost and a person's style entry or an explicit `provider`
+  still picks `isaac`. The names are yaml strings, never names in code;
 - no rung-2 target. The ladder skips a rung that has no candidate.
 
 ## 5. Consumers
@@ -732,11 +734,13 @@ Three tools, in `agent/tools/simulate.py` and `agent/tools/apply_sim_change.py`.
 a model call: rungs 1 and 3 are code, and rungs 2 and 4 are other systems reached through their
 own gated tools.
 
-| Tool               | Gate                                        | What it does                                                       |
-| ------------------ | ------------------------------------------- | ------------------------------------------------------------------ |
-| `simulate`         | none                                        | runs rung 1, enqueues rung 3, routes rungs 2 and 4, dry-runs a fix |
-| `get_sim_result`   | none (read-only)                            | reads one `sim_result` of the project                              |
-| `apply_sim_change` | a card in Build mode; Guide mode refuses it | applies one dry-run fix after the person approves, then re-runs    |
+| Tool               | Gate                                        | What it does                                                                |
+| ------------------ | ------------------------------------------- | --------------------------------------------------------------------------- |
+| `simulate`         | none                                        | runs rung 1, enqueues rung 3, routes rungs 2 and 4, dry-runs a fix          |
+| `get_sim_result`   | none (read-only)                            | reads one `sim_result` of the project                                       |
+| `apply_sim_change` | a card in Build mode; Guide mode refuses it | applies one dry-run fix after the person approves, then re-runs             |
+| `sim.available`    | none (read-only, SOLUSDEV-322)              | one row per provider: installed, connected, runnable here, sessions         |
+| `sim.map_to_parts` | a card in Build mode; Guide mode refuses it | records simulated joints as `attrs.sim_aliases` of the parts they stand for |
 
 ### Registration and wiring
 
@@ -751,8 +755,43 @@ as the requesting person and a bare registry still lists only `get_entity`.
   queues `(job, request)` on the app's ARQ pool under `<job>:<project>:<sha1 of the request>[:12]`.
   arq refuses an id that is still live, so the same request never queues twice while it waits; the
   jobs keep no result (`keep_result=0`), so a finished request may run again.
-- Which external targets are connected is read once, at registration, off the gated tools already
-  registered: the bridge's.
+- Which external targets are connected is read once, at registration, off the tools already
+  registered: the bridge's. Connection is registration (SOLUSDEV-322 P1-T3): the routine tool's
+  static gate does not count, since its gate is decided per call (P2-T2).
+- `sim.available` (`agent/tools/sim_available.py`, SOLUSDEV-322 P1-T2) registers whenever a person
+  is bound, after the bridge tools. It answers `{providers: [{provider, installed, connected,
+runnable_here, reason, version, running_sessions: {owned, attached}, capabilities}]}` for
+  `calculators`, `mujoco`, `ngspice`, `gazebo` and `isaac`. `installed` is a fact: `mujoco` and
+  `ngspice` from this deployment (`find_spec`, the pinned `SOLUS_NGSPICE_BIN`), `gazebo` from the
+  asker's machine (`attrs.simulators`, derived by `services/machine_simulators.py` from the
+  companion's `tool_versions` lines: `{gazebo: {family: classic|ignition|gz, version} | null,
+nvidia_smi: bool, ngspice: version | null}`), `isaac` only from its probe's `available: true`
+  (otherwise `null`, never "absent"). `connected` is registration: a bridge row is connected when
+  its `<provider>.probe` tool is in the registry; the tool calls at most those two probe objects
+  and forwards their answers as `capabilities`. Every `reason` is one sentence SOL repeats as it
+  is (P7-T2): without a companion `The companion is offline (bridge offline).`; Isaac's platform
+  reasons (non-Linux, non-x86_64, no `nvidia-smi`) come first. The same rule holds across the
+  `gazebo.*` / `isaac.*` wrappers: a companion refusal `{ok: false, code, reason}` reaches SOL
+  with its `reason` flattened to one path-free sentence (a bare code names the code), and a dead
+  bridge answers `The companion is offline (bridge offline); reconnect it and try again.` with
+  the contract's `unavailable` code and retryability. `running_sessions` counts the project's live rows in the ownership ledger
+  (`simulation/sessions_ledger.py`) by provider: `owned` = started by Solus, `attached` = the
+  person's own.
+- `sim.map_to_parts` (`agent/tools/sim_mapping.py`, SOLUSDEV-322 P5-T1) registers whenever a person
+  is bound. Arguments: `{provider, session_id?, model_entity_id?, channels: [{device_id,
+joint_name}] ≤ 64, robot_id?}` (strict, closed; ids are uuid text; a `session_id` must be a live
+  ledger row of that provider in this project). Matching per channel, first rung with candidates:
+  the bound `simulation_model`'s joint binding `name` → a live part whose normalized name is the
+  joint or whose hardware config carries a telemetry channel `<joint>.<signal>` → (P6, not yet) the
+  generated model's URDF joint names. Exactly one candidate maps; none or several stay unmapped.
+  Static card (`requires_confirmation`, complete preview): one row per mapped part (`before` = the
+  provider's existing alias, `after` = `<provider>/<device_id>`) and one
+  `unmapped: <joint> (ambiguous: a, b | no part matches)` row; a mapping with nothing to write
+  refuses the park. The approved write is `part.attrs.sim_aliases = existing + [{provider,
+device_id}]`, deduped and reassigned under `lock_project`, `version` bumped, `external_ref` never
+  touched; it emits the data event `sim.aliases_mapped` `{provider, mapped, unmapped, part_ids}`.
+  `model_entity_id`/`robot_id` from another project, or a model binding that points outside the
+  project, are refused (`not_found`), never followed.
 
 ### `simulate(question, scope?, provider?, change?)`
 
@@ -818,19 +857,26 @@ Another project's result, a deleted one, an entity of another kind or an unknown
 `ExternalTarget` provider the ladder ranks; the module names no target.
 
 - Its tool is `<target>.run_routine`, and it is connected when the turn's registry holds that tool
-  behind confirmation. A tool of that name that is not gated never connects it.
+  (`ExternalProviders.of(config, registered=…)`), whatever the tool's static gate: connection is
+  registration (SOLUSDEV-322 P1-T3). A sibling tool of the same server never connects it.
 - It lacks nothing Solus can tell (`can_answer`): the routed tool previews its own inputs. It never
   runs here: `run` raises `SimulationRefusedError`.
-- A route reads `{rung, target, tool, requires_confirmation: true, connected, status}`, where
-  `status` is "call `<tool>`: it previews the run and asks the person first" or "not connected".
-  The model calls the tool itself, through the gated dispatcher, so the call keeps that tool's own
-  gate: its preview and its card.
+- A route reads `{rung, target, tool, gate: "per call", connected, status}`, where `status` is
+  "call `<tool>`: it previews the run and its gate decides per call" or "not connected". The model
+  calls the tool itself, through the gated dispatcher, so the call keeps that tool's own gate: its
+  preview, and a card where the per-call gate (P2-T2: the ownership ledger) asks for one. The route
+  never promises `requires_confirmation`; the gate does.
 - **A routed call always shows its card (M1, R115).** `simulate` notes the routed tool for the turn
   (`note_routed`), and in that turn the Build policy treats that tool's call as forced confirmation
   (`BuildExecutionPolicy.prepare` asks `routed_by_simulation`): it is never owned, so the call goes
   to its card. Even an owned routine such as `isaac.run_routine`, which Build mode would otherwise
   run on its own after two identical previews, waits behind its card: the person asked to simulate,
-  not to run a routine. The next turn the tool is owned again.
+  not to run a routine. The next turn the tool is owned again. SOLUSDEV-322 decision 2 supersedes
+  this for the simulator tools, which P2-T3 made static-ungated and gated per call by the
+  ownership ledger (`isaac.*` and, since P3-T4, `gazebo.*`): a routed call on a Solus-owned
+  session runs without a card, on an attached one it cards; `routed_by_simulation` still guards
+  the Onshape owned routines (`docs/api/isaac-development.md` §"Ownership decides the card",
+  `docs/api/gazebo-integration.md`).
 
 ### The backward loop (R91, R111, R112)
 
@@ -940,6 +986,53 @@ provider reads a model with no joint tree but candidate joints as lacking `mate_
 
 `mounts` positions stay a connector fact (M141): no Solus writer states `attrs.position_m`, so on
 real data the sensor sites stay `unknown` until a connector states them.
+
+### The twin → the generated model (SOLUSDEV-322 P6-T2)
+
+A candidate's `axis` and `origin` are numbers when the `mates_with` edge carries the connector's
+`mate_frame` (`{origin_m, x_axis, y_axis, z_axis}`, the src part's frame; P6-T1): the frame's z axis
+and origin placed by the src part's assembly transform (`cad_import.placed_frame`). `missing` lists
+`mate_frame` only while some candidate is still `unknown`.
+
+`sim.generate_model{robot_id, name, source_entity_id?}` (`agent/tools/sim_generate.py`) turns the
+twin into a model. It is a static card whose preview IS the gap report; approval enqueues
+`run_generate_sim_model` (`simulation/model_job.py`; ARQ `timeout=300`, `max_tries=1`,
+`keep_result=0`), which reads the robot's static CAD import, its placed leaves and the twin, and:
+
+- **gap report** `{"properties": [{name, value, unit, source}], "gaps": [{name, set_in}]}`, in
+  source order: `<link>.mass` from the part's cached `attrs.mass_properties.mass_kg` (`cad_mass`),
+  else `attrs.material.density_kg_m3` over the closed placed mesh (`mesh_mass`), else a gap;
+  `<joint>.frame` from the placed mate frame (`mate_frame`) or a gap; `<joint>.limits` in radians
+  or metres from the MOVING part's (the mate's child) hardware config
+  `position_min_<unit>`/`position_max_<unit>` (`user_config`), then its definition's position
+  limits in the unit its position telemetry states (`definition`), else a gap (no measured range
+  is read: nothing stores one); `<joint>.actuated` when the child is on the bus map (`bus_map`);
+  `<link>.sensor_site` from `mounts`. Every gap names where to set the fact.
+- **joints**: a mate is a moving joint only when its frame AND its limits are known. Any other
+  mate, and any part no mate moves, is a `fixed` attachment keeping the CAD placement. One parent
+  per child and no loop; a later mate that breaks either is a `<joint>.tree` gap. No mate able to
+  move → `status: "refused"` with the gaps.
+- **files**: `model.urdf` (`urdf_writer`: world-aligned link frames at the moving joint's origin,
+  `<limit>` always, visual + collision mesh per link, `<inertial>` only for a known mass over a
+  closed mesh), `meshes/<link>.stl` (binary), and when the physics engine builds it the compiled
+  scene XML (`mjcf_compile`: child process under `limit_child`, post-processed to the compiler
+  attrs and `pos`+`euler` the scene parser pins; a build failure is the gap `mjcf`). All are
+  retained artifacts; `attrs.artifacts = {urdf, mjcf | null, meshes: {path: artifact_id}}` and the
+  v2 `asset` manifest holds every file's sha256.
+- **graph**: one `joint` entity per moving joint (kind `joint`, origin `system`, domain
+  simulation, `external_ref = solus:sim-joint:<robot>:<parent>:<child>:<feature>`, attrs
+  `{robot_id, type, unit, mate_feature_id, parent_part_id, child_part_id, actuator_part_id, axis,
+  origin_m, lower, upper, limits_source}`, reassigned on a rerun), then the `simulation_model` v2
+  through `SimulationModelService.create(origin="system", extra_attrs={robot_id, scene_model_id,
+  source_entity_id, cad_microversion, requested_by, gaps, artifacts})`; its `contains` edges bind
+  every part and joint. `_validate` compares only `attrs["simulation_model"]`, so the same
+  definition is `status: "reused"` (its `cad_microversion` and `gaps` refreshed) and a changed one
+  is a new model beside the old. The job emits `sim.model_generated`.
+
+`sim.map_to_parts` reads the joint entities as its rung 3: a channel named after a generated
+joint maps the part it moves (`actuator_part_id`, else `child_part_id`). A successful CAD refresh
+re-queues the job for each system model whose `cad_microversion` is no longer the scene's
+`source_revision` (`docs/api/bench-scene.md`).
 
 ## 10. The wiring (P4-T5, R97–R99)
 

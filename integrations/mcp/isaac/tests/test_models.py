@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import pytest
@@ -9,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parents[4]))
 from integrations.mcp.isaac.solus.models import Model, Routine, plan_routine
 
 
-def fixture():
+def fixture() -> dict[str, Any]:
     from integrations.mcp.isaac.tests.test_generic_models import fixture as generic
 
     data = generic()
@@ -26,12 +27,12 @@ def fixture():
     return data
 
 
-def test_valid_model():
+def test_valid_model() -> None:
     assert Model.model_validate(fixture()).asset.urdf_path == "robot.urdf"
 
 
 @pytest.mark.parametrize("bad", [True, "0.1", float("nan"), float("inf")])
-def test_strict_pose(bad):
+def test_strict_pose(bad: bool | str | float) -> None:
     data = fixture()
     data["sensors"][0]["translation_m"][0] = bad
     with pytest.raises(ValidationError):
@@ -41,7 +42,7 @@ def test_strict_pose(bad):
 @pytest.mark.parametrize(
     "mutation", ["duplicate", "missing", "foreign_parent", "quaternion", "extra", "foreign_asset"]
 )
-def test_model_rejects_unsafe_bindings(mutation):
+def test_model_rejects_unsafe_bindings(mutation: str) -> None:
     data = fixture()
     if mutation == "duplicate":
         data["joints"][0]["entity_id"] = data["links"][0]["entity_id"]
@@ -59,7 +60,7 @@ def test_model_rejects_unsafe_bindings(mutation):
         Model.model_validate(data)
 
 
-def routine(model):
+def routine(model: Model) -> dict[str, Any]:
     positions = [{"joint_entity_id": j.entity_id, "position_rad": 0.05} for j in model.joints]
     return {
         "routine": "joint_trajectory",
@@ -71,7 +72,7 @@ def routine(model):
     }
 
 
-def test_bounded_plan():
+def test_bounded_plan() -> None:
     model = Model.model_validate(fixture())
     plan = plan_routine(
         model, Routine.model_validate(routine(model)), {j.entity_id: 0.0 for j in model.joints}
@@ -83,7 +84,7 @@ def test_bounded_plan():
 @pytest.mark.parametrize(
     "mutation", ["missing_phase", "missing_joint", "range", "speed", "foreign", "nan"]
 )
-def test_bad_routine(mutation):
+def test_bad_routine(mutation: str) -> None:
     model = Model.model_validate(fixture())
     data = routine(model)
     if mutation == "missing_phase":
@@ -103,14 +104,14 @@ def test_bad_routine(mutation):
 
 
 @pytest.mark.parametrize("value", [True, 1.0, "1"])
-def test_schema_version_is_actual_integer(value):
+def test_schema_version_is_actual_integer(value: bool | float | str) -> None:
     data = fixture()
     data["schema_version"] = value
     with pytest.raises(ValidationError):
         Model.model_validate(data)
 
 
-def test_each_phase_has_settling_hold_inside_duration():
+def test_each_phase_has_settling_hold_inside_duration() -> None:
     model = Model.model_validate(fixture())
     data = routine(model)
     for index, waypoint in enumerate(data["waypoints"]):
@@ -127,7 +128,7 @@ def test_each_phase_has_settling_hold_inside_duration():
         assert all(target == held[-1] for target in held)
 
 
-def test_speed_includes_reserved_settling_time():
+def test_speed_includes_reserved_settling_time() -> None:
     model = Model.model_validate(fixture())
     data = routine(model)
     data["duration_s"] = 1.0

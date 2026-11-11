@@ -40,7 +40,9 @@ if TYPE_CHECKING:
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import SecretStore
     from solus_api.graph.live import LiveHub
+    from solus_api.livebench.sim_runs import RoutineReader, SimRunHook
     from solus_api.services.code_environment_adapter import EnvironmentFetch
+    from solus_api.simulation.sessions_ledger import SessionsLedger
     from solus_api.storage import ArtifactStore
     from solus_api.widgets.capability import WidgetCapability
 
@@ -60,6 +62,11 @@ from solus_api.agent import citations, prompt, reason, reasoning_frame, screen, 
 from solus_api.agent.command_auto import AUTO_COMMAND_TOOL, model_result, stream_view
 from solus_api.agent.context import Context, build_context
 from solus_api.agent.deterministic import DeterministicAnswer, answer_first_tier, first_tier_events
+from solus_api.agent.dynamic_gate import (
+    flow_unavailable_refusal,
+    registry_needs_card,
+    with_current_call_id,
+)
 from solus_api.agent.errors_filing import file_tool_error
 from solus_api.agent.front_app import front_app_block
 from solus_api.agent.guide_toolkb_version import placed_tools
@@ -105,6 +112,10 @@ MAX_TOOL_CALLS = GUIDE_TOOL_CALLS
 #: The companion's ungated inventory read, by its composed bridge name. Feeds
 #: `link_environment` the facts the model is not allowed to supply.
 _CODE_ENVIRONMENTS: Final = "code.probe_environment"
+#: Simulator forks whose raw bridge tools never reach the registry: only their owned wrappers
+#: (`agent/tools/{isaac,gazebo}_tools.py`) may expose them to SOL (SOLUSDEV-322).
+_OWNED_SIM_SERVERS: Final = frozenset({"isaac", "gazebo"})
+_OWNED_SIM_PREFIXES: Final = tuple(server + "." for server in sorted(_OWNED_SIM_SERVERS))
 # Graph traversal depth for the scaffold's W0-07 context pull (the 2-degree perf lever).
 _CONTEXT_DEGREE = 1
 
@@ -171,6 +182,8 @@ def build_sol_registry(
             team_id=team_id,
             bridge_call_cap_bytes=bridge_call_cap_bytes,
             secret_store=secret_store,
+            artifact_store=artifact_store,
+            graph_hub=graph_hub,
         )
     _register_drive_step(
         registry,
@@ -376,6 +389,24 @@ def _register_user_tools(
     register_search_tools(registry, session_factory, project_id)
     register_finding_tools(registry, session_factory, project_id)
     register_machine_tools(registry, session_factory, project_id, user_id=user_id)
+    # SOLUSDEV-322 P1-T2: `sim.available`, an ungated read of what can simulate for this person.
+    # After the bridge tools on purpose: it reads which probes they brought (connected ==
+    # registered) and counts the project's live sim sessions off the ownership ledger.
+    from solus_api.agent.tools.sim_available import register_sim_available
+    from solus_api.agent.tools.sim_mapping import register_sim_mapping
+    from solus_api.simulation.sessions_ledger import SessionsLedger
+
+    ledger = SessionsLedger(session_factory)
+    register_sim_available(registry, session_factory, project_id, user_id=user_id, ledger=ledger)
+    # SOLUSDEV-322 P5-T1: `sim.map_to_parts`, the gated write of `attrs.sim_aliases` on parts.
+    register_sim_mapping(registry, session_factory, project_id, user_id=user_id, ledger=ledger)
+    # SOLUSDEV-322 P6-T2: `sim.generate_model`, a card whose preview is the gap report and whose
+    # approval queues the generation job on the same enqueue `simulate` uses.
+    from solus_api.agent.tools.sim_generate import register_sim_generate
+
+    register_sim_generate(
+        registry, session_factory, project_id, user_id=user_id, enqueue_sim=enqueue_sim
+    )
     if secret_store is not None:
         # SOLUSDEV-321 P3-T4 (R57): the one model path for netlist motifs, metered as this user.
         from solus_api.agent.tools.label_motifs import register_label_motifs_tool
@@ -650,9 +681,10 @@ def _internal_only(spec: "BridgeToolSpec") -> bool:
     # Solus code to dispatch — the ADR-041 drive executor calls `drive.act`.
     if spec.internal:
         return True
-    # Internal simulator inputs carry resolved graph data. Only the owned
-    # graph adapter may expose Isaac operations to SOL.
-    if spec.server == "isaac" or spec.descriptor.name.startswith("isaac."):
+    # Internal simulator inputs carry resolved graph data. Only the owned graph
+    # adapters may expose Isaac and Gazebo operations to SOL (SOLUSDEV-322 P3-T4);
+    # their allowlists also say `exposure: internal`, this is defence in depth.
+    if spec.server in _OWNED_SIM_SERVERS or spec.descriptor.name.startswith(_OWNED_SIM_PREFIXES):
         return True
     # Automatic code reads must resolve graph identity and the turn's selected
     # revision through read_code_file. Keep this native primitive available to
@@ -673,6 +705,8 @@ def _register_bridge_tools(
     team_id: uuid.UUID,
     bridge_call_cap_bytes: int,
     secret_store: "SecretStore | None",
+    artifact_store: "ArtifactStore | None" = None,
+    graph_hub: "LiveHub | None" = None,
 ) -> "EnvironmentFetch | None":
     """Register model-facing entries from the live cloud-validated inventory.
 
@@ -759,10 +793,30 @@ def _register_bridge_tools(
     from solus_api.agent.tools.ros_live import live_graph_tool
     from solus_api.services.code_environment_adapter import with_environment_recording
 
-    for owned_tool in _owned_isaac_tools(
-        session_factory, project_id, bridge, user_id, team_id, bridge_call_cap_bytes
-    ):
-        register_owned_routine(owned_tool, family="isaac")
+    # SOLUSDEV-322 P2-T3/P3-T4: the simulator wrappers are gated per call by the ownership
+    # ledger (their `needs_confirmation` hook), never Build-owned routines.
+    for owned_tool in [
+        *_owned_isaac_tools(
+            session_factory,
+            project_id,
+            bridge,
+            user_id,
+            team_id,
+            bridge_call_cap_bytes,
+            artifact_store=artifact_store,
+            graph_hub=graph_hub,
+        ),
+        *_owned_gazebo_tools(
+            session_factory,
+            project_id,
+            bridge,
+            user_id,
+            team_id,
+            bridge_call_cap_bytes,
+            artifact_store=artifact_store,
+            graph_hub=graph_hub,
+        ),
+    ]:
         registry.register(owned_tool)
 
     for tool in tools:
@@ -797,8 +851,138 @@ def _owned_isaac_tools(
     user_id: uuid.UUID,
     team_id: uuid.UUID,
     call_cap_bytes: int,
+    *,
+    artifact_store: "ArtifactStore | None" = None,
+    graph_hub: "LiveHub | None" = None,
 ) -> list["Tool"]:
-    from solus_api.agent.tools.isaac_tools import build_isaac_tools
+    """SOLUSDEV-322 P4-T2: `spawn_at` pushes model files from the artifact store like
+    `gazebo.spawn`, so the store rides along (None → a missing model cannot be pushed; the
+    connection-status read in `routers/isaac_connection.py` observes only probe/status).
+    P5-T4: `run_routine` files a Run through `sim_run_hook` when the hub and store are here."""
+    from functools import partial
+
+    from solus_api.agent.tools.isaac_tools import build_isaac_tools, isaac_routine_readback
+    from solus_api.simulation.sessions_ledger import SessionsLedger
+
+    ledger = SessionsLedger(session_factory)
+    builder = partial(
+        build_isaac_tools,
+        ledger=ledger,
+        artifacts=artifact_store,
+        user_id=user_id,
+        record_sim_run=_sim_run_hook(
+            session_factory,
+            graph_hub,
+            artifact_store,
+            ledger,
+            project_id=project_id,
+            provider="isaac",
+            user_id=user_id,
+            reader=isaac_routine_readback,
+        ),
+    )
+    return _owned_server_tools(
+        session_factory,
+        project_id,
+        bridge,
+        user_id,
+        team_id,
+        call_cap_bytes,
+        server="isaac",
+        builder=builder,
+    )
+
+
+def _owned_gazebo_tools(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    bridge: "BridgeSessionRegistry",
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    call_cap_bytes: int,
+    *,
+    artifact_store: "ArtifactStore | None",
+    graph_hub: "LiveHub | None" = None,
+) -> list["Tool"]:
+    """SOLUSDEV-322 P3-T4: the owned `gazebo.*` wrappers; `spawn` pushes model files from the
+    artifact store, so the store rides along (None → a missing model cannot be pushed).
+    P5-T4: `run_routine` files a Run through `sim_run_hook` when the hub and store are here."""
+    from functools import partial
+
+    from solus_api.agent.tools.gazebo_tools import build_gazebo_tools, gazebo_routine_readback
+    from solus_api.simulation.sessions_ledger import SessionsLedger
+
+    ledger = SessionsLedger(session_factory)
+    builder = partial(
+        build_gazebo_tools,
+        ledger=ledger,
+        artifacts=artifact_store,
+        user_id=user_id,
+        record_sim_run=_sim_run_hook(
+            session_factory,
+            graph_hub,
+            artifact_store,
+            ledger,
+            project_id=project_id,
+            provider="gazebo",
+            user_id=user_id,
+            reader=gazebo_routine_readback,
+        ),
+    )
+    return _owned_server_tools(
+        session_factory,
+        project_id,
+        bridge,
+        user_id,
+        team_id,
+        call_cap_bytes,
+        server="gazebo",
+        builder=builder,
+    )
+
+
+def _sim_run_hook(
+    session_factory: async_sessionmaker[AsyncSession],
+    graph_hub: "LiveHub | None",
+    artifact_store: "ArtifactStore | None",
+    ledger: "SessionsLedger",
+    *,
+    project_id: uuid.UUID,
+    provider: str,
+    user_id: uuid.UUID,
+    reader: "RoutineReader",
+) -> "SimRunHook | None":
+    """SOLUSDEV-322 P5-T4: the routine hook of an owned simulator wrapper, or None (the
+    wrapper's no-op) in a scope without the graph hub or the artifact store a Run needs."""
+    if graph_hub is None or artifact_store is None:
+        return None
+    from solus_api.livebench.sim_runs import sim_run_hook
+
+    return sim_run_hook(
+        session_factory,
+        graph_hub,
+        artifact_store,
+        ledger,
+        project_id=project_id,
+        provider=provider,
+        user_id=user_id,
+        reader=reader,
+    )
+
+
+def _owned_server_tools(
+    session_factory: async_sessionmaker[AsyncSession],
+    project_id: uuid.UUID,
+    bridge: "BridgeSessionRegistry",
+    user_id: uuid.UUID,
+    team_id: uuid.UUID,
+    call_cap_bytes: int,
+    *,
+    server: str,
+    builder: "Callable[[async_sessionmaker[AsyncSession], uuid.UUID, Mapping[str, Tool]], list[Tool]]",  # noqa: E501
+) -> list["Tool"]:
+    """The raw `<server>.*` bridge tools of this scope, handed to the server's owned builder
+    (SOLUSDEV-322 P2-T3; `isaac` today, `gazebo` in P3-T4). Raw specs never reach the registry."""
     from solus_api.bridge.tool import BridgeTool
 
     session = bridge.get(user_id, team_id, project_id)
@@ -814,9 +998,9 @@ def _owned_isaac_tools(
             call_cap_bytes=call_cap_bytes,
         )
         for spec in session.inventory
-        if spec.server == "isaac" and spec.descriptor.name.startswith("isaac.")
+        if spec.server == server and spec.descriptor.name.startswith(server + ".")
     }
-    return build_isaac_tools(session_factory, project_id, raw)
+    return builder(session_factory, project_id, raw)
 
 
 def _bridge_reader(
@@ -1018,17 +1202,7 @@ def confirmation_refusal(registry: ToolRegistry, call: ToolCall) -> ToolResult |
     guarantee is structural rather than a rule reviewers must enforce."""
     descriptor = next((d for d in registry.list() if d.name == call.tool), None)
     if descriptor is not None and descriptor.requires_confirmation:
-        return ToolResult.failure(
-            call.call_id,
-            ToolError(
-                code=ToolErrorCode.UNAUTHORIZED,
-                message=(
-                    f"{call.tool} is a destructive action requiring explicit user "
-                    "confirmation; the confirmation flow is not yet available"
-                ),
-                retryable=False,
-            ),
-        )
+        return flow_unavailable_refusal(call)
     return None
 
 
@@ -1043,7 +1217,12 @@ async def gate_tool_call(
     never fail open.
     """
     if park is None:
-        return confirmation_refusal(registry, call)
+        # Static flag first (never consults the hook), then the per-call hook
+        # (SOLUSDEV-322 P2-T2): both refuse with the same message.
+        static = confirmation_refusal(registry, call)
+        if static is not None or await registry_needs_card(registry, call):
+            return static or flow_unavailable_refusal(call)
+        return None
     parked = await park(call)
     return None if parked is None else parked.result
 
@@ -1116,7 +1295,8 @@ def build_dispatch(
         return await registry.invoke(call)
 
     async def dispatch(call: ToolCall) -> ToolResult:
-        return await run_tool(gated, call)
+        # SOLUSDEV-322 P2-T2: `current_call_id` is set around the gated closure.
+        return await run_tool(lambda c: with_current_call_id(gated, c), call)
 
     return dispatch
 

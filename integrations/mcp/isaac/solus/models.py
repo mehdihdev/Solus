@@ -7,7 +7,7 @@ import json
 import math
 import re
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
@@ -35,6 +35,20 @@ Number = Annotated[float, BeforeValidator(finite)]
 EntityId = Annotated[str, BeforeValidator(uuid_text)]
 Vec3 = Annotated[list[Annotated[Number, Field(ge=-10, le=10)]], Field(min_length=3, max_length=3)]
 Quat = Annotated[list[Number], Field(min_length=4, max_length=4)]
+# SOLUSDEV-322 P4-T1: names that may reach argv or USD paths are plain identifiers (never an
+# option, never path syntax); root-relative paths are plain components joined by "/".
+_PART = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+_PRIM = r"[A-Za-z_][A-Za-z0-9_]*"
+Name = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")]
+RelPath = Annotated[str, Field(pattern=rf"^{_PART}(/{_PART}){{0,15}}$", max_length=512)]
+PrimPath = Annotated[str, Field(pattern=rf"^/{_PRIM}(/{_PRIM}){{0,31}}$", max_length=512)]
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+MAX_ROUTINE_S: Final = 60
+MAX_TARGET_SPEED_RAD_S: Final = 0.25
+MAX_DATA_B64: Final = 96 * 1024
+MAX_MANIFEST_FILES: Final = 32
+MAX_SENSORS_READ: Final = 8
+_B64 = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
 
 
 class Strict(BaseModel):
@@ -49,15 +63,17 @@ class Binding(Strict):
 class Sensor(Strict):
     entity_id: EntityId
     parent_link_entity_id: EntityId
-    kind: Literal["contact"]
+    kind: Literal["contact", "imu", "camera"]
     translation_m: Vec3
     orientation_wxyz: Quat
-    radius_m: Annotated[Number, Field(ge=0.001, le=0.05)]
+    radius_m: Annotated[Number, Field(ge=0.001, le=0.05)] | None = None  # contact only
 
     @model_validator(mode="after")
     def unit_quaternion(self) -> Self:
         if abs(math.sqrt(sum(v * v for v in self.orientation_wxyz)) - 1) > 1e-6:
             raise ValueError("unit quaternion required")
+        if self.kind == "contact" and self.radius_m is None:
+            raise ValueError("a contact sensor needs its sensing radius")
         return self
 
 
@@ -172,14 +188,37 @@ class Waypoint(Strict):
     positions: Annotated[list[Position], Field(min_length=1, max_length=16)]
 
 
+class Sweep(Strict):
+    """A triangle between two limits of ONE joint of an articulation in the user's own stage."""
+
+    articulation: PrimPath
+    joint: Name
+    lower: Number
+    upper: Number
+    speed_rad_s: Annotated[Number, Field(gt=0, le=MAX_TARGET_SPEED_RAD_S)]
+
+    @model_validator(mode="after")
+    def ordered(self) -> Self:
+        if self.lower >= self.upper:
+            raise ValueError("ordered sweep range required")
+        return self
+
+
 class Routine(Strict):
-    routine: Literal["joint_trajectory"]
-    duration_s: Annotated[Number, Field(ge=1, le=30)]
-    joints: Annotated[list[Range], Field(min_length=1, max_length=16)]
-    waypoints: Annotated[list[Waypoint], Field(min_length=1, max_length=16)]
+    routine: Literal["joint_trajectory", "sweep"]
+    duration_s: Annotated[Number, Field(ge=1, le=MAX_ROUTINE_S)]
+    joints: Annotated[list[Range], Field(max_length=16)] = Field(default_factory=list)
+    waypoints: Annotated[list[Waypoint], Field(max_length=16)] = Field(default_factory=list)
+    sweep: Sweep | None = None
 
     @model_validator(mode="after")
     def exact_targets(self) -> Self:
+        if self.routine == "sweep":
+            if self.sweep is None or self.joints or self.waypoints:
+                raise ValueError("a sweep carries exactly its sweep spec")
+            return self
+        if self.sweep is not None or not self.joints or not self.waypoints:
+            raise ValueError("a joint trajectory carries joint ranges and waypoints")
         ids = {joint.joint_entity_id for joint in self.joints}
         if len(ids) != len(self.joints) or any(joint.lower >= joint.upper for joint in self.joints):
             raise ValueError("distinct ordered joint ranges required")
@@ -215,7 +254,7 @@ def plan_routine(
         raise ValueError("duplicate joint range")
     _check_ranges({j.entity_id: (j.lower_rad, j.upper_rad) for j in model.joints}, ranges, observed)
     count = int(routine.duration_s * 60)
-    if not 60 <= count <= 1800:
+    if not 60 <= count <= MAX_ROUTINE_S * 60:
         raise ValueError("step limit")
     targets = []
     previous = dict(observed)
@@ -230,7 +269,8 @@ def plan_routine(
             lower, upper = ranges[identity]
             if (
                 not lower <= value <= upper
-                or abs(value - previous[identity]) / (moving_steps / 60) > 0.25 + 1e-12
+                or abs(value - previous[identity]) / (moving_steps / 60)
+                > MAX_TARGET_SPEED_RAD_S + 1e-12
             ):
                 raise ValueError("target range or speed exceeded")
         for step in range(1, steps + 1):
@@ -244,3 +284,94 @@ def plan_routine(
             )
         previous = final
     return targets
+
+
+def sweep_targets(sweep: Sweep, duration_s: float, *, start: float) -> list[float]:
+    """60 Hz positions: from ``start`` toward ``lower``, then a triangle between the two limits
+    at ``speed_rad_s``; never outside them, never faster than the speed. ``start`` must already
+    lie inside the range (the observed position the preview showed); float noise within 1e-6
+    is clamped onto the nearest bound."""
+    if not math.isfinite(start) or not sweep.lower - 1e-6 <= start <= sweep.upper + 1e-6:
+        raise ValueError("observed position outside the sweep range")
+    step = sweep.speed_rad_s / 60
+    targets: list[float] = []
+    position, goal = min(max(start, sweep.lower), sweep.upper), sweep.lower
+    for _ in range(int(duration_s * 60)):
+        if abs(goal - position) <= step:
+            position = goal
+            goal = sweep.upper if goal == sweep.lower else sweep.lower
+        else:
+            position += step if goal > position else -step
+        targets.append(position)
+    return targets
+
+
+# --- the user's own stage (SOLUSDEV-322 P4-T1): pure argument shapes --------------------------
+# `actions.py` adds the scene-generation guard and `dry_run` for the worker; `server.py` adds
+# `session_id` for the wire. `stage_ref` / `dest` / asset `path` are root-relative and are
+# confined by `stages.py` and `assets.py`; `name` and prim paths are plain identifiers.
+
+
+class ListStages(Strict):
+    pass
+
+
+class OpenStage(Strict):
+    stage_ref: RelPath
+
+
+class FindArticulations(Strict):
+    pass
+
+
+class SpawnAtPose(Strict):
+    xyz: Vec3 = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+    rpy: Vec3 = Field(default_factory=lambda: [0.0, 0.0, 0.0])
+
+
+class SpawnAt(Strict):
+    model_sha256: Sha256
+    name: Name
+    pose: SpawnAtPose = Field(default_factory=SpawnAtPose)
+
+
+class ReadState(Strict):
+    articulation: PrimPath | None = None
+    sensors: Annotated[list[PrimPath], Field(max_length=MAX_SENSORS_READ)] = Field(
+        default_factory=list
+    )
+    camera_frame: bool = False
+
+
+class StageControl(Strict):
+    action: Literal["pause", "play", "step", "reset"]
+    steps: Annotated[int, BeforeValidator(actual_integer), Field(ge=1, le=10_000)] = 1
+
+
+class SaveStage(Strict):
+    dest: RelPath
+
+    @model_validator(mode="after")
+    def writable_suffix(self) -> Self:
+        if PurePosixPath(self.dest).suffix not in (".usd", ".usda", ".usdc"):
+            raise ValueError("a stage is saved as .usd, .usda or .usdc")
+        return self
+
+
+class PutAsset(Strict):
+    sha256: Sha256
+    path: RelPath
+    index: Annotated[int, BeforeValidator(actual_integer), Field(ge=0, le=100_000)]
+    total: Annotated[int, BeforeValidator(actual_integer), Field(ge=1, le=100_000)]
+    data_b64: Annotated[str, Field(max_length=MAX_DATA_B64)]
+    manifest: (
+        Annotated[dict[RelPath, Sha256], Field(min_length=1, max_length=MAX_MANIFEST_FILES)] | None
+    ) = None
+
+    @model_validator(mode="after")
+    def chunk_shape(self) -> Self:
+        if _B64.fullmatch(self.data_b64) is None or len(self.data_b64) % 4:
+            raise ValueError("data_b64 is not base64")
+        if self.index >= self.total:
+            raise ValueError("chunk index past total")
+        return self

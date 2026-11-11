@@ -572,9 +572,15 @@ simulation:
   escalate_at: 0.8 # the spec's "within 20 % of a limit"
   bands: {}
   targets:
-    - name: isaac # the full-simulation integration; P4-T4 routes it through its gated routine tool
+    - name: isaac # the full-simulation integration; P4-T4 routes it through its routine tool
       rung: 4
       domain: mechanical
       quantities: [joint_trajectory]
       cost: 4
       fidelity: 4
+    - name: gazebo # SOLUSDEV-322 P1-T3: cheaper, less faithful rung-4 sibling; ranks first when both connect
+      rung: 4
+      domain: mechanical
+      quantities: [joint_trajectory]
+      cost: 3
+      fidelity: 3

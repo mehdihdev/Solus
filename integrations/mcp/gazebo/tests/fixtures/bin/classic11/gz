@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+# Fixture CLI for the classic `gz` tool. Recorded from Classic 11.15.1 (conda env
+# solus-gz-classic) on 2026-11-09 against a headless `gzserver empty.world` the recording script
+# started and terminated through its own Popen handle, with a two-link URDF spawned as `twolink`.
+# `gz --version` / `gz sim --versions` print "Invalid arguments" on STDERR and exit 255, so the
+# detector never reads a classic install as the new family. The `goo.gle/debug*` marker lines are
+# what the conda protobuf build prints before every DebugString and are kept verbatim.
+# Re-recorded live in P8-T2 (2026-11-09, docs/qa/acceptance/P8-live-smoke.md): `topic -e ... -d`
+# takes WHOLE seconds — `-d 0.3` / `-d 1.0` print "Invalid arguments" on stderr and exit 0 with
+# no stdout; `-d 1` echoes ~5 world_stats messages (one per 0.2 s) in ~1.2 s.
+# `model -w <w> -m broken -f <file> ...` replays a URDF the parser rejects (recorded live in
+# P8-T2 (2026-11-09) and again in P9-T3: rc 0, stdout empty, the `Error:` lines below on
+# stderr; `model -m broken -i` then prints "Unable to get info on model[broken] in the
+# world[default]" on STDOUT with rc 0 — P8 defect B).
+# Knob: GZ_PARTITION=solus-fixture-paused → world_stats says `paused: true` (only env.allow names
+# cross the adapters' scrubbed child environment, so the test selects the replay that way).
+# Knob: GZ_PARTITION=solus-fixture-nonfinite → `angle: nan` / `angle: inf` in the model info
+# (AUTHORED from protobuf's DebugString float printing; what diverged physics reports).
+# Knob: GZ_PARTITION=solus-fixture-idle → `topic -l` lists no `/gazebo/<world>/...` topic
+# (AUTHORED: the listing before any gzserver is up).
+import os
+import sys
+import time
+
+WORLD = "default"
+TOPICS = """/gazebo/default/atmosphere
+/gazebo/default/diagnostics
+/gazebo/default/factory
+/gazebo/default/factory/light
+/gazebo/default/gui
+/gazebo/default/joint
+/gazebo/default/light/modify
+/gazebo/default/log/control
+/gazebo/default/log/status
+/gazebo/default/model/info
+/gazebo/default/model/modify
+/gazebo/default/physics
+/gazebo/default/physics/contacts
+/gazebo/default/playback_control
+/gazebo/default/pose/info
+/gazebo/default/pose/local/info
+/gazebo/default/pose/modify
+/gazebo/default/request
+/gazebo/default/response
+/gazebo/default/twolink/arm/wrench
+/gazebo/default/twolink/base/wrench
+/gazebo/default/twolink/tip/wrench
+/gazebo/default/undo_redo
+/gazebo/default/user_cmd
+/gazebo/default/user_cmd_stats
+/gazebo/default/visual
+/gazebo/default/wind
+/gazebo/default/world_control
+/gazebo/default/world_stats
+/gazebo/performance_metrics
+/gazebo/server/control
+/gazebo/world/modify
+"""
+
+STATS = """goo.gle/debugonly
+sim_time {{
+  sec: {sec}
+  nsec: 458000000
+}}
+pause_time {{
+  sec: 0
+  nsec: 0
+}}
+real_time {{
+  sec: 7
+  nsec: 464878991
+}}
+paused: {paused}
+iterations: 7458
+
+"""
+
+# `gz model -w default -m twolink -i`: gazebo.msgs.Model text format (links abridged to names).
+MODEL_INFO = """goo.gle/debugstr
+name: "twolink"
+id: 10
+is_static: false
+pose {{
+  position {{
+    x: 0.99933922516007612
+    y: 0.0031146534095398528
+    z: 0.049999999982770812
+  }}
+  orientation {{
+    x: -4.2843751774229355e-11
+    y: 4.6016408001306915e-12
+    z: 0.21866041033465702
+    w: 0.97580101708918077
+  }}
+}}
+joint {{
+  name: "twolink::shoulder"
+  id: 26
+  angle: {shoulder}
+  type: REVOLUTE
+  parent: "twolink::base"
+  parent_id: 11
+  child: "twolink::arm"
+  child_id: 16
+  pose {{
+    position {{
+      x: 0
+      y: 0
+      z: 0
+    }}
+    orientation {{
+      x: 0
+      y: 0
+      z: 0
+      w: 1
+    }}
+  }}
+  axis1 {{
+    xyz {{
+      x: 0
+      y: 1
+      z: 0
+    }}
+    limit_lower: -1.57
+    limit_upper: 1.57
+  }}
+}}
+joint {{
+  name: "twolink::elbow"
+  id: 27
+  angle: {elbow}
+  type: REVOLUTE
+  parent: "twolink::arm"
+  parent_id: 16
+  child: "twolink::tip"
+  child_id: 21
+}}
+link {{
+  id: 11
+  name: "twolink::base"
+  self_collide: false
+  gravity: true
+}}
+link {{
+  id: 16
+  name: "twolink::arm"
+  self_collide: false
+  gravity: true
+}}
+link {{
+  id: 21
+  name: "twolink::tip"
+  self_collide: false
+  gravity: true
+}}
+visual {{
+  name: "twolink"
+  id: 10
+  parent_name: "default"
+  parent_id: 1
+  type: MODEL
+}}
+scale {{
+  x: 1
+  y: 1
+  z: 1
+}}
+self_collide: false
+enable_wind: false
+
+"""
+
+# `gz model -w default -m broken -f <urdf without joint effort>`: stderr, rc 0 (the build-tree
+# paths are urdfdom's own, as printed).
+_URDFDOM = (
+    "/home/conda/feedstock_root/build_artifacts/bld/"
+    "rattler-build_urdfdom_h57aec1e_1793831053/work/urdf_parser/src/"
+)
+SPAWN_PARSE_ERROR = f"""Error:   joint [elbow]: limit has no effort
+         at line 176 in {_URDFDOM}joint.cpp
+Error:   Could not parse limit element for joint [elbow]
+         at line 600 in {_URDFDOM}joint.cpp
+Error:   joint xml is not initialized correctly
+         at line 243 in {_URDFDOM}model.cpp
+Error: SDF parsing the xml failed
+"""
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    partition = os.environ.get("GZ_PARTITION")
+    paused = partition == "solus-fixture-paused"
+    nonfinite = partition == "solus-fixture-nonfinite"
+    if args == ["topic", "-l"]:
+        idle = partition == "solus-fixture-idle"
+        prefix = f"/gazebo/{WORLD}/"
+        topics = [t for t in TOPICS.splitlines() if not (idle and t.startswith(prefix))]
+        sys.stdout.write("".join(t + "\n" for t in topics))
+        return 0
+    if args[:2] == ["topic", "-e"]:
+        if "-d" in args and not args[args.index("-d") + 1].isdigit():
+            sys.stderr.write("Invalid arguments\n")  # recorded: `-d` takes whole seconds
+            return 0
+        if args[2] != f"/gazebo/{WORLD}/world_stats":
+            time.sleep(float(args[args.index("-d") + 1]) if "-d" in args else 30)
+            return 0
+        for i in range(2):
+            sys.stdout.write(STATS.format(sec=16 if paused else 7 + i, paused=str(paused).lower()))
+        return 0
+    if args[:1] == ["model"] and "-i" in args:
+        model = args[args.index("-m") + 1]
+        if model != "twolink":
+            sys.stdout.write(f"Unable to get info on model[{model}] in the world[{WORLD}]\n")
+            return 0
+        sys.stdout.write(
+            MODEL_INFO.format(
+                shoulder="nan" if nonfinite else "1.5697520194514176",
+                elbow="inf" if nonfinite else "1.5464770391330855",
+            )
+        )
+        return 0
+    if args[:1] == ["model"] and "-f" in args and args[args.index("-m") + 1] == "broken":
+        sys.stderr.write(SPAWN_PARSE_ERROR)  # recorded live in P8-T2 (2026-11-09): rc 0
+        return 0
+    if args[:1] in (["model"], ["joint"], ["world"]) and "-w" in args:
+        return 0  # spawn / --pos-t / -p -s -m -r -t -o: recorded as silent successes
+    sys.stderr.write("Invalid arguments\n")
+    return 255
+
+
+sys.exit(main())

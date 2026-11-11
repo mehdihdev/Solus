@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import statistics
 import uuid
@@ -201,6 +202,33 @@ def canonical_unit(unit: str | None) -> str | None:
     if not text:
         return None
     return _BY_SPELLING.get("".join(text.split()).casefold(), text)
+
+
+#: canonical (source, target) -> factor: the pairs a sample may be converted across to reach its
+#: envelope's unit (a simulated joint's rad against a real part's deg; a driver's mA against a
+#: rating in A). The run analysis and the window evaluator share this one table.
+_SCALES: Final = {
+    ("rad", "deg"): 180 / math.pi,
+    ("deg", "rad"): math.pi / 180,
+    ("rad/s", "deg/s"): 180 / math.pi,
+    ("deg/s", "rad/s"): math.pi / 180,
+    ("mA", "A"): 0.001,
+    ("A", "mA"): 1000.0,
+}
+
+
+def convert_unit(value: float, source: str | None, target: str | None) -> float | None:
+    """`value` in `target`, when `source` is `target` or the table scales between them; None for
+    a unit left out, a pair it does not know, or a result that is not finite — never a guess."""
+    if source is None or target is None:
+        return None
+    if source == target:
+        return value
+    factor = _SCALES.get((source, target))
+    if factor is None:
+        return None
+    converted = value * factor
+    return converted if math.isfinite(converted) else None
 
 
 def _short_line(unit: object) -> bool:

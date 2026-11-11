@@ -14,7 +14,8 @@ A tick, in ONE transaction:
    reaches a rule. A first read starts where the session first saw the channel
    (`SessionView.parts`) or, when that first packet is itself dated past the skew, at the ring's
    start, so an earlier session's leftovers can be judged once. A sample in another unit than its
-   envelope's is dropped too: nothing is converted. Each drop is logged once a channel;
+   envelope's is converted when `convert_unit` scales between the two (a simulated joint's rad
+   against a real part's deg) and dropped otherwise. Each drop is logged once a channel;
 2. loads the parts' envelopes — through the ONE `EnvelopeCache` the graph-changed fan-out drops,
    with the robot's baseline run for the learned bounds (M56) — and the graph around the parts
    through `to_graph_context`;
@@ -68,6 +69,7 @@ from solus_api.livebench.findings.envelopes import (
     EnvelopeKey,
     build_envelope,
     canonical_unit,
+    convert_unit,
     load_envelope_inputs,
 )
 from solus_api.livebench.findings.rules.rule_base import (
@@ -236,6 +238,20 @@ def _visible(rows: Sequence[RecentSample], end: datetime | None) -> tuple[Recent
     return tuple(rows[bisect_left(rows, rows[stop - 1].timestamp - _HORIZON, key=_stamp) : stop])
 
 
+def _in_unit(sample: RecentSample, unit: str | None) -> RecentSample | None:
+    """`sample` in `unit`: as it is when either states no unit or they agree, converted when the
+    scale table knows the pair, None when it does not (a sample nothing can compare)."""
+    if not (unit and sample.unit):
+        return sample
+    source = canonical_unit(sample.unit)
+    if source == unit:
+        return sample
+    converted = convert_unit(sample.value, source, unit)
+    if converted is None:
+        return None
+    return sample.model_copy(update={"value": converted, "unit": unit})
+
+
 def _newest(samples: Mapping[str, Sequence[RecentSample]]) -> dict[str, datetime]:
     return {channel: rows[-1].timestamp for channel, rows in samples.items() if rows}
 
@@ -272,6 +288,8 @@ def _finding_evidence(
         evidence["code_site"] = {**site, "source_id": sources.get(str(site.get("entity_id")))}
     if item.also:
         evidence["also"] = list(item.also)
+    if view.sim:  # SOLUSDEV-322 P5-T3: a simulated session's finding says so
+        evidence["sim"] = True
     return {**evidence, "robot_id": str(view.robot_entity_id), "session_id": str(view.session_id)}
 
 
@@ -525,11 +543,12 @@ class WindowEvaluator:
     ) -> list[RecentSample]:
         """The samples in the unit of the envelope their channel is read against — its quantity's,
         a command's target's (`commanded_position` is a position); either stating none keeps a
-        sample. Nothing is converted."""
+        sample as it is. A sample in another unit is converted when `convert_unit` scales between
+        the two (a simulated joint's rad against a real part's deg) and dropped when it does not."""
         quantity = channel.rsplit(".", 1)[-1].removeprefix("commanded_")
         envelope = tick.envelopes[part].get(quantity)
         unit = envelope.unit if envelope is not None else None
-        kept = [s for s in samples if not (unit and s.unit) or canonical_unit(s.unit) == unit]
+        kept = [s for s in (_in_unit(sample, unit) for sample in samples) if s is not None]
         if len(kept) < len(samples):
             self._said_once(self._off_unit, "not in their envelope's unit", tick, part, channel)
         return kept

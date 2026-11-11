@@ -14,7 +14,6 @@ import contextlib
 import json
 import os
 import sys
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -144,14 +143,17 @@ def desktop_relay(script: Path, **kwargs: Any) -> DriveRelay:
     return relay
 
 
-def gone(pid: int) -> bool:
-    """The desktop stops the script a moment after the companion cancels."""
+async def gone(pid: int) -> bool:
+    """The desktop stops the script a moment after the companion cancels. The poll yields
+    to the loop: on Python 3.12 the pidfd child watcher reaps the terminated child only
+    while the loop runs, and a blocking sleep leaves it a zombie that still answers
+    `os.kill(pid, 0)`."""
     for _ in range(200):
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return True
-        time.sleep(0.01)
+        await asyncio.sleep(0.01)
     return False
 
 
@@ -479,7 +481,7 @@ async def test_a_hung_helper_is_killed_at_its_timeout(tmp_path: Path) -> None:
     result = await server.call_tool("identify", {})
     assert result.isError
     assert text_of(result).startswith("helper_timeout: ")
-    assert gone(int(pidfile.read_text()))
+    assert await gone(int(pidfile.read_text()))
 
 
 async def test_helper_errors_carry_a_code(tmp_path: Path) -> None:
@@ -512,7 +514,7 @@ async def test_a_cancelled_call_kills_the_helper(tmp_path: Path) -> None:
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert gone(int(pidfile.read_text()))
+    assert await gone(int(pidfile.read_text()))
 
 
 async def test_one_deadline_covers_the_whole_request(tmp_path: Path) -> None:

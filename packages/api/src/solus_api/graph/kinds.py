@@ -55,6 +55,9 @@ BENCH_SCENE_CAD_IMPORT: Final[str] = "bench_scene_cad_import"
 SIMULATION_MODEL: Final[str] = "simulation_model"
 #: What one simulation run found about one subject (SOLUSDEV-321 P4-T1, `simulation/sim_facts.py`).
 SIM_RESULT: Final[str] = "sim_result"
+#: One generated kinematic joint of a `simulation_model` (SOLUSDEV-322 P6-T2,
+#: `simulation/model_job.py`): the model root `contains` it; a sim stream resolves through it.
+JOINT: Final[str] = "joint"
 
 # software (SOLUSDEV-321 P6, `software/ros_reader.py`): a ROS workspace's launched nodes and the
 # topics their modules declare; `graph/inference/ros_edges.py` joins them.

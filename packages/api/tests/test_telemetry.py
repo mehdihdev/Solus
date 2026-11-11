@@ -218,3 +218,34 @@ async def test_device_ring_clears_when_the_device_resolves() -> None:
     view = await plumbing.get_device_recent(project, "serial:arm")
     assert view.resolved_entity_id == entity
     assert [p.value for p in view.signals[0].points] == [2.0]  # no stale pre-link sample
+
+
+class _RecordingResolver:
+    """A resolver that keeps the `source` each lookup carried (SOLUSDEV-322 P5-T2)."""
+
+    def __init__(self, entity: uuid.UUID) -> None:
+        self.entity = entity
+        self.sources: list[str | None] = []
+
+    async def resolve(
+        self, project_id: uuid.UUID, device_id: str, *, source: str | None = None
+    ) -> uuid.UUID | None:
+        self.sources.append(source)
+        return self.entity
+
+
+async def test_ingest_forwards_the_session_source_to_the_resolver() -> None:
+    """`ingest(..., source=<provider>)` is how a sim session's packets reach a part's alias rows;
+    a real session (no source) and `get_device_recent` resolve by `external_ref` alone."""
+    project, entity = uuid.uuid4(), uuid.uuid4()
+    resolver = _RecordingResolver(entity)
+    plumbing = TelemetryPlumbing(InMemoryTelemetryBuffer(), resolver)
+
+    assert (
+        await plumbing.ingest(project, _packet("world/arm/elbow", 0.0, q=1.0))
+    ).entity_id == entity
+    result = await plumbing.ingest(project, _packet("world/arm/elbow", 1.0, q=2.0), source="sim-a")
+    assert result.entity_id == entity and result.accepted == 1
+    await plumbing.get_device_recent(project, "world/arm/elbow")
+
+    assert resolver.sources == [None, "sim-a", None]
