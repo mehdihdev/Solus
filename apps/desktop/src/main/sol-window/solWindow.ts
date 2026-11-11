@@ -11,7 +11,12 @@ import { externalOpenHandler } from '../externalUrl'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { attachOrbOverlayWire, type WireIpc } from './orbOverlayWire'
-import { SOL_PILL_EXIT_MS, SOL_PILL_RESUME_MS, SOL_WINDOW_CHANNELS } from './solWindow.constants'
+import {
+  SOL_PILL_EXIT_MS,
+  SOL_PILL_RESUME_MS,
+  SOL_WINDOW_CHANNELS,
+  SUMMON_CAPTURE_WAIT_MS
+} from './solWindow.constants'
 import type { SolActionMode, SolSettings } from '../solSettings'
 import type { CaptureCapability } from '../capture/screenCapture'
 import type { CapabilityState } from '../platform/capabilities'
@@ -19,6 +24,7 @@ import type { ActiveWindowInfo } from '../capture/activeWindow'
 import { SOL_PILL_INITIAL_HEIGHT, SOL_PILL_WIDTH, type Point, type Rect } from './pillGeometry'
 import { createPillPlacement } from './pillPlacement'
 import type { SolFrontApp } from '../drive/frontAppShape'
+import type { SolScreenPayload } from '../capture/summonShot'
 
 export type { Point, Rect } from './pillGeometry'
 
@@ -167,9 +173,21 @@ export interface SolWindowManager {
   /** SOLUSDEV-319 slice 4: run before every summon shows or focuses the pill
    *  (the front-app identify, ≤ 250 ms). Null: summon synchronously. */
   setSummonGate(gate: (() => Promise<void>) | null): void
+  /** SOLUSDEV-324: take the summon picture before the pill shows — skipped when
+   *  the pill is already on screen, waited on at most SUMMON_CAPTURE_WAIT_MS —
+   *  and drop it whenever the pill hides or closes. */
+  setSummonCapture(capture: SummonCapture | null): void
+  /** SOLUSDEV-324: forget the summon picture now (sign-out). */
+  dropSummonCapture(): void
   /** The front-app snapshot → the SOL window only; the latest is delivered
    *  when a fresh renderer mounts. */
   pushFrontApp(front: SolFrontApp | null): void
+}
+
+/** SOLUSDEV-324: the summon picture's holder, as the manager drives it. */
+export interface SummonCapture {
+  refresh(near: Point): Promise<void>
+  clear(): void
 }
 
 export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowManager {
@@ -188,6 +206,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
   let hiddenAt: number | null = null
   // SOLUSDEV-319 slice 4: the summon gate and the latest front-app snapshot.
   let summonGate: (() => Promise<void>) | null = null
+  let summonCapture: SummonCapture | null = null
   let summoning = false
   let frontApp: { value: SolFrontApp | null } | null = null
   // Summoned over another app: a hand dismissal returns there, not to Solus.
@@ -213,6 +232,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       if (!alive() || !current?.isVisible()) return
       current.hide()
       hiddenAt = now()
+      summonCapture?.clear()
       // Hiding the key window leaves Solus active, so macOS raises the main
       // window. A blur already moved focus elsewhere; a hand hide yields it.
       if (byHand && returnFocus) deps.yieldFocus?.()
@@ -236,6 +256,7 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
       if (current !== win) return
       current = null
       pending = null // ephemeral by construction: a region never outlives its window
+      summonCapture?.clear()
       ready = false
       busy = false
       pinned = false
@@ -272,22 +293,29 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     current.focus()
   }
 
-  /** Every summon path: the gate (the front-app identify) runs BEFORE the pill
-   *  is shown or takes focus; a summon while it runs is coalesced. */
+  /** True when the pill is already on screen. Off screen, samples where a
+   *  hand dismissal returns focus (after the show, the pill is the active app). */
+  const sampleOnScreen = (): boolean => {
+    const onScreen = alive() && (current?.isVisible() ?? false)
+    if (!onScreen) returnFocus = !(deps.appActive?.() ?? true)
+    return onScreen
+  }
+
+  /** Every summon path: the gate (the front-app identify) and the summon
+   *  picture run BEFORE the pill is shown or takes focus; a summon while they
+   *  run is coalesced. */
   const open = (opts?: { near?: Point }): void => {
     const near = opts?.near ?? deps.screen.getCursorScreenPoint()
-    // Sampled before the pill shows (after, the pill itself is the active window).
-    if (!(alive() && current?.isVisible())) returnFocus = !(deps.appActive?.() ?? true)
-    const gate = summonGate
-    if (gate === null) return show(near)
+    // A pill already on screen would picture itself: keep the earlier picture.
+    const capture = sampleOnScreen() || summonCapture === null ? null : summonCapture
+    const work = beforeSummon(summonGate, capture && (() => capture.refresh(near)))
+    if (work === null) return show(near)
     if (summoning) return
     summoning = true
-    void gate()
-      .catch(() => undefined)
-      .then(() => {
-        summoning = false
-        show(near)
-      })
+    void work().then(() => {
+      summoning = false
+      show(near)
+    })
   }
 
   const sendFrontApp = (): void => {
@@ -343,11 +371,38 @@ export function createSolWindowManager(deps: SolWindowManagerDeps): SolWindowMan
     },
     isSender: (sender) => alive() && current?.webContents === sender,
     setSummonGate: (gate) => void (summonGate = gate),
+    setSummonCapture: (capture) => void (summonCapture = capture),
+    dropSummonCapture: () => summonCapture?.clear(),
     pushFrontApp(front) {
       frontApp = { value: front }
       sendFrontApp()
     }
   }
+}
+
+/** What must settle before a summon shows the pill: the drive gate and the
+ *  bounded summon picture, side by side, never rejecting — started only by a
+ *  summon that is not coalesced. Null: show now. */
+function beforeSummon(
+  gate: (() => Promise<void>) | null,
+  capture: (() => Promise<void>) | null
+): (() => Promise<void>) | null {
+  if (gate === null && capture === null) return null
+  return () =>
+    Promise.all([gate?.().catch(() => undefined), capture && boundedCapture(capture)]).then(
+      () => undefined
+    )
+}
+
+/** A capture that never rejects and never holds a summon past the bound. */
+function boundedCapture(capture: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, SUMMON_CAPTURE_WAIT_MS)
+  })
+  return Promise.race([capture().catch(() => undefined), bound]).finally(() =>
+    clearTimeout(timer)
+  )
 }
 
 export interface SolIpcDeps {
@@ -358,6 +413,8 @@ export interface SolIpcDeps {
   guideScope?(): number | null
   /** Open the capture capability's own settings pane (SOLUSDEV-318). */
   openCaptureSettings?(): void
+  /** SOLUSDEV-324: the summon picture, once (main/capture/summonShot). */
+  takeScreen?(): SolScreenPayload | null
 }
 
 /** Wire the invokes (channel constants only — see the ratchet). Every
@@ -451,6 +508,11 @@ function registerPillIpcHandlers(
   ipc.handle(
     c.hide,
     pillOnly(() => deps.windows.hide())
+  )
+  // SOLUSDEV-324: pixels go to the pill's own top frame only — any other
+  // sender gets null and never consumes the picture.
+  ipc.handle(c.takeScreen, (event) =>
+    isAllowedSender(event) && fromPillTopFrame(event) ? (deps.takeScreen?.() ?? null) : null
   )
 }
 

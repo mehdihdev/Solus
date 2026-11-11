@@ -19,9 +19,10 @@ export type SolActionMode = 'guide' | 'do'
 
 /** The one screen capture a turn may carry (SOLUSDEV-252 S3, sol-window.md §8):
  *  the crop the user circled plus the downscaled surrounding screen, both
- *  base64 PNG, held in memory for exactly one send. Never cached, never logged. */
+ *  base64 PNG — or (SOLUSDEV-324) the whole-screen JPEG taken at summon, with
+ *  no context — held in memory for exactly one send. Never cached, never logged. */
 export interface SolScreenshot {
-  media_type: 'image/png'
+  media_type: 'image/png' | 'image/jpeg'
   data: string
   width: number
   height: number

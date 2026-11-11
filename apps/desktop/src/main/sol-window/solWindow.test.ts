@@ -213,7 +213,7 @@ describe('IPC registration', () => {
     expect(main.calls).toEqual([])
   })
 
-  it('registers the ten invokes on the shared constants and returns the state', () => {
+  it('registers the eleven invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
@@ -227,7 +227,8 @@ describe('IPC registration', () => {
         c.openCaptureSettings,
         c.resize,
         c.setBusy,
-        c.hide
+        c.hide,
+        c.takeScreen
       ].sort()
     )
     expect(handlers.get(c.getState)?.(EVENT)).toEqual(STATE) // marks the sender ready

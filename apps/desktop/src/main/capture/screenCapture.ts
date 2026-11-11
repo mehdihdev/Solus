@@ -10,6 +10,16 @@ import { activeWindow, realActiveWindowDeps, type ActiveWindowInfo } from './act
 /** Downscaled full-screen context image width cap (§6). */
 export const CONTEXT_MAX_WIDTH = 1280
 
+/** SOLUSDEV-324: the summon picture's width cap and JPEG quality. A 1920-px
+ *  JPEG stays far under the API's 2.5 MiB decoded cap (agent/screen.py) while
+ *  keeping on-screen text legible to the model. */
+export const SCREEN_SHOT_MAX_WIDTH = 1920
+export const SCREEN_SHOT_JPEG_QUALITY = 80
+/** Lower qualities tried, in order, when a busy screen encodes over the cap. */
+export const SCREEN_SHOT_FALLBACK_QUALITIES = [60, 40] as const
+/** The API's decoded cap for a turn's screenshot (agent/screen.py MAX_DECODED_BYTES). */
+export const SCREEN_SHOT_MAX_BYTES = Math.floor(2.5 * 1024 * 1024)
+
 export interface Rect {
   x: number
   y: number
@@ -36,6 +46,15 @@ export interface CaptureResult {
   window: ActiveWindowInfo | null
 }
 
+/** SOLUSDEV-324: the whole display under the cursor, taken at summon. */
+export interface ScreenShot {
+  jpeg: Buffer
+  width: number
+  height: number
+  display: number
+  window: ActiveWindowInfo | null
+}
+
 export interface CaptureUnavailable {
   reason: 'disabled' | 'needs-permission' | 'unavailable' | 'empty-region' | 'error'
   message: string
@@ -45,6 +64,8 @@ export interface CaptureUnavailable {
 export interface ScreenCapture {
   capability(): CaptureCapability
   captureRegion(region: Rect): Promise<CaptureResult | CaptureUnavailable>
+  /** SOLUSDEV-324: the display nearest `point`, whole, ≤ SCREEN_SHOT_MAX_WIDTH, JPEG. */
+  captureScreen(point: { x: number; y: number }): Promise<ScreenShot | CaptureUnavailable>
 }
 
 /** Structural slice of Electron's NativeImage. */
@@ -53,6 +74,7 @@ export interface CaptureImage {
   crop(rect: Rect): CaptureImage
   resize(options: { width: number }): CaptureImage
   toPNG(): Buffer
+  toJPEG(quality: number): Buffer
 }
 
 export interface CaptureDisplay {
@@ -89,6 +111,12 @@ function intersect(a: Rect, b: Rect): Rect {
   }
 }
 
+const sourceFor = (
+  sources: Array<{ display_id: string; thumbnail: CaptureImage }>,
+  display: CaptureDisplay
+): CaptureImage | null =>
+  (sources.find((s) => s.display_id === String(display.id)) ?? sources[0])?.thumbnail ?? null
+
 /** The display's screen source → the crop and the downscaled context image. */
 async function grab(
   deps: ScreenCaptureDeps,
@@ -102,9 +130,8 @@ async function grab(
       height: Math.round(display.bounds.height * display.scaleFactor)
     }
   })
-  const source = sources.find((s) => s.display_id === String(display.id)) ?? sources[0]
-  if (!source) return { reason: 'error', message: 'No screen source was available.' }
-  const thumb = source.thumbnail
+  const thumb = sourceFor(sources, display)
+  if (!thumb) return { reason: 'error', message: 'No screen source was available.' }
   // The capturer may hand back a thumbnail scaled to fit, so derive the
   // DIP→pixel ratio from what we actually got rather than trusting scaleFactor.
   const scale = thumb.getSize().width / display.bounds.width
@@ -127,6 +154,44 @@ async function grab(
     scale,
     display: display.id,
     context: { crop, screen: display.bounds },
+    window
+  }
+}
+
+/** The first JPEG encoding that fits the API's cap, or null — never an
+ *  oversized picture that would 422 the person's turn. */
+function encodeUnderCap(image: CaptureImage): Buffer | null {
+  for (const quality of [SCREEN_SHOT_JPEG_QUALITY, ...SCREEN_SHOT_FALLBACK_QUALITIES]) {
+    const jpeg = image.toJPEG(quality)
+    if (jpeg.length <= SCREEN_SHOT_MAX_BYTES) return jpeg
+  }
+  return null
+}
+
+/** The whole display, asked for (and, if handed back bigger, scaled) at ≤ the cap. */
+async function grabScreen(
+  deps: ScreenCaptureDeps,
+  display: CaptureDisplay
+): Promise<ScreenShot | CaptureUnavailable> {
+  const pxWidth = Math.round(display.bounds.width * display.scaleFactor)
+  const width = Math.min(pxWidth, SCREEN_SHOT_MAX_WIDTH)
+  const height = Math.round((display.bounds.height * display.scaleFactor * width) / pxWidth)
+  const sources = await deps.getSources({ types: ['screen'], thumbnailSize: { width, height } })
+  const thumb = sourceFor(sources, display)
+  if (!thumb) return { reason: 'error', message: 'No screen source was available.' }
+  const image =
+    thumb.getSize().width > SCREEN_SHOT_MAX_WIDTH
+      ? thumb.resize({ width: SCREEN_SHOT_MAX_WIDTH })
+      : thumb
+  const jpeg = encodeUnderCap(image)
+  if (!jpeg) return { reason: 'error', message: 'The screen picture was too large to send.' }
+  const size = image.getSize()
+  const window = await deps.activeWindow().catch(() => null)
+  return {
+    jpeg,
+    width: size.width,
+    height: size.height,
+    display: display.id,
     window
   }
 }
@@ -183,7 +248,23 @@ export function createScreenCapture(deps: ScreenCaptureDeps): ScreenCapture {
     }
   }
 
-  return { capability, captureRegion }
+  const captureScreen = async (point: {
+    x: number
+    y: number
+  }): Promise<ScreenShot | CaptureUnavailable> => {
+    const refused = refuse()
+    if (refused) return refused
+    try {
+      return await grabScreen(deps, deps.getDisplayNearestPoint(point))
+    } catch (error) {
+      deps.warn(
+        `[capture] screen capture failed: ${error instanceof Error ? error.message : 'unknown'}`
+      )
+      return { reason: 'error', message: 'Screen capture failed on this machine.' }
+    }
+  }
+
+  return { capability, captureRegion, captureScreen }
 }
 
 /** Production deps over the real Electron modules. */

@@ -226,3 +226,22 @@ Security posture is unchanged: the same isolated webPreferences, navigation and 
 `transparent: true` has no isolation effect. `sol:pill` is main → renderer only and carries no data
 beyond the cue; malformed payloads are dropped at the preload boundary. The plan card is a presentation of the existing
 per-confirmation approvals and adds no new approval path.
+
+## SOLUSDEV-324 summon picture
+
+Wireflow §D promises that SOL "can take a picture of your screen when you summon it". Before this ticket only
+the circle gesture captured, so a typed question reached the model with no pixels while the pill said
+"sees your screen". Now:
+
+- **When:** every summon of a pill that is not already on screen runs the summon capture alongside the drive
+  gate, BEFORE the pill shows (so the pill never covers the subject). The wait is bounded by
+  `SUMMON_CAPTURE_WAIT_MS` (400 ms); a capture landing later than `SUMMON_SHOT_MAX_LATENCY_MS` is dropped.
+- **What:** `ScreenCapture.captureScreen(near)` — the whole display nearest the summon point, ≤ 1920 px wide,
+  JPEG q80 (re-encoded at 60 / 40 if over the API's 2.5 MiB decoded cap, else refused). Same `refuse()` gate
+  as `captureRegion`: setting off → no capture ever.
+- **Where it lives:** `main/capture/summonShot.ts`, main-process memory only. Cleared when the pill hides or
+  closes, on sign-out, when the setting turns off, and by `take()`.
+- **How it reaches a turn:** the pill invokes `sol:take-screen` (pill top frame only; any other sender gets
+  `null` and consumes nothing; main re-checks the setting). The renderer attaches it as
+  `screenshot: { media_type: 'image/jpeg', data, width, height, source, context: null }` when no circled
+  region is attached; a circled region always wins. One question, then gone (§8 applies unchanged).

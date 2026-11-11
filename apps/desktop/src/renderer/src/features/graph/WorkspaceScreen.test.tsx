@@ -343,14 +343,18 @@ describe('WorkspaceScreen — the canvas-edge device rail', () => {
     render(<WorkspaceScreen />)
     await userEvent.type(await screen.findByRole('textbox', { name: 'Robot name' }), 'Bench arm')
     // The refetch is held: the robot must come from the wire's ConfirmOut, not the snapshot.
-    let releaseRefetch: () => void = () => undefined
+    // Every read from here on is held (a slow runner can add live-revision re-reads), and all
+    // of them release together, so the count below is relative to the click, not absolute.
+    const held: Array<() => void> = []
+    const releaseRefetch = (): void => held.splice(0).forEach((release) => release())
     vi.mocked(resources.getProject).mockResolvedValue(detailWith(4, 0, [{ id: 's1' }]))
     vi.mocked(resources.listAllEntities).mockImplementation(
       () =>
         new Promise((resolve) => {
-          releaseRefetch = () => resolve([leader, boundPart, arm, armPart])
+          held.push(() => resolve([leader, boundPart, arm, armPart]))
         })
     )
+    const readsBeforeAdd = vi.mocked(resources.listAllEntities).mock.calls.length
     await userEvent.click(within(rail()).getByRole('button', { name: 'Add' }))
     expect(hardwareApi.confirmDetected).toHaveBeenCalledExactlyOnceWith(
       'p1',
@@ -359,7 +363,9 @@ describe('WorkspaceScreen — the canvas-edge device rail', () => {
     )
     expect(await screen.findByRole('button', { name: 'Select Bench arm' })).toBeInTheDocument()
     expect(screen.getByTestId('graph-node-arm')).toHaveAttribute('data-domain', 'project')
-    await waitFor(() => expect(resources.listAllEntities).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(vi.mocked(resources.listAllEntities).mock.calls.length).toBeGreaterThan(readsBeforeAdd)
+    )
     // Existing defaults may save, but the optimistic robot must not be persisted yet.
     expect(
       vi
