@@ -32,7 +32,7 @@ Your plan, credits, and payment — managed securely through Stripe.
 │ Renews          October 19, 2026             (active states)       │
 │ Next charge     $25.00 on October 19, 2026   (or "None" / "—")     │
 │ Card            Visa •••• 4242               (or "No card on file")│
-│ Credits         9,059                                              │
+│ Credits         9,059  Buy more ↓   (scrolls to Credits)          │
 │ Seats           1                                                  │
 │ [Change plan]  [Cancel plan]                 (Stripe-backed only)  │
 └────────────────────────────────────────────────────────────────────┘
@@ -46,8 +46,17 @@ Plans                                              [ Monthly | Yearly ]
 │ [action]      │ │ [action]      │ │ [Contact sales]   │
 └───────────────┘ └───────────────┘ └───────────────────┘
 
-Buy credits                                           (packs section)
-┌ $10 ┐ ┌ $25 ┐ ┌ $50 ┐ ┌ $100 ┐      or notice: "Credit packs aren't available right now."
+┌ Credits section (SOLUSDEV-325) ────────────────────────────────────┐
+│ [Adding credits for SOL        ← Back to SOL]   (only from SOL's +) │
+│ CREDITS                                                            │
+│ 9,059 credits available        941 of 10,000 used this cycle       │
+│                                ▬▬▬▬───────────  Resets {date}      │
+│ Top up                                                             │
+│ ┌ $10 ──────────┐ ┌ $25 ┐ ┌ $50 ┐ ┌ $100 ┐                          │
+│ │ +1,000 credits│                                                  │
+│ │ → 10,059 after│   or the no-packs notice + [Compare plans ↑]     │
+│ │ [Buy]         │                                                  │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 Element rules:
@@ -78,13 +87,42 @@ Element rules:
   not `canceled`. Changed from today's plan-only rule (`PROPOSED` — the interval
   rule is locked by the SOLUSDEV-236 approval; the rule is restated here for the
   UI). Enterprise never shows the badge.
-- **Buy credits packs.** From `GET /billing/packs`. `usd` is display-only; the
-  charge is the Stripe Price. Each pack button opens Checkout in `kind: "pack"`.
+- **Credits section (SOLUSDEV-325).** Last on the page, an `aria-label="Credits"`
+  region. Header: the balance (`GET /users/me/credits`; warn color at ≤100) and,
+  when `GET /users/me/usage` has an allowance, "{used} of {allowance} used this
+  cycle · Resets {cycle_end}" with a meter (accent → warn ≥70% → err ≥90%) — the
+  same numbers SOL's usage panel shows. Development `unlimited` shows
+  "Unlimited (development)" and no meter.
+- **Top up packs.** From `GET /billing/packs`. `usd` is display-only; the
+  charge is the Stripe Price. Each pack card shows `$usd`, "+{credits} credits",
+  "→ {balance + credits} after purchase", and a Buy button that opens Checkout
+  in `kind: "pack"`.
+- **No packs (state 13).** Never a dead end: "Credit packs aren't available
+  right now." + "You can still raise your monthly allowance by changing plan.
+  Your next {allowance} credits arrive {cycle_end}." and a **Compare plans ↑**
+  button that scrolls to the plan grid.
+- **Arriving from SOL.** SOL's Add credits (+, or the top-up card's Open Billing)
+  sets a one-shot shell intent (`shellStore.requestBillingFocus('credits')`).
+  Billing reads it on mount, clears it, scrolls the Credits section into view and
+  highlights it (accent border + ring) with an "Adding credits for SOL" strip and
+  **← Back to SOL**. Opening Billing from the rail or palette starts at the top
+  with no highlight.
+- **Pack purchase confirmation.** After a successful in-app pack checkout the
+  Credits section shows a `role=status` banner in place of the strip: "Payment
+  received — adding your credits…" until the balance reflects the pack, then
+  "+{credits} credits added · Payment received. SOL can keep going." with
+  **Back to SOL →** when the visit came from SOL. It replaces the generic
+  success notice for packs. While landing it adds "This usually takes a few
+  seconds. Refresh". "Landed" is a balance delta (balance before + pack), so
+  credits spent or refilled during checkout can shift when it flips; a balance
+  that had not loaded before checkout counts as landed once it loads.
+- **Buy more ↓.** The current-plan card's Credits row links down to the Credits
+  section (hidden for `unlimited`).
 - **Return from portal or Checkout.** The browser tab is outside Solus. The portal return URL is a web URL (`stripe_billing_portal_return_url`), not a desktop deep link, so the app cannot receive it directly. The
   window `focus` event refetches `summary`, `subscription` and `credits`. After a
   Checkout or portal open, also refetch at 1.5 s, 4 s and 10 s (existing
   `POST_CHECKOUT_REFRESH_DELAYS_MS`), because the webhook lands moments later.
-  No separate "returned" screen exists.
+  No separate "returned" screen exists (packs show the in-section confirmation above).
 
 ## Data sources
 
@@ -104,21 +142,21 @@ about plan prices for a local trial.
 Classification order (first match wins): offline, loading, then the summary and
 subscription fields below. `Trial` state comes from `summary.trial.state`.
 
-| #   | State               | Detection                                                                   | Banner                                                                                               | Current-plan card                                                                                                                                                                      | Plan-card actions                                                                                                                                            | Packs                                                                                                                  |
-| --- | ------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| 1   | Loading             | summary or subscription not yet fetched                                     | none (spinner, `data-testid="billing-loading"`)                                                      | —                                                                                                                                                                                      | —                                                                                                                                                            | —                                                                                                                      |
-| 2   | Offline             | workspace offline (`useOfflineReason`)                                      | none; `BillingOffline` card replaces the page body (existing copy)                                   | —                                                                                                                                                                                      | —                                                                                                                                                            | —                                                                                                                      |
-| 3   | Local trial active  | `stripe_subscription_id` null, `status` trialing, `trial.state` active      | none. Info line in the card                                                                          | `Basic plan · TRIALING`; row `Trial ends` = "in N days" (or "today"); Next charge "—"; Card "No card on file"; no Change/Cancel buttons                                                | Basic and Pro: **Subscribe** (Checkout). Enterprise: **Contact sales**                                                                                       | visible, enabled                                                                                                       |
-| 4   | Local trial expired | `stripe_subscription_id` null, `trial.state` expired (`trial_expired` true) | **warn**, role=status: "Trial ended {date} — choose a plan"                                          | `Basic plan · TRIALING` plus a "Trial ended" row in place of "Trial ends"; Next charge "—"; Card "No card on file"                                                                     | Same as state 3. Metered (model) features blocked; everything else works (ADR-024)                                                                           | visible, enabled                                                                                                       |
-| 5   | Stripe trialing     | `stripe_subscription_id` set, status trialing                               | none (info line only)                                                                                | Row "Trial ends" + "Then {amount} on {date}" from `next_invoice` (or "—" if null); Card from `payment_method`; Change/Cancel shown                                                     | Other plans: **Change plan** (portal, `update`). Current plan + interval: badge                                                                              | visible, enabled                                                                                                       |
-| 6   | Active, monthly     | status active, `billing_interval` month, `cancel_at` null                   | none                                                                                                 | `Renews {date}` (from `current_period_end`); Next charge `{amount} on {date}`; Card; Change/Cancel shown                                                                               | Other plans and the yearly price: **Change plan** (portal). Current plan + monthly: badge                                                                    | visible, enabled                                                                                                       |
-| 7   | Active, yearly      | as 6, `billing_interval` year                                               | none                                                                                                 | as 6                                                                                                                                                                                   | as 6, mirrored for monthly                                                                                                                                   | visible, enabled                                                                                                       |
-| 8   | Cancel pending      | `cancel_at` set, status active or trialing                                  | cancel bar (existing copy, always visible while set)                                                 | Row "Ends {date}" replaces Renews; Next charge "None — plan ends {date}"; Change plan hidden; Cancel plan replaced by the text "Resume in Manage billing"                              | Cards disabled with note "Resume in Manage billing to change plans." Current-plan badge still shown when plan+interval match                                 | visible, enabled                                                                                                       |
-| 9   | Canceled            | status canceled                                                             | none (the plan ended; the webhook already sent `subscription.ended`)                                 | "No active plan" headline, "Your plan ended {date}" (`cancel_at` cleared, so use `current_period_end` if present, else no date); Card "No card on file" or last card; no Change/Cancel | Basic and Pro: **Subscribe** (Checkout, new subscription). Enterprise: **Contact sales**. No current-plan badge                                              | visible, enabled                                                                                                       |
-| 10  | Past due            | status past_due                                                             | **warn**: "Payment failed — update your payment method in Manage billing to keep your plan."         | Status chip `PAST DUE`; Next charge "—"; Card shows last card; Change/Cancel shown                                                                                                     | Other plans: **Change plan** (portal, `update`). Badge rule as state 6                                                                                       | visible, enabled                                                                                                       |
-| 11  | Stripe unavailable  | `summary.stripe_status` unavailable (Stripe call errored or timed out)      | **warn**: "Billing is temporarily unavailable — your plan is unchanged. Try again in a few minutes." | Local fields still shown (plan, status, interval, trial and renewal dates from the subscription row). Next charge and Card show "Unavailable right now"                                | Price text "—" on every card. All purchase actions disabled (Subscribe, Change plan, Cancel plan, Manage billing, pack buttons). Contact sales stays enabled | packs listed; purchase disabled                                                                                        |
-| 12  | Stripe unconfigured | `summary.stripe_status` unconfigured                                        | **info** (dev/staging only): "Billing isn't configured for this environment."                        | Same as 11                                                                                                                                                                             | Same as 11                                                                                                                                                   | packs listed; purchase disabled                                                                                        |
-| 13  | Packs unavailable   | `summary.packs_available` false (`SOLUS_STRIPE_PACK_CREDITS` empty)         | none                                                                                                 | unchanged                                                                                                                                                                              | unchanged                                                                                                                                                    | **explicit notice** in the Buy credits section: "Credit packs aren't available right now." The section is never hidden |
+| #   | State               | Detection                                                                   | Banner                                                                                               | Current-plan card                                                                                                                                                                      | Plan-card actions                                                                                                                                            | Packs                                                                                                                           |
+| --- | ------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Loading             | summary or subscription not yet fetched                                     | none (spinner, `data-testid="billing-loading"`)                                                      | —                                                                                                                                                                                      | —                                                                                                                                                            | —                                                                                                                               |
+| 2   | Offline             | workspace offline (`useOfflineReason`)                                      | none; `BillingOffline` card replaces the page body (existing copy)                                   | —                                                                                                                                                                                      | —                                                                                                                                                            | —                                                                                                                               |
+| 3   | Local trial active  | `stripe_subscription_id` null, `status` trialing, `trial.state` active      | none. Info line in the card                                                                          | `Basic plan · TRIALING`; row `Trial ends` = "in N days" (or "today"); Next charge "—"; Card "No card on file"; no Change/Cancel buttons                                                | Basic and Pro: **Subscribe** (Checkout). Enterprise: **Contact sales**                                                                                       | visible, enabled                                                                                                                |
+| 4   | Local trial expired | `stripe_subscription_id` null, `trial.state` expired (`trial_expired` true) | **warn**, role=status: "Trial ended {date} — choose a plan"                                          | `Basic plan · TRIALING` plus a "Trial ended" row in place of "Trial ends"; Next charge "—"; Card "No card on file"                                                                     | Same as state 3. Metered (model) features blocked; everything else works (ADR-024)                                                                           | visible, enabled                                                                                                                |
+| 5   | Stripe trialing     | `stripe_subscription_id` set, status trialing                               | none (info line only)                                                                                | Row "Trial ends" + "Then {amount} on {date}" from `next_invoice` (or "—" if null); Card from `payment_method`; Change/Cancel shown                                                     | Other plans: **Change plan** (portal, `update`). Current plan + interval: badge                                                                              | visible, enabled                                                                                                                |
+| 6   | Active, monthly     | status active, `billing_interval` month, `cancel_at` null                   | none                                                                                                 | `Renews {date}` (from `current_period_end`); Next charge `{amount} on {date}`; Card; Change/Cancel shown                                                                               | Other plans and the yearly price: **Change plan** (portal). Current plan + monthly: badge                                                                    | visible, enabled                                                                                                                |
+| 7   | Active, yearly      | as 6, `billing_interval` year                                               | none                                                                                                 | as 6                                                                                                                                                                                   | as 6, mirrored for monthly                                                                                                                                   | visible, enabled                                                                                                                |
+| 8   | Cancel pending      | `cancel_at` set, status active or trialing                                  | cancel bar (existing copy, always visible while set)                                                 | Row "Ends {date}" replaces Renews; Next charge "None — plan ends {date}"; Change plan hidden; Cancel plan replaced by the text "Resume in Manage billing"                              | Cards disabled with note "Resume in Manage billing to change plans." Current-plan badge still shown when plan+interval match                                 | visible, enabled                                                                                                                |
+| 9   | Canceled            | status canceled                                                             | none (the plan ended; the webhook already sent `subscription.ended`)                                 | "No active plan" headline, "Your plan ended {date}" (`cancel_at` cleared, so use `current_period_end` if present, else no date); Card "No card on file" or last card; no Change/Cancel | Basic and Pro: **Subscribe** (Checkout, new subscription). Enterprise: **Contact sales**. No current-plan badge                                              | visible, enabled                                                                                                                |
+| 10  | Past due            | status past_due                                                             | **warn**: "Payment failed — update your payment method in Manage billing to keep your plan."         | Status chip `PAST DUE`; Next charge "—"; Card shows last card; Change/Cancel shown                                                                                                     | Other plans: **Change plan** (portal, `update`). Badge rule as state 6                                                                                       | visible, enabled                                                                                                                |
+| 11  | Stripe unavailable  | `summary.stripe_status` unavailable (Stripe call errored or timed out)      | **warn**: "Billing is temporarily unavailable — your plan is unchanged. Try again in a few minutes." | Local fields still shown (plan, status, interval, trial and renewal dates from the subscription row). Next charge and Card show "Unavailable right now"                                | Price text "—" on every card. All purchase actions disabled (Subscribe, Change plan, Cancel plan, Manage billing, pack buttons). Contact sales stays enabled | packs listed; purchase disabled                                                                                                 |
+| 12  | Stripe unconfigured | `summary.stripe_status` unconfigured                                        | **info** (dev/staging only): "Billing isn't configured for this environment."                        | Same as 11                                                                                                                                                                             | Same as 11                                                                                                                                                   | packs listed; purchase disabled                                                                                                 |
+| 13  | Packs unavailable   | `summary.packs_available` false (`SOLUS_STRIPE_PACK_CREDITS` empty)         | none                                                                                                 | unchanged                                                                                                                                                                              | unchanged                                                                                                                                                    | **explicit notice** in the Credits section's Top up: "Credit packs aren't available right now." + Compare plans ↑. Never hidden |
 
 States 3 through 10 are not mutually exclusive with the packs states; the packs
 section is independent of the plan state. States 11 and 12 override the plan-card
@@ -269,7 +307,7 @@ requires adding to the closed `event_type` set in `POST /api/v1/events`.
 
 **Status: APPROVED — 2026-11-08, in-chat (ADR-042).** Academic is not a fourth
 column in the plan grid. It is one full-width card directly under the
-Basic / Pro / Enterprise grid and above Buy credits, so it reads as its own
+Basic / Pro / Enterprise grid and above the Credits section, so it reads as its own
 offer. The verification flow happens inside that card (no modal, no new screen).
 
 ```
@@ -294,13 +332,13 @@ Data: `GET /api/v1/billing/academic`, fetched with the rest of the snapshot
 and no form). Monthly credits and the domain hint come from that response,
 not static copy.
 
-| #   | Card state          | Detection                                                                   | Step area                                                                                                                                                       |
-| --- | ------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A0  | Not verified        | `state` none                                                                | Email field (`type=email`, label "Academic email") + **Send code**. Hint: "Use your school address — .edu, .ac.uk, .edu.au and similar."                        |
-| A1  | Code sent           | `state` pending (or right after Send code)                                  | "We sent a 6-digit code to {email}. It expires in 15 minutes." Code field (`inputmode=numeric`, `autocomplete=one-time-code`, 6 digits) + **Verify**. Buttons: **Resend code** (disabled with a countdown for 60 s), **Use a different email** (back to A0). |
-| A2  | Active              | `state` active                                                              | "Verified {email} · free until {date}". `CURRENT PLAN` badge on the card. Within 30 days of the end, a **Verify again** link opens A0 prefilled.               |
-| A3  | Expired             | `state` expired                                                             | "Your academic plan ended {date}." A0 form prefilled with the old address. The page banner (warn): "Academic plan ended {date} — verify your academic email again or choose a plan." |
-| A4  | Not eligible        | live Stripe subscription (`view.isLive`) or Enterprise                     | "To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends." No form.                                           |
+| #   | Card state   | Detection                                              | Step area                                                                                                                                                                                                                                                    |
+| --- | ------------ | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A0  | Not verified | `state` none                                           | Email field (`type=email`, label "Academic email") + **Send code**. Hint: "Use your school address — .edu, .ac.uk, .edu.au and similar."                                                                                                                     |
+| A1  | Code sent    | `state` pending (or right after Send code)             | "We sent a 6-digit code to {email}. It expires in 15 minutes." Code field (`inputmode=numeric`, `autocomplete=one-time-code`, 6 digits) + **Verify**. Buttons: **Resend code** (disabled with a countdown for 60 s), **Use a different email** (back to A0). |
+| A2  | Active       | `state` active                                         | "Verified {email} · free until {date}". `CURRENT PLAN` badge on the card. Within 30 days of the end, a **Verify again** link opens A0 prefilled.                                                                                                             |
+| A3  | Expired      | `state` expired                                        | "Your academic plan ended {date}." A0 form prefilled with the old address. The page banner (warn): "Academic plan ended {date} — verify your academic email again or choose a plan."                                                                         |
+| A4  | Not eligible | live Stripe subscription (`view.isLive`) or Enterprise | "To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends." No form.                                                                                                                                          |
 
 Overlays: offline hides the card with the rest of the page. Stripe degradation
 (states 11, 12) does **not** disable the academic flow; it does not touch Stripe.
@@ -331,24 +369,24 @@ flowchart TD
 
 ### Copy
 
-| Key                         | Copy                                                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Card title / badge          | Academic / FREE                                                                                        |
-| Card lede                   | Free for students, teachers and researchers.                                                           |
-| Card terms                  | Basic limits · {N} credits every month · verify once a year                                           |
-| Send button                 | Send code                                                                                              |
-| Not academic                | That address isn't on our list of academic domains. Use your school email.                             |
-| Code sent                   | We sent a 6-digit code to {email}. It expires in 15 minutes.                                           |
-| Wrong code                  | That code didn't match — {N} tries left.                                                               |
-| Code expired / no code      | That code can't be used anymore. Send a new one.                                                       |
-| Too many wrong codes        | Too many wrong codes. Wait a while, then send a new one.                                               |
-| Address in use              | That address is already verified on another Solus account.                                             |
-| Rate limited                | Too many codes requested. Try again in a minute.                                                       |
-| Email unconfigured          | We can't send verification emails right now. Try again later.                                          |
-| Success notice              | You're on the Academic plan — {N} credits are in your account.                                         |
-| Active line                 | Verified {email} · free until {date}                                                                   |
-| Expired banner              | Academic plan ended {date} — verify your academic email again or choose a plan                         |
-| Not eligible                | To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends. |
+| Key                    | Copy                                                                                                     |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| Card title / badge     | Academic / FREE                                                                                          |
+| Card lede              | Free for students, teachers and researchers.                                                             |
+| Card terms             | Basic limits · {N} credits every month · verify once a year                                              |
+| Send button            | Send code                                                                                                |
+| Not academic           | That address isn't on our list of academic domains. Use your school email.                               |
+| Code sent              | We sent a 6-digit code to {email}. It expires in 15 minutes.                                             |
+| Wrong code             | That code didn't match — {N} tries left.                                                                 |
+| Code expired / no code | That code can't be used anymore. Send a new one.                                                         |
+| Too many wrong codes   | Too many wrong codes. Wait a while, then send a new one.                                                 |
+| Address in use         | That address is already verified on another Solus account.                                               |
+| Rate limited           | Too many codes requested. Try again in a minute.                                                         |
+| Email unconfigured     | We can't send verification emails right now. Try again later.                                            |
+| Success notice         | You're on the Academic plan — {N} credits are in your account.                                           |
+| Active line            | Verified {email} · free until {date}                                                                     |
+| Expired banner         | Academic plan ended {date} — verify your academic email again or choose a plan                           |
+| Not eligible           | To switch to Academic, cancel your paid plan in Manage billing first. You keep it until the period ends. |
 
 SOL block message for `academic_expired` (SOL mode aware):
 
@@ -357,13 +395,13 @@ SOL block message for `academic_expired` (SOL mode aware):
 
 ### Events
 
-| Event                                         | When                                   | Source |
-| --------------------------------------------- | -------------------------------------- | ------ |
-| `billing.academic.code_sent` `{domain}`       | code emailed                           | server |
-| `billing.academic.verified` `{domain}`        | plan switched to Academic              | server |
-| `billing.academic.failed` `{reason}`          | wrong, expired or exhausted code; address in use | server |
-| `billing.academic.expired`                    | daily sweep first sees the expiry      | server |
-| `orchestration.blocked` `{reason: "academic_expired"}` | metered call refused          | server |
+| Event                                                  | When                                             | Source |
+| ------------------------------------------------------ | ------------------------------------------------ | ------ |
+| `billing.academic.code_sent` `{domain}`                | code emailed                                     | server |
+| `billing.academic.verified` `{domain}`                 | plan switched to Academic                        | server |
+| `billing.academic.failed` `{reason}`                   | wrong, expired or exhausted code; address in use | server |
+| `billing.academic.expired`                             | daily sweep first sees the expiry                | server |
+| `orchestration.blocked` `{reason: "academic_expired"}` | metered call refused                             | server |
 
 Accessibility: the step area is a `role="group"` labelled "Academic
 verification"; inline errors use `role="alert"` and are tied to their field with

@@ -223,10 +223,14 @@ solus_sol_pinned_v1`, keyed by project and conversation; a fresh chat's pins fol
 - "This cycle `used / allowance`" in credits (ADR-018 — credit-denominated,
   never raw tokens) from `GET /users/me/usage`, with a 3px progress bar (accent →
   warn ≥70% → err ≥90%; fill width eases). Balance line underneath. An accent **+**
-  (`Add credits`) beside the meter navigates to the **Billing** screen (SOLUSDEV-325).
+  (`Add credits`) beside the meter opens **Billing › Credits**: Billing scrolls to and
+  highlights its Credits section (balance, this cycle's meter, packs with the balance
+  after purchase) with an "Adding credits for SOL · ← Back to SOL" strip
+  (SOLUSDEV-325; see `billing.md` §Element rules).
 - **Top-up card** ("Running low on credits" / "Out of credits" after a 402): the
   ADR-024 packs from `GET /billing/packs` as `$N` buttons through the same Stripe
-  checkout flow as the Billing screen, plus an **Open Billing** link (the only action
+  checkout flow as the Billing screen, plus an **Open Billing** link (same Credits
+  landing as the +; the only action
   when no packs are configured). Shown when the balance is low (≤100 credits,
   provisional) or a turn was rejected with 402.
 
