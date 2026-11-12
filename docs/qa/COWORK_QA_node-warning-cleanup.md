@@ -31,7 +31,7 @@ and test helpers. No new user flow or public interface is intended.
   intact; activity/menu clicks do not accidentally activate another project.
 - [ ] Open the project switcher and notifications, then dismiss each. Expected:
   focus, close behavior, empty states and menu placement remain unchanged.
-- [ ] Open Settings and inspect preferences and panel-link controls. Expected:
+- [ ] Open Settings and inspect preferences (panel-link controls were removed in SOLUSDEV-325). Expected:
   inputs, labels, enabled states and cancellation behave as before. Do not approve
   an unsolicited pairing request.
 - [ ] In the desktop local-folder card, open the folder picker and cancel.

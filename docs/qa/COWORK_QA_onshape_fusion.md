@@ -222,6 +222,9 @@ unaffected and keeps full read/write.
 
 ### 5.2 Pairing — the security-critical flow
 
+> **Not runnable since SOLUSDEV-325**: the desktop pairing UI (steps 5.2.3, 5.2.5, 5.2.6) was
+> removed. Skip §5.2 and its failure paths until the feature is retired or re-homed.
+
 The panel starts with **no credential at all**. Onshape appends its own `{$userId}` to the panel
 URL, and Solus deliberately does **not** accept that as identity: Onshape user ids are visible to
 anyone sharing a document, so a match would let a collaborator read your graph. Instead the panel

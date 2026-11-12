@@ -557,9 +557,9 @@ page →` which lands on this Members view); rename, notify-on-new-project
   and the owner danger zone sit behind its `Edit team` disclosure
   (SOLUSDEV-318, `docs/wireflows/settings.md`). Its Members section is
   retired in favour of Home.
-- **Onshape panel pairing** (SOLUSDEV-318, moved from Settings): on the
-  Connected accounts view's Mechanical tab, under the card — enter the code
-  the Onshape panel shows, `Link panel`; linked panels list with `Revoke`.
+- **Onshape panel pairing — removed** (SOLUSDEV-325): Connected accounts no
+  longer shows a pairing section on any tab. The backend `/users/me/panel-links`
+  routes remain until a follow-up retires the feature.
 - **Deep links from Settings** (SOLUSDEV-318): Settings asks the shell for a
   first pane (`useShellStore.requestHomeView`) — `members` or `accounts` —
   and Home opens on it once, then clears the request.
