@@ -2,7 +2,7 @@
 // integrations catalog): the user's ACCOUNT-scoped grants (SOLUSDEV-241,
 // GET /users/me/connections) with their real health, so Settings answers "is
 // my Onshape still linked?" — and one way out to Home › Connected accounts,
-// where linking, revoking and the Onshape panel pairing live.
+// where linking and revoking live.
 import { Button } from '../../../components/ui/Button'
 import { useIntegrationCatalog } from '../../onboarding/useIntegrationCatalog'
 import { ProviderMark } from '../../workspace/ConnectedAccountsCard'
