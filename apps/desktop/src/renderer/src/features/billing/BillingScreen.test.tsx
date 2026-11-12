@@ -11,6 +11,7 @@ import * as resources from '../../lib/api/resources'
 import * as billing from '../../lib/api/resources.billing'
 import * as academicApi from '../../lib/api/resources.academic'
 import { PRICES, SUMMARY } from './billingTestFixtures'
+import { useShellStore } from '../workspace/shellStore'
 
 vi.mock('../../lib/api/resources', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../lib/api/resources')>()
@@ -18,6 +19,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     ...actual,
     getCredits: vi.fn(),
     getCreditPacks: vi.fn(),
+    getUsage: vi.fn(),
     createSubscriptionCheckout: vi.fn(),
     createPackCheckout: vi.fn()
   }
@@ -92,6 +94,13 @@ beforeEach(() => {
   useAuthStore.setState({ status: 'authenticated', user: { email: 'a@b.com' } })
   mockState(TRIAL_SUB, TRIAL_SUMMARY)
   vi.mocked(resources.getCredits).mockResolvedValue({ user_id: 'u1', balance: 1000 })
+  vi.mocked(resources.getUsage).mockResolvedValue({
+    used: 941,
+    allowance: 10000,
+    balance: 9059,
+    cycle_start: '2026-11-10T00:00:00Z',
+    cycle_end: '2026-12-10T00:00:00Z'
+  })
   vi.mocked(resources.getCreditPacks).mockResolvedValue([{ price_id: 'price_p10', credits: 500 }])
   vi.mocked(resources.createSubscriptionCheckout).mockResolvedValue({ url: 'https://checkout/x' })
   vi.mocked(resources.createPackCheckout).mockResolvedValue({ url: 'https://checkout/pack' })
@@ -107,7 +116,7 @@ afterEach(() => {
 })
 
 async function ready(): Promise<void> {
-  await screen.findByText('Buy credits')
+  await screen.findByRole('region', { name: 'Credits' })
 }
 
 function plan(name: string): HTMLElement {
@@ -143,7 +152,7 @@ function billingSummaryTests(): void {
     await ready()
     expect(screen.getByText('Basic plan')).toBeInTheDocument()
     expect(screen.getByText('TRIALING')).toBeInTheDocument()
-    expect(screen.getByText('1,000')).toBeInTheDocument()
+    expect(screen.getAllByText('1,000')).toHaveLength(2) // plan card + Credits
   })
 
   it.each([true, false])(
@@ -151,7 +160,10 @@ function billingSummaryTests(): void {
     async (unlimited) => {
       vi.mocked(resources.getCredits).mockResolvedValue({ user_id: 'u1', balance: 17, unlimited })
       render(<BillingScreen />)
-      await screen.findByText(unlimited ? 'Unlimited (development)' : '17')
+      // Shown in both the plan card and Billing › Credits.
+      expect(await screen.findAllByText(unlimited ? 'Unlimited (development)' : '17')).toHaveLength(
+        2
+      )
       expect(
         screen.queryByText(unlimited ? '17' : 'Unlimited (development)')
       ).not.toBeInTheDocument()
@@ -166,7 +178,7 @@ function billingSummaryTests(): void {
       unlimited: true
     })
     render(<BillingScreen />)
-    await screen.findByText('Unlimited (development)')
+    expect((await screen.findAllByText('Unlimited (development)')).length).toBeGreaterThan(0)
   })
 
   it('shows an honest offline notice when signed out', async () => {
@@ -389,13 +401,40 @@ function billingCancellationAndPacksTests(): void {
   })
 }
 
+describe('BillingScreen credits focus (SOLUSDEV-325)', () => {
+  beforeEach(() => useShellStore.getState().reset())
+
+  it('arriving from SOL highlights Credits, takes the intent, and Back to SOL navigates', async () => {
+    const onNavigate = vi.fn()
+    useShellStore.getState().requestBillingFocus('credits')
+    render(<BillingScreen onNavigate={onNavigate} />)
+    await ready()
+    expect(screen.getByText('Adding credits for SOL')).toBeInTheDocument()
+    expect(useShellStore.getState().billingFocus).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /back to sol/i }))
+    expect(onNavigate).toHaveBeenCalledWith('sol')
+  })
+
+  it('opening Billing from the rail shows no SOL strip', async () => {
+    render(<BillingScreen onNavigate={vi.fn()} />)
+    await ready()
+    expect(screen.queryByText('Adding credits for SOL')).not.toBeInTheDocument()
+  })
+
+  it('shows the cycle meter from the usage endpoint', async () => {
+    render(<BillingScreen />)
+    await ready()
+    expect(screen.getByText('941 of 10,000 used this cycle')).toBeInTheDocument()
+  })
+})
+
 describe('BillingScreen academic plan (ADR-042)', () => {
   it('renders Academic as its own card between the plan grid and Buy credits', async () => {
     render(<BillingScreen />)
     await ready()
     const academic = plan('Academic')
     const enterprise = plan('Enterprise')
-    const packs = screen.getByText('Buy credits')
+    const packs = screen.getByRole('region', { name: 'Credits' })
     expect(
       enterprise.compareDocumentPosition(academic) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()

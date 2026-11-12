@@ -16,6 +16,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
     ...actual,
     getCredits: vi.fn(),
     getCreditPacks: vi.fn(),
+    getUsage: vi.fn(),
     createSubscriptionCheckout: vi.fn(),
     createPackCheckout: vi.fn()
   }
@@ -65,6 +66,13 @@ beforeEach(() => {
   vi.mocked(billing.getBillingSubscription).mockResolvedValue(SUB)
   vi.mocked(billing.getBillingSummary).mockResolvedValue(SUMMARY)
   vi.mocked(resources.getCredits).mockResolvedValue({ user_id: 'u1', balance: 1000 })
+  vi.mocked(resources.getUsage).mockResolvedValue({
+    used: 941,
+    allowance: 10000,
+    balance: 9059,
+    cycle_start: '2026-11-10T00:00:00Z',
+    cycle_end: '2026-12-10T00:00:00Z'
+  })
   vi.mocked(resources.getCreditPacks).mockResolvedValue([{ price_id: 'price_p10', credits: 1000 }])
   ;(window as unknown as { solus?: unknown }).solus = { billing: { openExternal } }
 })
@@ -99,6 +107,7 @@ describe('useBillingData with the in-app checkout bridge', () => {
   })
   checkoutBridgeSuccessTests()
   checkoutWebhookRefreshTests()
+  packPurchaseTests()
   checkoutBridgeOutcomesTests()
 })
 
@@ -236,6 +245,38 @@ function checkoutBridgeSuccessTests(): void {
     expect(result.current.notice).toMatch(/payment received/i)
     expect(bellRefresh).toHaveBeenCalled()
     window.removeEventListener('solus:notifications-refresh', bellRefresh)
+  })
+}
+
+function packPurchaseTests(): void {
+  it('a successful pack checkout records what was bought instead of the generic notice', async () => {
+    openCheckout.mockResolvedValue({ status: 'success' })
+    vi.mocked(resources.getCreditPacks).mockResolvedValue([
+      { price_id: 'price_p25', credits: 2600, usd: 25 }
+    ])
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.credits).toBe(1000))
+    await act(async () => {
+      await result.current.buyPack('price_p25')
+    })
+    expect(result.current.purchase).toEqual({ credits: 2600, balanceBefore: 1000 })
+    expect(result.current.notice).toBeNull()
+  })
+
+  it('a canceled pack checkout records no purchase', async () => {
+    openCheckout.mockResolvedValue({ status: 'cancel' })
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.status).toBe('ready'))
+    await act(async () => {
+      await result.current.buyPack('price_p10')
+    })
+    expect(result.current.purchase).toBeNull()
+    expect(result.current.notice).toMatch(/canceled/i)
+  })
+
+  it('loads the cycle usage for the Credits section', async () => {
+    const { result } = renderHook(() => useBillingData())
+    await waitFor(() => expect(result.current.usage?.used).toBe(941))
   })
 }
 

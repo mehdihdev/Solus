@@ -36,11 +36,6 @@ vi.mock('../onboarding/useIntegrationCatalog', () => ({ useIntegrationCatalog: v
 // with their own tests; here they are stubbed so the card stays deterministic.
 vi.mock('../project/useProjectSources', () => ({ useProjectSources: vi.fn() }))
 vi.mock('./useBridgeStatus', () => ({ useBridgeStatus: vi.fn(() => null) }))
-// The Onshape panel pairing (SOLUSDEV-318, moved from Settings) has its own tests.
-vi.mock('./OnshapePanelLinks', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./OnshapePanelLinks')>()),
-  OnshapePanelLinks: () => <div data-testid="onshape-panel-links" />
-}))
 // The Code environment row's hook (SOLUSDEV-250) has its own tests; here it
 // answers from the sources it is handed so the row appears only with a local
 // source, without touching the desktop bridge or the route.
@@ -730,12 +725,14 @@ function accountDomainNavigationTests(GITHUB: CatalogEntry, FUSION: CatalogEntry
     expect(screen.getByRole('tab', { name: 'Software' })).toHaveAttribute('aria-selected', 'false')
   })
 
-  it("carries the Onshape panel pairing under Onshape's domain only", async () => {
+  it('no longer shows the Onshape panel pairing on any domain (SOLUSDEV-325)', async () => {
     mockAccounts()
     render(<ConnectedAccountsCard />)
-    expect(screen.getByTestId('onshape-panel-links')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('tab', { name: 'Software' }))
-    expect(screen.queryByTestId('onshape-panel-links')).toBeNull()
+    for (const name of ['Mechanical', 'Electrical', 'Simulation', 'Software']) {
+      await userEvent.click(screen.getByRole('tab', { name }))
+      expect(screen.queryByText('Onshape panel')).toBeNull()
+      expect(screen.queryByRole('button', { name: /approve/i })).toBeNull()
+    }
   })
 
   it('groups tools by domain and keeps account tools ahead of per-project ones', async () => {

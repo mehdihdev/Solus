@@ -31,7 +31,6 @@ import { toolStatusText, platformUnavailableReason } from '../project/localconne
 import { useProjectSources } from '../project/useProjectSources'
 import { AccountRow, LegacyRow, SourceItem } from './AccountRows'
 import { CodeEnvironmentRow } from './CodeEnvironmentRow'
-import { ONSHAPE_PROVIDER, OnshapePanelLinks } from './OnshapePanelLinks'
 import { LOCAL_FOLDER_MARK, LOCAL_SOURCE_TYPE, localFolderLabel } from './connectedAccounts'
 import {
   ACCOUNT_DOMAINS,
@@ -443,11 +442,6 @@ export function ConnectedAccountsCard({
           />
         </div>
       </Card>
-      {domain === accountDomain({ id: ONSHAPE_PROVIDER }) && (
-        <div style={{ marginTop: 14 }}>
-          <OnshapePanelLinks />
-        </div>
-      )}
       <CardWizardModal wizard={wizard} scope={scope} />
     </div>
   )

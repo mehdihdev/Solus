@@ -1337,41 +1337,6 @@ export async function decideSolConfirmation(
   return outcome
 }
 
-// --- Onshape panel links (SOLUS-A7-01) ------------------------------------
-// A panel link is a SECOND credential class: a long-lived token the Onshape
-// in-app panel holds, minted only after the signed-in user approves the code
-// the panel is showing. The desktop app never sees that token — it only
-// approves the pairing and can revoke it afterwards.
-
-export interface PanelLink {
-  id: string
-  /** Untrusted label from Onshape, shown only so two links are tellable apart. */
-  onshape_user_id: string | null
-  created_at: string
-  last_used_at: string | null
-  expires_at: string
-}
-
-export function listPanelLinks(client: ApiClient = api): Promise<PanelLink[]> {
-  return client.request<PanelLink[]>('/users/me/panel-links')
-}
-
-/** Approve the code the panel is displaying. Rejects 404 `invalid_pairing`
- * (wrong or expired) and 409 `already_approved`. */
-export function approvePanelLink(
-  userCode: string,
-  client: ApiClient = api
-): Promise<{ status: string }> {
-  return client.request<{ status: string }>('/users/me/panel-links', {
-    method: 'POST',
-    body: { user_code: userCode }
-  })
-}
-
-export function revokePanelLink(linkId: string, client: ApiClient = api): Promise<void> {
-  return client.request<void>(`/users/me/panel-links/${linkId}`, { method: 'DELETE' })
-}
-
 // --- Local connections: bench sources + sessions (SOLUSDEV-72) --------------
 
 /** Whether livebench is installed server-side. `available=false` disables every

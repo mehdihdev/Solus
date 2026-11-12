@@ -28,6 +28,8 @@ export interface CurrentPlanCardProps {
   busy: boolean
   /** `undefined` = the general portal (Manage billing). */
   onPortal: (flow?: PortalFlow) => void
+  /** Scroll to Billing › Credits (SOLUSDEV-325); omitted = no link. */
+  onBuyMore?: () => void
 }
 
 const UNAVAILABLE = 'Unavailable right now'
@@ -119,7 +121,7 @@ function TimelineRow({
 }
 
 export function CurrentPlanCard(props: CurrentPlanCardProps): React.JSX.Element {
-  const { subscription: sub, summary, view, credits, unlimited, busy, onPortal } = props
+  const { subscription: sub, summary, view, credits, unlimited, busy, onPortal, onBuyMore } = props
   if (!sub) {
     return (
       <Card pad={20} style={{ marginTop: 20 }}>
@@ -169,21 +171,58 @@ export function CurrentPlanCard(props: CurrentPlanCardProps): React.JSX.Element 
         <Row label="Card">
           <Value>{cardText(summary, view)}</Value>
         </Row>
-        <Row label="Credits">
-          <span style={MONO_VALUE}>
-            {unlimited
-              ? 'Unlimited (development)'
-              : credits === null
-                ? '—'
-                : credits.toLocaleString()}
-          </span>
-        </Row>
+        <CreditsRow credits={credits} unlimited={unlimited} onBuyMore={onBuyMore} />
         <Row label="Seats">
           <span style={MONO_VALUE}>{sub.seat_count ?? 1}</span>
         </Row>
       </div>
       <PlanActions view={view} disabled={disabled} onPortal={onPortal} />
     </Card>
+  )
+}
+
+function CreditsRow({
+  credits,
+  unlimited,
+  onBuyMore
+}: {
+  credits: number | null
+  unlimited: boolean
+  onBuyMore?: () => void
+}): React.JSX.Element {
+  const value = unlimited
+    ? 'Unlimited (development)'
+    : credits === null
+      ? '—'
+      : credits.toLocaleString()
+  return (
+    <Row label="Credits">
+      <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span style={MONO_VALUE}>{value}</span>
+        {!unlimited && onBuyMore && <BuyMoreLink onClick={onBuyMore} />}
+      </span>
+    </Row>
+  )
+}
+
+function BuyMoreLink({ onClick }: { onClick: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className="interactive"
+      onClick={onClick}
+      style={{
+        padding: 0,
+        background: 'transparent',
+        border: 0,
+        color: 'var(--acc)',
+        cursor: 'pointer',
+        fontFamily: 'var(--font-ui)',
+        fontSize: 11
+      }}
+    >
+      Buy more ↓
+    </button>
   )
 }
 

@@ -61,3 +61,28 @@ async def report_provider_refs(store: SecretStore, settings: Settings) -> Provid
         missing=tuple(missing),
         onshape_pair_configured=bool(settings.onshape_client_id and settings.onshape_client_secret),
     )
+
+
+def report_pack_config(settings: Settings) -> tuple[str, ...]:
+    """SOLUSDEV-325: name credit-pack config gaps at boot (never raises, ids only).
+
+    The packs catalog is `SOLUS_STRIPE_PACK_CREDITS`; a priced pack missing from it
+    is silently unpurchasable, and a key spelled without the `SOLUS_` prefix is
+    ignored entirely — which surfaced only as "Credit packs aren't available".
+    """
+    unmapped = sorted(set(settings.stripe_pack_usd) - set(settings.stripe_pack_credits))
+    if not unmapped:
+        return ()
+    if not settings.stripe_pack_credits:
+        warning = (
+            f"SOLUS_STRIPE_PACK_CREDITS is empty but SOLUS_STRIPE_PACK_USD prices "
+            f"{len(unmapped)} pack(s) — credit packs are disabled. Check the key carries "
+            f"the SOLUS_ prefix (an unprefixed STRIPE_PACK_CREDITS is ignored)."
+        )
+    else:
+        warning = (
+            "Credit pack price ids in SOLUS_STRIPE_PACK_USD but not in "
+            f"SOLUS_STRIPE_PACK_CREDITS (not purchasable): {', '.join(unmapped)}"
+        )
+    logger.warning(warning)
+    return (warning,)

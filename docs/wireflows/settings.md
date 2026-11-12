@@ -87,7 +87,7 @@ When the page is offline it ends with the sign-in / API-unreachable notice.
 
 ## Moved out
 
-- **Onshape panel pairing** now lives in Home › Connected accounts, on the Mechanical
-  tab (`docs/wireflows/home.md`).
+- **Onshape panel pairing** moved to Home › Connected accounts (SOLUSDEV-318) and was then
+  removed from the desktop app entirely (SOLUSDEV-325, `docs/wireflows/home.md`).
 - **Integrations catalog** (the "AVAILABLE" rows) has been replaced by Connected tools.
 - **Account** is no longer its own card. Delete account is a row in Privacy & data.

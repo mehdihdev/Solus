@@ -19,6 +19,8 @@ export interface ShellToast {
   extensionSlug?: string
 }
 
+export type BillingFocus = 'credits'
+
 export type MainScreen = 'home' | 'workspace' | 'bench' | 'sol' | 'store' | 'billing' | 'settings'
 
 /** Where the shell is: a main screen (a rail item), an alert detail, or an
@@ -51,6 +53,9 @@ export interface ShellState {
   /** SOLUSDEV-321 P7: the finding a SOL citation pill asked the Live Bench to open — read by the
    *  Bench's Findings pane on its next mount, which clears it. */
   benchFinding: string | null
+  /** SOLUSDEV-325: the Billing section the next Billing mount scrolls to and
+   *  highlights (SOL's Add credits). Billing clears it on mount. */
+  billingFocus: BillingFocus | null
 
   setToast: (toast: ShellToast) => void
   clearToast: () => void
@@ -59,6 +64,8 @@ export interface ShellState {
   clearHomeView: () => void
   requestBenchFinding: (findingId: string) => void
   clearBenchFinding: () => void
+  requestBillingFocus: (focus: BillingFocus) => void
+  clearBillingFocus: () => void
   reset: () => void
 }
 
@@ -66,7 +73,8 @@ const INITIAL = {
   toast: null as ShellToast | null,
   lastMain: 'home' as MainScreen,
   homeView: null as HomePaneView | null,
-  benchFinding: null as string | null
+  benchFinding: null as string | null,
+  billingFocus: null as BillingFocus | null
 }
 
 export const useShellStore = create<ShellState>((set) => ({
@@ -79,5 +87,7 @@ export const useShellStore = create<ShellState>((set) => ({
   clearHomeView: () => set({ homeView: null }),
   requestBenchFinding: (benchFinding) => set({ benchFinding }),
   clearBenchFinding: () => set({ benchFinding: null }),
+  requestBillingFocus: (billingFocus) => set({ billingFocus }),
+  clearBillingFocus: () => set({ billingFocus: null }),
   reset: () => set({ ...INITIAL })
 }))

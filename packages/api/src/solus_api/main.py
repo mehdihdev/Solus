@@ -41,7 +41,7 @@ from solus_api.core.errors import register_error_handlers
 from solus_api.core.logging import configure_logging
 from solus_api.core.ratelimit import RateLimitMiddleware
 from solus_api.core.security import build_jwks_client
-from solus_api.core.startup_checks import report_provider_refs
+from solus_api.core.startup_checks import report_pack_config, report_provider_refs
 from solus_api.corpus import router as corpus_router
 from solus_api.extensions.bom_catalog_setup import prepare_catalog
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
@@ -297,6 +297,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
             await report_provider_refs(served.state.secret_store, resolved_settings)
         except Exception:
             logging.getLogger("solus.main").exception("provider ref check failed")
+        report_pack_config(resolved_settings)
         # ADR-038 §1: purges that were due while no process ran (also the only retry in
         # inline mode, together with the next revoke-related request).
         await run_startup_cad_purges(
