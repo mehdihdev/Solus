@@ -60,6 +60,22 @@ describe('benchFinding (SOLUSDEV-321 P7: a finding pill opens the Bench on that 
   })
 })
 
+describe('billing focus (SOLUSDEV-325)', () => {
+  it('holds the requested Billing section until Billing takes it', () => {
+    expect(useShellStore.getState().billingFocus).toBeNull()
+    useShellStore.getState().requestBillingFocus('credits')
+    expect(useShellStore.getState().billingFocus).toBe('credits')
+    useShellStore.getState().clearBillingFocus()
+    expect(useShellStore.getState().billingFocus).toBeNull()
+  })
+
+  it('is cleared by reset', () => {
+    useShellStore.getState().requestBillingFocus('credits')
+    useShellStore.getState().reset()
+    expect(useShellStore.getState().billingFocus).toBeNull()
+  })
+})
+
 describe('routeKey', () => {
   it('keys main screens by name, alerts by id and extension pages by slug', () => {
     expect(routeKey({ name: 'bench' })).toBe('bench')

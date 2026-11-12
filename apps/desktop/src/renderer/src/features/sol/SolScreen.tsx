@@ -58,7 +58,7 @@ export function SolScreen({
         footer={
           <UsagePanel
             creditsExhausted={chat.creditsExhausted}
-            onOpenBilling={() => onNavigate('billing')}
+            onOpenBilling={() => openBillingCredits(onNavigate)}
           />
         }
       />
@@ -138,4 +138,10 @@ function SolHeader({ title, pinned }: { title: string; pinned: number }): React.
       )}
     </div>
   )
+}
+
+/** SOLUSDEV-325: Add credits lands on Billing › Credits, highlighted. */
+function openBillingCredits(onNavigate: (screen: MainScreen) => void): void {
+  useShellStore.getState().requestBillingFocus('credits')
+  onNavigate('billing')
 }

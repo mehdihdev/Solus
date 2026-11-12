@@ -12,9 +12,11 @@ import {
   createSubscriptionCheckout,
   getCreditPacks,
   getCredits,
+  getUsage,
   type CheckoutInterval,
   type CreditPack,
-  type PlanType
+  type PlanType,
+  type UsageApi
 } from '../../lib/api/resources'
 import {
   createBillingPortalFlow,
@@ -35,6 +37,14 @@ import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
 
 export type BillingStatus = 'loading' | 'ready' | 'offline'
 
+/** A pack bought through the in-app checkout window this visit (SOLUSDEV-325):
+ *  what it adds and the balance before, so Credits can tell "on the way" from
+ *  "added" once the webhook lands. */
+export interface PackPurchase {
+  credits: number
+  balanceBefore: number | null
+}
+
 export interface BillingData {
   status: BillingStatus
   subscription: BillingSubscription | null
@@ -46,7 +56,11 @@ export interface BillingData {
   /** Credit balance, or null before it has loaded. */
   credits: number | null
   unlimited: boolean
+  /** GET /users/me/usage (this cycle's used / allowance); null when it failed. */
+  usage: UsageApi | null
   packs: CreditPack[]
+  /** The last successful in-app pack checkout this visit; null = none. */
+  purchase: PackPurchase | null
   /** GET /billing/academic; null when it failed (the Academic card degrades). */
   academic: AcademicStatus | null
   /** Email an academic verification code (ADR-042); rejects with the ApiError. */
@@ -130,6 +144,7 @@ interface Snapshot {
   summary: BillingSummary | null
   credits: number | null
   unlimited: boolean
+  usage: UsageApi | null
   packs: CreditPack[]
   academic: AcademicStatus | null
 }
@@ -147,18 +162,20 @@ async function orElse<T>(read: Promise<T>, fallback: T): Promise<T> {
 /** Load subscription (404 → null), summary (failure → null = degraded), credit
  *  balance, and packs, concurrently. */
 async function fetchSnapshot(): Promise<Snapshot> {
-  const [subscription, summary, balance, packs, academic] = await Promise.all([
+  const [subscription, summary, balance, packs, academic, usage] = await Promise.all([
     orElse(getBillingSubscription(), null),
     orElse(getBillingSummary(), null),
     orElse(getCredits(), null),
     orElse(getCreditPacks(), []),
-    orElse(getAcademicStatus(), null)
+    orElse(getAcademicStatus(), null),
+    orElse(getUsage(), null)
   ])
   return {
     subscription,
     summary,
     credits: balance ? balance.balance : null,
     unlimited: balance?.unlimited === true,
+    usage,
     packs,
     academic
   }
@@ -172,7 +189,9 @@ export function useBillingData(): BillingData {
   const [summary, setSummary] = useState<BillingSummary | null>(null)
   const [credits, setCredits] = useState<number | null>(null)
   const [unlimited, setUnlimited] = useState(false)
+  const [usage, setUsage] = useState<UsageApi | null>(null)
   const [packs, setPacks] = useState<CreditPack[]>([])
+  const [purchase, setPurchase] = useState<PackPurchase | null>(null)
   const [academic, setAcademic] = useState<AcademicStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -189,6 +208,7 @@ export function useBillingData(): BillingData {
     setSummary(snap.summary)
     setAsOf(Date.now())
     if (snap.credits !== null) setCredits(snap.credits)
+    setUsage(snap.usage)
     setPacks(snap.packs)
     setAcademic(snap.academic)
     setStatus('ready')
@@ -197,7 +217,11 @@ export function useBillingData(): BillingData {
   const { finishCheckout, scheduleRefetch } = useCheckoutCompletion(load, setNotice)
 
   const runAction = useCallback(
-    async (kind: ActionKind, getUrl: () => Promise<string>): Promise<void> => {
+    async (
+      kind: ActionKind,
+      getUrl: () => Promise<string>,
+      onSuccess?: () => void
+    ): Promise<void> => {
       setBusy(true)
       setNotice(null)
       try {
@@ -205,7 +229,7 @@ export function useBillingData(): BillingData {
         const openCheckout = billingBridge()?.openCheckout
         if (openCheckout) {
           // Self-contained: a sandboxed in-app window; busy until it closes.
-          finishCheckout((await openCheckout(url)).status, kind)
+          finishCheckout((await openCheckout(url)).status, kind, onSuccess)
         } else {
           await openExternal(url)
           scheduleRefetch()
@@ -226,9 +250,18 @@ export function useBillingData(): BillingData {
     [runAction]
   )
   const buyPack = useCallback(
-    (priceId: string): Promise<void> =>
-      runAction('checkout', async () => (await createPackCheckout(priceId)).url),
-    [runAction]
+    (priceId: string): Promise<void> => {
+      const pack = packs.find((p) => p.price_id === priceId)
+      const recordPurchase = pack
+        ? () => setPurchase({ credits: pack.credits, balanceBefore: credits })
+        : undefined
+      return runAction(
+        'checkout',
+        async () => (await createPackCheckout(priceId)).url,
+        recordPurchase
+      )
+    },
+    [runAction, packs, credits]
   )
   const openPortalFlow = useCallback(
     (flow?: PortalFlow): Promise<void> =>
@@ -244,7 +277,9 @@ export function useBillingData(): BillingData {
     asOf,
     credits,
     unlimited,
+    usage,
     packs,
+    purchase,
     academic,
     sendAcademic: (email) => sendAcademicCode(email),
     verifyAcademic: (code) => verifyAcademicCode(code),
@@ -260,7 +295,8 @@ export function useBillingData(): BillingData {
 }
 
 interface CheckoutCompletion {
-  finishCheckout: (status: CheckoutStatus, kind: ActionKind) => void
+  /** `onSuccess` replaces the generic success notice (a pack's own confirmation). */
+  finishCheckout: (status: CheckoutStatus, kind: ActionKind, onSuccess?: () => void) => void
   /** Refetch now-ish and again at 1.5/4/10 s (webhook lag) after any open. */
   scheduleRefetch: () => void
 }
@@ -308,7 +344,7 @@ function useCheckoutCompletion(
 
   /** Apply the outcome of the in-app checkout window (SOLUSDEV-114). */
   const finishCheckout = useCallback(
-    (status: CheckoutStatus, kind: ActionKind): void => {
+    (status: CheckoutStatus, kind: ActionKind, onSuccess?: () => void): void => {
       if (status === 'cancel' || status === 'closed') {
         setNotice(CANCELED_NOTICE)
         return
@@ -321,7 +357,10 @@ function useCheckoutCompletion(
         setNotice(messageFor(null, kind))
         return
       }
-      if (status === 'success') setNotice(SUCCESS_NOTICE)
+      if (status === 'success') {
+        if (onSuccess) onSuccess()
+        else setNotice(SUCCESS_NOTICE)
+      }
       refetchEverything()
       scheduleRefetch()
     },

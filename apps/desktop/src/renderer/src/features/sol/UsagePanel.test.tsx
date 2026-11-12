@@ -32,6 +32,8 @@ function billing(overrides: Partial<billingData.BillingData> = {}): billingData.
     summary: null,
     asOf: 0,
     credits: 9059,
+    usage: null,
+    purchase: null,
     packs: [
       { price_id: 'pk10', credits: 1000, usd: 10 },
       { price_id: 'pk25', credits: 2600, usd: 25 }

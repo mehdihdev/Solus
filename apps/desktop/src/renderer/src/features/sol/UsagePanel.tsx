@@ -8,16 +8,10 @@ import { useEffect, useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
 import { getUsage, type UsageApi } from '../../lib/api/resources'
+import { LOW_BALANCE_CREDITS, formatCredits } from '../billing/credits.constants'
 import { useBillingData } from '../billing/useBillingData'
 import { SOL_REASONER_NAME } from './reasoner'
 import { useWorkspaceFetchEnabled } from '../workspace/workspaceOnline'
-
-/** Below this balance the top-up card shows even without a 402 (provisional). */
-const LOW_BALANCE_CREDITS = 100
-
-function formatCredits(n: number): string {
-  return n.toLocaleString('en-US')
-}
 
 function MeterBar({ fraction }: { fraction: number }): React.JSX.Element {
   const pct = Math.max(0, Math.min(1, fraction))

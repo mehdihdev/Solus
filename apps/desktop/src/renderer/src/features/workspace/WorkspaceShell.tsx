@@ -328,7 +328,7 @@ const SIMPLE_SCREENS: Readonly<
 > = {
   store: () => <StoreScreen />,
   sol: (navigate) => <SolScreen onNavigate={navigate} />,
-  billing: () => <BillingScreen />,
+  billing: (navigate) => <BillingScreen onNavigate={navigate} />,
   settings: (navigate) => <SettingsScreen onNavigate={navigate} />
 }
 

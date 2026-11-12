@@ -6,6 +6,7 @@ import { LIVE_SUB, LOCAL_TRIAL_SUB, SUMMARY, viewOf } from './billingTestFixture
 import type { BillingSubscription, BillingSummary } from '../../lib/api/resources.billing'
 
 const onPortal = vi.fn()
+const onBuyMore = vi.fn()
 
 function setup(
   sub: BillingSubscription | null,
@@ -22,6 +23,7 @@ function setup(
       unlimited={extra.unlimited ?? false}
       busy={extra.busy ?? false}
       onPortal={onPortal}
+      onBuyMore={onBuyMore}
     />
   )
 }
@@ -30,6 +32,19 @@ function row(label: string): string {
   const el = screen.getByText(label)
   return el.parentElement?.textContent ?? ''
 }
+
+describe('CurrentPlanCard Buy more (SOLUSDEV-325)', () => {
+  it('the Credits row links down to the Credits section', async () => {
+    setup(LIVE_SUB)
+    await userEvent.click(screen.getByRole('button', { name: /buy more/i }))
+    expect(onBuyMore).toHaveBeenCalled()
+  })
+
+  it('has no Buy more for unlimited development accounts', () => {
+    setup(LIVE_SUB, SUMMARY, { unlimited: true })
+    expect(screen.queryByRole('button', { name: /buy more/i })).not.toBeInTheDocument()
+  })
+})
 
 describe('CurrentPlanCard rows', () => {
   it('active: renews date, next charge, card, credits, seats', () => {

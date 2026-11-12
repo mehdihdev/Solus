@@ -427,5 +427,6 @@ describe('SolScreen — citation pills (SOLUSDEV-321 P7)', () => {
     render(page())
     fireEvent.click(await screen.findByRole('button', { name: 'Add credits' }))
     expect(onNavigate).toHaveBeenCalledWith('billing')
+    expect(useShellStore.getState().billingFocus).toBe('credits')
   })
 })
