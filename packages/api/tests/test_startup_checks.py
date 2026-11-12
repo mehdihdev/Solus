@@ -9,7 +9,11 @@ from pydantic_settings import SettingsConfigDict
 from solus_api.agent.tools.mcp_servers import WEB_SEARCH
 from solus_api.connectors.secrets import InMemorySecretStore
 from solus_api.core.config import Settings
-from solus_api.core.startup_checks import EXPECTED_REFS, report_provider_refs
+from solus_api.core.startup_checks import (
+    EXPECTED_REFS,
+    report_pack_config,
+    report_provider_refs,
+)
 from solus_api.orchestration.providers import (
     ANTHROPIC_API_KEY_NAME,
     GOOGLE_API_KEY_NAME,
@@ -91,3 +95,43 @@ async def test_unexpected_store_error_reported_as_missing(
 
     assert report.present == ()
     assert set(report.missing) == EXPECTED_REFS
+
+
+# --- SOLUSDEV-325: credit-pack config check -------------------------------------------
+
+
+def _pack_settings(credits: dict[str, int], usd: dict[str, int]) -> Settings:
+    return HermeticSettings(
+        supabase_jwt_secret="dummy-jwt-signing-value-tests-only",
+        database_url="sqlite+aiosqlite://",
+        stripe_pack_credits=credits,
+        stripe_pack_usd=usd,
+    )
+
+
+def test_pack_check_warns_when_prices_set_but_no_credits(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    warnings = report_pack_config(_pack_settings({}, {"price_a": 10, "price_b": 25}))
+    assert len(warnings) == 1
+    assert "SOLUS_STRIPE_PACK_CREDITS" in warnings[0]
+    assert "SOLUS_STRIPE_PACK_CREDITS" in caplog.text
+
+
+def test_pack_check_warns_on_priced_pack_without_credits() -> None:
+    warnings = report_pack_config(_pack_settings({"price_a": 1000}, {"price_a": 10, "price_b": 25}))
+    assert len(warnings) == 1
+    assert "price_b" in warnings[0]
+
+
+@pytest.mark.parametrize(
+    ("credits", "usd"),
+    [({}, {}), ({"price_a": 1000}, {"price_a": 10}), ({"price_a": 1000}, {})],
+)
+def test_pack_check_silent_when_consistent(
+    credits: dict[str, int], usd: dict[str, int], caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    assert report_pack_config(_pack_settings(credits, usd)) == ()
+    assert caplog.text == ""
