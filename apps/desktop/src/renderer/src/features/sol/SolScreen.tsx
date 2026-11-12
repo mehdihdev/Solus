@@ -55,7 +55,12 @@ export function SolScreen({
         data={conversations}
         onSelect={chat.selectConversation}
         onNewChat={chat.startNewChat}
-        footer={<UsagePanel creditsExhausted={chat.creditsExhausted} />}
+        footer={
+          <UsagePanel
+            creditsExhausted={chat.creditsExhausted}
+            onOpenBilling={() => onNavigate('billing')}
+          />
+        }
       />
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <SolHeader title={title} pinned={pins.length} />

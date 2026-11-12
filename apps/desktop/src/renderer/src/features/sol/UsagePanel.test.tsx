@@ -14,6 +14,7 @@ vi.mock('../../lib/api/resources', async (importOriginal) => {
 vi.mock('../billing/useBillingData', () => ({ useBillingData: vi.fn() }))
 const getUsage = vi.mocked(resources.getUsage)
 const useBillingData = vi.mocked(billingData.useBillingData)
+const onOpenBilling = vi.fn()
 
 const USAGE: resources.UsageApi = {
   used: 941,
@@ -60,13 +61,13 @@ beforeEach(() => {
 
 describe('UsagePanel', () => {
   it('names the product reasoner, never a model', async () => {
-    render(<UsagePanel creditsExhausted={false} />)
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())
     expect(screen.getByText('Reasoner · sol-reasoner-1')).toBeInTheDocument()
   })
 
   it('shows the credit meter for this cycle', async () => {
-    render(<UsagePanel creditsExhausted={false} />)
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())
     expect(screen.getByText('941 / 10,000')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: 'Credits used this cycle' })).toBeVisible()
@@ -77,7 +78,7 @@ describe('UsagePanel', () => {
 
   it('shows actual usage without a cap or top-up warning for development allowance', async () => {
     getUsage.mockResolvedValue({ ...USAGE, balance: 0, unlimited: true })
-    render(<UsagePanel creditsExhausted />)
+    render(<UsagePanel creditsExhausted onOpenBilling={onOpenBilling} />)
     await screen.findByText('Unlimited (development)')
     expect(screen.getByText('941 credits')).toBeInTheDocument()
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
@@ -89,7 +90,7 @@ describe('UsagePanel', () => {
     const data = billing()
     useBillingData.mockReturnValue(data)
     getUsage.mockResolvedValue({ ...USAGE, used: 9950, balance: 50 })
-    render(<UsagePanel creditsExhausted={false} />)
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText(/Running low on credits/)).toBeInTheDocument())
     expect(screen.getByText(/Top up to keep SOL grounded/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '$10' }))
@@ -98,30 +99,48 @@ describe('UsagePanel', () => {
 
   it('escalates to "Out of credits" after a 402 turn rejection', async () => {
     getUsage.mockResolvedValue({ ...USAGE, balance: 0 })
-    render(<UsagePanel creditsExhausted />)
+    render(<UsagePanel creditsExhausted onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText('Out of credits')).toBeInTheDocument())
   })
 
   it('is honest offline', () => {
     useWorkspaceStore.setState({ linked: false })
-    render(<UsagePanel creditsExhausted={false} />)
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     expect(screen.getByText(/Usage unavailable offline/)).toBeInTheDocument()
     expect(getUsage).not.toHaveBeenCalled()
   })
 
   it('surfaces a failed usage fetch instead of loading forever (review M2)', async () => {
     getUsage.mockRejectedValue(new Error('down'))
-    render(<UsagePanel creditsExhausted={false} />)
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText(/Usage unavailable offline/)).toBeInTheDocument())
     expect(screen.queryByText(/Loading usage/)).not.toBeInTheDocument()
   })
 
-  it('the accent + opens the credit packs even when nothing is low (design template)', async () => {
-    render(<UsagePanel creditsExhausted={false} />)
+  it('the accent + opens the Billing screen (SOLUSDEV-325)', async () => {
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
     await waitFor(() => expect(screen.getByText('This cycle')).toBeInTheDocument())
-    expect(screen.queryByText('$10')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Add credits' }))
-    expect(screen.getByText('Add credits')).toBeInTheDocument()
-    expect(screen.getByText('$10')).toBeInTheDocument()
+    expect(onOpenBilling).toHaveBeenCalledTimes(1)
+    // It navigates; it no longer toggles an inline pack card.
+    expect(screen.queryByText('$10')).not.toBeInTheDocument()
+  })
+
+  it('the low-credit card links to the Billing screen', async () => {
+    getUsage.mockResolvedValue({ ...USAGE, used: 9950, balance: 50 })
+    render(<UsagePanel creditsExhausted={false} onOpenBilling={onOpenBilling} />)
+    await screen.findByText(/Running low on credits/)
+    await userEvent.click(screen.getByRole('button', { name: 'Open Billing' }))
+    expect(onOpenBilling).toHaveBeenCalledTimes(1)
+  })
+
+  it('with no packs, the card still offers a way to Billing', async () => {
+    useBillingData.mockReturnValue(billing({ packs: [] }))
+    getUsage.mockResolvedValue({ ...USAGE, balance: 0 })
+    render(<UsagePanel creditsExhausted onOpenBilling={onOpenBilling} />)
+    await screen.findByText('Out of credits')
+    expect(screen.queryByText(/managed on the Billing screen/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Open Billing' }))
+    expect(onOpenBilling).toHaveBeenCalledTimes(1)
   })
 })

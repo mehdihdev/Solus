@@ -422,4 +422,10 @@ describe('SolScreen — citation pills (SOLUSDEV-321 P7)', () => {
     expect(useFocusStore.getState().focusedEntityId).toBe(part)
     expect(onNavigate).toHaveBeenCalledTimes(3)
   })
+
+  it('the usage panel + opens the Billing screen (SOLUSDEV-325)', async () => {
+    render(page())
+    fireEvent.click(await screen.findByRole('button', { name: 'Add credits' }))
+    expect(onNavigate).toHaveBeenCalledWith('billing')
+  })
 })

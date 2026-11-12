@@ -1,7 +1,9 @@
 // SOLUSDEV-233: the SOL page's usage meter + top-up card. Credit-denominated
 // per ADR-018 (raw token metering was rejected): "This cycle used / allowance"
 // from GET /users/me/usage, and the ADR-024 credit packs through the same
-// Stripe flow the Billing screen uses (useBillingData).
+// Stripe flow the Billing screen uses (useBillingData). SOLUSDEV-325: the
+// accent + navigates to the Billing screen; the low/out-of-credits card keeps
+// its inline packs and links there too.
 import { useEffect, useState } from 'react'
 import { Card } from '../../components/ui/Card'
 import { Mono } from '../../components/ui/Mono'
@@ -47,7 +49,13 @@ function MeterBar({ fraction }: { fraction: number }): React.JSX.Element {
   )
 }
 
-function TopUpCard({ exhausted, low }: { exhausted: boolean; low: boolean }): React.JSX.Element {
+function TopUpCard({
+  exhausted,
+  onOpenBilling
+}: {
+  exhausted: boolean
+  onOpenBilling: () => void
+}): React.JSX.Element {
   const billing = useBillingData()
   return (
     <Card
@@ -58,8 +66,8 @@ function TopUpCard({ exhausted, low }: { exhausted: boolean; low: boolean }): Re
         borderColor: 'color-mix(in srgb, var(--warn) 45%, var(--bd))'
       }}
     >
-      <div style={{ fontSize: 12, fontWeight: 600, color: low ? 'var(--warn)' : 'var(--tx)' }}>
-        {exhausted ? 'Out of credits' : low ? 'Running low on credits' : 'Add credits'}
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--warn)' }}>
+        {exhausted ? 'Out of credits' : 'Running low on credits'}
       </div>
       <div style={{ fontSize: 11, color: 'var(--mut)', marginTop: 3 }}>
         Top up to keep SOL grounded.
@@ -92,19 +100,40 @@ function TopUpCard({ exhausted, low }: { exhausted: boolean; low: boolean }): Re
             {pack.usd != null ? `$${pack.usd}` : `${formatCredits(pack.credits)} cr`}
           </button>
         ))}
-        {billing.packs.length === 0 && (
-          <span style={{ fontSize: 11, color: 'var(--mut)' }}>
-            Credit packs are managed on the Billing screen.
-          </span>
-        )}
       </div>
+      <button
+        type="button"
+        className="interactive"
+        onClick={onOpenBilling}
+        style={{
+          marginTop: 8,
+          padding: 0,
+          background: 'transparent',
+          border: 0,
+          color: 'var(--acc)',
+          cursor: 'pointer',
+          fontFamily: 'var(--font-ui)',
+          fontSize: 11
+        }}
+      >
+        Open Billing
+      </button>
     </Card>
   )
 }
 
 type UsageStatus = 'loading' | 'ready' | 'offline'
 
-export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }): React.JSX.Element {
+export interface UsagePanelProps {
+  creditsExhausted: boolean
+  /** Navigate to the Billing screen (the + and the top-up card's link). */
+  onOpenBilling: () => void
+}
+
+export function UsagePanel({
+  creditsExhausted,
+  onOpenBilling
+}: UsagePanelProps): React.JSX.Element {
   const fetchEnabled = useWorkspaceFetchEnabled()
   const [usage, setUsage] = useState<UsageApi | null>(null)
   const [fetched, setStatus] = useState<UsageStatus>('loading')
@@ -133,8 +162,6 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
 
   const unlimited = usage?.unlimited === true
   const lowOnCredits = lowCredits(usage, unlimited, creditsExhausted)
-  // Design template: the accent "+" opens the packs even when nothing is low.
-  const [wantTopUp, setWantTopUp] = useState(false)
 
   return (
     <div style={{ margin: 12 }}>
@@ -146,12 +173,10 @@ export function UsagePanel({ creditsExhausted }: { creditsExhausted: boolean }):
             </Mono>
             <UsageBody usage={usage} status={status} unlimited={unlimited} />
           </div>
-          {!unlimited && (
-            <AddCreditsButton pressed={wantTopUp} onToggle={() => setWantTopUp((on) => !on)} />
-          )}
+          {!unlimited && <AddCreditsButton onClick={onOpenBilling} />}
         </div>
       </Card>
-      {(lowOnCredits || wantTopUp) && <TopUpCard exhausted={creditsExhausted} low={lowOnCredits} />}
+      {lowOnCredits && <TopUpCard exhausted={creditsExhausted} onOpenBilling={onOpenBilling} />}
     </div>
   )
 }
@@ -178,22 +203,15 @@ function UsageBody({
   return <UsageSummary usage={usage} unlimited={unlimited} />
 }
 
-/** The design's accent "+": opens the packs whether or not the balance is low. */
-function AddCreditsButton({
-  pressed,
-  onToggle
-}: {
-  pressed: boolean
-  onToggle: () => void
-}): React.JSX.Element {
+/** The design's accent "+": goes to the Billing screen (SOLUSDEV-325). */
+function AddCreditsButton({ onClick }: { onClick: () => void }): React.JSX.Element {
   return (
     <button
       type="button"
       aria-label="Add credits"
       title="Add credits"
       className="interactive"
-      aria-pressed={pressed}
-      onClick={onToggle}
+      onClick={onClick}
       style={{
         width: 32,
         height: 32,
