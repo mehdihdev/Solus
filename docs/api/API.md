@@ -369,6 +369,25 @@ and counts only. The transport's own `loop_limit` guard (`error` frame) is indep
 unchanged: it only fires on a runner that streams more tool calls than the cap. Frames are not
 part of the OpenAPI schema, so none of it changes `openapi.json`.
 
+**SOLUSDEV-326 — SOL's thinking, visible.** On each answer round the stream carries
+`event: thinking` with `data: {text}`: a piece of the model's thought SUMMARY (Anthropic adaptive
+thinking with `display: "summarized"`; OpenAI Responses `reasoning.summary: "auto"`) — never the
+raw chain of thought, which no provider returns. A round's thought precedes its `token` frames and
+its `tool_call`s. The text is model output: the server holds it until a sentence or line ends,
+never cuts after a secret label still waiting for its value, masks each release whole
+(`redact_text`), sends it in frames of at most 2,000 characters, and stops at 24,000 characters a
+turn. Nothing on the server reads it back — it picks
+no tool, mode, scope or permission. It streams only when the routed catalog entry sets
+`show_thinking` (models.yaml: every SOL chat model except the trivial Claude route, and only where
+the model already thinks, so it adds no thinking tokens); other gateway callers never ask for it.
+The stored assistant turn carries `attrs.thinking = {segments, ms}` — one segment per stretch
+between tool calls, each masked again whole, and the milliseconds spent inside segments (the tool
+runs between them are not counted) — absent when the turn showed none, so a reload shows the same
+block. A thought summary is not the answer: a round-1 refusal after only thinking is still re-asked
+on the GENERAL cell. The consent-gated `sol.turn.completed` event adds
+`thinking_chars` (a count, 0 when none). Anthropic thinking blocks are replayed unchanged on the
+next tool round of the same turn. Frames are not part of the OpenAPI schema.
+
 **SOLUSDEV-321 (P1-T4, P2-T1) — retrieval tools.** The model can look things up itself through nine
 read-only tools, registered whenever the turn has a user and never gated, in Guide and in Build:
 `search_workspace` (graph entities), `search_solus` (`.solus` entries), `search_corpus` (the
