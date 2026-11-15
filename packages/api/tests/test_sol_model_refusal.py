@@ -18,7 +18,7 @@ from solus_api.agent.runtime import AgentRunContext, LlmRunner
 from solus_api.agent.stream import AgentEventType
 from solus_api.models import CreditLedger
 from solus_api.orchestration.enums import RouteType
-from solus_api.orchestration.providers import ProviderRefusalError, ToolUse, Usage
+from solus_api.orchestration.providers import ProviderRefusalError, Thinking, ToolUse, Usage
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 from test_sol_reasoner import _CODE_FILE, _CodeScopeSystems, _ctx, _spy
@@ -31,16 +31,25 @@ class _RefusingModel:
     refusing call stream a token before it refuses; `tool_on` is the call that is a tool round."""
 
     def __init__(
-        self, refuse: set[int], *, stream_first: bool = False, tool_on: int | None = None
+        self,
+        refuse: set[int],
+        *,
+        stream_first: bool = False,
+        think_first: bool = False,
+        tool_on: int | None = None,
     ) -> None:
         self.refuse = refuse
         self.stream_first = stream_first
+        self.think_first = think_first
         self.tool_on = tool_on
         self.calls = 0
 
     async def stream(self, *args: Any, conversation: Any = None, **kwargs: Any) -> Any:
         self.calls += 1
         if self.calls in self.refuse:
+            if self.think_first:
+                yield Thinking("I should check whether the selftest covers the 180 degree case. ")
+                yield Thinking("Held, unfinished")
             if self.stream_first:
                 yield "Partial "
             raise ProviderRefusalError("anthropic/claude-x refused the request", category="cyber")
@@ -123,6 +132,22 @@ async def test_a_refusal_after_text_reached_the_person_is_not_rerouted(
         await _collect(_RefusingModel({1}, stream_first=True), ctx)
 
     assert len(calls) == 1
+
+
+async def test_a_refusal_after_only_thinking_still_reroutes(
+    engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SOLUSDEV-326: a thought summary is not the answer — a round-1 refusal after streaming only
+    thought is re-asked on GENERAL like before, and the refused round's held thought is dropped."""
+    calls = _spy(monkeypatch)
+    ctx = await _code_ctx(engine)
+
+    events = await _collect(_RefusingModel({1}, think_first=True), ctx)
+
+    assert [call["type"] for call in calls] == [RouteType.CODE, RouteType.GENERAL]
+    assert ANSWER in _text(events)
+    thought = "".join(e.data["text"] for e in events if e.type is AgentEventType.THINKING)
+    assert "Held, unfinished" not in thought
 
 
 async def test_a_refusal_in_a_later_round_is_not_rerouted(

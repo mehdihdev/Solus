@@ -120,6 +120,8 @@ export type SolStreamEvent =
   | { type: 'research_sources'; research: ResearchSources }
   /** SOLUSDEV-321 P7: what SOL weighed before a proposal (bounded, validated whole). */
   | { type: 'reasoning'; reasoning: ReasoningInfo }
+  /** SOLUSDEV-326: a piece of SOL's thought summary (masked and bounded by the server). */
+  | { type: 'thinking'; text: string }
   | { type: 'message'; role: string; content: string; citations: string[] }
   | { type: 'error'; code: string; message: string }
   | { type: 'done'; conversationId: string; turnId: string }
@@ -157,6 +159,8 @@ const MAX_ARG_CHARS = 64
 const MAX_REASONING_ITEMS = 12
 const MAX_REASONING_TEXT = 200
 const MAX_PROPOSING = 400
+// SOLUSDEV-326: the server's `thinking` frame bound (agent/stream.py THINKING_CHUNK_CAP).
+const MAX_THINKING_CHUNK = 2_000
 
 /** A non-empty word of at most `cap` characters. */
 function label(value: unknown, cap: number): value is string {
@@ -182,7 +186,7 @@ const argText = (value: unknown): string =>
 /** The args of a `tool_call`, as bounded text, or undefined when there is nothing to show. The
  *  server redacted them (agent/stream.py); this bounds them so a model-proposed call with a
  *  thousand keys or a megabyte value costs the transcript a line, not a page. */
-function toToolArgs(value: unknown): ToolArgs | undefined {
+export function toToolArgs(value: unknown): ToolArgs | undefined {
   const d = record(value)
   if (d === null) return undefined
   const entries = Object.entries(d)
@@ -363,6 +367,12 @@ const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
     const reasoning = toReasoning(d)
     return reasoning ? { type: 'reasoning', reasoning } : null
   },
+  // SOLUSDEV-326: a piece of SOL's thought summary — model text the server masked and cut, bounded
+  // again here; the Thinking block draws it as plain text, never markup or a link.
+  thinking: (d) =>
+    str(d.text) && d.text.length > 0 && d.text.length <= MAX_THINKING_CHUNK
+      ? { type: 'thinking', text: d.text }
+      : null,
   message: (d) => {
     if (!str(d.role) || !str(d.content)) return null
     if (!Array.isArray(d.citations) || !d.citations.every(str)) return null

@@ -76,6 +76,7 @@ from solus_api.agent.project_card import CardInputs, project_card_section
 from solus_api.agent.research import ResearchStep, model_visible, withhold_server_driven
 from solus_api.agent.sol_anchors import resolve_anchor_inputs
 from solus_api.agent.stream import AgentEvent, AgentEventType
+from solus_api.agent.thinking import ThinkingRelay
 from solus_api.agent.tools import (
     ToolCall,
     ToolDescriptor,
@@ -94,6 +95,7 @@ from solus_api.orchestration import bump_complexity, estimate_complexity, gatewa
 from solus_api.orchestration.enums import Complexity, InteractionContext, RouteType
 from solus_api.orchestration.providers import (
     ProviderRefusalError,
+    Thinking,
     ToolConversation,
     ToolOutcome,
     Turn,
@@ -1464,6 +1466,11 @@ def _terminal_reply(
     return None
 
 
+#: Frames that do not count as the answer reaching the person: a round-1 refusal after only these
+#: is still re-asked on GENERAL. A thought summary is the model working, not its reply (326).
+_NOT_THE_ANSWER: Final = frozenset({AgentEventType.BUDGET_REACHED, AgentEventType.THINKING})
+
+
 async def _close_unfinished(stream: gateway.CompletionStream) -> None:
     """Close a model stream the round did not read to its end (the transport broke out)."""
     if stream.completion is None:
@@ -1492,6 +1499,7 @@ async def _routed_round(
     *,
     first: bool,
     round_tokens: int,
+    relay: ThinkingRelay,
 ) -> AsyncIterator[AgentEvent]:
     """One round's model call and its events; the answer lands on `state.completion`.
 
@@ -1522,15 +1530,18 @@ async def _routed_round(
                 purpose="answer",
                 turn_id=ctx.turn_id,
                 project_id=ctx.project_id,
+                # SOLUSDEV-326: the round's thought summary streams as `thinking` frames.
+                show_thinking=True,
             )
             try:
-                async for event in _round_events(stream, hit, ctx):
-                    streamed |= event.type is not AgentEventType.BUDGET_REACHED
+                async for event in _round_events(stream, hit, ctx, relay):
+                    streamed |= event.type not in _NOT_THE_ANSWER
                     yield event
             except ProviderRefusalError:
                 general = stream.model.route_type is RouteType.GENERAL
                 if not first or state.rerouted or streamed or general:
                     raise
+                relay.discard()  # SOLUSDEV-326: the refused round's unfinished thought
             else:
                 state.completion = stream.completion
                 return
@@ -1556,12 +1567,16 @@ async def _routed_round(
 
 
 async def _round_events(
-    stream: gateway.CompletionStream, hit: BudgetHit | None, ctx: AgentRunContext
+    stream: gateway.CompletionStream,
+    hit: BudgetHit | None,
+    ctx: AgentRunContext,
+    relay: ThinkingRelay,
 ) -> AsyncIterator[AgentEvent]:
     """One round's events: the `budget_reached` frame when a ceiling made this the closing round
     (announced before the round is asked, and logged with ids and counts only), then its tokens
     as they arrive. P1-T3. Its `<reasoning>` block arrives as one `reasoning` frame, never as
-    tokens (P7)."""
+    tokens (P7). Its thought summary arrives as `thinking` frames through the turn's `relay`,
+    flushed the moment the answer text starts, so the thought precedes it (SOLUSDEV-326)."""
     if hit is not None:
         logger.info(
             "turn budget reached limit=%s used=%d cap=%d turn_id=%s user_id=%s project_id=%s",
@@ -1573,7 +1588,15 @@ async def _round_events(
             ctx.project_id,
         )
         yield AgentEvent.budget_reached(hit.limit, hit.used, hit.cap)
-    async for event in reasoning_frame.reasoned_tokens(stream):
+    parser = reasoning_frame.ReasoningParser()
+    async for piece in stream.events():
+        if isinstance(piece, Thinking):
+            for event in relay.feed(piece.text):
+                yield event
+            continue
+        for event in [*relay.flush(), *parser.feed(piece)]:
+            yield event
+    for event in [*relay.flush(), *parser.flush()]:
         yield event
 
 
@@ -1808,6 +1831,7 @@ class LlmRunner:
             code_style=code_style_of(ctx.engineering_preferences),
         )
         state = _RoundState(complexity, route_type)
+        relay = ThinkingRelay()  # SOLUSDEV-326: one thought-summary cap for the whole turn
         for round_index in range(limits.model_rounds):
             # P1-T3: this round and its model call counted (a call counts against its own cap),
             # its whole request measured, then the first ceiling the turn has reached. A hit makes
@@ -1836,6 +1860,7 @@ class LlmRunner:
                 turn_budget,
                 first=round_index == 0,
                 round_tokens=round_tokens,
+                relay=relay,
             ):
                 yield event
             completion = state.completion

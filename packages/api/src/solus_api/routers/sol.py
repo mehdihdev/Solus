@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
@@ -72,11 +73,17 @@ from solus_api.agent.sol_anchors import (
     require_turn_targets,
     visible_entity_ids,
 )
-from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse, persisted_answer
+from solus_api.agent.stream import (
+    THINKING_TURN_CAP,
+    AgentEvent,
+    AgentEventType,
+    format_sse,
+    persisted_answer,
+)
 from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
-from solus_api.agent.tools.untrusted import call_display_paths, redact_value
+from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
 from solus_api.agent.turn_limits import turn_limits
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
@@ -681,10 +688,23 @@ async def _persist_turn(
                     # reached — fixed names and counts, null when the turn had neither.
                     "answer_source": (assistant_attrs or {}).get("answer_source"),
                     "budget_reached": (assistant_attrs or {}).get("budget_reached"),
+                    # SOLUSDEV-326: how much thought summary the turn showed — a count only.
+                    "thinking_chars": sum(
+                        len(segment)
+                        for segment in ((assistant_attrs or {}).get("thinking") or {}).get(
+                            "segments", []
+                        )
+                    ),
                 },
             )
         await session.commit()
         return assistant.id
+
+
+def _thinking_attr(transcript: "_TurnTranscript") -> dict[str, Any]:
+    """SOLUSDEV-326: `{"thinking": {segments, ms}}` when the turn thought aloud, else {}."""
+    thinking = transcript.thinking_attrs()
+    return {"thinking": thinking} if thinking is not None else {}
 
 
 async def _close_runner(stream: AsyncIterator[AgentEvent]) -> None:
@@ -762,11 +782,57 @@ class _TurnTranscript:
     tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=list)
     final_text: str = ""
     tool_calls: int = 0
+    #: SOLUSDEV-326: the turn's thought summary, one segment per stretch between tool calls —
+    #: already masked and bounded by the runtime (agent/thinking.py).
+    thinking: list[str] = field(default_factory=list)
+    #: How many tool calls preceded each segment, so a reload places it among the steps.
+    thinking_after: list[int] = field(default_factory=list)
+    #: Whether the next `thinking` frame continues the last segment (no tool call since).
+    thinking_open: bool = False
+    #: Seconds spent inside thought segments — the time between tool calls is not thinking.
+    thinking_seconds: float = 0.0
+    #: Monotonic time of the last `thinking` frame.
+    thinking_last: float | None = None
+
+    def thinking_attrs(self) -> dict[str, Any] | None:
+        """What the assistant turn stores of the thought (`attrs.thinking`), or None: the
+        segments, how many tool calls preceded each (`after`), and how long SOL spent thinking —
+        so a reload places each segment among the turn's steps as the live turn did."""
+        if not self.thinking:
+            return None
+        # Masked again WHOLE: the frames were masked one by one, and a stored segment is served
+        # back on every reload (security review M1).
+        segments = [redact_text(segment) for segment in self.thinking]
+        return {
+            "segments": segments,
+            "after": list(self.thinking_after),
+            "ms": int(self.thinking_seconds * 1000),
+        }
+
+    def _note_thinking(self, text: str) -> None:
+        # The runtime's relay already holds a turn to the cap; this keeps the stored copy bounded
+        # whichever runner streamed the frames (security review L4).
+        text = text[: THINKING_TURN_CAP - sum(len(segment) for segment in self.thinking)]
+        if not text:
+            return
+        now = time.monotonic()
+        if self.thinking_open and self.thinking_last is not None:
+            self.thinking_seconds += now - self.thinking_last
+            self.thinking[-1] += text
+        else:
+            self.thinking.append(text)
+            self.thinking_after.append(self.tool_calls)
+        self.thinking_last = now
+        self.thinking_open = True
 
     def record(self, event: AgentEvent, max_tool_calls: int) -> bool:
         """Note `event`; False when it is the tool call past the loop guard, which is
         then NOT recorded (the turn aborts before it streams)."""
+        if event.type is AgentEventType.THINKING:
+            self._note_thinking(event.data["text"])
+            return True
         if event.type is AgentEventType.TOOL_CALL:
+            self.thinking_open = False  # the next thought is a new segment
             self.tool_calls += 1
             # Loop guard enforced HERE, independent of the runner: a runaway
             # (real, model-driven) runner is cut off by the plumbing, not by
@@ -872,7 +938,11 @@ async def _run_and_persist(
             parked_tools=frozenset(
                 parked_tools.union(p.tool for p in parked if p.confirmation_id is not None)
             ),
-            assistant_attrs={**(assistant_attrs or {}), **answered},
+            assistant_attrs={
+                **(assistant_attrs or {}),
+                **answered,
+                **_thinking_attr(transcript),
+            },
         )
         if aborted is not None:
             yield format_sse(_abort_event(aborted, abort_error))

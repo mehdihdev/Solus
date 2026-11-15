@@ -64,4 +64,5 @@ def route(
         route_type=resolved,
         rationale=f"matrix[{complexity}][{resolved}] -> {role}",
         reasoning_effort=entry.reasoning_effort,
+        show_thinking=entry.show_thinking,
     )

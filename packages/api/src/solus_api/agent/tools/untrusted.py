@@ -298,9 +298,20 @@ def redact_value(value: Any, *, allowed_paths: frozenset[str] = frozenset()) -> 
     return value
 
 
+#: The words that make `<label> = value` / `<label>: value` a secret assignment.
+#: A label pattern, not a credential (hence the S105 waiver).
+_SECRET_LABEL: Final = (
+    r"(?:token|secret|passw(?:or)?d|api[_-]?key|authorization|cookie|private[_-]?key|credential)"  # noqa: S105
+)
 _SECRET_ASSIGNMENT = re.compile(
-    r"((?:token|secret|passw(?:or)?d|api[_-]?key|authorization|cookie|private[_-]?key|credential)"
-    r"[A-Za-z0-9_-]*\s*[=:]\s*)(\S+)",
+    rf"({_SECRET_LABEL}[A-Za-z0-9_-]*\s*[=:]\s*)(\S+)",
+    re.IGNORECASE,
+)
+#: SOLUSDEV-326: text ENDING in a secret label whose value has not arrived yet (`password:`,
+#: `Authorization: Bearer`). A streamed text cut there would mask the label and the value apart —
+#: and neither half matches `_SECRET_ASSIGNMENT` — so agent/thinking.py never cuts after one.
+PENDING_SECRET_LABEL: Final = re.compile(
+    rf"{_SECRET_LABEL}[A-Za-z0-9_-]*\s*[=:]\s*(?:(?:Bearer|Basic)\s*)?$",
     re.IGNORECASE,
 )
 _AUTHORIZATION = re.compile(r"(authorization\s*[=:]\s*)(?:Bearer|Basic)\s+\S+", re.IGNORECASE)

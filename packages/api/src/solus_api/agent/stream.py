@@ -31,6 +31,11 @@ RESEARCH_QUESTION_CAP: Final = 400
 REASONING_ITEMS_CAP: Final = 12
 REASONING_TEXT_CAP: Final = 200
 REASONING_PROPOSING_CAP: Final = 400
+#: The bounds of a `thinking` frame (SOLUSDEV-326), defined ONCE: agent/thinking.py holds a turn's
+#: streamed thought to `THINKING_TURN_CAP` characters in frames of at most `THINKING_CHUNK_CAP`,
+#: the route stores no more, and the desktop validator (solStream.ts) drops a frame past them.
+THINKING_CHUNK_CAP: Final = 2_000
+THINKING_TURN_CAP: Final = 24_000
 
 
 def _masked(text: str, cap: int) -> str:
@@ -67,6 +72,9 @@ class AgentEventType(enum.StrEnum):
     #: SOLUSDEV-321 P7: what SOL weighed before it proposes a change — the `<reasoning>` block it
     #: wrote, parsed out of its text (agent/reasoning_frame.py); it precedes the round's calls.
     REASONING = "reasoning"
+    #: SOLUSDEV-326: a piece of the model's thought summary as it streams (agent/thinking.py),
+    #: masked and bounded; the desktop shows it in the reply's collapsible Thinking block.
+    THINKING = "thinking"
     MESSAGE = "message"
     ERROR = "error"
     DONE = "done"
@@ -304,6 +312,14 @@ class AgentEvent(BaseModel):
                 "proposing": _masked(proposing, REASONING_PROPOSING_CAP),
             },
         )
+
+    @classmethod
+    def thinking(cls, text: str) -> Self:
+        """A piece of SOL's thought summary (SOLUSDEV-326): model output, so masked token by token
+        and cut to `THINKING_CHUNK_CAP` after masking. agent/thinking.py holds pieces back until a
+        sentence ends, so a credential reaches `redact_text` whole. Display data only — nothing
+        on the server reads it back, and it picks no tool, mode, scope or permission."""
+        return cls(type=AgentEventType.THINKING, data={"text": _masked(text, THINKING_CHUNK_CAP)})
 
     @classmethod
     def message(
