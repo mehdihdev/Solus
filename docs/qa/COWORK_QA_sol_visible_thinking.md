@@ -27,8 +27,8 @@ not the raw internal reasoning, which no provider exposes.
 - [ ] **How much thought appears is up to the model.** A simple question may show only a sentence
       or two, or none. One run with no thought is not a failure. Keep pushing with the multi-step
       questions in §2.
-- [ ] **A reloaded turn shows its thought, but not its steps inside the block.** Steps of past
-      turns appear as the separate grey tool rows, as before.
+- [ ] **Turns saved before this change** show their thought before all the steps (they predate the
+      stored placement). New turns keep the live order after a reload.
 
 ---
 
@@ -79,9 +79,9 @@ not the raw internal reasoning, which no provider exposes.
 
 1. With a turn from 2.1 on screen, reload the app window (or switch to another conversation and
    back).
-   - [ ] Expected: that assistant reply still shows `Thought for Ns` (folded in Expert). Opening
-         it shows the thought text. The tool steps of that turn appear as the separate grey
-         tool rows above the reply.
+   - [ ] Expected: that assistant reply still shows `Thought for Ns · N steps` (folded in Expert),
+         and there are **no grey `tool → ok` rows** above it. Opening it shows the steps and the
+         thought in the same order as when it was live.
 2. Open a conversation from **before** this change.
    - [ ] Expected: old replies show no Thinking block and no error.
 
@@ -101,6 +101,24 @@ not the raw internal reasoning, which no provider exposes.
          still works.
 
 ---
+
+### 2.6 Minimize and animation
+
+1. While SOL is still working, click **Thinking…**.
+   - [ ] Expected: the block folds (chevron turns from ⌄ to ›) and SOL keeps working. Click again:
+         it opens.
+2. On a finished turn, open and close the block a few times.
+   - [ ] Expected: the panel grows and fades in, and shrinks and fades out, smoothly (about 0.2 s).
+         No jump, no flash of content. Hovering the header gives it a faint background.
+
+### 2.7 Following the conversation
+
+1. Open an older turn's block, then send a new question.
+   - [ ] Expected: the view jumps to your message and stays pinned to the bottom while SOL thinks
+         and answers.
+2. While SOL is answering, scroll up with the trackpad or mouse wheel.
+   - [ ] Expected: the view stays where you scrolled. It does not yank you back down. Scrolling
+         back to the bottom resumes following.
 
 ## 3. Edge cases and failure paths
 
@@ -151,5 +169,7 @@ not the raw internal reasoning, which no provider exposes.
 | 2.3 Reload             |      |      |       |
 | 2.4 Steps only         |      |      |       |
 | 2.5 Build + card       |      |      |       |
+| 2.6 Minimize/animation |      |      |       |
+| 2.7 Follow / scroll up |      |      |       |
 | 3 Edge cases           |      |      |       |
 | 4 Cross-feature        |      |      |       |
