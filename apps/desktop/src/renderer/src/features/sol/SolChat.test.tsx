@@ -247,9 +247,10 @@ describe('SolChat streaming render (SOL-02 obligations)', () => {
     })
     render(<SolChat projectId="p1" />)
     sendMessage('check it')
-    await waitFor(() => expect(screen.getByTestId('tool-trace')).toBeInTheDocument())
-    const trace = screen.getByTestId('tool-trace')
-    expect(within(trace).getByText('2 tool steps')).toBeInTheDocument()
+    // SOLUSDEV-326: the steps fold into the Thinking block once the answer lands; opened, each
+    // step still reads `tool → outcome` with its redacted args.
+    await openSteps('2 steps')
+    const trace = screen.getByTestId('thinking-body')
     // Arrow format matches the backend's persisted tool turns (SOLUSDEV-233).
     const getEntity = within(trace).getByText(/get_entity → ok/)
     const runChecker = within(trace).getByText(/run_checker → not_found/)
@@ -505,10 +506,17 @@ describe('SolChat artifacts and machine failures (SOLUSDEV-252 S5)', () => {
     })
     render(<SolChat projectId="p1" />)
     sendMessage('build it')
-    const trace = await screen.findByTestId('tool-trace')
+    await openSteps('1 step')
+    const trace = screen.getByTestId('thinking-body')
     expect(within(trace).getByText('machine.run_command → TOOL_ERROR')).toBeInTheDocument()
   })
 })
+
+/** SOLUSDEV-326: open the folded Thinking block (Guide already shows it open). */
+async function openSteps(label: string): Promise<void> {
+  const toggle = await screen.findByRole('button', { name: label })
+  if (toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle)
+}
 
 // SOLUSDEV-320: a search hit's snippet is the matched text — the stored path for a
 // code file — so two files that share a name are still told apart in the list.

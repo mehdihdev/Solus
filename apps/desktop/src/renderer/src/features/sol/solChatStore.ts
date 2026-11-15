@@ -43,6 +43,7 @@ import { createRunTracker, refusalStatus } from './commandRunTracker'
 import { processIdOf, rememberProcessOwner, resetProcessOwners } from './processOwners'
 import type { WakeStart } from './processWake'
 import { attachResearchSources, type ResearchSources } from './researchSources'
+import { addThought, type ThinkingInfo } from './thinking'
 import { applyContextUsed } from './contextUsed'
 import {
   MAX_TURN_CHARS,
@@ -96,6 +97,8 @@ export interface ChatItem extends ReasonedItem {
   /** SOLUSDEV-321 P1-T6: who answered (the graph, no model) and a ceiling the turn hit. */
   answerSource?: AnswerSourceInfo
   budgetReached?: BudgetReachedInfo
+  /** SOLUSDEV-326: SOL's thought summary for this reply; absent reads as none. */
+  thinking?: ThinkingInfo
   /** SOLUSDEV-252 S3: this user turn carried a screen capture. A flag only —
    *  pixels live in memory for one send and never enter an item. */
   hasScreenshot?: boolean
@@ -787,6 +790,11 @@ function handleTurnEvent(
   }
   if (event.type === 'research_sources') {
     attachResearchSources(patch, event.research)
+    return false
+  }
+  if (event.type === 'thinking') {
+    const now = Date.now()
+    patch((item) => addThought(item, event.text, now))
     return false
   }
   // Mid-stream credit exhaustion arrives as an error FRAME, not a 402.

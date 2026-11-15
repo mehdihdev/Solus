@@ -4,6 +4,7 @@
 import { ApiError } from '../../lib/api/envelope.types'
 import type { AutoRun } from '../../lib/api/solStream'
 import { toResearchSources } from './researchSources'
+import { toThinkingInfo } from './thinking'
 import type { SolTurn } from './solApi'
 import type { ChatItem } from './solChatStore'
 import {
@@ -51,10 +52,12 @@ export function turnToReasonedItem(turn: SolTurn): ChatItem {
     sources: turn.attrs.sources
   })
   const budgetReached = toBudgetReachedInfo(turn.attrs.budget_reached)
+  const thinking = toThinkingInfo(turn.attrs.thinking)
   return {
     ...item,
     ...(answerSource ? { answerSource } : {}),
-    ...(budgetReached ? { budgetReached } : {})
+    ...(budgetReached ? { budgetReached } : {}),
+    ...(thinking ? { thinking } : {})
   }
 }
 

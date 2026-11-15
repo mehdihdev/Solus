@@ -1,0 +1,40 @@
+/* SOLUSDEV-326: the reply's Thinking block — the live shimmer and the running-step pulse. */
+.sol-thinking-live {
+  background: linear-gradient(90deg, var(--mut) 0%, var(--tx) 50%, var(--mut) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: sol-thinking-shimmer 1.6s linear infinite;
+}
+
+.sol-thinking-pulse {
+  animation: sol-thinking-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes sol-thinking-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes sol-thinking-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sol-thinking-live,
+  .sol-thinking-pulse {
+    animation: none;
+    color: var(--mut);
+  }
+}

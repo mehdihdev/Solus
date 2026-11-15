@@ -5,8 +5,8 @@
 // - citations render from the message event's STRUCTURED array in a dedicated
 //   region: plain text spans, never linkified, each display-capped (~64 chars),
 //   never parsed out of prose;
-// - the tool trace shows tool name + ok/error and each step's args as TEXT — only the
-//   server-redacted copy, cut to display size at the parse boundary (solStream);
+// - the tool steps (ThinkingBlock) show tool name + ok/error and each step's args as TEXT — only
+//   the server-redacted copy, cut to display size at the parse boundary (solStream);
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
@@ -16,6 +16,7 @@ import { SolusLogo } from '../../components/ui/SolusLogo'
 import { DomainDot } from './domainDot'
 import { citationDomain, citationTarget, type CitationTarget } from './domainIds'
 import { ReasoningBlock } from './ReasoningBlock'
+import { ThinkingBlock } from './ThinkingBlock'
 import { pageAnchors } from './pageAnchors'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
@@ -25,7 +26,6 @@ import { AutoRunsView } from './AutoRunRow'
 import { ResearchPills } from './ResearchPills'
 import { AnswerSourceBadge } from './AnswerSourceBadge'
 import { BudgetNotice } from './BudgetNotice'
-import { TraceArgs } from './TraceArgs'
 import { CommandOutput } from './CommandOutput'
 import { DriveStrip } from './DriveStrip'
 import { isDriveTool } from './driveProgress'
@@ -46,13 +46,7 @@ import {
   useSolActionMode,
   useSolWindowStore
 } from './solWindowStore'
-import {
-  useSolChat,
-  type ChatArtifact,
-  type ChatItem,
-  type SolChat,
-  type TraceEntry
-} from './useSolChat'
+import { useSolChat, type ChatArtifact, type ChatItem, type SolChat } from './useSolChat'
 
 const CITATION_DISPLAY_CAP = 64
 
@@ -74,23 +68,11 @@ const MUTED: React.CSSProperties = { fontSize: 11, color: 'var(--mut)' }
  *  under a streaming reply so the body does not jump when citations land (S2). */
 const CITATIONS_RESERVE_PX = 52
 
-function TraceView({ trace }: { trace: readonly TraceEntry[] }): React.JSX.Element | null {
-  if (trace.length === 0) return null
-  return (
-    <details data-testid="tool-trace" style={{ marginTop: 6 }}>
-      <summary style={{ ...MUTED, cursor: 'pointer', userSelect: 'none' }}>
-        {trace.length} tool {trace.length === 1 ? 'step' : 'steps'}
-      </summary>
-      {trace.map((t) => (
-        <div key={t.callId} style={{ ...MUTED, fontFamily: 'var(--font-mono)', padding: '2px 0' }}>
-          {/* Same arrow format the backend persists (`tool → outcome`), so live
-              and reloaded turns read as one language (SOLUSDEV-233). */}
-          {t.tool} → {t.ok === null ? 'running…' : t.ok ? 'ok' : (t.errorCode ?? 'error')}
-          <TraceArgs args={t.args} />
-        </div>
-      ))}
-    </details>
-  )
+/** A reply with nothing to show yet: a quiet note until the first thought or step arrives, when
+ *  the Thinking block takes over (SOLUSDEV-326). */
+function WaitingNote({ item }: { item: ChatItem }): React.JSX.Element | null {
+  const waiting = item.pending && !item.thinking && item.trace.length === 0
+  return waiting ? <div style={MUTED}>thinking…</div> : null
 }
 
 /** SOLUSDEV-252 S5: what a tool produced, each with its "File this to…?" row. */
@@ -317,15 +299,12 @@ const MessageRow = memo(function MessageRow({
   const confirmations = item.confirmations
   const body = (
     <>
-      <TraceView trace={item.trace} />
+      {/* SOLUSDEV-326: the thought summary and tool steps, live, then folded. */}
+      <ThinkingBlock item={item} />
       <ArtifactsView artifacts={item.artifacts ?? []} projectId={projectId} onFile={onFile} />
       {/* SOLUSDEV-317 §10.1: Build-mode commands that ran without a card. */}
       <AutoRunsView runs={item.autoRuns} />
-      {item.content ? (
-        <SolMarkdown content={item.content} />
-      ) : item.pending ? (
-        <div style={MUTED}>thinking…</div>
-      ) : null}
+      {item.content ? <SolMarkdown content={item.content} /> : <WaitingNote item={item} />}
       <BudgetNotice budget={item.budgetReached} />
       {item.error && <div style={{ ...MUTED, color: 'var(--err)' }}>{item.error}</div>}
       <AnswerSourceBadge answer={item.answerSource} />
