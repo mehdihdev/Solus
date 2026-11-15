@@ -180,8 +180,11 @@ it('enters either robot through one shared host identity and keeps downstream bu
     />
   )
   await screen.findByRole('button', { name: 'Sensors' })
+  // The wheel only enters a node whose children are indexed; on a slow CI runner the category
+  // buttons can render before robot-two's children do, so wait for its zoom affordance first.
+  await screen.findByRole('button', { name: 'Zoom into robot-two' })
   fireEvent.wheel(screen.getByRole('button', { name: 'Select robot-two' }), { deltaY: -100 })
-  expect(screen.getAllByTestId('graph-node-host')).toHaveLength(1)
+  expect(await screen.findAllByTestId('graph-node-host')).toHaveLength(1)
   enter('host')
   enter('bus')
   expect(screen.getByTestId('graph-node-sensor')).toBeInTheDocument()
