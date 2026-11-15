@@ -17,6 +17,8 @@ import { DomainDot } from './domainDot'
 import { citationDomain, citationTarget, type CitationTarget } from './domainIds'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ThinkingBlock } from './ThinkingBlock'
+import { replyGrowth } from './thinking'
+import { bottomTop, nextFollow, type FollowState } from './scrollFollow'
 import { pageAnchors } from './pageAnchors'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
@@ -374,9 +376,6 @@ function AssistantFrame({
   )
 }
 
-/** Stick-to-bottom margin: within this many px of the bottom counts as "following". */
-const FOLLOW_SLACK_PX = 48
-
 function MessageList({
   chat,
   projectId,
@@ -393,14 +392,15 @@ function MessageList({
   onShowMe?: () => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
-  const followRef = useRef(true)
+  const followRef = useRef<FollowState>({ following: true, lastTop: 0 })
   const lastCountRef = useRef(0)
   const count = chat.items.length
   // Streamed tokens grow an item's CONTENT without changing the item count, so
-  // the follow signal must track text length, not just rows — the old
+  // the follow signal must track how much the reply grew, not just rows — the old
   // count-only dep is why replies ran off-screen mid-stream. Only the LAST
-  // row ever grows (the streaming reply), so its length is the whole signal.
-  const textSize = count ? chat.items[count - 1].content.length : 0
+  // row ever grows (the streaming reply); its text, thought and steps (SOLUSDEV-326)
+  // are the whole signal.
+  const textSize = count ? replyGrowth(chat.items[count - 1]) : 0
   useEffect(() => {
     const el = listRef.current
     if (!el) return
@@ -408,16 +408,19 @@ function MessageList({
       // A new row (the user's send, SOL's reply starting) re-engages follow
       // even if they had scrolled up to read history.
       lastCountRef.current = count
-      followRef.current = true
+      followRef.current = { ...followRef.current, following: true }
     }
-    if (followRef.current) el.scrollTop = el.scrollHeight
+    if (followRef.current.following) {
+      el.scrollTop = el.scrollHeight
+      followRef.current = { following: true, lastTop: bottomTop(el) }
+    }
   }, [count, textSize])
   const handleScroll = (): void => {
     const el = listRef.current
     if (!el) return
-    // The user's intent, read from where they left the scrollbar: near the
-    // bottom = follow the stream; scrolled up = reading, don't yank them back.
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_SLACK_PX
+    // The user's intent, read from which way they scrolled: up = reading, don't yank them
+    // back; at the bottom = follow the stream (scrollFollow.ts explains why not distance alone).
+    followRef.current = nextFollow(followRef.current, el)
   }
   return (
     <div

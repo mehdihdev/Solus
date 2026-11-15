@@ -81,3 +81,13 @@ export function thoughtSummary(thinking: ThinkingInfo | undefined, steps: number
   const thought = `Thought for ${duration(thinking.ms ?? 0)}`
   return stepText ? `${thought} · ${stepText}` : thought
 }
+
+/** How much a reply has grown — text, thought and steps (a step counts again when it finishes).
+ *  The chat follows this while a reply streams; text length alone let a long Thinking block run
+ *  off-screen (SOLUSDEV-326 live check). */
+export function replyGrowth(item: ChatItem): number {
+  const finished = item.trace.filter((step) => step.ok !== null).length
+  return (
+    item.content.length + usedChars(item.thinking?.segments ?? []) + item.trace.length + finished
+  )
+}

@@ -101,12 +101,17 @@ describe('ThinkingBlock', () => {
     )
   })
 
-  it('draws model text as text, never markup', () => {
+  it('draws the summary’s markdown through the safe renderer: bold yes, HTML and images never', () => {
     render(
       <ThinkingBlock
         item={thinkingItem({
           thinking: {
-            segments: [{ text: '<img src=x onerror=alert(1)> **bold**', afterSteps: 0 }],
+            segments: [
+              {
+                text: '**Checking the bus**\n\n<img src=x onerror=alert(1)> ![x](http://e/x.png)',
+                afterSteps: 0
+              }
+            ],
             lastAt: 0,
             ms: 1
           }
@@ -114,7 +119,9 @@ describe('ThinkingBlock', () => {
       />
     )
 
-    expect(screen.getByTestId('thinking-body')).toHaveTextContent('<img src=x onerror=alert(1)>')
+    const body = screen.getByTestId('thinking-body')
+    expect(body.querySelector('strong')).toHaveTextContent('Checking the bus')
+    expect(body.textContent).not.toContain('**')
     expect(document.querySelector('img')).toBeNull()
   })
 

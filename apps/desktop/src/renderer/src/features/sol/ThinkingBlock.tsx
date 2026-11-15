@@ -4,11 +4,14 @@
 // reasoning is part of the teaching; Expert folds it until asked (ADR-016: the mode is universal).
 //
 // The thought is model text the server masked and bounded (agent/thinking.py) and solStream bounded
-// again, so it renders as text nodes only — never markdown, never HTML, never a link. A step shows
+// again. Provider summaries are written in markdown (`**Checking the bus**`), so it renders through
+// SolMarkdown, the same renderer as the answer: React elements only — raw HTML skipped, links
+// inert, images dropped (Markdown.test.tsx). A step shows
 // the server's redacted args (TraceArgs) and the same `tool → outcome` words the backend persists.
 import { Fragment, useState } from 'react'
 import { useSettingsStore } from '../../store/settingsStore'
 import type { ChatItem, TraceEntry } from './solChatStore'
+import { SolMarkdown } from './Markdown'
 import { humanizeTool, thoughtSummary, type ThoughtSegment } from './thinking'
 import { TraceArgs } from './TraceArgs'
 import './ThinkingBlock.css'
@@ -36,7 +39,7 @@ const BODY: React.CSSProperties = {
   color: 'var(--mut)'
 }
 
-const THOUGHT: React.CSSProperties = { margin: '2px 0 6px', whiteSpace: 'pre-wrap' }
+const THOUGHT: React.CSSProperties = { margin: '2px 0 6px' }
 
 type StepState = 'running' | 'ok' | 'error'
 
@@ -71,9 +74,9 @@ function Thoughts({ segments }: { segments: readonly ThoughtSegment[] }): React.
   return (
     <>
       {segments.map((segment, i) => (
-        <p key={i} style={THOUGHT}>
-          {segment.text}
-        </p>
+        <div key={i} style={THOUGHT}>
+          <SolMarkdown content={segment.text} />
+        </div>
       ))}
     </>
   )

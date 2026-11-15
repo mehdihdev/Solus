@@ -63,8 +63,11 @@ protocol unchanged.
   folds into one line, `Thought for 12s · 3 steps` (thinking time only, not the tool runs) (`Thought for a few seconds`
   under one second; just `3 steps` when the model showed no thought; no step count when there
   were none). Guide keeps it open after the answer — the reasoning is part of the teaching;
-  Expert folds it until clicked. All plain text — model text the server masked and capped and
-  the client bounds again, never markdown, never a link. A reloaded turn shows its stored thought
+  Expert folds it until clicked. The thought is model text the server masked and capped and the
+  client bounds again; provider summaries are written in markdown (`**Checking the bus**`), so it
+  renders through the same safe renderer as the answer — React elements only, raw HTML skipped,
+  links inert, images dropped. The chat keeps following the bottom while the block grows; only
+  the person scrolling up stops that, and reaching the bottom again resumes it. A reloaded turn shows its stored thought
   folded the same way (its steps are the separate tool rows). Replaces the old `N tool steps`
   trace.
 - **SOL's reasoning above a proposal** (SOLUSDEV-321 P7). In Build, SOL writes what it weighed

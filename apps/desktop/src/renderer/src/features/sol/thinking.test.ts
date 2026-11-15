@@ -4,6 +4,7 @@ import { blankItem } from './solChatItems'
 import {
   addThought,
   humanizeTool,
+  replyGrowth,
   MAX_THINKING_CHARS,
   thoughtSummary,
   toThinkingInfo
@@ -122,5 +123,25 @@ describe('thoughtSummary', () => {
 
   it('omits the steps when there were none', () => {
     expect(thoughtSummary({ segments: [], lastAt: 0, ms: 65_000 }, 0)).toBe('Thought for 1m 5s')
+  })
+})
+
+describe('replyGrowth (what the chat follows while a reply streams)', () => {
+  it('grows with the thought and with each step, not only the text', () => {
+    const empty = item()
+    const thought = addThought(empty, 'Checking the bus.', 0)
+    const stepped = {
+      ...thought,
+      trace: [{ callId: 'c1', tool: 'graph.get_entity', ok: null, errorCode: null }]
+    }
+    const finished = {
+      ...stepped,
+      trace: [{ callId: 'c1', tool: 'graph.get_entity', ok: true, errorCode: null }]
+    }
+
+    expect(replyGrowth(thought)).toBeGreaterThan(replyGrowth(empty))
+    expect(replyGrowth(stepped)).toBeGreaterThan(replyGrowth(thought))
+    expect(replyGrowth(finished)).toBeGreaterThan(replyGrowth(stepped))
+    expect(replyGrowth({ ...finished, content: 'Answer' })).toBeGreaterThan(replyGrowth(finished))
   })
 })
