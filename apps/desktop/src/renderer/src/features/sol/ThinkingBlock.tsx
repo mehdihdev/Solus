@@ -1,6 +1,6 @@
 // SOLUSDEV-326: what SOL is doing while it works — its thought summary and each tool step, in
-// order — above the reply (docs/wireflows/sol-page.md). Open while SOL thinks; once the answer
-// starts it folds into "Thought for 12s · 3 steps". Guide keeps it open after the answer, where the
+// order — above the reply (docs/wireflows/sol-page.md). Open while the turn runs; when it ends it
+// folds into "Thought for 12s · 3 steps". Guide keeps it open after the answer, where the
 // reasoning is part of the teaching; Expert folds it until asked (ADR-016: the mode is universal).
 //
 // The thought is model text the server masked and bounded (agent/thinking.py) and solStream bounded
@@ -101,7 +101,8 @@ export function ThinkingBlock({ item }: { item: ChatItem }): React.JSX.Element |
   const guide = useSettingsStore((state) => state.solMode === 'Guide')
   const [chosen, setChosen] = useState<boolean | null>(null)
   if (!item.thinking && item.trace.length === 0) return null
-  const live = item.pending && !item.content
+  // Live for the whole turn: text SOL writes before a tool call is not the end of its work.
+  const live = item.pending
   const open = live || (chosen ?? guide)
   return (
     <div data-testid="thinking-block" style={{ margin: '2px 0 4px' }}>

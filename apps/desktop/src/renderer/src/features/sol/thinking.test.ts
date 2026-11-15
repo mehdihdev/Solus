@@ -18,7 +18,7 @@ describe('addThought', () => {
 
     expect(twice.thinking).toEqual({
       segments: [{ text: 'Check the bus.', afterSteps: 0 }],
-      startedAt: 1_000,
+      lastAt: 1_400,
       ms: 400
     })
   })
@@ -36,6 +36,19 @@ describe('addThought', () => {
       { text: 'Look it up.', afterSteps: 0 },
       { text: 'Now answer.', afterSteps: 1 }
     ])
+  })
+
+  it('counts only the time inside segments, not the tool run between them', () => {
+    let current = addThought(item(), 'One ', 0)
+    current = addThought(current, 'two.', 2_000)
+    current = {
+      ...current,
+      trace: [{ callId: 'c1', tool: 'graph.get_entity', ok: true, errorCode: null }]
+    }
+    current = addThought(current, 'Three ', 50_000)
+    current = addThought(current, 'four.', 51_500)
+
+    expect(current.thinking?.ms).toBe(3_500)
   })
 
   it('stops growing at the turn cap', () => {
@@ -60,7 +73,7 @@ describe('toThinkingInfo (a reloaded turn’s attrs.thinking)', () => {
         { text: 'One.', afterSteps: 0 },
         { text: 'Two.', afterSteps: 0 }
       ],
-      startedAt: null,
+      lastAt: null,
       ms: 2_500
     })
   })
@@ -92,13 +105,13 @@ describe('humanizeTool', () => {
 
 describe('thoughtSummary', () => {
   it('names the time and the steps', () => {
-    expect(thoughtSummary({ segments: [], startedAt: 0, ms: 12_400 }, 3)).toBe(
+    expect(thoughtSummary({ segments: [], lastAt: 0, ms: 12_400 }, 3)).toBe(
       'Thought for 12s · 3 steps'
     )
   })
 
   it('says a few seconds under one second, and one step in the singular', () => {
-    expect(thoughtSummary({ segments: [], startedAt: 0, ms: 300 }, 1)).toBe(
+    expect(thoughtSummary({ segments: [], lastAt: 0, ms: 300 }, 1)).toBe(
       'Thought for a few seconds · 1 step'
     )
   })
@@ -108,6 +121,6 @@ describe('thoughtSummary', () => {
   })
 
   it('omits the steps when there were none', () => {
-    expect(thoughtSummary({ segments: [], startedAt: 0, ms: 65_000 }, 0)).toBe('Thought for 1m 5s')
+    expect(thoughtSummary({ segments: [], lastAt: 0, ms: 65_000 }, 0)).toBe('Thought for 1m 5s')
   })
 })

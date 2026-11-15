@@ -18,9 +18,9 @@ export interface ThoughtSegment {
 
 export interface ThinkingInfo {
   segments: readonly ThoughtSegment[]
-  /** Epoch ms of the first live thought; null for a reloaded turn. */
-  startedAt: number | null
-  /** How long SOL spent thinking, first thought to last. */
+  /** Epoch ms of the latest live thought; null for a reloaded turn. */
+  lastAt: number | null
+  /** How long SOL spent thinking: time inside segments only, not the tool runs between them. */
   ms: number | null
 }
 
@@ -30,18 +30,18 @@ const usedChars = (segments: readonly ThoughtSegment[]): number =>
 /** `item` with one more piece of live thought, at time `now`. A piece continues the last segment
  *  until a tool step starts; then it opens a new one, placed after that step. */
 export function addThought(item: ChatItem, text: string, now: number): ChatItem {
-  const prior = item.thinking ?? { segments: [], startedAt: now, ms: 0 }
+  const prior = item.thinking ?? { segments: [], lastAt: null, ms: 0 }
   const room = MAX_THINKING_CHARS - usedChars(prior.segments)
   const piece = text.slice(0, Math.max(0, room))
   if (!piece) return item
   const steps = item.trace.length
   const last = prior.segments[prior.segments.length - 1]
-  const segments =
-    last && last.afterSteps === steps
-      ? [...prior.segments.slice(0, -1), { ...last, text: last.text + piece }]
-      : [...prior.segments, { text: piece, afterSteps: steps }]
-  const startedAt = prior.startedAt ?? now
-  return { ...item, thinking: { segments, startedAt, ms: now - startedAt } }
+  const continues = last !== undefined && last.afterSteps === steps
+  const segments = continues
+    ? [...prior.segments.slice(0, -1), { ...last, text: last.text + piece }]
+    : [...prior.segments, { text: piece, afterSteps: steps }]
+  const spent = continues && prior.lastAt !== null ? now - prior.lastAt : 0
+  return { ...item, thinking: { segments, lastAt: now, ms: (prior.ms ?? 0) + spent } }
 }
 
 /** A reloaded turn's `attrs.thinking` (`{segments, ms}`), or null when anything is unproven. */
@@ -51,7 +51,7 @@ export function toThinkingInfo(value: unknown): ThinkingInfo | null {
   const texts = storedSegments(segments)
   const isDuration = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
   if (texts === null || !isDuration) return null
-  return { segments: texts.map((text) => ({ text, afterSteps: 0 })), startedAt: null, ms }
+  return { segments: texts.map((text) => ({ text, afterSteps: 0 })), lastAt: null, ms }
 }
 
 /** Stored segments as strings, or null when the list is empty, too long or not all text. */

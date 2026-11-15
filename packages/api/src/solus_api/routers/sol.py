@@ -73,11 +73,17 @@ from solus_api.agent.sol_anchors import (
     require_turn_targets,
     visible_entity_ids,
 )
-from solus_api.agent.stream import AgentEvent, AgentEventType, format_sse, persisted_answer
+from solus_api.agent.stream import (
+    THINKING_TURN_CAP,
+    AgentEvent,
+    AgentEventType,
+    format_sse,
+    persisted_answer,
+)
 from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
-from solus_api.agent.tools.untrusted import call_display_paths, redact_value
+from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
 from solus_api.agent.turn_limits import turn_limits
 from solus_api.bridge.registry import BridgeSessionRegistry
 from solus_api.core.errors import APIError
@@ -779,28 +785,37 @@ class _TurnTranscript:
     #: SOLUSDEV-326: the turn's thought summary, one segment per stretch between tool calls —
     #: already masked and bounded by the runtime (agent/thinking.py).
     thinking: list[str] = field(default_factory=list)
-    #: Whether the next `thinking` frame continues the last segment (no call or text since).
+    #: Whether the next `thinking` frame continues the last segment (no tool call since).
     thinking_open: bool = False
-    #: Monotonic seconds of the first `thinking` frame and of the last one.
-    thinking_started: float | None = None
-    thinking_ended: float | None = None
+    #: Seconds spent inside thought segments — the time between tool calls is not thinking.
+    thinking_seconds: float = 0.0
+    #: Monotonic time of the last `thinking` frame.
+    thinking_last: float | None = None
 
     def thinking_attrs(self) -> dict[str, Any] | None:
         """What the assistant turn stores of the thought (`attrs.thinking`), or None: the
-        segments and how long SOL spent thinking, so a reload reads like the live turn."""
-        if not self.thinking or self.thinking_started is None or self.thinking_ended is None:
+        segments and how long SOL spent thinking. A reload shows the segments together; the
+        turn's steps are its separate tool rows."""
+        if not self.thinking:
             return None
-        elapsed_ms = int((self.thinking_ended - self.thinking_started) * 1000)
-        return {"segments": list(self.thinking), "ms": elapsed_ms}
+        # Masked again WHOLE: the frames were masked one by one, and a stored segment is served
+        # back on every reload (security review M1).
+        segments = [redact_text(segment) for segment in self.thinking]
+        return {"segments": segments, "ms": int(self.thinking_seconds * 1000)}
 
     def _note_thinking(self, text: str) -> None:
+        # The runtime's relay already holds a turn to the cap; this keeps the stored copy bounded
+        # whichever runner streamed the frames (security review L4).
+        text = text[: THINKING_TURN_CAP - sum(len(segment) for segment in self.thinking)]
+        if not text:
+            return
         now = time.monotonic()
-        self.thinking_started = self.thinking_started or now
-        self.thinking_ended = now
-        if self.thinking_open:
+        if self.thinking_open and self.thinking_last is not None:
+            self.thinking_seconds += now - self.thinking_last
             self.thinking[-1] += text
         else:
             self.thinking.append(text)
+        self.thinking_last = now
         self.thinking_open = True
 
     def record(self, event: AgentEvent, max_tool_calls: int) -> bool:

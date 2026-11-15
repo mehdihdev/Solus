@@ -22,7 +22,7 @@ function thinkingItem(over: Partial<ChatItem> = {}): ChatItem {
         { text: 'I should look at the IMU first.', afterSteps: 0 },
         { text: 'The address clashes with the baro.', afterSteps: 1 }
       ],
-      startedAt: 0,
+      lastAt: 0,
       ms: 4_200
     },
     trace: [step('c1', 'graph.get_entity', true)],
@@ -67,8 +67,21 @@ describe('ThinkingBlock', () => {
     expect(screen.getByText(/TIMEOUT/)).toBeInTheDocument()
   })
 
-  it('folds into a summary once the answer starts, shut in Expert mode', () => {
-    render(<ThinkingBlock item={thinkingItem({ content: 'The IMU and baro share 0x76.' })} />)
+  it('stays live while the turn runs, even after SOL writes text before a tool', () => {
+    render(<ThinkingBlock item={thinkingItem({ content: 'Let me check the netlist…' })} />)
+
+    expect(screen.getByRole('button', { name: /thinking/i })).toHaveAttribute(
+      'aria-expanded',
+      'true'
+    )
+  })
+
+  it('folds into a summary once the turn ends, shut in Expert mode', () => {
+    render(
+      <ThinkingBlock
+        item={thinkingItem({ content: 'The IMU and baro share 0x76.', pending: false })}
+      />
+    )
 
     const toggle = screen.getByRole('button', { name: 'Thought for 4s · 1 step' })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -94,7 +107,7 @@ describe('ThinkingBlock', () => {
         item={thinkingItem({
           thinking: {
             segments: [{ text: '<img src=x onerror=alert(1)> **bold**', afterSteps: 0 }],
-            startedAt: 0,
+            lastAt: 0,
             ms: 1
           }
         })}

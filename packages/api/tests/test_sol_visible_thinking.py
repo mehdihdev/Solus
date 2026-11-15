@@ -18,6 +18,7 @@ import pytest
 from solus_api.agent import runtime
 from solus_api.agent.stream import (
     THINKING_CHUNK_CAP,
+    THINKING_TURN_CAP,
     AgentEvent,
     AgentEventType,
 )
@@ -482,6 +483,48 @@ def test_transcript_keeps_thinking_segments_split_by_tool_calls() -> None:
     assert attrs is not None
     assert attrs["segments"] == ["First thought.", "Second thought."]
     assert isinstance(attrs["ms"], int) and attrs["ms"] >= 0
+
+
+def test_transcript_duration_leaves_out_the_time_between_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter([0.0, 2.0, 50.0, 51.5])
+    monkeypatch.setattr("solus_api.routers.sol.time.monotonic", lambda: next(clock))
+    transcript = _TurnTranscript()
+    for event in [
+        AgentEvent.thinking("One "),  # t=0
+        AgentEvent.thinking("two."),  # t=2   → 2s
+        _tool_call_frame("c1"),  # a 48-second tool run is not thinking
+        AgentEvent.thinking("Three "),  # t=50
+        AgentEvent.thinking("four."),  # t=51.5 → 1.5s
+    ]:
+        transcript.record(event, max_tool_calls=10)
+
+    attrs = transcript.thinking_attrs()
+
+    assert attrs is not None and attrs["ms"] == 3_500
+
+
+def test_persisted_thinking_is_masked_whole() -> None:
+    transcript = _TurnTranscript()
+    for event in [AgentEvent.thinking("The db password: "), AgentEvent.thinking("hunter2 here.")]:
+        transcript.record(event, max_tool_calls=10)
+
+    attrs = transcript.thinking_attrs()
+
+    assert attrs is not None
+    assert "hunter2" not in attrs["segments"][0]
+
+
+def test_transcript_caps_thinking_at_the_turn_cap() -> None:
+    transcript = _TurnTranscript()
+    for _ in range(40):
+        transcript.record(AgentEvent.thinking("x" * 1_000), max_tool_calls=10)
+
+    attrs = transcript.thinking_attrs()
+
+    assert attrs is not None
+    assert sum(len(s) for s in attrs["segments"]) <= THINKING_TURN_CAP
 
 
 def test_transcript_without_thinking_stores_nothing() -> None:

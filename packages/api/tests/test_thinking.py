@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import pytest
 from solus_api.agent.stream import THINKING_CHUNK_CAP, THINKING_TURN_CAP, AgentEvent
 from solus_api.agent.thinking import ThinkingRelay
 
@@ -76,3 +77,44 @@ def test_spent_relay_ignores_more_input() -> None:
 
     assert relay.feed("More thinking here, plenty of it. " * 5) == []
     assert relay.flush() == []
+
+
+# --- security review M1 / L1: a secret's label and value are never split ------------------------
+
+
+def _streamed(*deltas: str) -> str:
+    relay = ThinkingRelay()
+    out: list[AgentEvent] = []
+    for delta in deltas:
+        out += relay.feed(delta)
+    out += relay.flush()
+    return _joined_text(out)
+
+
+_PAD = "I am reading the deployment config to see how the service connects. " * 2
+
+
+@pytest.mark.parametrize(
+    "deltas",
+    [
+        (_PAD + "The db password:\n", "hunter2 is weak. "),
+        (_PAD + "It sets api_key = ", "hunter2", " in the env. "),
+        ("x " * 330 + "password: ", "hunter2", " and more. "),
+        (_PAD + "Authorization: Bearer\n", "abc123lowentropy works. "),
+    ],
+)
+def test_relay_never_splits_assignment_label_from_value(deltas: tuple[str, ...]) -> None:
+    streamed = _streamed(*deltas)
+
+    assert "hunter2" not in streamed
+    assert "abc123lowentropy" not in streamed
+    assert "[REDACTED]" in streamed
+
+
+def test_relay_long_unbroken_token_never_leaks_a_fragment() -> None:
+    token = "".join(chr(ord("a") + (i * 7) % 26) + str(i % 10) for i in range(1_200))
+    deltas = [token[i : i + 10] for i in range(0, len(token), 10)]
+
+    streamed = _streamed("The blob is ", *deltas, " end. ")
+
+    assert not any(token[i : i + 8] in streamed for i in range(0, len(token) - 8, 8))

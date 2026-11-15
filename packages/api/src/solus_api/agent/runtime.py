@@ -1466,6 +1466,11 @@ def _terminal_reply(
     return None
 
 
+#: Frames that do not count as the answer reaching the person: a round-1 refusal after only these
+#: is still re-asked on GENERAL. A thought summary is the model working, not its reply (326).
+_NOT_THE_ANSWER: Final = frozenset({AgentEventType.BUDGET_REACHED, AgentEventType.THINKING})
+
+
 async def _close_unfinished(stream: gateway.CompletionStream) -> None:
     """Close a model stream the round did not read to its end (the transport broke out)."""
     if stream.completion is None:
@@ -1530,12 +1535,13 @@ async def _routed_round(
             )
             try:
                 async for event in _round_events(stream, hit, ctx, relay):
-                    streamed |= event.type is not AgentEventType.BUDGET_REACHED
+                    streamed |= event.type not in _NOT_THE_ANSWER
                     yield event
             except ProviderRefusalError:
                 general = stream.model.route_type is RouteType.GENERAL
                 if not first or state.rerouted or streamed or general:
                     raise
+                relay.discard()  # SOLUSDEV-326: the refused round's unfinished thought
             else:
                 state.completion = stream.completion
                 return
