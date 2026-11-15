@@ -601,7 +601,10 @@ function scrollReadingPositionTests(
       await waitFor(() => expect(emit).not.toBeNull())
       // scrollTop reads 0 from the stub, so the list believes the user is
       // 1000-0-200 = 800px above the bottom — far beyond the follow slack.
-      const list = screen.getByText('thinking…').parentElement?.parentElement as HTMLElement
+      const list = screen.getByText('Thinking…').parentElement?.parentElement as HTMLElement
+      // The person's own input says "reading": a wheel up (SOLUSDEV-326 — a bare scroll event can
+      // be the browser re-measuring rows, so it no longer stops following by itself).
+      fireEvent.wheel(list, { deltaY: -120 })
       fireEvent.scroll(list)
       const pinned = pins.length
       await act(async () => {

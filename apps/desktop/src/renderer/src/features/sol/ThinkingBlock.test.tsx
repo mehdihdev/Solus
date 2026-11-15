@@ -125,6 +125,27 @@ describe('ThinkingBlock', () => {
     expect(document.querySelector('img')).toBeNull()
   })
 
+  it('can be minimized while SOL is still working', () => {
+    render(<ThinkingBlock item={thinkingItem()} />)
+    const toggle = screen.getByRole('button', { name: /thinking/i })
+
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps the panel mounted but hidden after closing, so the close can animate', () => {
+    render(<ThinkingBlock item={thinkingItem({ content: 'Done.', pending: false })} />)
+    const toggle = screen.getByRole('button', { name: /Thought for/ })
+
+    fireEvent.click(toggle)
+    fireEvent.click(toggle)
+
+    const panel = screen.getByTestId('thinking-panel')
+    expect(panel).toHaveAttribute('aria-hidden', 'true')
+    expect(panel).toHaveAttribute('inert')
+  })
+
   it('folds a steps-only turn into its step count', () => {
     render(
       <ThinkingBlock

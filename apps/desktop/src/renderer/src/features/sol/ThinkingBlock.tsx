@@ -1,45 +1,21 @@
 // SOLUSDEV-326: what SOL is doing while it works — its thought summary and each tool step, in
-// order — above the reply (docs/wireflows/sol-page.md). Open while the turn runs; when it ends it
-// folds into "Thought for 12s · 3 steps". Guide keeps it open after the answer, where the
-// reasoning is part of the teaching; Expert folds it until asked (ADR-016: the mode is universal).
+// order — above the reply (docs/wireflows/sol-page.md). Open while the turn runs (the person can
+// fold it any time); when the turn ends it folds into "Thought for 12s · 3 steps". Guide keeps it
+// open after the answer, where the reasoning is part of the teaching; Expert folds it until asked
+// (ADR-016: the mode is universal). Opening and closing animate (ThinkingBlock.css).
 //
 // The thought is model text the server masked and bounded (agent/thinking.py) and solStream bounded
 // again. Provider summaries are written in markdown (`**Checking the bus**`), so it renders through
 // SolMarkdown, the same renderer as the answer: React elements only — raw HTML skipped, links
 // inert, images dropped (Markdown.test.tsx). A step shows
 // the server's redacted args (TraceArgs) and the same `tool → outcome` words the backend persists.
-import { Fragment, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useSettingsStore } from '../../store/settingsStore'
 import type { ChatItem, TraceEntry } from './solChatStore'
 import { SolMarkdown } from './Markdown'
 import { humanizeTool, thoughtSummary, type ThoughtSegment } from './thinking'
 import { TraceArgs } from './TraceArgs'
 import './ThinkingBlock.css'
-
-const MUTED: React.CSSProperties = { fontSize: 11, color: 'var(--mut)' }
-
-const TOGGLE: React.CSSProperties = {
-  ...MUTED,
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  padding: 0,
-  border: 'none',
-  background: 'none',
-  cursor: 'pointer',
-  userSelect: 'none'
-}
-
-const BODY: React.CSSProperties = {
-  margin: '4px 0 6px',
-  padding: '2px 0 2px 10px',
-  borderLeft: '2px solid var(--bd)',
-  fontSize: 12,
-  lineHeight: 1.5,
-  color: 'var(--mut)'
-}
-
-const THOUGHT: React.CSSProperties = { margin: '2px 0 6px' }
 
 type StepState = 'running' | 'ok' | 'error'
 
@@ -53,16 +29,12 @@ function Step({ step }: { step: TraceEntry }): React.JSX.Element {
   const outcome =
     state === 'running' ? 'running…' : state === 'ok' ? 'ok' : (step.errorCode ?? 'error')
   return (
-    <div data-step={state} style={{ padding: '2px 0' }}>
-      <span
-        aria-hidden
-        className={state === 'running' ? 'sol-thinking-pulse' : undefined}
-        style={{ color: state === 'error' ? 'var(--err)' : 'var(--acc)', marginRight: 6 }}
-      >
+    <div data-step={state} className="sol-thinking-step sol-thinking-entry">
+      <span aria-hidden className="sol-thinking-mark">
         {STEP_MARK[state]}
       </span>
-      <span style={{ color: 'var(--tx)' }}>{humanizeTool(step.tool)}</span>
-      <div style={{ ...MUTED, fontFamily: 'var(--font-mono)', paddingLeft: 16 }}>
+      <span className="sol-thinking-name">{humanizeTool(step.tool)}</span>
+      <div className="sol-thinking-detail">
         {step.tool} → {outcome}
         <TraceArgs args={step.args} />
       </div>
@@ -74,7 +46,7 @@ function Thoughts({ segments }: { segments: readonly ThoughtSegment[] }): React.
   return (
     <>
       {segments.map((segment, i) => (
-        <div key={i} style={THOUGHT}>
+        <div key={i} className="sol-thinking-thought sol-thinking-entry">
           <SolMarkdown content={segment.text} />
         </div>
       ))}
@@ -88,7 +60,7 @@ function Body({ item }: { item: ChatItem }): React.JSX.Element {
   const at = (steps: number): ThoughtSegment[] => segments.filter((s) => s.afterSteps === steps)
   const trailing = segments.filter((s) => s.afterSteps > item.trace.length)
   return (
-    <div data-testid="thinking-body" style={BODY}>
+    <div data-testid="thinking-body" className="sol-thinking-body">
       {item.trace.map((step, i) => (
         <Fragment key={step.callId}>
           <Thoughts segments={at(i)} />
@@ -100,34 +72,72 @@ function Body({ item }: { item: ChatItem }): React.JSX.Element {
   )
 }
 
+/** Whether the panel is mounted and whether it shows. It mounts on first open and stays mounted,
+ *  and `shown` follows `open` one frame later, so both the open and the close transition run. A
+ *  block that starts open (a live turn) shows at once, with no entry animation. */
+function usePanel(open: boolean): { mounted: boolean; shown: boolean } {
+  const [mounted, setMounted] = useState(open)
+  const [shown, setShown] = useState(open)
+  useEffect(() => {
+    if (open) setMounted(true)
+    const frame = requestAnimationFrame(() => setShown(open))
+    return () => cancelAnimationFrame(frame)
+  }, [open])
+  return { mounted: mounted || open, shown }
+}
+
 export function ThinkingBlock({ item }: { item: ChatItem }): React.JSX.Element | null {
   const guide = useSettingsStore((state) => state.solMode === 'Guide')
   const [chosen, setChosen] = useState<boolean | null>(null)
-  if (!item.thinking && item.trace.length === 0) return null
   // Live for the whole turn: text SOL writes before a tool call is not the end of its work.
   const live = item.pending
-  const open = live || (chosen ?? guide)
+  const open = chosen ?? (live || guide)
+  const panel = usePanel(open)
+  if (!item.thinking && item.trace.length === 0) return null
   return (
-    <div data-testid="thinking-block" style={{ margin: '2px 0 4px' }}>
+    <div data-testid="thinking-block" className="sol-thinking">
       <button
         type="button"
+        className="sol-thinking-toggle"
         aria-expanded={open}
         onClick={() => setChosen(!open)}
-        disabled={live}
-        style={TOGGLE}
       >
         {live ? (
           <span className="sol-thinking-live">Thinking…</span>
         ) : (
           thoughtSummary(item.thinking, item.trace.length)
         )}
-        {!live && (
-          <span aria-hidden style={{ fontSize: 9 }}>
-            {open ? '▾' : '▸'}
-          </span>
-        )}
+        <svg
+          aria-hidden
+          className="sol-thinking-chevron"
+          data-open={open}
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+        >
+          <path
+            d="M2.5 1.5 5.5 4 2.5 6.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </button>
-      {open && <Body item={item} />}
+      {panel.mounted && (
+        <div
+          data-testid="thinking-panel"
+          className="sol-thinking-panel"
+          data-open={panel.shown && open}
+          aria-hidden={!open}
+          inert={!open}
+        >
+          <div className="sol-thinking-clip">
+            <Body item={item} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

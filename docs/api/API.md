@@ -380,8 +380,9 @@ turn. Nothing on the server reads it back — it picks
 no tool, mode, scope or permission. It streams only when the routed catalog entry sets
 `show_thinking` (models.yaml: every SOL chat model except the trivial Claude route, and only where
 the model already thinks, so it adds no thinking tokens); other gateway callers never ask for it.
-The stored assistant turn carries `attrs.thinking = {segments, ms}` — one segment per stretch
-between tool calls, each masked again whole, and the milliseconds spent inside segments (the tool
+The stored assistant turn carries `attrs.thinking = {segments, after, ms}` — one segment per
+stretch between tool calls, `after[i]` the number of the turn's tool calls before segment `i` (so a
+reload places it among the steps), each masked again whole, and the milliseconds spent inside segments (the tool
 runs between them are not counted) — absent when the turn showed none, so a reload shows the same
 block. A thought summary is not the answer: a round-1 refusal after only thinking is still re-asked
 on the GENERAL cell. The consent-gated `sol.turn.completed` event adds

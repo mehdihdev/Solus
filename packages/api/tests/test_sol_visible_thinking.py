@@ -482,6 +482,8 @@ def test_transcript_keeps_thinking_segments_split_by_tool_calls() -> None:
 
     assert attrs is not None
     assert attrs["segments"] == ["First thought.", "Second thought."]
+    # Each segment's place among the steps, so a reload interleaves like the live turn.
+    assert attrs["after"] == [0, 1]
     assert isinstance(attrs["ms"], int) and attrs["ms"] >= 0
 
 

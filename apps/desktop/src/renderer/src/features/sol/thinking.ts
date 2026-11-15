@@ -44,14 +44,27 @@ export function addThought(item: ChatItem, text: string, now: number): ChatItem 
   return { ...item, thinking: { segments, lastAt: now, ms: (prior.ms ?? 0) + spent } }
 }
 
-/** A reloaded turn's `attrs.thinking` (`{segments, ms}`), or null when anything is unproven. */
+/** A reloaded turn's `attrs.thinking` (`{segments, after, ms}`), or null when anything is
+ *  unproven. An unproven `after` (each segment's place among the steps) only loses the placement:
+ *  the segments then sit before the steps. */
 export function toThinkingInfo(value: unknown): ThinkingInfo | null {
   if (typeof value !== 'object' || value === null) return null
-  const { segments, ms } = value as Record<string, unknown>
+  const { segments, after, ms } = value as Record<string, unknown>
   const texts = storedSegments(segments)
   const isDuration = typeof ms === 'number' && Number.isFinite(ms) && ms >= 0
   if (texts === null || !isDuration) return null
-  return { segments: texts.map((text) => ({ text, afterSteps: 0 })), lastAt: null, ms }
+  const places = storedPlaces(after, texts.length)
+  return {
+    segments: texts.map((text, i) => ({ text, afterSteps: places?.[i] ?? 0 })),
+    lastAt: null,
+    ms
+  }
+}
+
+/** Stored step counts, one per segment, or null when the list is not exactly that. */
+function storedPlaces(value: unknown, count: number): number[] | null {
+  const isPlace = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0
+  return Array.isArray(value) && value.length === count && value.every(isPlace) ? value : null
 }
 
 /** Stored segments as strings, or null when the list is empty, too long or not all text. */

@@ -44,6 +44,7 @@ import { processIdOf, rememberProcessOwner, resetProcessOwners } from './process
 import type { WakeStart } from './processWake'
 import { attachResearchSources, type ResearchSources } from './researchSources'
 import { addThought, type ThinkingInfo } from './thinking'
+import { foldToolTurns } from './historyFold'
 import { applyContextUsed } from './contextUsed'
 import {
   MAX_TURN_CHARS,
@@ -52,7 +53,6 @@ import {
   applyReasoningFrame,
   blankItem,
   turnFailureText,
-  turnToReasonedItem,
   type Patch
 } from './solChatItems'
 
@@ -280,7 +280,8 @@ export async function syncSession(projectId: string): Promise<void> {
     ])
     // Still the active conversation? A switch mid-fetch discards this load.
     if (selectConversationId(useSolSessionStore.getState(), projectId) !== active) return
-    const loaded = [...turns].reverse().map(turnToReasonedItem)
+    // SOLUSDEV-326: each reply's stored tool rows fold into its steps, as the live turn showed.
+    const loaded = foldToolTurns([...turns].reverse())
     patchSession(projectId, (s) => ({
       ...s,
       // Merge, don't replace: a send may have appended local items while

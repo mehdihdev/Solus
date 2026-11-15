@@ -55,21 +55,28 @@ protocol unchanged.
   and the SOL window's chips stay inert. Messages enter with a short fade-rise.
 - **SOL's thinking** (SOLUSDEV-326). While SOL works, a **Thinking…** block sits at the top of
   the reply, open, label shimmering: SOL's thought summary as it streams, and each tool step as
-  it starts — a mark (pulsing dot while running, ✓ done, ✕ failed), the step's name in words
-  (`kicad.read_netlist` → `Read netlist`) and under it the persisted `tool → outcome` line with
-  the step's redacted args. A thought stretch sits after the steps that preceded it. Until the
-  first thought or step arrives the reply shows the quiet `thinking…` note. The block stays live
-  for the whole turn (text SOL writes before a tool call does not end it); when the turn ends it
-  folds into one line, `Thought for 12s · 3 steps` (thinking time only, not the tool runs) (`Thought for a few seconds`
-  under one second; just `3 steps` when the model showed no thought; no step count when there
-  were none). Guide keeps it open after the answer — the reasoning is part of the teaching;
-  Expert folds it until clicked. The thought is model text the server masked and capped and the
-  client bounds again; provider summaries are written in markdown (`**Checking the bus**`), so it
-  renders through the same safe renderer as the answer — React elements only, raw HTML skipped,
-  links inert, images dropped. The chat keeps following the bottom while the block grows; only
-  the person scrolling up stops that, and reaching the bottom again resumes it. A reloaded turn shows its stored thought
-  folded the same way (its steps are the separate tool rows). Replaces the old `N tool steps`
-  trace.
+  it starts — a mark (pulsing accent dot while running, ✓ done, ✕ failed), the step's name in
+  words (`kicad.read_netlist` → `Read netlist`) and under it the persisted `tool → outcome` line
+  with the step's redacted args. A thought stretch sits after the steps that preceded it. Until the
+  first thought or step arrives the reply shows the same shimmering **Thinking…** label. The block
+  stays live for the whole turn (text SOL writes before a tool call does not end it); when the turn
+  ends it folds into one line, `Thought for 12s · 3 steps` (thinking time only, not the tool runs;
+  `Thought for a few seconds` under one second; just `3 steps` when the model showed no thought; no
+  step count when there were none). The header is a toggle with a chevron (› folded, rotating to ⌄
+  open) and can be clicked any time, also while SOL works. Opening and closing animate — the panel
+  grows and fades (about 200 ms), new thoughts and steps settle in as they arrive — and all motion
+  stops under the OS reduced-motion setting. Guide keeps it open after the answer — the reasoning
+  is part of the teaching; Expert folds it until clicked. The thought is model text the server
+  masked and capped and the client bounds again; provider summaries are written in markdown
+  (`**Checking the bus**`), so it renders through the same safe renderer as the answer — React
+  elements only, raw HTML skipped, links inert, images dropped. A reloaded turn looks like the live
+  one: the tool rows stored before a reply fold into that reply's steps (a row whose stored shape
+  does not validate, or that no reply follows, stays a plain row), and each thought stretch keeps
+  its place among them. The chat keeps following the bottom while a reply streams — including while
+  rows above re-measure — and only the person's own input stops that (a wheel or trackpad scroll up,
+  PageUp / ↑ / Home, or dragging the scrollbar away from the bottom); reaching the bottom again, or
+  sending a message, resumes it. Replaces the old `N tool steps` trace and the column of grey tool
+  rows on reload.
 - **SOL's reasoning above a proposal** (SOLUSDEV-321 P7). In Build, SOL writes what it weighed
   before proposing a change; the server takes it out of the reply — raw JSON never reaches the
   chat — and streams it as one `reasoning` frame. A collapsible block, `SOL's reasoning`, sits

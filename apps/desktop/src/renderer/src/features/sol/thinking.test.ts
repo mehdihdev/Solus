@@ -79,6 +79,25 @@ describe('toThinkingInfo (a reloaded turn’s attrs.thinking)', () => {
     })
   })
 
+  it('places each stored segment after the steps that preceded it', () => {
+    expect(toThinkingInfo({ segments: ['One.', 'Two.'], after: [0, 3], ms: 10 })?.segments).toEqual(
+      [
+        { text: 'One.', afterSteps: 0 },
+        { text: 'Two.', afterSteps: 3 }
+      ]
+    )
+  })
+
+  it('ignores a placement list it cannot prove, and keeps the thought', () => {
+    for (const after of [[0], ['x', 1], [-1, 0], [0.5, 1]]) {
+      expect(
+        toThinkingInfo({ segments: ['One.', 'Two.'], after, ms: 10 })?.segments.map(
+          (s) => s.afterSteps
+        )
+      ).toEqual([0, 0])
+    }
+  })
+
   it.each([
     ['not an object', 'nope'],
     ['segments missing', { ms: 1 }],

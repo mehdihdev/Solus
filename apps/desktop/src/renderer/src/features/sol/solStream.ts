@@ -186,7 +186,7 @@ const argText = (value: unknown): string =>
 /** The args of a `tool_call`, as bounded text, or undefined when there is nothing to show. The
  *  server redacted them (agent/stream.py); this bounds them so a model-proposed call with a
  *  thousand keys or a megabyte value costs the transcript a line, not a page. */
-function toToolArgs(value: unknown): ToolArgs | undefined {
+export function toToolArgs(value: unknown): ToolArgs | undefined {
   const d = record(value)
   if (d === null) return undefined
   const entries = Object.entries(d)

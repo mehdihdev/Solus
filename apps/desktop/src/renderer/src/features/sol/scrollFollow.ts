@@ -1,14 +1,15 @@
-// Whether the SOL chat keeps following a streaming reply after a scroll event — read from the
-// person's DIRECTION, not from the distance to the bottom alone. Settled rows use
-// `content-visibility: auto` (main.css .sol-msg-settled) and render at an estimated height until
-// they come into view; when they do, the list grows without anyone scrolling, and a distance-only
-// rule took that for "scrolled up" and stopped following (seen live with a tall Thinking block,
-// SOLUSDEV-326). Only an actual scroll up stops it; reaching the bottom resumes it.
+// Whether the SOL chat keeps following a streaming reply. The person's INPUT says when to stop: a
+// wheel or trackpad scroll up, PageUp/ArrowUp/Home, or dragging the scrollbar away from the bottom.
+// Scroll events alone cannot tell: settled rows use `content-visibility: auto` (main.css
+// .sol-msg-settled), so when rows above re-measure the browser changes scrollHeight and clamps
+// scrollTop by itself — seen live (SOLUSDEV-326) dropping from 3112 to 417 with nobody scrolling,
+// which a distance or direction rule took for "scrolled up". A scroll event only ever RESUMES
+// following, when the list reaches the bottom.
 
 /** Stick-to-bottom margin: within this many px of the bottom counts as "at the bottom". */
 export const FOLLOW_SLACK_PX = 48
-/** A scroll up by more than this many px is the person's own. */
-const UP_SLACK_PX = 2
+
+const UPWARD_KEYS: ReadonlySet<string> = new Set(['PageUp', 'ArrowUp', 'Home'])
 
 export interface ScrollGeometry {
   scrollTop: number
@@ -16,18 +17,16 @@ export interface ScrollGeometry {
   clientHeight: number
 }
 
-export interface FollowState {
-  following: boolean
-  /** Where the list was after the last scroll or pin. */
-  lastTop: number
-}
+export const isUpwardKey = (key: string): boolean => UPWARD_KEYS.has(key)
 
-/** The scrollTop of a list pinned to its bottom. */
-export const bottomTop = (g: ScrollGeometry): number => Math.max(0, g.scrollHeight - g.clientHeight)
-
-export function nextFollow(prior: FollowState, g: ScrollGeometry): FollowState {
+/** Following after a scroll event: at the bottom resumes it; dragging the scrollbar away from the
+ *  bottom stops it; anything else (the browser moving the list) leaves it as it was. */
+export function nextFollow(
+  following: boolean,
+  g: ScrollGeometry,
+  input: { dragging: boolean }
+): boolean {
   const atBottom = g.scrollHeight - g.scrollTop - g.clientHeight < FOLLOW_SLACK_PX
-  const scrolledUp = g.scrollTop < prior.lastTop - UP_SLACK_PX
-  const following = atBottom || (prior.following && !scrolledUp)
-  return { following, lastTop: g.scrollTop }
+  if (atBottom) return true
+  return input.dragging ? false : following
 }

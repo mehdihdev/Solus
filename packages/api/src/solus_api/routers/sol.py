@@ -785,6 +785,8 @@ class _TurnTranscript:
     #: SOLUSDEV-326: the turn's thought summary, one segment per stretch between tool calls —
     #: already masked and bounded by the runtime (agent/thinking.py).
     thinking: list[str] = field(default_factory=list)
+    #: How many tool calls preceded each segment, so a reload places it among the steps.
+    thinking_after: list[int] = field(default_factory=list)
     #: Whether the next `thinking` frame continues the last segment (no tool call since).
     thinking_open: bool = False
     #: Seconds spent inside thought segments — the time between tool calls is not thinking.
@@ -794,14 +796,18 @@ class _TurnTranscript:
 
     def thinking_attrs(self) -> dict[str, Any] | None:
         """What the assistant turn stores of the thought (`attrs.thinking`), or None: the
-        segments and how long SOL spent thinking. A reload shows the segments together; the
-        turn's steps are its separate tool rows."""
+        segments, how many tool calls preceded each (`after`), and how long SOL spent thinking —
+        so a reload places each segment among the turn's steps as the live turn did."""
         if not self.thinking:
             return None
         # Masked again WHOLE: the frames were masked one by one, and a stored segment is served
         # back on every reload (security review M1).
         segments = [redact_text(segment) for segment in self.thinking]
-        return {"segments": segments, "ms": int(self.thinking_seconds * 1000)}
+        return {
+            "segments": segments,
+            "after": list(self.thinking_after),
+            "ms": int(self.thinking_seconds * 1000),
+        }
 
     def _note_thinking(self, text: str) -> None:
         # The runtime's relay already holds a turn to the cap; this keeps the stored copy bounded
@@ -815,6 +821,7 @@ class _TurnTranscript:
             self.thinking[-1] += text
         else:
             self.thinking.append(text)
+            self.thinking_after.append(self.tool_calls)
         self.thinking_last = now
         self.thinking_open = True
 

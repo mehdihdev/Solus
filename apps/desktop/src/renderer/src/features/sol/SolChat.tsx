@@ -10,7 +10,7 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { Fragment, memo, useCallback, useEffect, useRef } from 'react'
+import { Fragment, memo, useCallback, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { SolusLogo } from '../../components/ui/SolusLogo'
 import { DomainDot } from './domainDot'
@@ -18,7 +18,7 @@ import { citationDomain, citationTarget, type CitationTarget } from './domainIds
 import { ReasoningBlock } from './ReasoningBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { replyGrowth } from './thinking'
-import { bottomTop, nextFollow, type FollowState } from './scrollFollow'
+import { useFollowStream } from './useFollowStream'
 import { pageAnchors } from './pageAnchors'
 import { ArtifactCard } from './ArtifactCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
@@ -74,7 +74,12 @@ const CITATIONS_RESERVE_PX = 52
  *  the Thinking block takes over (SOLUSDEV-326). */
 function WaitingNote({ item }: { item: ChatItem }): React.JSX.Element | null {
   const waiting = item.pending && !item.thinking && item.trace.length === 0
-  return waiting ? <div style={MUTED}>thinking…</div> : null
+  // The same shimmering label the Thinking block opens with, so nothing jumps when it takes over.
+  return waiting ? (
+    <div className="sol-thinking-live" style={{ display: 'inline-block', fontSize: 11.5 }}>
+      Thinking…
+    </div>
+  ) : null
 }
 
 /** SOLUSDEV-252 S5: what a tool produced, each with its "File this to…?" row. */
@@ -392,40 +397,22 @@ function MessageList({
   onShowMe?: () => void
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
-  const followRef = useRef<FollowState>({ following: true, lastTop: 0 })
-  const lastCountRef = useRef(0)
   const count = chat.items.length
   // Streamed tokens grow an item's CONTENT without changing the item count, so
   // the follow signal must track how much the reply grew, not just rows — the old
   // count-only dep is why replies ran off-screen mid-stream. Only the LAST
   // row ever grows (the streaming reply); its text, thought and steps (SOLUSDEV-326)
   // are the whole signal.
-  const textSize = count ? replyGrowth(chat.items[count - 1]) : 0
-  useEffect(() => {
-    const el = listRef.current
-    if (!el) return
-    if (count !== lastCountRef.current) {
-      // A new row (the user's send, SOL's reply starting) re-engages follow
-      // even if they had scrolled up to read history.
-      lastCountRef.current = count
-      followRef.current = { ...followRef.current, following: true }
-    }
-    if (followRef.current.following) {
-      el.scrollTop = el.scrollHeight
-      followRef.current = { following: true, lastTop: bottomTop(el) }
-    }
-  }, [count, textSize])
-  const handleScroll = (): void => {
-    const el = listRef.current
-    if (!el) return
-    // The user's intent, read from which way they scrolled: up = reading, don't yank them
-    // back; at the bottom = follow the stream (scrollFollow.ts explains why not distance alone).
-    followRef.current = nextFollow(followRef.current, el)
-  }
+  const follow = useFollowStream(listRef, count, count ? replyGrowth(chat.items[count - 1]) : 0)
   return (
     <div
       ref={listRef}
-      onScroll={handleScroll}
+      onScroll={follow.onScroll}
+      onWheel={follow.onWheel}
+      onKeyDown={follow.onKeyDown}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) follow.onPointerDown()
+      }}
       className="sol-thread"
       style={{
         flex: 1,
