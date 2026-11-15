@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 import re
 import string
-from collections.abc import AsyncIterable, AsyncIterator
 from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -165,17 +164,6 @@ def _tag_prefix(text: str) -> int:
 def _dropped(why: str) -> None:
     """One debug line for a block that is never shown: why, never what it held."""
     logger.debug("reasoning block dropped: %s", why)
-
-
-async def reasoned_tokens(chunks: AsyncIterable[str]) -> AsyncIterator[AgentEvent]:
-    """A model round's text as `token` frames, and its reasoning block as one `reasoning` frame
-    where the block ends — ahead of the round's calls."""
-    parser = ReasoningParser()
-    async for chunk in chunks:
-        for event in parser.feed(chunk):
-            yield event
-    for event in parser.flush():
-        yield event
 
 
 def strip_reasoning(text: str) -> str:

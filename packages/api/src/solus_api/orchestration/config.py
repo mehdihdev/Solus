@@ -58,6 +58,10 @@ class ModelCatalogEntry(BaseModel):
     #: (the frontier reasoning tier rejects "none") still fails loudly as a
     #: ProviderError.
     reasoning_effort: ReasoningEffort | None = None
+    #: SOLUSDEV-326: may this model stream its thought summary to the person? Only honoured when
+    #: the CALLER also asks (`gateway.stream(show_thinking=True)` — SOL's answer rounds). Off where
+    #: showing it would add thinking the model does not already do (the trivial Claude route).
+    show_thinking: bool = False
     #: SOLUSDEV-252 S3 (review M2): can this model take image blocks in a turn?
     #: A screenshot rides the live turn of GENERAL/CODE routes, so those cells
     #: must never resolve to a text-only model — enforced at config load.

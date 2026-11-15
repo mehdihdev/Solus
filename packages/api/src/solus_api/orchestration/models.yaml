@@ -32,6 +32,9 @@
 # whole call bills the long rates (no cached-long rate is modeled; over-bills,
 # never under). `reasoning_effort`: the provider effort knob for that entry
 # (OpenAI only today; Anthropic/Gemini adapters carry no thinking mapping yet).
+# `show_thinking` (default false, SOLUSDEV-326): the entry may stream its thought
+# SUMMARY to the person when the caller asks (SOL's answer rounds). Set only where
+# the model already thinks, so showing it adds no thinking tokens.
 #
 # `accepts_images` (default true): every entry below is vision-capable, so none
 # sets it. A text-only model MUST set `accepts_images: false` and may then fill
@@ -60,6 +63,7 @@ catalog:
     price_out: 10.0
     price_cached_in: 0.2
     context_window: 1000000 # full 1M window at standard pricing (verified)
+    show_thinking: true # SOLUSDEV-326: thinks by default (adaptive); this shows the summary
     roles: [general_standard] # default_role fallback only — no matrix cell points here
 
   - provider: anthropic
@@ -68,6 +72,7 @@ catalog:
     price_out: 50.0
     price_cached_in: 0.25 # 0.025x input on Fable 5.1 (verified 2026-09-07)
     context_window: 1000000 # 1M window, 128K max output (verified 2026-09-07)
+    show_thinking: true # SOLUSDEV-326: thinking is always on; this shows the summary
     roles: [code_standard] # standard.code: strongest CODE reasoning
 
   - provider: anthropic
@@ -131,6 +136,7 @@ catalog:
     price_in_long: 20.0
     price_out_long: 75.0
     reasoning_effort: medium # supports low..max ONLY — never "none"
+    show_thinking: true # SOLUSDEV-326: a summary of the reasoning it already does
     roles: [general_hard, code_hard] # one entry, both hard cells
 
   - provider: openai
@@ -143,6 +149,7 @@ catalog:
     price_in_long: 8.0
     price_out_long: 30.0
     reasoning_effort: medium
+    show_thinking: true
     roles: [openai_standard] # standard.general
 
   - provider: openai
@@ -167,6 +174,7 @@ catalog:
     price_in_long: 0.4
     price_out_long: 1.8
     reasoning_effort: low
+    show_thinking: true
     roles: [openai_trivial] # trivial.general
 
 # --- Provider stanzas (SOLUSDEV-252): connection shape for providers WITHOUT a

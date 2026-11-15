@@ -64,6 +64,8 @@ from solus_api.orchestration.providers import (
     ProviderError,
     ProviderRefusalError,
     ProviderTransientError,
+    StreamItem,
+    Thinking,
     ToolCallingUnsupportedError,
     ToolConversation,
     ToolUse,
@@ -232,7 +234,7 @@ class CompletionStream:
 
     def __init__(
         self,
-        inner_factory: Callable[[], AsyncIterator[str | ToolUse | Usage]],
+        inner_factory: Callable[[], AsyncIterator[StreamItem]],
         *,
         call_id: str,
         model: ModelChoice,
@@ -247,7 +249,7 @@ class CompletionStream:
         project_id: uuid.UUID | None = None,
     ) -> None:
         self._inner_factory = inner_factory
-        self._inner: AsyncIterator[str | ToolUse | Usage] | None = None
+        self._inner: AsyncIterator[StreamItem] | None = None
         self._call_id = call_id
         self._model = model
         self._config = config
@@ -274,10 +276,25 @@ class CompletionStream:
         return self
 
     async def __anext__(self) -> str:
-        # Loops so a ToolUse event is absorbed rather than returned: this
-        # iterator is typed `AsyncIterator[str]` and every existing consumer
-        # treats what it yields as text. A tool call must never leak out as a
-        # text chunk.
+        # Loops so a ToolUse or Thinking event is absorbed rather than returned:
+        # this iterator is typed `AsyncIterator[str]` and every existing consumer
+        # treats what it yields as text. A tool call or a thought summary must
+        # never leak out as a text chunk.
+        while True:
+            piece = await self._next_piece()
+            if isinstance(piece, str):
+                return piece
+
+    async def events(self) -> AsyncIterator[str | Thinking]:
+        """Text AND thought-summary pieces in stream order (SOLUSDEV-326) — the same call,
+        gates, retries and billing as plain iteration; `.completion` holds only the text."""
+        while True:
+            try:
+                yield await self._next_piece()
+            except StopAsyncIteration:
+                return
+
+    async def _next_piece(self) -> str | Thinking:
         while True:
             event = await self._next_inner()
             if isinstance(event, Usage):
@@ -286,10 +303,11 @@ class CompletionStream:
             if isinstance(event, ToolUse):
                 self._tool_uses.append(event)
                 continue
-            self._parts.append(event)
+            if isinstance(event, str):
+                self._parts.append(event)
             return event
 
-    async def _next_inner(self) -> str | ToolUse | Usage:
+    async def _next_inner(self) -> StreamItem:
         if self._closed:
             raise StopAsyncIteration
         try:
@@ -319,7 +337,7 @@ class CompletionStream:
             ) from exc
         return event
 
-    async def _start(self) -> str | ToolUse | Usage:
+    async def _start(self) -> StreamItem:
         """Pre-flight gates, then start the provider stream with transient
         retry; returns the first inner event. MO-03 order: frequency cap →
         spend/trial gate → (retry-wrapped) provider call."""
@@ -338,7 +356,7 @@ class CompletionStream:
             )
             await assert_can_spend(self._user_id, session=self._session, limits=self._config.limits)
 
-        async def _attempt() -> tuple[Any, str | ToolUse | Usage]:
+        async def _attempt() -> tuple[Any, StreamItem]:
             inner = self._inner_factory()
             try:
                 event = await inner.__anext__()
@@ -461,7 +479,7 @@ class CompletionStream:
         )
 
 
-async def _close_generator(inner: AsyncIterator[str | ToolUse | Usage]) -> None:
+async def _close_generator(inner: AsyncIterator[StreamItem]) -> None:
     if isinstance(inner, AsyncGenerator):
         await inner.aclose()
 
@@ -488,6 +506,7 @@ def stream(
     purpose: Purpose = "answer",
     turn_id: uuid.UUID | None = None,
     project_id: uuid.UUID | None = None,
+    show_thinking: bool = False,
 ) -> CompletionStream:
     """Streaming variant of the gateway. Routing and adapter selection happen
     here (synchronously); gates and the provider call start on first iteration.
@@ -573,9 +592,14 @@ def stream(
     )
     # `reasoning_effort` rides only when the catalog entry sets one, so adapters
     # (and test fakes) for non-reasoning entries keep the pre-S1 call shape.
-    effort_kw: dict[str, str] = (
+    effort_kw: dict[str, Any] = (
         {"reasoning_effort": choice.reasoning_effort} if choice.reasoning_effort else {}
     )
+    # SOLUSDEV-326: thought summaries stream only when the caller asks (SOL's answer rounds read
+    # them through `CompletionStream.events()`) AND the catalog entry allows it; otherwise the
+    # adapter call keeps its pre-326 shape.
+    if show_thinking and choice.show_thinking:
+        effort_kw = {**effort_kw, "show_thinking": True}
     return CompletionStream(
         lambda: adapter.stream(
             choice.model_name,

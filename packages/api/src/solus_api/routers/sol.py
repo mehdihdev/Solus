@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
@@ -681,10 +682,23 @@ async def _persist_turn(
                     # reached — fixed names and counts, null when the turn had neither.
                     "answer_source": (assistant_attrs or {}).get("answer_source"),
                     "budget_reached": (assistant_attrs or {}).get("budget_reached"),
+                    # SOLUSDEV-326: how much thought summary the turn showed — a count only.
+                    "thinking_chars": sum(
+                        len(segment)
+                        for segment in ((assistant_attrs or {}).get("thinking") or {}).get(
+                            "segments", []
+                        )
+                    ),
                 },
             )
         await session.commit()
         return assistant.id
+
+
+def _thinking_attr(transcript: "_TurnTranscript") -> dict[str, Any]:
+    """SOLUSDEV-326: `{"thinking": {segments, ms}}` when the turn thought aloud, else {}."""
+    thinking = transcript.thinking_attrs()
+    return {"thinking": thinking} if thinking is not None else {}
 
 
 async def _close_runner(stream: AsyncIterator[AgentEvent]) -> None:
@@ -762,11 +776,41 @@ class _TurnTranscript:
     tool_turns: list[tuple[dict[str, Any], dict[str, Any]]] = field(default_factory=list)
     final_text: str = ""
     tool_calls: int = 0
+    #: SOLUSDEV-326: the turn's thought summary, one segment per stretch between tool calls —
+    #: already masked and bounded by the runtime (agent/thinking.py).
+    thinking: list[str] = field(default_factory=list)
+    #: Whether the next `thinking` frame continues the last segment (no call or text since).
+    thinking_open: bool = False
+    #: Monotonic seconds of the first `thinking` frame and of the last one.
+    thinking_started: float | None = None
+    thinking_ended: float | None = None
+
+    def thinking_attrs(self) -> dict[str, Any] | None:
+        """What the assistant turn stores of the thought (`attrs.thinking`), or None: the
+        segments and how long SOL spent thinking, so a reload reads like the live turn."""
+        if not self.thinking or self.thinking_started is None or self.thinking_ended is None:
+            return None
+        elapsed_ms = int((self.thinking_ended - self.thinking_started) * 1000)
+        return {"segments": list(self.thinking), "ms": elapsed_ms}
+
+    def _note_thinking(self, text: str) -> None:
+        now = time.monotonic()
+        self.thinking_started = self.thinking_started or now
+        self.thinking_ended = now
+        if self.thinking_open:
+            self.thinking[-1] += text
+        else:
+            self.thinking.append(text)
+        self.thinking_open = True
 
     def record(self, event: AgentEvent, max_tool_calls: int) -> bool:
         """Note `event`; False when it is the tool call past the loop guard, which is
         then NOT recorded (the turn aborts before it streams)."""
+        if event.type is AgentEventType.THINKING:
+            self._note_thinking(event.data["text"])
+            return True
         if event.type is AgentEventType.TOOL_CALL:
+            self.thinking_open = False  # the next thought is a new segment
             self.tool_calls += 1
             # Loop guard enforced HERE, independent of the runner: a runaway
             # (real, model-driven) runner is cut off by the plumbing, not by
@@ -872,7 +916,11 @@ async def _run_and_persist(
             parked_tools=frozenset(
                 parked_tools.union(p.tool for p in parked if p.confirmation_id is not None)
             ),
-            assistant_attrs={**(assistant_attrs or {}), **answered},
+            assistant_attrs={
+                **(assistant_attrs or {}),
+                **answered,
+                **_thinking_attr(transcript),
+            },
         )
         if aborted is not None:
             yield format_sse(_abort_event(aborted, abort_error))

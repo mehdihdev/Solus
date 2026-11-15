@@ -30,3 +30,5 @@ class ModelChoice(BaseModel):
     #: Provider reasoning-effort knob for this entry (config, `models.yaml`);
     #: None = the provider's default / a non-reasoning model.
     reasoning_effort: str | None = None
+    #: SOLUSDEV-326: the catalog allows this model's thought summary to stream (`models.yaml`).
+    show_thinking: bool = False

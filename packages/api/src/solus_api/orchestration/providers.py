@@ -84,6 +84,16 @@ class Usage(NamedTuple):
     stop_reason: str | None = None
 
 
+class Thinking(NamedTuple):
+    """A piece of the model's thought SUMMARY as it streams (SOLUSDEV-326): Anthropic's
+    summarized thinking or OpenAI's reasoning summary — never the raw chain of thought, which
+    no provider returns. Model output, untrusted: the runtime masks and bounds it before it
+    reaches the wire, and nothing on the server reads it back. Adapters yield it only when
+    asked (`show_thinking`); the gateway's text iteration never returns it."""
+
+    text: str
+
+
 class ProviderCredentialsMissingError(RuntimeError):
     """No API key in the SecretStore for the provider being called."""
 
@@ -280,6 +290,10 @@ class ToolUse(BaseModel):
     id: str
     name: str
     args: dict[str, Any] = {}
+
+
+#: What an adapter stream yields: text, thought summaries, proposed calls, then one Usage.
+StreamItem = str | Thinking | ToolUse | Usage
 
 
 class ToolOutcome(BaseModel):
@@ -490,6 +504,7 @@ def openai_request(
     images: Sequence[ImageBlock] | None,
     conversation: ToolConversation | None,
     reasoning_effort: str | None,
+    show_thinking: bool = False,
 ) -> dict[str, Any]:
     """`responses.create` kwargs. No temperature, ever (reasoning models reject
     it). `store=False` always (§7). The text-only path is one user message with
@@ -501,7 +516,9 @@ def openai_request(
         "stream": True,
     }
     if reasoning_effort is not None:
-        request["reasoning"] = {"effort": reasoning_effort}
+        # SOLUSDEV-326: a readable summary of the reasoning the model already does.
+        summary = {"summary": "auto"} if show_thinking else {}
+        request["reasoning"] = {"effort": reasoning_effort, **summary}
         request["include"] = ["reasoning.encrypted_content"]
     if conversation is None:
         request["input"] = [{"role": "user", "content": openai_content(query, images)}]
@@ -576,6 +593,10 @@ def anthropic_messages(turns: Sequence[Turn]) -> list[dict[str, object]]:
                 }
                 for r in turn.tool_results
             ]
+        elif _anthropic_replay(turn):
+            # SOLUSDEV-326: the round's own content, thinking blocks included, back unchanged —
+            # a thinking block that is edited or dropped mid-turn breaks the model's reasoning.
+            content = [dict(item) for item in turn.provider_items]
         elif turn.tool_uses:
             content = [{"type": "text", "text": turn.text}] if turn.text else []
             content += [
@@ -590,6 +611,19 @@ def anthropic_messages(turns: Sequence[Turn]) -> list[dict[str, object]]:
             content = [*blocks[:-1], {**blocks[-1], "cache_control": {"type": "ephemeral"}}]
         messages.append({"role": "user" if turn.tool_results else turn.role, "content": content})
     return messages
+
+
+#: Anthropic content block types; a replay item of any other type came from another provider.
+_ANTHROPIC_BLOCK_TYPES: Final = frozenset({"text", "thinking", "redacted_thinking", "tool_use"})
+
+
+def _anthropic_replay(turn: Turn) -> bool:
+    """An assistant turn whose replay items are Anthropic content blocks (SOLUSDEV-326)."""
+    return (
+        turn.role == "assistant"
+        and bool(turn.provider_items)
+        and all(item.get("type") in _ANTHROPIC_BLOCK_TYPES for item in turn.provider_items)
+    )
 
 
 def anthropic_tool_uses(blocks: Sequence[Any]) -> tuple[ToolUse, ...]:
@@ -631,8 +665,10 @@ def _refuse_conversation(provider: str, conversation: ToolConversation | None) -
 class ProviderAdapter(Protocol):
     """One streaming call surface per provider.
 
-    Contract: yield zero or more ``str`` text chunks, then zero or more
-    `ToolUse`, then EXACTLY ONE `Usage`, last, after the provider stream closes.
+    Contract: yield zero or more ``str`` text chunks (interleaved with `Thinking`
+    summary pieces only when `show_thinking` is set and the adapter supports it),
+    then zero or more `ToolUse`, then EXACTLY ONE `Usage`, last, after the provider
+    stream closes.
     On provider failure: raise — never yield a `Usage`. The gateway's
     `complete()` drains this same stream for request-response calls, so both
     paths share one implementation and report identical usage numbers.
@@ -653,7 +689,8 @@ class ProviderAdapter(Protocol):
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
         reasoning_effort: str | None = None,
-    ) -> AsyncIterator[str | ToolUse | Usage]: ...
+        show_thinking: bool = False,
+    ) -> AsyncIterator[StreamItem]: ...
 
 
 class _BaseAdapter:
@@ -696,6 +733,20 @@ def _refusal(model_name: str, final: Any) -> ProviderRefusalError:
     )
 
 
+async def _anthropic_pieces(stream: Any) -> AsyncIterator[str | Thinking]:
+    """Text and thought-summary deltas, in the order they stream (SOLUSDEV-326). Every other
+    event (block starts, signatures, tool input) is the SDK's to accumulate for the final message.
+    `text_stream` stays the path when thinking is not shown, so that request is unchanged."""
+    async for event in stream:
+        if getattr(event, "type", None) != "content_block_delta":
+            continue
+        delta = event.delta
+        if delta.type == "text_delta" and delta.text:
+            yield delta.text
+        elif delta.type == "thinking_delta" and delta.thinking:
+            yield Thinking(delta.thinking)
+
+
 def _anthropic_usage(usage: Any) -> Usage:
     """input_tokens EXCLUDES cache reads and writes; tokens_in is the whole prompt,
     tokens_cached_in its cached subset (price_cached_in).
@@ -721,8 +772,9 @@ class AnthropicAdapter(_BaseAdapter):
         max_tokens: int,
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
-        reasoning_effort: str | None = None,  # ponytail: no thinking mapping yet
-    ) -> AsyncIterator[str | ToolUse | Usage]:
+        reasoning_effort: str | None = None,  # ponytail: effort is the model default
+        show_thinking: bool = False,
+    ) -> AsyncIterator[StreamItem]:
         api_key = await self._api_key()
         import anthropic  # lazy: keyless environments never touch provider SDKs
 
@@ -752,6 +804,10 @@ class AnthropicAdapter(_BaseAdapter):
             }
             if conversation.tool_choice == "none" and conversation.tools:
                 request["tool_choice"] = {"type": "none"}
+        if show_thinking:
+            # SOLUSDEV-326: the catalog's Claude chat models already think by default (adaptive);
+            # this only asks for the readable summary instead of an empty thinking field.
+            request["thinking"] = {"type": "adaptive", "display": "summarized"}
 
         client = anthropic.AsyncAnthropic(
             api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS, max_retries=0
@@ -763,10 +819,9 @@ class AnthropicAdapter(_BaseAdapter):
                     model=model_name, max_tokens=max_tokens, **request
                 ) as stream,
             ):
-                # `text_stream` filters to text blocks, so the streaming text path
-                # is unchanged when tools are present.
-                async for text in stream.text_stream:
-                    yield text
+                pieces = _anthropic_pieces(stream) if show_thinking else stream.text_stream
+                async for piece in pieces:
+                    yield piece
                 final = await stream.get_final_message()
                 if final.stop_reason == "refusal":
                     raise _refusal(model_name, final)
@@ -776,7 +831,12 @@ class AnthropicAdapter(_BaseAdapter):
                 # be dispatched.
                 for use in anthropic_tool_uses(final.content):
                     yield use
-                yield _anthropic_usage(final.usage)
+                usage = _anthropic_usage(final.usage)
+                if show_thinking:
+                    # The round's whole content replays on the next round (anthropic_messages).
+                    replay = tuple(block.model_dump(exclude_none=True) for block in final.content)
+                    usage = usage._replace(provider_items=replay)
+                yield usage
         except anthropic.APIError as exc:
             raise normalize_provider_error(self.provider, model_name, exc) from None
 
@@ -880,7 +940,8 @@ class OpenAIAdapter(_BaseAdapter):
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
         reasoning_effort: str | None = None,
-    ) -> AsyncIterator[str | ToolUse | Usage]:
+        show_thinking: bool = False,
+    ) -> AsyncIterator[StreamItem]:
         api_key = await self._api_key()
         import openai  # lazy: keyless environments never touch provider SDKs
 
@@ -891,6 +952,7 @@ class OpenAIAdapter(_BaseAdapter):
             images=images,
             conversation=conversation,
             reasoning_effort=reasoning_effort,
+            show_thinking=show_thinking,
         )
         # max_retries=0 keeps the SDK's silent default retries from preempting
         # the gateway's MO-03 backoff (which retries ProviderTransientError).
@@ -898,12 +960,12 @@ class OpenAIAdapter(_BaseAdapter):
         try:
             async with client:
                 events = await client.responses.create(**cast("Any", request))
-                state = _OpenAIStreamState(model_name)
+                state = _OpenAIStreamState(model_name, show_thinking=show_thinking)
                 try:
                     async for event in events:
-                        text = state.handle(event)
-                        if text:
-                            yield text
+                        piece = state.handle(event)
+                        if piece:
+                            yield piece
                 finally:
                     closer = getattr(events, "close", None) or getattr(events, "aclose", None)
                     if closer is not None:
@@ -920,16 +982,19 @@ class _OpenAIStreamState:
     items and the final usage. One method per event so the adapter's generator
     stays a straight yield loop."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, *, show_thinking: bool = False) -> None:
         self.model_name = model_name
+        self.show_thinking = show_thinking
         self.items: list[dict[str, Any]] = []
         self.uses: list[ToolUse] = []
         self.usage: Usage | None = None
 
-    def handle(self, event: Any) -> str | None:
+    def handle(self, event: Any) -> str | Thinking | None:
         kind = event.type
         if kind == "response.output_text.delta":
             return cast("str", event.delta)
+        if kind.startswith("response.reasoning_summary_"):
+            return self._summary(event) if self.show_thinking else None
         if kind == "response.output_item.done":
             self._item_done(event.item)
         elif kind in ("response.completed", "response.incomplete"):
@@ -954,6 +1019,18 @@ class _OpenAIStreamState:
                 else "provider_error"
             )
             raise error_cls(f"openai {kind} for model {self.model_name}: {safe_reason}")
+        return None
+
+    @staticmethod
+    def _summary(event: Any) -> Thinking | None:
+        """SOLUSDEV-326: a reasoning-summary delta, or a paragraph break before each summary part
+        after the first; any other summary event (part done, text done) adds nothing."""
+        if event.type == "response.reasoning_summary_text.delta":
+            return Thinking(cast("str", event.delta))
+        if event.type == "response.reasoning_summary_part.added" and getattr(
+            event, "summary_index", 0
+        ):
+            return Thinking("\n\n")
         return None
 
     def _item_done(self, item: Any) -> None:
@@ -998,7 +1075,8 @@ class GeminiAdapter(_BaseAdapter):
         images: Sequence[ImageBlock] | None = None,
         conversation: ToolConversation | None = None,
         reasoning_effort: str | None = None,  # ponytail: no thinking mapping yet
-    ) -> AsyncIterator[str | ToolUse | Usage]:
+        show_thinking: bool = False,  # SOL chat never routes here (no conversations)
+    ) -> AsyncIterator[StreamItem]:
         _refuse_conversation(self.provider, conversation)
         api_key = await self._api_key()
         from google import genai  # lazy: keyless environments never touch provider SDKs
