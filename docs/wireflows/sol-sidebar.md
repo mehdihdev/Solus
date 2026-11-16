@@ -32,8 +32,11 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
   the chord does nothing.
 - **Escape** inside the sidebar closes it unless a popover inside it (the `@` picker, the attach
   menu) is open and consumes the key first.
-- Open or closed is **remembered per screen** (key = the route name; `alert` and `ext-page` share
-  one key each), on this machine (`localStorage`, best effort). First run: closed everywhere.
+- **It follows the person.** One open/closed state for the whole shell: open it on the Workspace
+  and it stays open on the Bench, Home, Settings… — the tag, greeting and placeholder re-scope to
+  each screen, with no re-opening motion. On the SOL page it is hidden (not closed): leaving the
+  SOL page brings it back. Remembered on this machine (`localStorage`, best effort). First run:
+  closed.
 - Opening moves focus into the composer; closing returns focus to the toggle.
 
 ## 3. The panel
@@ -46,7 +49,8 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
   - **Pop out to the pill** (Electron only — hidden where there is no SOL window bridge): closes
     the sidebar and opens the SOL window, which already holds the thread.
   - **Open in the SOL page** (⤢): the panel morphs to fill the screen, then the shell navigates
-    to the SOL page on the same conversation. The sidebar closes for the screen it left.
+    to the SOL page on the same conversation. The sidebar closes (it does not reappear when the
+    person leaves the SOL page).
   - **Close** (×).
 - **Thread:** the shared `SolChat` surface in its `sidebar` layout — the page's message rendering
   (markdown, Thinking block, confirmation cards, plan cards, reasoning block, citation chips that
@@ -58,10 +62,12 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
   that screen. A chip sends its text as the person's message. Greetings and chips are
   Solus-authored constants per screen (§6); screens without their own get a plain greeting naming
   the screen.
-- **Composer:** the panel composer (Guide/Build badge, Think harder, Confirm every change, routing
-  line, `@` picker) with the screen's placeholder (`Ask SOL about anything in the workspace`,
-  `…on the bench`, generic `Ask SOL about this project`). Sends from the sidebar carry the
-  Workspace focus and the chat's pinned nodes exactly as the page does (`focus`, `pins`).
+- **Composer:** input, `@` picker and Send only — no preferences row (no Guide/Build badge, Think
+  harder, Confirm every change or routing line; those stay on the SOL page and the pill). A send
+  uses the current shared action mode and the chat's Confirm-every-change choice as set elsewhere.
+  Short per-screen placeholder so it fits one line at 320px (`Ask about the workspace`,
+  `Ask about the bench`, generic `Ask SOL anything`). Sends from the sidebar carry the Workspace
+  focus and the chat's pinned nodes exactly as the page does (`focus`, `pins`).
 - **Proactive notes** (SOL speaking first, with actions under the note): the panel renders any
   SOL message the session holds, so when a later ticket (Live Bench) adds proactive notes they
   appear here with their action buttons. This ticket adds no proactive trigger of its own.

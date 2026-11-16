@@ -337,7 +337,8 @@ export function Composer({
   footerEnd,
   onUpload,
   onAddNodeFromGraph,
-  placeholder
+  placeholder,
+  bare = false
 }: ComposerProps): React.JSX.Element {
   // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
   const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
@@ -379,6 +380,7 @@ export function Composer({
       onUpload={onUpload}
       onAddNodeFromGraph={onAddNodeFromGraph}
       placeholder={placeholder}
+      bare={bare}
     />
   )
 }
@@ -418,14 +420,24 @@ function ColumnForm({
   page,
   onUpload,
   onAddNodeFromGraph,
-  placeholder
+  placeholder,
+  bare
 }: FormState & {
   page: boolean
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
   placeholder?: string
+  bare?: boolean
 }): React.JSX.Element {
   const attach = Boolean(onUpload || onAddNodeFromGraph)
+  const footerProps = {
+    mode,
+    onModeChange,
+    classify,
+    forceConfirmation,
+    onForceConfirmationChange,
+    streaming
+  }
   return (
     <form
       onSubmit={(e) => {
@@ -459,35 +471,53 @@ function ColumnForm({
           />
           <SendButton streaming={streaming} empty={empty} />
         </div>
-        <div className="sol-composer-foot">
-          {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
-              Electron) — the same badge the SOL window header shows. */}
-          <ModeBadge mode={mode} onChange={onModeChange} />
-          {/* S1-W3: one tier up for THIS message. Lives in the classify override
-              state so the routing preview reflects it and the post-send reset
-              clears it — one source, two controls (this and the popover). */}
-          <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
-            <Switch
-              checked={classify.override.thinkHarder}
-              onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
-              ariaLabel="Think harder"
-            />
-            Think harder
-          </span>
-          <ReviewPreference
-            checked={forceConfirmation}
-            onChange={onForceConfirmationChange}
-            streaming={streaming}
-          />
-          <ClassifyIndicator
-            preview={classify.preview}
-            override={classify.override}
-            onOverride={classify.setOverride}
-            onReset={classify.resetOverride}
-          />
-        </div>
+        {!bare && <ComposerFooter {...footerProps} />}
       </div>
     </form>
+  )
+}
+
+/** The panel / page composer's preferences row: action mode, Think harder, Confirm every change
+ *  and the routing line. The sidebar (SOLUSDEV-327) leaves it out. */
+function ComposerFooter({
+  mode,
+  onModeChange,
+  classify,
+  forceConfirmation,
+  onForceConfirmationChange,
+  streaming
+}: Pick<
+  FormState,
+  'mode' | 'onModeChange' | 'classify' | 'forceConfirmation' | 'onForceConfirmationChange' | 'streaming'
+>): React.JSX.Element {
+  return (
+    <div className="sol-composer-foot">
+      {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
+          Electron) — the same badge the SOL window header shows. */}
+      <ModeBadge mode={mode} onChange={onModeChange} />
+      {/* S1-W3: one tier up for THIS message. Lives in the classify override
+          state so the routing preview reflects it and the post-send reset
+          clears it — one source, two controls (this and the popover). */}
+      <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
+        <Switch
+          checked={classify.override.thinkHarder}
+          onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
+          ariaLabel="Think harder"
+        />
+        Think harder
+      </span>
+      <ReviewPreference
+        checked={forceConfirmation}
+        onChange={onForceConfirmationChange}
+        streaming={streaming}
+      />
+      <ClassifyIndicator
+        preview={classify.preview}
+        override={classify.override}
+        onOverride={classify.setOverride}
+        onReset={classify.resetOverride}
+      />
+    </div>
   )
 }
 
@@ -542,6 +572,8 @@ export interface ComposerProps {
   onAddNodeFromGraph?: () => void
   /** SOLUSDEV-327: the sidebar's per-screen placeholder (column layouts only). */
   placeholder?: string
+  /** SOLUSDEV-327: the sidebar's composer — input, + and Send only, no preferences row. */
+  bare?: boolean
 }
 
 const MODE_OPTIONS = [MODE_LABEL.guide, MODE_LABEL.do] as const

@@ -41,8 +41,7 @@ function host(route: ShellRoute = { name: 'workspace' }): ReturnType<typeof rend
 }
 
 const panel = (): HTMLElement => screen.getByRole('complementary', { name: 'SOL sidebar' })
-const open = (key = 'workspace'): void =>
-  act(() => useSolSidebarStore.getState().setOpen(key, true))
+const open = (): void => act(() => useSolSidebarStore.getState().setOpen(true))
 const isOpen = (key = 'workspace'): boolean => selectSidebarOpen(useSolSidebarStore.getState(), key)
 
 beforeEach(() => {
@@ -75,7 +74,7 @@ describe('SolSidebarHost — presence', () => {
     expect(
       within(sb).getByRole('button', { name: 'Is anything wired inconsistently?' })
     ).toBeVisible()
-    expect(within(sb).getByPlaceholderText('Ask SOL about anything in the workspace')).toBeVisible()
+    expect(within(sb).getByPlaceholderText('Ask about the workspace')).toBeVisible()
   })
 
   it('names the focused node in the tag on the workspace', () => {
@@ -90,18 +89,23 @@ describe('SolSidebarHost — presence', () => {
     expect(within(panel()).getByText('WORKSPACE · imu')).toBeInTheDocument()
   })
 
-  it('is remembered per screen', () => {
-    open('bench')
-    host({ name: 'workspace' })
-    expect(screen.queryByRole('complementary', { name: 'SOL sidebar' })).toBeNull()
+  it('follows the person to the next screen, with that screen\'s copy', () => {
+    open()
+    const { rerender } = host({ name: 'workspace' })
+    rerender(<SolSidebarHost route={{ name: 'bench' }} navigate={navigate} />)
+    expect(within(panel()).getByText('LIVE BENCH')).toBeInTheDocument()
+    expect(panel()).toHaveAttribute('data-phase', 'open')
   })
 
-  it('never renders on the SOL page, and ⌘J does nothing there', () => {
-    host({ name: 'sol' })
+  it('hides on the SOL page and comes back on the next screen; ⌘J does nothing there', () => {
+    open()
+    const { rerender } = host({ name: 'sol' })
+    expect(screen.queryByRole('complementary', { name: 'SOL sidebar' })).toBeNull()
     fireEvent.keyDown(window, { key: 'j', metaKey: true, ctrlKey: false })
     fireEvent.keyDown(window, { key: 'j', ctrlKey: true, metaKey: false })
-    expect(screen.queryByRole('complementary', { name: 'SOL sidebar' })).toBeNull()
-    expect(isOpen('sol')).toBe(false)
+    expect(isOpen('home')).toBe(true)
+    rerender(<SolSidebarHost route={{ name: 'home' }} navigate={navigate} />)
+    expect(panel()).toBeInTheDocument()
   })
 })
 
@@ -135,7 +139,7 @@ describe('SolSidebarHost — controls', () => {
   it('leaves Escape to a popover that consumed it', () => {
     open()
     host()
-    const box = within(panel()).getByPlaceholderText('Ask SOL about anything in the workspace')
+    const box = within(panel()).getByPlaceholderText('Ask about the workspace')
     box.addEventListener('keydown', (event) => event.preventDefault())
     fireEvent.keyDown(box, { key: 'Escape' })
     expect(isOpen()).toBe(true)
@@ -175,6 +179,20 @@ describe('SolSidebarHost — controls', () => {
   })
 })
 
+describe('SolSidebarHost — composer', () => {
+  it('is just the input, + and Send — no mode, think-harder, confirm or routing footer', () => {
+    open()
+    host()
+    const sb = panel()
+    expect(within(sb).getByRole('button', { name: /send/i })).toBeInTheDocument()
+    expect(within(sb).queryByText('Think harder')).toBeNull()
+    expect(within(sb).queryByText('Confirm every change')).toBeNull()
+    expect(within(sb).queryByText(/auto routing/)).toBeNull()
+    expect(within(sb).queryByText('Build')).toBeNull()
+    expect(within(sb).queryByText('Guide')).toBeNull()
+  })
+})
+
 describe('SolSidebarHost — anchors', () => {
   it('a typed send carries the workspace focus, like the page', async () => {
     const id = '00000000-0000-4000-8000-000000000002'
@@ -182,7 +200,7 @@ describe('SolSidebarHost — anchors', () => {
     streamSolMessage.mockResolvedValue(undefined as never)
     open()
     host()
-    const box = within(panel()).getByPlaceholderText('Ask SOL about anything in the workspace')
+    const box = within(panel()).getByPlaceholderText('Ask about the workspace')
     fireEvent.change(box, { target: { value: 'Why two buses?' } })
     fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(streamSolMessage).toHaveBeenCalled())

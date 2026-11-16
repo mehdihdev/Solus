@@ -6,7 +6,7 @@ describe('sidebarCopy', () => {
   it('names the workspace and its focused node', () => {
     const copy = sidebarCopy('workspace', 'imu')
     expect(copy.tag).toBe('WORKSPACE · imu')
-    expect(copy.placeholder).toBe('Ask SOL about anything in the workspace')
+    expect(copy.placeholder).toBe('Ask about the workspace')
     expect(copy.suggestions.length).toBeGreaterThan(0)
   })
 
@@ -16,7 +16,7 @@ describe('sidebarCopy', () => {
 
   it('ignores focus outside the workspace', () => {
     expect(sidebarCopy('bench', 'imu').tag).toBe('LIVE BENCH')
-    expect(sidebarCopy('bench', null).placeholder).toBe('Ask SOL about anything on the bench')
+    expect(sidebarCopy('bench', null).placeholder).toBe('Ask about the bench')
   })
 
   it('caps a long focused name', () => {
@@ -44,7 +44,7 @@ describe('sidebarCopy', () => {
     expect(copy.tag).toBe('BILLING')
     expect(copy.greeting).toBe('Ask SOL about this project.')
     expect(copy.suggestions).toEqual([])
-    expect(copy.placeholder).toBe('Ask SOL about this project')
+    expect(copy.placeholder).toBe('Ask SOL anything')
   })
 
   it('labels detail routes', () => {

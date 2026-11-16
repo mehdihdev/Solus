@@ -1,5 +1,6 @@
-// SOLUSDEV-327 — the SOL sidebar's open state per screen and its width (sol-sidebar.md §2–3).
-// UI preference only, on this machine: localStorage via zustand persist (best effort).
+// SOLUSDEV-327 — the SOL sidebar's open state and width (sol-sidebar.md §2–3). ONE open flag:
+// the sidebar follows the person across screens (only the SOL page never shows it). UI
+// preference only, on this machine: localStorage via zustand persist (best effort).
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ShellRoute } from '../../workspace/shellStore'
@@ -7,19 +8,19 @@ import type { ShellRoute } from '../../workspace/shellStore'
 export const SIDEBAR_DEFAULT_WIDTH = 360
 export const SIDEBAR_MIN_WIDTH = 320
 export const SIDEBAR_MAX_WIDTH = 480
-/** The SOL page already is SOL: the sidebar never opens there. */
-const NEVER_OPEN = 'sol'
+/** The SOL page already is SOL: the sidebar is never shown there. */
+const HIDDEN_ON = 'sol'
 
 export interface SolSidebarState {
-  openByScreen: Readonly<Record<string, boolean>>
+  open: boolean
   width: number
-  setOpen: (key: string, open: boolean) => void
-  toggle: (key: string) => void
+  setOpen: (open: boolean) => void
+  toggle: () => void
   setWidth: (width: number) => void
   reset: () => void
 }
 
-/** The per-screen key: a main screen's name; detail routes share one key per kind. */
+/** The screen name the sidebar reports and copies itself from; detail routes by their kind. */
 export function sidebarKey(route: ShellRoute): string {
   return route.name
 }
@@ -29,47 +30,38 @@ export function clampSidebarWidth(width: number): number {
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, Math.round(width)))
 }
 
-export function selectSidebarOpen(state: SolSidebarState, key: string): boolean {
-  return key !== NEVER_OPEN && state.openByScreen[key] === true
+/** Whether the sidebar shows on `screen`. */
+export function selectSidebarOpen(state: SolSidebarState, screen: string): boolean {
+  return screen !== HIDDEN_ON && state.open
 }
 
-const INITIAL = { openByScreen: {}, width: SIDEBAR_DEFAULT_WIDTH }
+const INITIAL = { open: false, width: SIDEBAR_DEFAULT_WIDTH }
 
 export const useSolSidebarStore = create<SolSidebarState>()(
   persist(
     (set) => ({
       ...INITIAL,
-      setOpen: (key, open) =>
-        set((s) => (key === NEVER_OPEN ? s : { openByScreen: { ...s.openByScreen, [key]: open } })),
-      toggle: (key) =>
-        set((s) =>
-          key === NEVER_OPEN
-            ? s
-            : { openByScreen: { ...s.openByScreen, [key]: s.openByScreen[key] !== true } }
-        ),
+      setOpen: (open) => set({ open }),
+      toggle: () => set((s) => ({ open: !s.open })),
       setWidth: (width) => set({ width: clampSidebarWidth(width) }),
       reset: () => set({ ...INITIAL })
     }),
     {
       name: 'solus.sol-sidebar',
-      partialize: (s) => ({ openByScreen: s.openByScreen, width: s.width }),
+      // v1: one open flag (v0 kept one per screen — dropped, the sidebar starts closed).
+      version: 1,
+      migrate: (persisted) => persisted,
+      partialize: (s) => ({ open: s.open, width: s.width }),
+      // localStorage is untrusted: only a real boolean and a finite, clamped width survive.
       merge: (persisted, current) => {
-        const saved = (persisted ?? {}) as Partial<SolSidebarState>
+        const saved = (persisted ?? {}) as Partial<Record<keyof SolSidebarState, unknown>>
         return {
           ...current,
-          openByScreen: isOpenMap(saved.openByScreen) ? saved.openByScreen : {},
-          width: clampSidebarWidth(saved.width ?? SIDEBAR_DEFAULT_WIDTH)
+          open: saved.open === true,
+          width:
+            typeof saved.width === 'number' ? clampSidebarWidth(saved.width) : SIDEBAR_DEFAULT_WIDTH
         }
       }
     }
   )
 )
-
-/** localStorage is untrusted: keep only string → boolean entries. */
-function isOpenMap(value: unknown): value is Record<string, boolean> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    Object.values(value).every((open) => typeof open === 'boolean')
-  )
-}

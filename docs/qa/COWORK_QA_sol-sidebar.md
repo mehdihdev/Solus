@@ -20,18 +20,18 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 5. [ ] With the panel open, press Escape while the composer is focused. Expected: closes.
 6. [ ] Type `@` plus a few letters in the composer until the node picker list appears, then press Escape. Expected: only the picker closes; the sidebar stays open.
 
-## 2. Per-screen memory
+## 2. It follows you
 
-1. [ ] Open the sidebar on Workspace. Go to Live Bench. Expected: closed there (first time).
-2. [ ] Open it on Live Bench, go to Home (closed), back to Workspace (open), back to Bench (open). Expected: each screen remembers its own state; switching screens shows it immediately without the slide.
-3. [ ] Quit and relaunch Solus. Expected: the same per-screen states are restored.
-4. [ ] Go to the **SOL** rail item. Expected: no sidebar and no SOL toggle in the menu bar; ⌘J does nothing.
+1. [ ] Open the sidebar on Workspace. Go to Live Bench, Home, Settings. Expected: it stays open on every screen, without replaying the slide; the tag, greeting and placeholder change to each screen; the thread is the same.
+2. [ ] Close it on Home, go to Workspace. Expected: closed there too.
+3. [ ] Open it, quit and relaunch Solus. Expected: open again.
+4. [ ] With it open, go to the **SOL** rail item. Expected: no sidebar and no SOL toggle in the menu bar; ⌘J does nothing. Go back to Workspace: the sidebar is there again.
 
 ## 3. Header and context greeting
 
-1. [ ] On Workspace with no node focused, open the sidebar on a project whose current chat is empty (start a New chat on the SOL page first if needed). Expected header: orb · `SOL` · tag `WORKSPACE`. Body: an accent-tinted SOL note ("I can see the workspace graph…"), then two suggestion chips rising in just after it. Placeholder: "Ask SOL about anything in the workspace".
+1. [ ] On Workspace with no node focused, open the sidebar on a project whose current chat is empty (start a New chat on the SOL page first if needed). Expected header: orb · `SOL` · tag `WORKSPACE`. Body: an accent-tinted SOL note ("I can see the workspace graph…"), then two suggestion chips rising in just after it. Placeholder: "Ask about the workspace", on one line. The composer shows only +, the input and Send — no Build/Guide, Think harder, Confirm every change or routing line.
 2. [ ] Click a node in the Workspace graph. Expected: the tag becomes `WORKSPACE · <node name>`; a very long name is cut with "…".
-3. [ ] Live Bench: tag `LIVE BENCH`, bench greeting, chips "What should I test first?" / "What can I put on the bench?", placeholder "…on the bench".
+3. [ ] Live Bench: tag `LIVE BENCH`, bench greeting, chips "What should I test first?" / "What can I put on the bench?", placeholder "Ask about the bench".
 4. [ ] Home: tag `HOME`, home greeting and chips. Billing / Settings / Store: tag names the screen, plain "Ask SOL about this project." greeting, no chips.
 5. [ ] Click a chip. Expected: it appears as your message; the shimmering **Thinking…** label shows; the header orb (and the menu-bar orb) breathe faster; SOL answers. The chip row is gone once the chat has messages.
 
@@ -44,7 +44,7 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 
 ## 5. Expand and pop out
 
-1. [ ] In the sidebar header click **Open in the SOL page** (diagonal arrows). Expected: the panel grows to fill the screen area (~0.4 s), then the SOL page appears on the same conversation. Returning to the previous screen shows the sidebar **closed**.
+1. [ ] In the sidebar header click **Open in the SOL page** (diagonal arrows). Expected: the panel grows to fill the screen area (~0.4 s), then the SOL page appears on the same conversation. Leaving the SOL page shows the sidebar **closed**.
 2. [ ] Open the sidebar again, click **Pop out to the pill** (frame icon). Expected: the panel contents shrink toward the bottom-right corner and fade (~¼ s), the sidebar closes, and the SOL pill window appears with the same thread.
 3. [ ] Run the renderer in a plain browser (no Electron): the pop-out button is absent; expand and close still work.
 
@@ -58,7 +58,7 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 
 1. [ ] Ask something that cites a graph node. Click an `[entity:…]` citation chip. Expected: the Workspace opens with that node focused.
 2. [ ] In Build mode, ask SOL to make a graph change. Expected: a confirmation card appears in the sidebar; nothing changes until Approve; Reject clears it.
-3. [ ] Toggle "Think harder" / "Confirm every change" in the sidebar composer footer; send. Expected: honoured as on the SOL page.
+3. [ ] Turn on "Confirm every change" on the SOL page, then send a change request from the sidebar. Expected: the sidebar send honours it (it has no toggle of its own).
 
 ## 8. Motion and accessibility
 

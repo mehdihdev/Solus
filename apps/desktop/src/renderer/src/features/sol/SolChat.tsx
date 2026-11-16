@@ -692,6 +692,7 @@ export function SolChat({
             onUpload={onUpload}
             onAddNodeFromGraph={onAddNodeFromGraph}
             placeholder={placeholder}
+            bare={layout === 'sidebar'}
           />
         }
       />

@@ -1,4 +1,5 @@
-// SOLUSDEV-327 — the SOL sidebar's per-screen open state and remembered width (sol-sidebar.md §2–3).
+// SOLUSDEV-327 — the SOL sidebar's one open state (it follows the person across screens) and its
+// remembered width (sol-sidebar.md §2–3).
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   SIDEBAR_DEFAULT_WIDTH,
@@ -6,7 +7,6 @@ import {
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
   selectSidebarOpen,
-  sidebarKey,
   useSolSidebarStore
 } from './solSidebarStore'
 
@@ -15,31 +15,27 @@ beforeEach(() => {
 })
 
 describe('solSidebarStore', () => {
-  it('starts closed everywhere at the default width', () => {
+  it('starts closed at the default width', () => {
     const state = useSolSidebarStore.getState()
     expect(selectSidebarOpen(state, 'workspace')).toBe(false)
-    expect(selectSidebarOpen(state, 'home')).toBe(false)
     expect(state.width).toBe(SIDEBAR_DEFAULT_WIDTH)
   })
 
-  it('remembers open or closed per screen', () => {
-    useSolSidebarStore.getState().toggle('workspace')
+  it('follows the person across screens', () => {
+    useSolSidebarStore.getState().toggle()
     const state = useSolSidebarStore.getState()
     expect(selectSidebarOpen(state, 'workspace')).toBe(true)
-    expect(selectSidebarOpen(state, 'bench')).toBe(false)
-    useSolSidebarStore.getState().setOpen('workspace', false)
-    expect(selectSidebarOpen(useSolSidebarStore.getState(), 'workspace')).toBe(false)
+    expect(selectSidebarOpen(state, 'bench')).toBe(true)
+    expect(selectSidebarOpen(state, 'alert')).toBe(true)
+    useSolSidebarStore.getState().setOpen(false)
+    expect(selectSidebarOpen(useSolSidebarStore.getState(), 'home')).toBe(false)
   })
 
-  it('never opens on the SOL page', () => {
-    useSolSidebarStore.getState().toggle('sol')
-    expect(selectSidebarOpen(useSolSidebarStore.getState(), 'sol')).toBe(false)
-  })
-
-  it('does not mutate the previous open map', () => {
-    const before = useSolSidebarStore.getState().openByScreen
-    useSolSidebarStore.getState().toggle('home')
-    expect(before).toEqual({})
+  it('is never shown on the SOL page, and stays open for the next screen', () => {
+    useSolSidebarStore.getState().setOpen(true)
+    const state = useSolSidebarStore.getState()
+    expect(selectSidebarOpen(state, 'sol')).toBe(false)
+    expect(selectSidebarOpen(state, 'home')).toBe(true)
   })
 
   it('clamps the width between 320 and 480', () => {
@@ -51,9 +47,22 @@ describe('solSidebarStore', () => {
     expect(useSolSidebarStore.getState().width).toBe(SIDEBAR_MAX_WIDTH)
   })
 
-  it('keys detail routes by their kind', () => {
-    expect(sidebarKey({ name: 'workspace' })).toBe('workspace')
-    expect(sidebarKey({ name: 'alert', alertId: 'a1' })).toBe('alert')
-    expect(sidebarKey({ name: 'ext-page', slug: 'x' })).toBe('ext-page')
+  it('restores only a boolean open flag from storage', async () => {
+    localStorage.setItem(
+      'solus.sol-sidebar',
+      JSON.stringify({ state: { open: 'yes', width: '9000' }, version: 1 })
+    )
+    await useSolSidebarStore.persist.rehydrate()
+    const state = useSolSidebarStore.getState()
+    expect(state.open).toBe(false)
+    expect(state.width).toBe(SIDEBAR_DEFAULT_WIDTH)
+    localStorage.setItem(
+      'solus.sol-sidebar',
+      JSON.stringify({ state: { open: true, width: 400 }, version: 1 })
+    )
+    await useSolSidebarStore.persist.rehydrate()
+    expect(useSolSidebarStore.getState().open).toBe(true)
+    expect(useSolSidebarStore.getState().width).toBe(400)
+    localStorage.clear()
   })
 })

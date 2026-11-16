@@ -22,7 +22,7 @@ interface ScreenCopy {
 }
 
 const GENERIC_GREETING = 'Ask SOL about this project.'
-const GENERIC_PLACEHOLDER = 'Ask SOL about this project'
+const GENERIC_PLACEHOLDER = 'Ask SOL anything'
 
 const LABELS: Readonly<Record<string, string>> = {
   home: 'HOME',
@@ -39,12 +39,12 @@ const SCREENS: Readonly<Record<string, Omit<ScreenCopy, 'label'>>> = {
   workspace: {
     greeting: 'I can see the workspace graph. Ask about any node, or how two connect.',
     suggestions: ["What does this project's graph cover?", 'Is anything wired inconsistently?'],
-    placeholder: 'Ask SOL about anything in the workspace'
+    placeholder: 'Ask about the workspace'
   },
   bench: {
     greeting: "I'm watching the bench with you. Ask about a signal or what to test.",
     suggestions: ['What should I test first?', 'What can I put on the bench?'],
-    placeholder: 'Ask SOL about anything on the bench'
+    placeholder: 'Ask about the bench'
   },
   home: {
     greeting: 'Ask about this project, or what changed since you were last here.',
