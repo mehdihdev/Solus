@@ -1,11 +1,10 @@
 // SOLUSDEV-252 S3: the tray (wireflow §E) against injected Tray/Menu slices —
-// menu reflects mode/setting, clicks call back, a missing host → null.
+// menu reflects the settings, clicks call back, a missing host → null.
 import { describe, it, expect, vi } from 'vitest'
 import { createTray, paintDot, trayTooltip, type TrayDeps, type TrayMenuItem } from './tray'
 import type { SolState } from './sol-window/solWindow'
 
 const STATE: SolState = {
-  actionMode: 'guide',
   screenIntelligence: false,
   hotkeysEnabled: true,
   capture: { mode: 'available', message: '' },
@@ -48,7 +47,6 @@ function harness(over: Partial<TrayDeps> = {}): {
     },
     buildMenu: (template) => template,
     onOpen: () => void clicks.push('open'),
-    onSetMode: (m) => void clicks.push(`mode:${m}`),
     onSetScreenIntelligence: (b) => void clicks.push(`si:${b}`),
     onSetHotkeys: (b) => void clicks.push(`hk:${b}`),
     onQuit: () => void clicks.push('quit'),
@@ -99,47 +97,43 @@ function registerTrayRenderingTests(): void {
     const tray = createTray(h.deps)
     expect(tray).not.toBeNull()
     tray?.update(STATE)
-    expect(h.tooltips.at(-1)).toBe('SOL · Guide')
+    expect(h.tooltips.at(-1)).toBe('SOL')
     const menu = h.menus.at(-1) ?? []
     expect(menu.map((i) => i.label ?? i.type)).toEqual([
       'Open SOL',
       'separator',
-      'Guide',
-      'Build',
       'SOL sees your screen',
       'Hold-Ctrl gestures',
       'separator',
-      'Ctrl+Shift+Space — open SOL · Ctrl+Space — mode · Ctrl+Shift+C — circle mode',
+      'Ctrl+Shift+Space — open SOL · Ctrl+Shift+C — circle mode',
       'separator',
       'Quit'
     ])
-    expect(byLabel(menu, 'Guide')).toMatchObject({ type: 'radio', checked: true })
-    expect(byLabel(menu, 'Build')).toMatchObject({ type: 'radio', checked: false })
+    // SOLUSDEV-327: SOL builds as needed — no Guide | Build radio.
+    expect(menu.some((i) => i.type === 'radio')).toBe(false)
     expect(byLabel(menu, 'SOL sees your screen')).toMatchObject({
       type: 'checkbox',
       checked: false
     })
     expect(byLabel(menu, 'Hold-Ctrl gestures')).toMatchObject({ type: 'checkbox', checked: true })
-    expect(menu[7].enabled).toBe(false)
+    expect(menu[5].enabled).toBe(false)
     expect(h.images.at(-1)).toBe('off')
 
     tray?.update({
       ...STATE,
-      actionMode: 'do',
       screenIntelligence: true,
       hotkeys: {
         hook: { status: 'unavailable', message: '' },
         shortcuts: {},
         mode: 'fallback',
         circleModeActive: false,
-        summary: 'Ctrl+Shift+Space — open · Ctrl+Space — mode · Ctrl+Shift+C — circle mode'
+        summary: 'Ctrl+Shift+Space — open · Ctrl+Shift+C — circle mode'
       }
     })
-    expect(h.tooltips.at(-1)).toBe('SOL · Build · sees your screen')
+    expect(h.tooltips.at(-1)).toBe('SOL · sees your screen')
     const next = h.menus.at(-1) ?? []
-    expect(byLabel(next, 'Build').checked).toBe(true)
     expect(byLabel(next, 'SOL sees your screen').checked).toBe(true)
-    expect(next[7].label).toMatch(/Ctrl\+Shift\+Space/)
+    expect(next[5].label).toMatch(/Ctrl\+Shift\+Space/)
     expect(h.images.at(-1)).toBe('on')
   })
 }
@@ -151,12 +145,11 @@ function registerTrayActionsAndFallbacksTests(): void {
     tray?.update(STATE)
     const menu = h.menus.at(-1) ?? []
     byLabel(menu, 'Open SOL').click?.()
-    byLabel(menu, 'Build').click?.()
     byLabel(menu, 'SOL sees your screen').click?.()
     byLabel(menu, 'Hold-Ctrl gestures').click?.()
     byLabel(menu, 'Quit').click?.()
     h.trayClick()
-    expect(h.clicks).toEqual(['open', 'mode:do', 'si:true', 'hk:false', 'quit', 'open'])
+    expect(h.clicks).toEqual(['open', 'si:true', 'hk:false', 'quit', 'open'])
     tray?.destroy()
     expect(h.destroyed()).toBe(true)
   })

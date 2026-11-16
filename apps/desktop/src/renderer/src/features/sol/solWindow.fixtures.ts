@@ -9,7 +9,6 @@ import type {
 } from '../../../../main/sol-window/solWindow'
 
 export const SOL_STATE: SolState = {
-  actionMode: 'guide',
   screenIntelligence: true,
   hotkeysEnabled: true,
   capture: { mode: 'available', message: '' },
@@ -50,7 +49,6 @@ export function fakeSolBridge(state: SolState | null = SOL_STATE): FakeSolBridge
   let summonHandler: ((at: number) => void) | null = null
   return {
     getState: vi.fn(async () => state),
-    setMode: vi.fn(async () => state),
     setScreenIntelligence: vi.fn(async () => state),
     setHotkeys: vi.fn(async () => state),
     open: vi.fn(async () => state),

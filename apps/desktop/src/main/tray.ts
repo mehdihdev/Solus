@@ -1,11 +1,10 @@
 // SOLUSDEV-252 S3: the tray (wireflow §E) — icon (dot overlay while SOL sees
-// the screen), tooltip, menu with Open / Guide|Build radio / sees-your-screen
+// the screen), tooltip, menu with Open / sees-your-screen
 // checkbox / shortcuts line / Quit. Electron's Tray, Menu and nativeImage are
 // injected as structural slices; `createTray` never throws: no host → null and
 // the window header carries the same state.
 import { summonShortcutLabel } from './hotkeys/globalHotkeys'
 import type { PlatformBasics } from './platform/capabilities'
-import type { SolActionMode } from './solSettings'
 import type { SolState } from './sol-window/solWindow'
 
 /** Structural slice of Electron's MenuItemConstructorOptions. */
@@ -34,7 +33,6 @@ export interface TrayDeps {
   createTray(image: unknown): TrayHandle
   buildMenu(template: TrayMenuItem[]): unknown
   onOpen(): void
-  onSetMode(mode: SolActionMode): void
   onSetScreenIntelligence(on: boolean): void
   /** The hold-Ctrl gestures (native key hook) consent toggle (§7). */
   onSetHotkeys(on: boolean): void
@@ -47,25 +45,15 @@ export interface SolTray {
   destroy(): void
 }
 
-const MODE_LABEL: Record<SolActionMode, string> = { guide: 'Guide', do: 'Build' }
-
 export function trayTooltip(state: SolState): string {
   if (state.hotkeys?.circleModeActive) return 'SOL · Circle mode — draw a loop'
-  return `SOL · ${MODE_LABEL[state.actionMode]}${state.screenIntelligence ? ' · sees your screen' : ''}`
+  return `SOL${state.screenIntelligence ? ' · sees your screen' : ''}`
 }
 
 export function trayMenu(state: SolState, deps: TrayDeps): TrayMenuItem[] {
   return [
     { label: 'Open SOL', click: deps.onOpen },
     { type: 'separator' },
-    ...(['guide', 'do'] as const).map(
-      (mode): TrayMenuItem => ({
-        label: MODE_LABEL[mode],
-        type: 'radio',
-        checked: state.actionMode === mode,
-        click: () => deps.onSetMode(mode)
-      })
-    ),
     {
       label: 'SOL sees your screen',
       type: 'checkbox',
@@ -82,7 +70,7 @@ export function trayMenu(state: SolState, deps: TrayDeps): TrayMenuItem[] {
     {
       label:
         state.hotkeys?.summary ||
-        `${summonShortcutLabel(deps.basics.platform)} — open SOL · Ctrl+Space — mode · Ctrl+Shift+C — circle mode`,
+        `${summonShortcutLabel(deps.basics.platform)} — open SOL · Ctrl+Shift+C — circle mode`,
       enabled: false
     },
     { type: 'separator' },

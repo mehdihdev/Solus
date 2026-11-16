@@ -24,11 +24,9 @@ function fakeShortcuts(taken: string[] = []): {
 }
 
 const handlers = (): {
-  onToggleMode: ReturnType<typeof vi.fn>
   onSummon: ReturnType<typeof vi.fn>
   onCircleMode: ReturnType<typeof vi.fn>
 } => ({
-  onToggleMode: vi.fn(),
   onSummon: vi.fn(),
   onCircleMode: vi.fn()
 })
@@ -56,22 +54,19 @@ function registerShortcutRegistrationTests(): void {
     const h = handlers()
     const reg = registerGlobalHotkeys(s.api, { available: true, hookAvailable: true, ...h })
     expect(ACCELERATORS.summonFallback).toBe('CommandOrControl+Shift+Space')
-    expect(s.registered()).toEqual([
-      ACCELERATORS.toggleMode,
-      ACCELERATORS.summonFallback,
-      ACCELERATORS.circleMode
-    ])
-    expect(reg.shortcuts).toEqual({ ctrlSpace: true, spawnFallback: true, circleMode: true })
+    expect(s.registered()).toEqual([ACCELERATORS.summonFallback, ACCELERATORS.circleMode])
+    // SOLUSDEV-327: no Ctrl+Space Guide | Build toggle — SOL builds as needed.
+    expect(ACCELERATORS).not.toHaveProperty('toggleMode')
+    expect(s.registered()).not.toContain('Control+Space')
+    expect([ACCELERATORS.summonFallback, ACCELERATORS.circleMode]).toHaveLength(2)
+    expect(reg.shortcuts).toEqual({ spawnFallback: true, circleMode: true })
     expect(reg.messages).toEqual([])
     s.fire(ACCELERATORS.summonFallback)
     expect(h.onSummon).toHaveBeenCalledTimes(1)
-    s.fire(ACCELERATORS.toggleMode)
     s.fire(ACCELERATORS.circleMode)
-    expect(h.onToggleMode).toHaveBeenCalledTimes(1)
     expect(h.onCircleMode).toHaveBeenCalledTimes(1)
     reg.stop()
     expect(s.api.unregister.mock.calls.map((c) => c[0])).toEqual([
-      ACCELERATORS.toggleMode,
       ACCELERATORS.summonFallback,
       ACCELERATORS.circleMode
     ])
@@ -82,25 +77,22 @@ function registerShortcutRegistrationTests(): void {
     const s = fakeShortcuts()
     const h = handlers()
     const reg = registerGlobalHotkeys(s.api, { available: true, hookAvailable: false, ...h })
-    expect(reg.shortcuts).toEqual({ ctrlSpace: true, spawnFallback: true, circleMode: true })
+    expect(reg.shortcuts).toEqual({ spawnFallback: true, circleMode: true })
     s.fire(ACCELERATORS.summonFallback)
     expect(h.onSummon).toHaveBeenCalledTimes(1)
   })
 
   it('a false from register() is a message, not a throw', () => {
-    const s = fakeShortcuts([ACCELERATORS.toggleMode])
+    const s = fakeShortcuts([ACCELERATORS.circleMode])
     const reg = registerGlobalHotkeys(s.api, {
       available: true,
       hookAvailable: true,
       ...handlers()
     })
-    expect(reg.shortcuts.ctrlSpace).toBe(false)
-    expect(reg.messages).toEqual(['Ctrl+Space is unavailable; use Open SOL window'])
+    expect(reg.shortcuts.circleMode).toBe(false)
+    expect(reg.messages).toEqual(['Ctrl+Shift+C is unavailable; use Open SOL window'])
     reg.stop() // never touches a chord another app owns
-    expect(s.api.unregister.mock.calls.map((c) => c[0])).toEqual([
-      ACCELERATORS.summonFallback,
-      ACCELERATORS.circleMode
-    ])
+    expect(s.api.unregister.mock.calls.map((c) => c[0])).toEqual([ACCELERATORS.summonFallback])
   })
 }
 
@@ -115,8 +107,8 @@ function registerShortcutFailureFallbacksTests(): void {
       hookAvailable: false,
       ...handlers()
     })
-    expect(reg.shortcuts).toEqual({ ctrlSpace: false, spawnFallback: false, circleMode: false })
-    expect(reg.messages).toHaveLength(3)
+    expect(reg.shortcuts).toEqual({ spawnFallback: false, circleMode: false })
+    expect(reg.messages).toHaveLength(2)
   })
 
   it('Wayland: registers nothing', () => {
@@ -127,7 +119,7 @@ function registerShortcutFailureFallbacksTests(): void {
       ...handlers()
     })
     expect(s.api.register).not.toHaveBeenCalled()
-    expect(reg.shortcuts).toEqual({ ctrlSpace: false, spawnFallback: false, circleMode: false })
+    expect(reg.shortcuts).toEqual({ spawnFallback: false, circleMode: false })
     reg.stop()
     expect(s.api.unregister).not.toHaveBeenCalled()
     expect(s.api.unregisterAll).not.toHaveBeenCalled()

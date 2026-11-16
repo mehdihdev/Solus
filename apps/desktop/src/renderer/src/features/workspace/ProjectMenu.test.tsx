@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { ProjectMenu } from './ProjectMenu'
+import { menuPlacement, ProjectMenu } from './ProjectMenu'
 import type { Project } from '../../lib/api/resources'
 import type { HomeActions } from './useHomeData'
 
@@ -64,5 +64,45 @@ describe('ProjectMenu', () => {
     await openMenu()
     expect(screen.getByRole('menuitem', { name: 'Edit details' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: 'Delete' })).toBeNull()
+  })
+
+  it('renders the menu outside the clipping table, at a fixed position', async () => {
+    const { container } = render(
+      <div style={{ overflowX: 'auto' }}>
+        <ProjectMenu project={PROJECT} canDelete actions={actions(true)} onActionFailed={vi.fn()} />
+      </div>
+    )
+    await openMenu()
+    const menu = screen.getByRole('menu')
+    expect(container.contains(menu)).toBe(false)
+    expect(menu.style.position).toBe('fixed')
+  })
+
+  it('keeps menu clicks from reaching the row', async () => {
+    const onRow = vi.fn()
+    render(
+      <div onClick={onRow}>
+        <ProjectMenu project={PROJECT} canDelete actions={actions(true)} onActionFailed={vi.fn()} />
+      </div>
+    )
+    await openMenu()
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Edit details' }))
+    expect(onRow).not.toHaveBeenCalled()
+  })
+})
+
+describe('menuPlacement', () => {
+  it('opens below the ⋯, right-aligned to it', () => {
+    expect(menuPlacement({ top: 100, bottom: 120, right: 900 }, 800, 1000)).toEqual({
+      right: 100,
+      top: 124
+    })
+  })
+
+  it('flips above the ⋯ when the window has no room below', () => {
+    expect(menuPlacement({ top: 740, bottom: 760, right: 900 }, 800, 1000)).toEqual({
+      right: 100,
+      bottom: 64
+    })
   })
 })

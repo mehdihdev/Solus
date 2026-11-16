@@ -6,6 +6,7 @@ import { render, screen, act, fireEvent, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { WorkspaceShell } from './WorkspaceShell'
+import { useSolSidebarStore } from '../sol/sidebar/solSidebarStore'
 import { useShellStore } from './shellStore'
 import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -252,6 +253,22 @@ describe('WorkspaceShell — chrome', () => {
     expect(screen.queryByText('Team')).toBeNull()
     await userEvent.click(screen.getByText('Home'))
     expect(useShellStore.getState().lastMain).toBe('home')
+  })
+
+  it('docks the SOL sidebar beside the screen and hides it on the SOL page (SOLUSDEV-327)', async () => {
+    useSolSidebarStore.getState().reset()
+    renderShell()
+    expect(screen.queryByRole('complementary', { name: 'SOL sidebar' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: /SOL sidebar/ }))
+    expect(await screen.findByRole('complementary', { name: 'SOL sidebar' })).toBeInTheDocument()
+    await userEvent.click(screen.getByLabelText('SOL'))
+    await waitFor(() =>
+      expect(screen.queryByRole('complementary', { name: 'SOL sidebar' })).toBeNull()
+    )
+    expect(screen.queryByRole('button', { name: /SOL sidebar/ })).toBeNull()
+    await userEvent.click(screen.getByText('Home'))
+    expect(await screen.findByRole('complementary', { name: 'SOL sidebar' })).toBeInTheDocument()
+    useSolSidebarStore.getState().reset()
   })
 
   it('mounts no corner orb — SOL is the rail item and the SOL window (SOLUSDEV-252)', () => {

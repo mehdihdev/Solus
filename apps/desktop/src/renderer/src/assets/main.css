@@ -440,26 +440,6 @@ body {
   font-size: 11px;
   color: var(--mut);
 }
-.sol-pill-chip {
-  background: transparent;
-  border: 1px solid var(--bd);
-  border-radius: 5px;
-  color: var(--mut);
-  font-family: var(--font-ui);
-  font-size: 11px;
-  padding: 1px 7px;
-  cursor: pointer;
-}
-.sol-pill-chip[aria-pressed='true'] {
-  color: var(--tx);
-  background: var(--sur2);
-}
-.sol-pill-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
 .sol-pill-hide {
   background: transparent;
   border: 0;
@@ -477,12 +457,15 @@ body {
    Summon: fade + rise + settle from a hair smaller, on an expo ease-out;
    leaving: a quicker fade/sink that main waits for (SOL_PILL_EXIT_MS,
    bounded) before it hides the window. Both scale from the bottom edge. */
+/* The two SOL curves, shared by every SOL surface (pill, sidebar — SOLUSDEV-327). */
+:root {
+  --sol-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sol-ease-in: cubic-bezier(0.4, 0, 0.9, 0.6);
+}
 .sol-pill-host {
   --sol-pill-in-ms: 280ms;
   --sol-pill-out-ms: 160ms;
   --sol-pill-arrive-ms: 320ms;
-  --sol-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --sol-ease-in: cubic-bezier(0.4, 0, 0.9, 0.6);
 }
 @keyframes sol-pill-in {
   from {
@@ -1128,13 +1111,6 @@ body {
   border: 1px solid var(--bd);
   border-radius: 6px;
   background: var(--sur);
-}
-.sol-composer-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 0 2px;
 }
 .sol-attach-menu {
   position: absolute;

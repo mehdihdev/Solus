@@ -2,8 +2,8 @@
 // docs/wireflows/home.md "Team overview"): a header naming the team, its plan and size, with
 // the ⋯ menu and a role-aware Invite; the projects (passed in); a preview of the members that
 // links to the full roster (Team & invites); "You in <team>"; and, for managers, the team's
-// pending invites. The personal workspace has no roster: it offers a way to work with others
-// instead (inviting from it creates a new team, ADR-025 — the workspace itself stays solo).
+// pending invites; and "Work with others" (invite here, or join another team). The personal
+// workspace is solo: no roster and no "Work with others" — its ⋯ menu still joins or starts teams.
 import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
@@ -39,10 +39,13 @@ export function TeamOverview(props: TeamOverviewProps): React.JSX.Element {
       {props.projects}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
         {!personal && <MembersPreview {...props} />}
-        <div style={{ flex: '1 1 280px', display: 'grid', gap: 12 }}>
-          {personal ? <WorkWithOthers {...props} /> : <YouInTeam {...props} />}
-          {!personal && <PendingInvites {...props} />}
-        </div>
+        {!personal && (
+          <div style={{ flex: '1 1 280px', display: 'grid', gap: 12 }}>
+            <YouInTeam {...props} />
+            <PendingInvites {...props} />
+            <WorkWithOthers {...props} />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -226,20 +229,33 @@ function PendingInvites({
   )
 }
 
-function WorkWithOthers({ onInvite, onJoin }: TeamOverviewProps): React.JSX.Element {
+function workWithOthersCopy(team: TeamSummary, manager: boolean): string {
+  return manager
+    ? `Bring someone into ${team.name}, or join another team with an invite code.`
+    : `Have an invite code for another team? Join it here — ${team.name} stays on your list.`
+}
+
+function WorkWithOthers({
+  team,
+  homeTeam,
+  onInvite,
+  onJoin
+}: TeamOverviewProps): React.JSX.Element {
+  const manager = canManage(homeTeam)
   return (
     <section aria-label="Work with others" style={CARD}>
       <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
         WORK WITH OTHERS
       </Mono>
       <span style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-        Inviting someone starts a new team for the two of you — your personal workspace stays yours
-        alone. Or join a team you were invited to.
+        {workWithOthersCopy(team, manager)}
       </span>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        <Button kind="primary" size="sm" onClick={onInvite}>
-          Invite a teammate
-        </Button>
+        {manager && (
+          <Button kind="primary" size="sm" onClick={onInvite}>
+            Invite a teammate
+          </Button>
+        )}
         <Button kind="ghost" size="sm" onClick={onJoin}>
           Join with an invite code
         </Button>

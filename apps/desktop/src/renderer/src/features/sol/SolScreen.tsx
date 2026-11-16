@@ -94,7 +94,7 @@ export function SolScreen({
  *  node in the Workspace, and a `.solus` entry its own graph node, whose sidebar shows the entry. An
  *  entry this project's `.solus` does not hold opens the Workspace, where `.solus` lives, focusing
  *  nothing. */
-function openCitation(
+export function openCitation(
   target: CitationTarget,
   sections: SolusState['sections'],
   onNavigate: (screen: MainScreen) => void

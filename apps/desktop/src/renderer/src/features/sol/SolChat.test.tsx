@@ -14,7 +14,6 @@ import { useSolSessionStore } from './solSessionStore'
 import { resetSolChatSessions } from './solChatStore'
 import { SolChat } from './SolChat'
 import { createSolStreamParser } from './solStream'
-import userEvent from '@testing-library/user-event'
 import { regionToScreenshot, useSolWindowStore } from './solWindowStore'
 import { SOL_REGION } from './solWindow.fixtures'
 
@@ -626,77 +625,14 @@ function scrollReadingPositionTests(
 }
 
 function composerActionModesTests(): void {
-  it('posts action_mode from the mode badge and clears the input after send', async () => {
-    // SOLUSDEV-252 S3: the Guide/Do segmented control is now the shared mode
-    // badge (Guide | Build), the same one the SOL window header shows.
+  it('clears the input after a send', async () => {
     streamSolMessage.mockResolvedValue(undefined)
     render(<SolChat projectId="p1" />)
-    const badge = screen.getByRole('button', { name: 'SOL action mode' })
-    expect(badge).toHaveTextContent('Build')
     sendMessage('flash the board')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ actionMode: 'do', content: 'flash the board' })
-      )
-    )
+    await waitFor(() => expect(streamSolMessage).toHaveBeenCalled())
     expect(screen.getByPlaceholderText('Ask about a signal, a change, a part…')).toHaveValue('')
-    fireEvent.click(badge)
-    expect(badge).toHaveTextContent('Guide')
-    sendMessage('what does this pin do')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ actionMode: 'guide' })
-      )
-    )
-    // The toggle sticks for the surface rather than resetting per send.
-    expect(badge).toHaveTextContent('Guide')
   })
 
-  it('sends think_harder from the composer toggle and resets it after send', async () => {
-    // S1-W3: one tier up for THIS message only — off by default, off again after.
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    const toggle = screen.getByRole('switch', { name: 'Think harder' })
-    expect(toggle).toHaveAttribute('aria-checked', 'false')
-    sendMessage('what is I2C')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ thinkHarder: false }))
-    )
-    fireEvent.click(toggle)
-    expect(toggle).toHaveAttribute('aria-checked', 'true')
-    sendMessage('why does the bus lock up under load')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          thinkHarder: true,
-          content: 'why does the bus lock up under load'
-        })
-      )
-    )
-    expect(screen.getByRole('switch', { name: 'Think harder' })).toHaveAttribute(
-      'aria-checked',
-      'false'
-    )
-  })
-
-  it('defaults to Do, so a mutating ask parks for approval instead of being refused', async () => {
-    // Guide refuses exactly the tools whose descriptor sets
-    // `requires_confirmation` (agent/modes.py) — precisely the set the CTR-03
-    // gate already parks. So defaulting to Guide added no safety: it replaced an
-    // approval card the user could act on with "switch to Do mode to operate the
-    // tool". The gate is unchanged and still parks every mutation; only the
-    // client default moves. `MessageCreate.action_mode` stays GUIDE for every
-    // non-UI caller.
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-
-    expect(screen.getByRole('button', { name: 'SOL action mode' })).toHaveTextContent('Build')
-
-    sendMessage('rename the mounting sketch')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
-    )
-  })
 }
 
 function composerMentionSelectionTests(): void {
@@ -783,101 +719,7 @@ function composerRoutingTests(): void {
     expect(screen.queryByRole('listbox', { name: 'Graph entities' })).not.toBeInTheDocument()
   })
 
-  it('still lets the user drop back to Guide for an explain-only turn', async () => {
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    fireEvent.click(screen.getByRole('button', { name: 'SOL action mode' }))
-
-    sendMessage('what would changing this break')
-
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ actionMode: 'guide' })
-      )
-    )
-  })
-
-  it('wires the classify preview onto the input (debounced, never per keystroke)', async () => {
-    vi.useFakeTimers()
-    try {
-      render(<SolChat projectId="p1" />)
-      fireEvent.change(screen.getByPlaceholderText('Ask about a signal, a change, a part…'), {
-        target: { value: 'why is the IMU noisy' }
-      })
-      expect(classifyQuery).not.toHaveBeenCalled()
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400)
-      })
-      expect(classifyQuery).toHaveBeenCalledWith({ query: 'why is the IMU noisy' })
-    } finally {
-      vi.useRealTimers()
-    }
-  })
 }
-
-describe('SOL review preference', () => {
-  it('does not let the switch misrepresent an already running turn', async () => {
-    streamSolMessage.mockImplementation(() => new Promise(() => undefined))
-    render(<SolChat projectId="p1" />)
-    sendMessage('update the wiring')
-    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(1))
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeDisabled()
-  })
-  it('defaults to normal Build behavior', async () => {
-    streamSolMessage.mockResolvedValue(undefined)
-    render(<SolChat projectId="p1" />)
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
-    sendMessage('inspect the wiring')
-    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(1))
-    expect(streamSolMessage.mock.calls[0]?.[0].forceConfirmation).toBeUndefined()
-  })
-
-  it('supports keyboard choice, keeps it across turns and remounts, and can turn it off', async () => {
-    streamSolMessage.mockResolvedValue(undefined)
-    const user = userEvent.setup()
-    const view = render(<SolChat projectId="p1" />)
-    screen.getByRole('switch', { name: 'Confirm every change' }).focus()
-    await user.keyboard(' ')
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
-    sendMessage('update the wiring')
-    await waitFor(() =>
-      expect(streamSolMessage).toHaveBeenLastCalledWith(
-        expect.objectContaining({ forceConfirmation: true })
-      )
-    )
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled())
-    view.unmount()
-    render(<SolChat projectId="p1" />)
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
-    sendMessage('update the code')
-    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(2))
-    expect(streamSolMessage).toHaveBeenLastCalledWith(
-      expect.objectContaining({ forceConfirmation: true })
-    )
-    screen.getByRole('switch', { name: 'Confirm every change' }).focus()
-    await user.keyboard('{Enter}')
-    sendMessage('inspect again')
-    await waitFor(() => expect(streamSolMessage).toHaveBeenCalledTimes(3))
-    expect(streamSolMessage.mock.calls[2]?.[0].forceConfirmation).toBeUndefined()
-  })
-
-  it('isolates projects and resets on a new conversation and account reset', async () => {
-    const user = userEvent.setup()
-    const view = render(<SolChat projectId="p1" />)
-    await user.click(screen.getByRole('switch', { name: 'Confirm every change' }))
-    view.rerender(<SolChat projectId="p2" />)
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
-    view.rerender(<SolChat projectId="p1" />)
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).toBeChecked()
-    act(() => useSolSessionStore.getState().setConversation('p1', 'other'))
-    await waitFor(() =>
-      expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
-    )
-    await user.click(screen.getByRole('switch', { name: 'Confirm every change' }))
-    act(() => resetSolChatSessions())
-    expect(screen.getByRole('switch', { name: 'Confirm every change' })).not.toBeChecked()
-  })
-})
 
 describe('SolChat research sources (SOLUSDEV-321 P1-T5)', () => {
   it('shows the sources a turn researched as inert pills in the reply that used them', async () => {

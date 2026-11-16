@@ -15,7 +15,6 @@ import type { DriveStatus } from '../main/drive/driveStatus'
 import type { SolRegionPayload, SolState } from '../main/sol-window/solWindow'
 
 const STATE: SolState = {
-  actionMode: 'do',
   screenIntelligence: true,
   hotkeysEnabled: false,
   capture: { mode: 'available', message: '' },
@@ -67,7 +66,6 @@ describe('invokes', () => {
     const f = fakeIpc()
     const b = createSolBridge(f.ipc)
     await expect(b.getState()).resolves.toEqual(STATE)
-    await b.setMode('guide')
     await b.setScreenIntelligence(true)
     await b.setHotkeys(false)
     await b.open()
@@ -78,7 +76,6 @@ describe('invokes', () => {
     const c = SOL_WINDOW_CHANNELS
     expect(f.invoked).toEqual([
       { channel: c.getState, args: [] },
-      { channel: c.setMode, args: ['guide'] },
       { channel: c.setScreenIntelligence, args: [true] },
       { channel: c.setHotkeys, args: [false] },
       { channel: c.open, args: [] },
@@ -117,7 +114,7 @@ describe('pushes', () => {
       const onRegion = vi.fn()
       b.onState(onState)
       b.onRegion(onRegion)
-      f.emit(SOL_WINDOW_CHANNELS.state, { ...STATE, actionMode: 'expert' })
+      f.emit(SOL_WINDOW_CHANNELS.state, { ...STATE, screenIntelligence: 'yes' })
       f.emit(SOL_WINDOW_CHANNELS.state, null)
       f.emit(SOL_WINDOW_CHANNELS.region, { ...REGION, pngBase64: 42 })
       f.emit(SOL_WINDOW_CHANNELS.region, { ...REGION, source: 'kicad' })
@@ -197,28 +194,6 @@ it('isSolState rejects a state missing hotkeysEnabled', () => {
 it('the structural slice accepts the real ipcRenderer shape', () => {
   const create: (ipc: IpcRenderer) => SolBridge = createSolBridge
   expect(create).toBe(createSolBridge)
-})
-
-it('validates native target geometry and uses an argument-free trusted discovery channel', async () => {
-  const target = {
-    tool: 'kicad',
-    windowTitle: 'Board',
-    displayId: '1',
-    bounds: { x: 0, y: 0, width: 800, height: 600 }
-  }
-  const invoke = vi.fn().mockResolvedValue(target)
-  const bridge = createSolBridge({ ...fakeIpc().ipc, invoke })
-  expect(await bridge.getGuideTarget?.()).toEqual(target)
-  expect(invoke).toHaveBeenCalledWith(SOL_WINDOW_CHANNELS.guideTarget)
-  for (const raw of [
-    null,
-    { ...target, tool: 'arbitrary' },
-    { ...target, bounds: { ...target.bounds, width: -1 } },
-    { ...target, bounds: { ...target.bounds, x: NaN } }
-  ]) {
-    invoke.mockResolvedValue(raw)
-    expect(await bridge.getGuideTarget?.()).toBeNull()
-  }
 })
 
 // SOLUSDEV-319 drive slice 3 (sol-drive.md §5): the drive members, validated

@@ -7,7 +7,7 @@
 //   H2 — the wire authenticates the WINDOW, not the handoff. Every inbound
 //        message is therefore checked against the handoff this session actually
 //        adopted; a message for any other one is dropped. The orb side already
-//        does the mirror of this (features/sol/overlayHandoff.ts).
+//        did the mirror of this (overlayHandoff.ts, retired in SOLUSDEV-327).
 //   M7 — `GuideStep` text is untrusted (it can originate in a vendored fork's
 //        knowledge). It leaves here as plain strings destined for a text node.
 //        This module builds no markup and performs no interpolation, so there is
@@ -32,7 +32,7 @@ import {
 // USER or the TOOL. None describes "the KB has no coordinates for this control",
 // and reporting one that does not fit would have the orb narrate something
 // untrue. `failed.reason` is the free-form field for exactly this, and it is
-// terminal on the orb side too (overlayHandoff.ts), so the panel picks the guide
+// terminal on the orb side too (the retired overlayHandoff.ts), so the panel picks the guide
 // up — which is why the handoff is released here rather than held.
 
 /** What the renderer needs to paint one step. Strings, a box, nothing else. */

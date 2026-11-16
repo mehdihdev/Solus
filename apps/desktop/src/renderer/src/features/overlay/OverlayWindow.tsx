@@ -27,7 +27,7 @@ import { createOverlaySession, type OverlayView } from './overlaySession'
  */
 const ORB_VOUCHED = 1
 
-/** Mirror of `orbPortFromBridge` (features/sol/overlayHandoff.ts) for this end. */
+/** The overlay end of the orb-overlay wire (its orb-side handoff was retired with Guide tasks, SOLUSDEV-327). */
 function overlayPortFromBridge(bridge: {
   publishToOrb(message: OverlayToOrb): void
   onOrbToOverlay(handler: (message: OrbToOverlay) => void): () => void

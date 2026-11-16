@@ -1,4 +1,3 @@
-import type { ToolWindowRef } from '@solus/shared-types'
 // SOLUSDEV-252 S3: the SOL window manager (docs/architecture/sol-window.md §2,
 // wireflow §A/§B) — replaces the SOLX-02 detach/attach registry. ONE
 // resizable, geometry-remembering, optionally always-on-top BrowserWindow at
@@ -17,7 +16,7 @@ import {
   SOL_WINDOW_CHANNELS,
   SUMMON_CAPTURE_WAIT_MS
 } from './solWindow.constants'
-import type { SolActionMode, SolSettings } from '../solSettings'
+import type { SolSettings } from '../solSettings'
 import type { CaptureCapability } from '../capture/screenCapture'
 import type { CapabilityState } from '../platform/capabilities'
 import type { ActiveWindowInfo } from '../capture/activeWindow'
@@ -96,7 +95,6 @@ export interface SolHotkeyStatus {
 
 /** The state snapshot (SOL_WINDOW_CHANNELS.state) every app renderer receives (§7). */
 export interface SolState {
-  actionMode: SolActionMode
   screenIntelligence: boolean
   /** The hold-Ctrl gestures setting (main/solSettings `hotkeys`); `hotkeys`
    *  below is what is actually running given the platform. */
@@ -400,17 +398,13 @@ function boundedCapture(capture: () => Promise<void>): Promise<void> {
   const bound = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, SUMMON_CAPTURE_WAIT_MS)
   })
-  return Promise.race([capture().catch(() => undefined), bound]).finally(() =>
-    clearTimeout(timer)
-  )
+  return Promise.race([capture().catch(() => undefined), bound]).finally(() => clearTimeout(timer))
 }
 
 export interface SolIpcDeps {
   windows: Pick<SolWindowManager, 'open' | 'markReady' | 'isSender' | 'resize' | 'setBusy' | 'hide'>
-  settings: Pick<SolSettings, 'setMode' | 'setScreenIntelligence' | 'setHotkeys'>
+  settings: Pick<SolSettings, 'setScreenIntelligence' | 'setHotkeys'>
   state(): SolState
-  guideTarget?(): Promise<ToolWindowRef | null>
-  guideScope?(): number | null
   /** Open the capture capability's own settings pane (SOLUSDEV-318). */
   openCaptureSettings?(): void
   /** SOLUSDEV-324: the summon picture, once (main/capture/summonShot). */
@@ -433,14 +427,6 @@ export function registerSolIpcHandlers(
       return deps.state()
     }
   const c = SOL_WINDOW_CHANNELS
-  const guideScopeMatches = (scope: number): boolean =>
-    deps.guideScope?.() === scope && deps.state().actionMode === 'guide'
-  ipc.handle(c.guideTarget, async (event) => {
-    const scope = deps.guideScope?.()
-    if (!isAllowedSender(event) || scope == null || deps.state().actionMode !== 'guide') return null
-    const target = await deps.guideTarget?.().catch(() => null)
-    return isAllowedSender(event) && guideScopeMatches(scope) ? (target ?? null) : null
-  })
   ipc.handle(
     c.getState,
     gated((_arg, event) => deps.windows.markReady(event.sender))
@@ -448,12 +434,6 @@ export function registerSolIpcHandlers(
   ipc.handle(
     c.open,
     gated(() => deps.windows.open())
-  )
-  ipc.handle(
-    c.setMode,
-    gated((mode) => {
-      if (mode === 'guide' || mode === 'do') deps.settings.setMode(mode)
-    })
   )
   ipc.handle(
     c.setScreenIntelligence,

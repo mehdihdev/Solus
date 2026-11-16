@@ -60,6 +60,8 @@ CLIENT_EVENT_TYPES = frozenset(
         "client.error",
         # SOLUSDEV-317: a ⌘K command-palette result was opened.
         "search.palette_opened",
+        # SOLUSDEV-327: the SOL sidebar opened, closed, expanded or popped out.
+        "sol.sidebar_toggled",
     }
 )
 MAX_EVENTS_PER_BATCH = 50
@@ -139,6 +141,19 @@ class SearchPaletteOpenedPayload(BaseModel):
     query_length: Annotated[int, Field(ge=0, le=200)]
 
 
+class SolSidebarToggledPayload(BaseModel):
+    """`sol.sidebar_toggled` (SOLUSDEV-327): what happened to the SOL sidebar, on
+    which shell screen, from which control — enums only, never message text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["open", "close", "expand", "pop_out"]
+    screen: Literal[
+        "home", "workspace", "bench", "store", "billing", "settings", "alert", "ext-page"
+    ]
+    via: Literal["button", "shortcut", "header", "escape"]
+
+
 #: Per-event payload schemas. A client event WITH a schema is validated against
 #: it (unknown keys, bad enums and malformed ids reject); the data-collection
 #: store never accepts free-form strings under a Solus-authored event name.
@@ -147,6 +162,7 @@ PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
     "store.suggested": StoreSuggestedPayload,
     "client.error": ClientErrorPayload,
     "search.palette_opened": SearchPaletteOpenedPayload,
+    "sol.sidebar_toggled": SolSidebarToggledPayload,
 }
 
 

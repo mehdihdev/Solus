@@ -31,7 +31,24 @@ function renderBar(over: Partial<React.ComponentProps<typeof MenuBar>> = {}): {
 describe('MenuBar', () => {
   menuNavigationTests()
   menuInteractionsTests()
+  solToggleTests()
 })
+
+/** SOLUSDEV-327: the SOL sidebar toggle sits in the right cluster, except on the SOL page. */
+function solToggleTests(): void {
+  it('shows the SOL sidebar toggle on a workspace screen', () => {
+    renderBar({ activeScreen: 'workspace' })
+    expect(screen.getByRole('button', { name: /SOL sidebar/ })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    )
+  })
+
+  it('hides the toggle on the SOL page', () => {
+    renderBar({ activeScreen: 'sol' })
+    expect(screen.queryByRole('button', { name: /SOL sidebar/ })).toBeNull()
+  })
+}
 
 function menuNavigationTests(): void {
   it('shows the four menus closed', () => {

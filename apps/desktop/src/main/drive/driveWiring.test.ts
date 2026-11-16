@@ -34,15 +34,12 @@ import { startDrive } from './driveWiring'
 function settings(): SolSettings {
   const listeners = new Set<(s: ReturnType<SolSettings['get']>) => void>()
   let state = {
-    actionMode: 'guide' as const,
     screenIntelligence: false,
     hotkeys: true,
     drive: true
   }
   return {
     get: () => state,
-    setMode: () => undefined,
-    toggleMode: () => 'guide',
     setScreenIntelligence: () => undefined,
     setHotkeys: () => undefined,
     setDrive: (drive) => {

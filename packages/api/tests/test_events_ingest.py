@@ -499,6 +499,69 @@ async def test_search_palette_opened_payload_is_strictly_typed(
     assert resp.status_code == 422, (payload, resp.text)
 
 
+async def test_sol_sidebar_toggled_is_a_typed_client_event(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-327: the desktop records the SOL sidebar opening, closing, expanding to
+    the page or popping out to the pill — which screen, from which control. Enums only."""
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    payload = {"action": "open", "screen": "workspace", "via": "shortcut"}
+    good = {"event_type": "sol.sidebar_toggled", "project_id": project["id"], "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [good]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "sol.sidebar_toggled")
+    rows = list((await db.scalars(stmt)).all())
+    assert len(rows) == 1 and str(rows[0].user_id) == alice_id
+    assert rows[0].payload == payload
+
+
+async def test_sol_sidebar_toggled_drops_a_foreign_project_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-327: another team's project id is stored as no project, never attributed."""
+    alice_headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, alice_headers)
+    project = await _project(client, alice_headers)
+    bob_id = await _consented_user(client, db, BOB)
+    event = {
+        "event_type": "sol.sidebar_toggled",
+        "project_id": project["id"],
+        "payload": {"action": "close", "screen": "bench", "via": "escape"},
+    }
+    resp = await client.post(
+        "/api/v1/events", json={"events": [event]}, headers=bearer(BOB["sub"], BOB["email"])
+    )
+    assert resp.status_code == 202
+    stmt = select(DataEvent).where(DataEvent.event_type == "sol.sidebar_toggled")
+    rows = list((await db.scalars(stmt)).all())
+    assert len(rows) == 1
+    assert str(rows[0].user_id) == bob_id
+    assert rows[0].project_id is None and rows[0].team_id is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "minimise", "screen": "workspace", "via": "button"},
+        {"action": "open", "screen": "sol", "via": "button"},
+        {"action": "open", "screen": "workspace", "via": "voice"},
+        {"action": "open", "screen": "workspace"},
+        {"action": "open", "screen": "workspace", "via": "button", "text": "hi"},
+        {"action": 1, "screen": "workspace", "via": "button"},
+    ],
+)
+async def test_sol_sidebar_toggled_payload_is_strictly_typed(
+    client: AsyncClient, payload: dict[str, Any]
+) -> None:
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = {"event_type": "sol.sidebar_toggled", "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 422, (payload, resp.text)
+
+
 async def test_project_switched_accepts_the_palette_surface(
     client: AsyncClient, db: AsyncSession
 ) -> None:

@@ -13,10 +13,7 @@ export const SOL_CONFIG_SCHEMA_VERSION = 1
 const CONFIG_FILE_MODE = 0o600
 const MAX_CONFIG_BYTES = 64 * 1024
 
-export type SolActionMode = 'guide' | 'do'
-
 export interface SolSettingsState {
-  actionMode: SolActionMode
   screenIntelligence: boolean
   /** The native key hook + cursor sampler (double-tap Ctrl, Ctrl-hold circle).
    *  Off stops both; the global chords stay. The consent surface for a global
@@ -28,7 +25,6 @@ export interface SolSettingsState {
 }
 
 export const DEFAULT_SOL_SETTINGS: SolSettingsState = {
-  actionMode: 'guide',
   screenIntelligence: false,
   hotkeys: true,
   drive: false
@@ -49,8 +45,6 @@ export type SolSettingsDeps = Pick<
 
 export interface SolSettings {
   get(): SolSettingsState
-  setMode(mode: SolActionMode): void
-  toggleMode(): SolActionMode
   setScreenIntelligence(on: boolean): void
   setHotkeys(on: boolean): void
   setDrive(on: boolean): void
@@ -63,11 +57,12 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 /** Pick only the known fields; anything malformed falls back to its default.
  *  SOLUSDEV-319: the pill retired the pin and saved geometry, so a stored
- *  `alwaysOnTop` / `window` is dropped here and gone on the next write. */
+ *  `alwaysOnTop` / `window` is dropped here and gone on the next write.
+ *  SOLUSDEV-327: SOL builds as needed — a stored `actionMode` (Guide | Build)
+ *  is dropped the same way. */
 export function parseSolSettings(v: unknown): SolSettingsState {
   const r = isRecord(v) ? v : {}
   return {
-    actionMode: r.actionMode === 'do' ? 'do' : 'guide',
     screenIntelligence: r.screenIntelligence === true,
     hotkeys: r.hotkeys !== false,
     drive: r.drive === true
@@ -139,12 +134,6 @@ export function createSolSettings(deps: SolSettingsDeps): SolSettings {
 
   return {
     get: () => state,
-    setMode: (actionMode) => update({ actionMode }),
-    toggleMode: () => {
-      const actionMode: SolActionMode = state.actionMode === 'guide' ? 'do' : 'guide'
-      update({ actionMode })
-      return actionMode
-    },
     setScreenIntelligence: (screenIntelligence) => update({ screenIntelligence }),
     setHotkeys: (hotkeys) => update({ hotkeys }),
     setDrive: (drive) => update({ drive }),

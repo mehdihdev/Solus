@@ -171,7 +171,7 @@ describe('summon capture hook', () => {
   })
 })
 
-const STATE = { actionMode: 'guide' } as unknown as SolState
+const STATE = { screenIntelligence: true } as unknown as SolState
 const SHOT: SolScreenPayload = {
   jpegBase64: '/9j/AAAA',
   width: 1920,
@@ -201,7 +201,7 @@ describe('sol:take-screen IPC', () => {
         setBusy: vi.fn(),
         hide: vi.fn()
       },
-      settings: { setMode: vi.fn(), setScreenIntelligence: vi.fn(), setHotkeys: vi.fn() },
+      settings: { setScreenIntelligence: vi.fn(), setHotkeys: vi.fn() },
       state: () => STATE,
       takeScreen
     }

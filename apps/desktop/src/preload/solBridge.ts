@@ -1,4 +1,3 @@
-import type { ToolWindowRef } from '@solus/shared-types'
 // SOLUSDEV-252 S3: the renderer end of the SOL window surface, exposed as
 // window.solus.sol (docs/architecture/sol-window.md §2). A pure factory over an
 // injected ipcRenderer so the validate-before-deliver behaviour is testable;
@@ -6,7 +5,6 @@ import type { ToolWindowRef } from '@solus/shared-types'
 // SOL_WINDOW_CHANNELS only (the ratchet in main/sol-window/solWindow.test.ts).
 import { SOL_WINDOW_CHANNELS } from '../main/sol-window/solWindow.constants'
 import type { SolPillEvent, SolRegionPayload, SolState } from '../main/sol-window/solWindow'
-import type { SolActionMode } from '../main/solSettings'
 import { DRIVE_AGENT_STATES, DRIVE_UNAVAILABLE, type DriveStatus } from '../main/drive/driveStatus'
 import { isSolFrontApp, type SolFrontApp } from '../main/drive/frontAppShape'
 import type { SolScreenPayload } from '../main/capture/summonShot'
@@ -19,9 +17,7 @@ export interface SolBridgeIpc {
 }
 
 export interface SolBridge {
-  getGuideTarget?(): Promise<ToolWindowRef | null>
   getState(): Promise<SolState | null>
-  setMode(mode: SolActionMode): Promise<SolState | null>
   setScreenIntelligence(on: boolean): Promise<SolState | null>
   /** The hold-Ctrl gestures (native key hook + cursor sampler) on/off. */
   setHotkeys(on: boolean): Promise<SolState | null>
@@ -75,10 +71,7 @@ const hasFlags = (r: Record<string, unknown>): boolean =>
 export function isSolState(raw: unknown): raw is SolState {
   if (!isRecord(raw)) return false
   return (
-    (raw.actionMode === 'guide' || raw.actionMode === 'do') &&
-    hasFlags(raw) &&
-    isCapability(raw.capture) &&
-    (raw.hotkeys === null || isRecord(raw.hotkeys))
+    hasFlags(raw) && isCapability(raw.capture) && (raw.hotkeys === null || isRecord(raw.hotkeys))
   )
 }
 
@@ -124,27 +117,12 @@ export function isSolRegion(raw: unknown): raw is SolRegionPayload {
 }
 
 export function isSolScreen(raw: unknown): raw is SolScreenPayload {
-  return (
-    isRecord(raw) && typeof raw.jpegBase64 === 'string' && hasSize(raw) && isSource(raw.source)
-  )
+  return isRecord(raw) && typeof raw.jpegBase64 === 'string' && hasSize(raw) && isSource(raw.source)
 }
 
 export function isSolPillEvent(raw: unknown): raw is SolPillEvent {
   if (!isRecord(raw)) return false
   return raw.kind === 'leaving' || (raw.kind === 'summoned' && typeof raw.resume === 'boolean')
-}
-
-function isGuideTarget(raw: unknown): raw is ToolWindowRef {
-  if (
-    !isRecord(raw) ||
-    raw.tool !== 'kicad' ||
-    typeof raw.windowTitle !== 'string' ||
-    raw.windowTitle.length > 256 ||
-    !(raw.displayId === null || typeof raw.displayId === 'string') ||
-    !isRecord(raw.bounds)
-  )
-    return false
-  return validGuideBounds(raw.bounds)
 }
 
 export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
@@ -167,10 +145,7 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
   }
   const c = SOL_WINDOW_CHANNELS
   return {
-    getGuideTarget: () =>
-      ipc.invoke(c.guideTarget).then((raw) => (isGuideTarget(raw) ? raw : null)),
     getState: () => call(c.getState),
-    setMode: (mode) => call(c.setMode, mode),
     setScreenIntelligence: (on) => call(c.setScreenIntelligence, on),
     setHotkeys: (on) => call(c.setHotkeys, on),
     open: () => call(c.open),
@@ -195,16 +170,4 @@ export function createSolBridge(ipc: SolBridgeIpc): SolBridge {
         () => null
       )
   }
-}
-
-function validGuideBounds(b: Record<string, unknown>): boolean {
-  return (
-    [b.x, b.y, b.width, b.height].every(Number.isSafeInteger) &&
-    typeof b.width === 'number' &&
-    typeof b.height === 'number' &&
-    b.width > 0 &&
-    b.height > 0 &&
-    b.width <= 16384 &&
-    b.height <= 16384
-  )
 }

@@ -39,7 +39,6 @@ export interface HotkeyDeps {
   /** darwin only: `systemPreferences.isTrustedAccessibilityClient(false)`. */
   isTrustedAccessibilityClient?: () => boolean
   onSummon(): void
-  onToggleMode(): void
   onRegion(region: Rect, display: DisplayInfo): void
   onStatus(status: HotkeyStatus): void
   /** SOLUSDEV-319 (sol-drive.md §5): true while SOL drives and briefly after —
@@ -149,7 +148,6 @@ export function startHotkeys(deps: HotkeyDeps): HotkeysHandle {
     available: capabilities.globalShortcuts.status !== 'unavailable',
     hookAvailable: hook !== null,
     platform: capabilities.platform,
-    onToggleMode: () => deps.onToggleMode(),
     onSummon: () => deps.onSummon(),
     onCircleMode: enterCircleMode
   })
