@@ -361,7 +361,7 @@ function AssistantFrame({
 }): React.JSX.Element {
   if (!page) {
     return (
-      <div className={rowClass} style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
+      <div className={rowClass} data-role="sol" style={{ alignSelf: 'stretch', maxWidth: '95%' }}>
         {children}
       </div>
     )
@@ -387,7 +387,8 @@ function MessageList({
   page,
   onDecide,
   onFocusEntity,
-  onShowMe
+  onShowMe,
+  emptyState
 }: {
   chat: SolChat
   projectId: string
@@ -395,6 +396,7 @@ function MessageList({
   onDecide: SolChat['decide']
   onFocusEntity?: (target: CitationTarget) => void
   onShowMe?: () => void
+  emptyState?: React.ReactNode
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const count = chat.items.length
@@ -426,11 +428,13 @@ function MessageList({
       }}
     >
       {chat.status === 'offline' && <Mono size={9.5}>SOL HISTORY UNAVAILABLE — OFFLINE</Mono>}
-      {chat.status === 'ready' && count === 0 && (
-        <div style={{ ...MUTED, textAlign: 'center', padding: '18px 8px' }}>
-          Ask SOL about your robot — it answers with evidence from the graph.
-        </div>
-      )}
+      {chat.status === 'ready' &&
+        count === 0 &&
+        (emptyState ?? (
+          <div style={{ ...MUTED, textAlign: 'center', padding: '18px 8px' }}>
+            Ask SOL about your robot — it answers with evidence from the graph.
+          </div>
+        ))}
       {chat.items.map((item, i) => (
         <MessageRow
           key={item.id}
@@ -451,8 +455,9 @@ function MessageList({
 export interface SolChatProps {
   projectId: string | null
   /** 'panel' fills a column; 'page' is the SolScreen column; 'pill' is the
-   *  SOLUSDEV-319 Ember Pill (panel above, bar below). */
-  layout?: 'panel' | 'page' | 'pill'
+   *  SOLUSDEV-319 Ember Pill (panel above, bar below); 'sidebar' is the SOLUSDEV-327 docked
+   *  panel — compact rows like 'panel', but it sends the page's anchors (focus, pins). */
+  layout?: 'panel' | 'page' | 'pill' | 'sidebar'
   /** Pill only: content at the top of the panel (status, Guide tasks) — the
    *  panel opens for it — and the footer's leading/trailing slots. */
   pillTop?: React.ReactNode
@@ -470,6 +475,10 @@ export interface SolChatProps {
   onAddNodeFromGraph?: () => void
   /** Page: a verified citation chip opens the surface it names (`citationTarget`, P7). */
   onFocusEntity?: (target: CitationTarget) => void
+  /** Sidebar: what an empty conversation shows (the screen's greeting and chips). */
+  emptyState?: React.ReactNode
+  /** Sidebar: the composer's per-screen placeholder. */
+  placeholder?: string
 }
 
 /** The circled region (SOL window only — main pushes it to that renderer).
@@ -585,6 +594,15 @@ function Surface(p: SurfaceParts): React.JSX.Element {
   )
 }
 
+/** The page and the sidebar send the workspace focus and pins; the window and the pill (their own
+ *  renderer) send neither — null. */
+function anchorIdsFor(
+  layout: NonNullable<SolChatProps['layout']>,
+  pinnedMentionIds: readonly string[] | undefined
+): readonly string[] | null {
+  return layout === 'page' || layout === 'sidebar' ? (pinnedMentionIds ?? []) : null
+}
+
 export function SolChat({
   projectId,
   layout = 'panel',
@@ -595,7 +613,9 @@ export function SolChat({
   pinnedMentionIds,
   onUpload,
   onAddNodeFromGraph,
-  onFocusEntity
+  onFocusEntity,
+  emptyState,
+  placeholder
 }: SolChatProps): React.JSX.Element {
   // Hooks run unconditionally; with a shared instance the internal hook is
   // parked on a null project, which is inert (no fetch, no store writes).
@@ -616,7 +636,7 @@ export function SolChat({
     chat,
     mode,
     forceConfirmation,
-    layout === 'page' ? (pinnedMentionIds ?? []) : null
+    anchorIdsFor(layout, pinnedMentionIds)
   )
   const showMeHow = useShowMeHow(chat, setMode, forceConfirmation)
   if (!projectId) {
@@ -640,6 +660,7 @@ export function SolChat({
             onDecide={decideInMode}
             onFocusEntity={onFocusEntity}
             onShowMe={layout === 'pill' ? showMeHow : undefined}
+            emptyState={emptyState}
           />
         }
         regionCard={
@@ -670,6 +691,7 @@ export function SolChat({
             footerEnd={pillFooterEnd}
             onUpload={onUpload}
             onAddNodeFromGraph={onAddNodeFromGraph}
+            placeholder={placeholder}
           />
         }
       />

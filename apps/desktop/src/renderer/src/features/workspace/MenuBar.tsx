@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Icons } from '../../components/ui/icons.constants'
+import { SolSidebarToggle } from '../sol/sidebar/SolSidebarToggle'
 import { BridgePill } from './BridgePill'
 import { MenuRow } from './ProjectSwitcher'
 import { BellButton, SearchBox } from './ShellChrome'
@@ -89,6 +90,7 @@ export function MenuBar({
       ))}
       <div style={{ flex: 1 }} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <SolSidebarToggle screen={activeScreen} />
         <BridgePill projectId={projectId} />
         <SearchBox />
         <BellButton openCount={openCount} onBell={onBell} />

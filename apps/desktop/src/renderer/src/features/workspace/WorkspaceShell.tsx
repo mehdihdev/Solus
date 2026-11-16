@@ -17,6 +17,7 @@ import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
 import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { SolScreen } from '../sol/SolScreen'
+import { SolSidebarHost } from '../sol/sidebar/SolSidebarHost'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
 import { useValidateProject } from './useValidateProject'
@@ -241,7 +242,14 @@ export function WorkspaceShell(): React.JSX.Element {
         />
         <div
           data-screen-label={SCREEN_TITLES[name]}
-          style={{ flex: 1, display: 'flex', minHeight: 0, minWidth: 0, position: 'relative' }}
+          style={{
+            flex: 1,
+            display: 'flex',
+            minHeight: 0,
+            minWidth: 0,
+            position: 'relative',
+            overflow: 'hidden'
+          }}
         >
           <ScreenView
             route={route}
@@ -253,6 +261,8 @@ export function WorkspaceShell(): React.JSX.Element {
             openExtensionPage={nav.openExtensionPage}
             goBack={() => go(useShellStore.getState().lastMain)}
           />
+          {/* SOLUSDEV-327: SOL docked beside the screen (never on the SOL page itself). */}
+          <SolSidebarHost route={route} navigate={go} />
         </div>
       </div>
       <ToastView onView={nav.viewToast} />

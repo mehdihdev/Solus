@@ -155,6 +155,16 @@ export const Icons = {
     '0 0 17 17',
     '<path d="M6 3.5H3.5v10h10V11M9.5 3.5h4v4M13.5 3.5L8 9" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
   ),
+  /** SOLUSDEV-327: open the SOL sidebar's thread in the full SOL page (diagonal arrows out). */
+  expand: makeIcon(
+    '0 0 17 17',
+    '<path d="M10 3.5h3.5V7M7 13.5H3.5V10M13.5 3.5L9.5 7.5M3.5 13.5l4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>'
+  ),
+  /** SOLUSDEV-327: pop the SOL sidebar out to the pill (a frame with a pill in its corner). */
+  popOut: makeIcon(
+    '0 0 17 17',
+    '<rect x="2.5" y="3.5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="9.5" width="5" height="2.5" rx="1.25" fill="currentColor"/>'
+  ),
   /** Verified-publisher seal: scalloped disc in currentColor, check punched in the surface colour. */
   verified: makeIcon(
     '0 0 17 17',

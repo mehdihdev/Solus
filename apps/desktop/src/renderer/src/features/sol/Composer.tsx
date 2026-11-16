@@ -336,7 +336,8 @@ export function Composer({
   footerStart,
   footerEnd,
   onUpload,
-  onAddNodeFromGraph
+  onAddNodeFromGraph,
+  placeholder
 }: ComposerProps): React.JSX.Element {
   // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
   const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
@@ -372,7 +373,13 @@ export function Composer({
   return pill ? (
     <PillForm {...form} footerStart={footerStart} footerEnd={footerEnd} />
   ) : (
-    <ColumnForm {...form} page={page} onUpload={onUpload} onAddNodeFromGraph={onAddNodeFromGraph} />
+    <ColumnForm
+      {...form}
+      page={page}
+      onUpload={onUpload}
+      onAddNodeFromGraph={onAddNodeFromGraph}
+      placeholder={placeholder}
+    />
   )
 }
 
@@ -410,11 +417,13 @@ function ColumnForm({
   onForceConfirmationChange,
   page,
   onUpload,
-  onAddNodeFromGraph
+  onAddNodeFromGraph,
+  placeholder
 }: FormState & {
   page: boolean
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
+  placeholder?: string
 }): React.JSX.Element {
   const attach = Boolean(onUpload || onAddNodeFromGraph)
   return (
@@ -443,7 +452,9 @@ function ColumnForm({
             onSubmitRequest={submit}
             page={page}
             placeholder={
-              regionAttached ? PLACEHOLDER_WITH_REGION : page ? PAGE_PLACEHOLDER : PLACEHOLDER
+              regionAttached
+                ? PLACEHOLDER_WITH_REGION
+                : (placeholder ?? (page ? PAGE_PLACEHOLDER : PLACEHOLDER))
             }
           />
           <SendButton streaming={streaming} empty={empty} />
@@ -529,6 +540,8 @@ export interface ComposerProps {
   /** Page: the attach menu's two paths. Absent ⇒ no "+" button. */
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
+  /** SOLUSDEV-327: the sidebar's per-screen placeholder (column layouts only). */
+  placeholder?: string
 }
 
 const MODE_OPTIONS = [MODE_LABEL.guide, MODE_LABEL.do] as const
