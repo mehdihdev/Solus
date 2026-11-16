@@ -2,7 +2,11 @@
 // for the SOLUSDEV-317 list): Edit details · Archive · Delete (owner only,
 // ADR-025, confirmed). Its clicks never reach the row, so the menu never
 // selects or opens the project. A failed archive raises the shell toast.
-import { useState } from 'react'
+// The dropdown is portalled to document.body at a fixed position: the projects
+// table scrolls sideways (overflow-x: auto), which clips anything absolutely
+// positioned inside it — the menu was cut off under the last rows.
+import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Project } from '../../lib/api/resources'
 import { ProjectEditModal } from '../project/ProjectEditModal'
 import { DeleteConfirmModal } from './modals'
@@ -21,7 +25,7 @@ export function ProjectMenu({
   actions,
   onActionFailed
 }: ProjectMenuProps): React.JSX.Element {
-  const [open, setOpen] = useState(false)
+  const { anchor, triggerRef, open, setOpen } = useMenuAnchor()
   const [renaming, setRenaming] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -32,9 +36,12 @@ export function ProjectMenu({
       onKeyDown={(e) => e.stopPropagation()}
     >
       <button
+        ref={triggerRef}
         type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
         aria-label={`Project actions for ${project.name}`}
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(!open)}
         style={{
           background: 'transparent',
           border: 'none',
@@ -47,8 +54,9 @@ export function ProjectMenu({
       >
         ⋯
       </button>
-      {open && (
+      {anchor && (
         <MenuDropdown
+          place={anchor}
           canDelete={canDelete}
           onClose={() => setOpen(false)}
           onRename={() => {
@@ -90,29 +98,67 @@ export function ProjectMenu({
   )
 }
 
+/** The open menu's fixed placement, measured from its ⋯ trigger when it opens. */
+function useMenuAnchor(): {
+  anchor: MenuPlacement | null
+  triggerRef: React.RefObject<HTMLButtonElement | null>
+  open: boolean
+  setOpen: (next: boolean) => void
+} {
+  const [anchor, setAnchor] = useState<MenuPlacement | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const setOpen = (next: boolean): void => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    setAnchor(next && rect ? menuPlacement(rect, window.innerHeight) : null)
+  }
+  return { anchor, triggerRef, open: anchor !== null, setOpen }
+}
+
+/** Rough height of the open menu (three items), for the flip-above decision. */
+const MENU_HEIGHT = 120
+const MENU_GAP = 4
+const VIEWPORT_MARGIN = 8
+
+export type MenuPlacement = { right: number } & ({ top: number } | { bottom: number })
+
+/** Right-aligned under the ⋯, or above it when the window has no room below. */
+export function menuPlacement(
+  rect: Pick<DOMRect, 'top' | 'bottom' | 'right'>,
+  viewportHeight: number,
+  viewportWidth: number = window.innerWidth
+): MenuPlacement {
+  const right = Math.max(VIEWPORT_MARGIN, viewportWidth - rect.right)
+  const fitsBelow = rect.bottom + MENU_GAP + MENU_HEIGHT <= viewportHeight - VIEWPORT_MARGIN
+  return fitsBelow
+    ? { right, top: rect.bottom + MENU_GAP }
+    : { right, bottom: viewportHeight - rect.top + MENU_GAP }
+}
+
 function MenuDropdown({
+  place,
   canDelete,
   onClose,
   onRename,
   onArchive,
   onDelete
 }: {
+  place: MenuPlacement
   canDelete: boolean
   onClose: () => void
   onRename: () => void
   onArchive: () => void
   onDelete: () => void
 }): React.JSX.Element {
-  return (
-    <>
+  return createPortal(
+    // Clicks inside the portal still bubble through React to the row: stop them here.
+    <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <div style={{ position: 'fixed', inset: 0, zIndex: 60 }} onClick={onClose} />
       <div
         role="menu"
         className="popover-in"
         style={{
-          position: 'absolute',
-          right: 0,
-          top: '100%',
+          position: 'fixed',
+          ...place,
           zIndex: 61,
           minWidth: 140,
           background: 'var(--sur)',
@@ -130,7 +176,8 @@ function MenuDropdown({
           </MenuItem>
         )}
       </div>
-    </>
+    </div>,
+    document.body
   )
 }
 
