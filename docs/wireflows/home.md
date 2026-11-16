@@ -93,10 +93,13 @@ views below are unchanged.
   - **YOU IN <TEAM>**: my role, when I joined, the team's live project count. For owners and
     admins, **PENDING INVITES · N** (up to four: invitee, role, "sent <when>") with Manage
     invites (the Team & invites view).
-  - **The personal workspace** has no roster: **WORK WITH OTHERS** — "Inviting someone starts
-    a new team for the two of you — your personal workspace stays yours alone. Or join a team
-    you were invited to." — with **Invite a teammate** (the invite modal; on a personal team
-    the server creates the new team, ADR-025) and **Join with an invite code**.
+  - **WORK WITH OTHERS** (collaborative teams only, below the above): owners and admins read
+    "Bring someone into <team>, or join another team with an invite code." with **Invite a
+    teammate** (the invite modal) and **Join with an invite code**; members and viewers read
+    "Have an invite code for another team? Join it here — <team> stays on your list." with
+    Join only.
+  - **The personal workspace** is solo: no roster, no You-in card and no Work with others —
+    its ⋯ menu still offers Join team and New team.
 - **Pane — Project**: unchanged, with "← Back to <team>" above it returning to the overview.
 - Dropped from design D (no data behind them yet): per-project domain owners, warnings,
   members' last-seen and domain, a per-team SOL mode (ADR-016 keeps it per user), "needs you"

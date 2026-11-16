@@ -1,6 +1,6 @@
 // SOLUSDEV-319 (multi-team Home, design D): the active team's overview — header with plan,
 // size and a role-aware Invite, the projects (passed in), a members preview, "You in <team>",
-// the team's pending invites for managers; and the personal workspace's own variant.
+// the team's pending invites for managers, "Work with others"; and the solo personal workspace.
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -146,8 +146,34 @@ describe('TeamOverview — a team', () => {
   })
 })
 
+describe('TeamOverview — work with others', () => {
+  it('lets managers invite or join another team from Work with others', async () => {
+    const p = props()
+    render(<TeamOverview {...p} />)
+    const card = screen.getByRole('region', { name: 'Work with others' })
+    expect(card).toHaveTextContent(
+      'Bring someone into Arm Lab, or join another team with an invite code.'
+    )
+    await userEvent.click(within(card).getByRole('button', { name: 'Invite a teammate' }))
+    await userEvent.click(within(card).getByRole('button', { name: 'Join with an invite code' }))
+    expect(p.onInvite).toHaveBeenCalled()
+    expect(p.onJoin).toHaveBeenCalled()
+  })
+
+  it('offers a member only Join in Work with others', () => {
+    render(
+      <TeamOverview
+        {...props({ team: { ...ARM, role: 'member' }, homeTeam: homeTeam({ myRole: 'member' }) })}
+      />
+    )
+    const card = screen.getByRole('region', { name: 'Work with others' })
+    expect(within(card).queryByRole('button', { name: 'Invite a teammate' })).toBeNull()
+    expect(within(card).getByRole('button', { name: 'Join with an invite code' })).toBeVisible()
+  })
+})
+
 describe('TeamOverview — the personal workspace', () => {
-  it('is only mine: no members, and a way to work with others', async () => {
+  it('is only mine: no members and no Work with others', () => {
     const p = props({ team: PERSONAL, homeTeam: homeTeam({ members: [ME], invites: [] }) })
     render(<TeamOverview {...p} />)
     expect(
@@ -155,11 +181,6 @@ describe('TeamOverview — the personal workspace', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('ONLY YOU')).toBeInTheDocument()
     expect(screen.queryByRole('list', { name: 'Members' })).toBeNull()
-    const card = screen.getByRole('region', { name: 'Work with others' })
-    expect(card).toHaveTextContent('your personal workspace stays yours alone')
-    await userEvent.click(within(card).getByRole('button', { name: 'Invite a teammate' }))
-    await userEvent.click(within(card).getByRole('button', { name: 'Join with an invite code' }))
-    expect(p.onInvite).toHaveBeenCalled()
-    expect(p.onJoin).toHaveBeenCalled()
+    expect(screen.queryByRole('region', { name: 'Work with others' })).toBeNull()
   })
 })
