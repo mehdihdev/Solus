@@ -62,9 +62,8 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
   that screen. A chip sends its text as the person's message. Greetings and chips are
   Solus-authored constants per screen (§6); screens without their own get a plain greeting naming
   the screen.
-- **Composer:** input, `@` picker and Send only — no preferences row (no Guide/Build badge, Think
-  harder, Confirm every change or routing line; those stay on the SOL page and the pill). A send
-  uses the current shared action mode and the chat's Confirm-every-change choice as set elsewhere.
+- **Composer:** input, `@` picker and Send only — no preferences row, like every SOL surface
+  (sol-page.md: Build, auto-routed, no forced confirmation).
   Short per-screen placeholder so it fits one line at 320px (`Ask about the workspace`,
   `Ask about the bench`, generic `Ask SOL anything`). Sends from the sidebar carry the Workspace
   focus and the chat's pinned nodes exactly as the page does (`focus`, `pins`).

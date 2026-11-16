@@ -11,8 +11,7 @@ import { pageAnchors } from '../pageAnchors'
 import { selectPins, usePinnedContextStore } from '../pinnedContextStore'
 import { SolChat } from '../SolChat'
 import { openCitation } from '../SolScreen'
-import { selectSession, useSolChatStore } from '../solChatStore'
-import { useSolActionMode } from '../solWindowStore'
+import { SOL_SEND_MODE } from '../solWindowStore'
 import { useSolChat } from '../useSolChat'
 import { closeSidebar, toggleSidebar } from './sidebarActions'
 import { sidebarCopy } from './sidebarCopy'
@@ -127,24 +126,17 @@ function SolSidebarPanel({
   )
 }
 
-/** A suggestion chip is the person's message: same mode, confirmation choice and anchors as a
- *  typed send from the sidebar's composer. */
+/** A suggestion chip is the person's message: sent like a typed one from the sidebar (Build,
+ *  auto-routed, the page's anchors). */
 function useChipSend(
   projectId: string | null,
   chat: ReturnType<typeof useSolChat>,
   pinIds: readonly string[]
 ): (text: string) => void {
-  const { mode } = useSolActionMode()
-  const forceConfirmation = useSolChatStore(
-    (s) => selectSession(s, projectId).forceConfirmation ?? false
-  )
   return (text) => {
     // A click racing a project switch: never pair this project's chat with the next one's focus.
     if (useWorkspaceStore.getState().project?.id !== projectId) return
-    void chat.send(text, mode, [], false, undefined, {
-      forceConfirmation,
-      ...pageAnchors(pinIds)
-    })
+    void chat.send(text, SOL_SEND_MODE, [], false, undefined, pageAnchors(pinIds))
   }
 }
 

@@ -93,12 +93,14 @@ protocol unchanged.
   image** → the project's `.solus/documentation`; **Add node from graph** →
   Workspace), an autosizing textarea (`Ask SOL about this project…`; Enter sends,
   Shift+Enter newline; Ctrl/Cmd+Enter stays with the command cards, SOLUSDEV-317)
-  and the accent **Send**; the box's footer row keeps the Guide/Build action-mode
-  badge, **Think harder**, **Confirm every change** and the routing line — ALWAYS
-  present (SOLUSDEV-233): with a classification it reads `tier · type · model`
-  (click to override); with none (empty input / endpoint hiccup) it shows the
-  honest idle line "auto routing · sizes each message to the cheapest capable model"
-  in the same spot — no layout shift, never a fabricated tier. Every send carries
+  and the accent **Send**. **No preferences row** (SOLUSDEV-327, superseding SOLUSDEV-233's
+  footer): no Guide/Build badge, **Think harder**, **Confirm every change** or routing line on
+  the page, the pill or the sidebar. SOL builds, routes and asks for confirmation as needed:
+  every send goes in Build (`action_mode: "do"`), auto-routed (no `think_harder`, no
+  pre-flight `POST …/classify` call from the composer) and without `force_confirmation` — the
+  server still cards destructive, remote, install, hardware and unclassified actions (ADR
+  action-mode amendment, SOLUSDEV-261). The plan card's "Show me how instead" is the one
+  Guide send, for that message only. Every send carries
   three separate anchor fields (SOLUSDEV-321): the typed `@`-mentions (`mentions`), the
   chat's pinned nodes (`pins`, the first 8) and the Workspace focus with the trail it was
   reached through (`focus`, only when something is focused). The SOL window sends none of them.
@@ -113,11 +115,10 @@ protocol unchanged.
   in "From the graph" with no extra UI. A failed search shows no list and never
   blocks Send. Code results show their stored path to distinguish duplicate filenames.
   Changing projects immediately invalidates old results and selected mentions.
-  The action-mode toggle **defaults to Build** (wire value `do`, SOLUSDEV-168) and sticks for the
-  panel instance. Guide refuses exactly the tools the CTR-03 gate already parks,
-  so a Guide default only replaced an approval card with a "switch to Build mode"
-  refusal; every mutation still parks for explicit approval. The API default
-  (`MessageCreate.action_mode`) stays `guide` for non-UI callers.
+  Build is the only mode the chat surfaces send (wire value `do`); Guide refuses exactly the
+  tools the CTR-03 gate already parks, so it only replaced an approval card with a "switch to
+  Build mode" refusal. Every mutation the gate parks still waits for explicit approval. The API
+  default (`MessageCreate.action_mode`) stays `guide` for non-UI callers.
 - Turn rejections are named, not generic: 402 → "You're out of SOL credits —
   top up to keep going." (and the top-up card lights); 429 → "Too many SOL
   turns right now — give it a few seconds."
@@ -150,11 +151,9 @@ protocol unchanged.
     arrival: at most 16 entries, every key and value at most 64 characters, nested values as
     JSON text. Live turns only — a reloaded tool turn is the persisted `tool → outcome` line.
 
-SOLUSDEV-262 demo review: the composer includes **Confirm every change**. This
-per-conversation preference sends the existing `force_confirmation` flag and
-defaults off. It persists across pane navigation, resets for a new conversation
-or account, and is disabled while a turn streams because that turn already
-captured its policy. It does not approve any pending action.
+SOLUSDEV-262's **Confirm every change** composer switch is retired (SOLUSDEV-327): the chat
+surfaces never send `force_confirmation`. The flag stays in the API for callers that need every
+change carded (the Workspace's firmware-telemetry and host-mirror offers still set it).
 
 SOLUSDEV-261 approval-card polish preserves the CTR-03 flow: a clear review heading,
 always-visible action summary, responsive labeled Before/After values with exact

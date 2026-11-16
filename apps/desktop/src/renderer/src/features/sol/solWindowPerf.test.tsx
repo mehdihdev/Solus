@@ -55,7 +55,6 @@ describe('idle SOL window: zero scripted animation', () => {
       'pillMeasure.ts',
       'solWindowStore.ts',
       'solSessionStore.ts',
-      'ModeBadge.tsx',
       'RegionCard.tsx'
     ]
     for (const name of sources) {

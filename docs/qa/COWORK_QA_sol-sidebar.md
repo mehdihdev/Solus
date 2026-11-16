@@ -57,8 +57,8 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 ## 7. Thread behaviour in the sidebar
 
 1. [ ] Ask something that cites a graph node. Click an `[entity:…]` citation chip. Expected: the Workspace opens with that node focused.
-2. [ ] In Build mode, ask SOL to make a graph change. Expected: a confirmation card appears in the sidebar; nothing changes until Approve; Reject clears it.
-3. [ ] Turn on "Confirm every change" on the SOL page, then send a change request from the sidebar. Expected: the sidebar send honours it (it has no toggle of its own).
+2. [ ] Ask SOL to delete a graph link. Expected: a confirmation card appears in the sidebar; nothing changes until Approve; Reject clears it. A routine edit (e.g. renaming a note) may run without a card — SOL builds as needed.
+3. [ ] On the SOL page, the pill and the sidebar: no Guide/Build control, no Think harder, no Confirm every change and no routing line anywhere in the composer.
 
 ## 8. Motion and accessibility
 

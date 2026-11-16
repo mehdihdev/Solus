@@ -39,13 +39,12 @@ import { newestPendingCommand, PillTakeover, useTakeoverFocusReturn } from './Pi
 import { SolMarkdown } from './Markdown'
 import { ASK_WHAT_IS_THIS, RegionCard } from './RegionCard'
 import type { PendingConfirmation } from '../../lib/api/solStream'
-import type { SolActionMode, SolScreenshot } from './solApi'
+import type { SolScreenshot } from './solApi'
 import type { SolRegionPayload } from '../../../../main/sol-window/solWindow'
-import { selectSession, setForceConfirmation, useSolChatStore } from './solChatStore'
 import {
   regionToScreenshot,
+  SOL_SEND_MODE,
   takeSummonScreenshot,
-  useSolActionMode,
   useSolWindowStore
 } from './solWindowStore'
 import { useSolChat, type ChatArtifact, type ChatItem, type SolChat } from './useSolChat'
@@ -487,8 +486,6 @@ export interface SolChatProps {
  *  the person can retry (FIX-2-R M3). A region circled meanwhile is not ours. */
 function useRegionSend(
   chat: SolChat,
-  mode: SolActionMode,
-  forceConfirmation: boolean,
   pageAnchorIds: readonly string[] | null
 ): {
   region: SolRegionPayload | null
@@ -497,7 +494,7 @@ function useRegionSend(
 } {
   const region = useSolWindowStore((s) => s.region)
   const clearRegion = useSolWindowStore((s) => s.clearRegion)
-  const sendWithRegion: ComposerSend = (text, mentions, thinkHarder) => {
+  const sendWithRegion: ComposerSend = (text, mentions) => {
     const anchors = pageAnchorIds ? pageAnchors(pageAnchorIds) : {}
     // A circled region wins; otherwise the picture taken at summon (SOLUSDEV-324).
     const pixels: Promise<SolScreenshot | undefined> = region
@@ -505,7 +502,7 @@ function useRegionSend(
       : takeSummonScreenshot()
     void pixels
       .then((screenshot) =>
-        chat.send(text, mode, mentions, thinkHarder, screenshot, { forceConfirmation, ...anchors })
+        chat.send(text, SOL_SEND_MODE, mentions, false, screenshot, anchors)
       )
       .then((ok) => {
         if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
@@ -515,15 +512,10 @@ function useRegionSend(
 }
 
 /** SOLUSDEV-319: the plan's "Show me how instead" — declined, now teach it. */
-function useShowMeHow(
-  chat: SolChat,
-  setMode: (mode: SolActionMode) => void,
-  forceConfirmation: boolean
-): () => void {
+function useShowMeHow(chat: SolChat): () => void {
   return useCallback(() => {
-    setMode('guide')
-    void chat.send(SHOW_ME_HOW, 'guide', [], false, undefined, { forceConfirmation })
-  }, [chat, setMode, forceConfirmation])
+    void chat.send(SHOW_ME_HOW, 'guide', [], false, undefined)
+  }, [chat])
 }
 
 interface SurfaceParts {
@@ -621,24 +613,18 @@ export function SolChat({
   // parked on a null project, which is inert (no fetch, no store writes).
   const ownChat = useSolChat(shared ? null : projectId)
   const chat = shared ?? ownChat
-  const forceConfirmation = useSolChatStore(
-    (state) => selectSession(state, projectId).forceConfirmation ?? false
-  )
-  const { mode, setMode } = useSolActionMode()
-  // SOLUSDEV-317: an approved command resumes SOL in the surface's current mode;
+  // SOLUSDEV-317: an approved command resumes SOL (in Build — SOL_SEND_MODE);
   // Cmd/Ctrl+Enter approves the newest command card inside THIS surface only.
   const decideInMode = useCallback<SolChat['decide']>(
-    (confirmationId, decision) => chat.decide(confirmationId, decision, mode),
-    [chat, mode]
+    (confirmationId, decision) => chat.decide(confirmationId, decision, SOL_SEND_MODE),
+    [chat]
   )
   const shortcut = useCommandShortcut(chat.items)
   const { region, clearRegion, sendWithRegion } = useRegionSend(
     chat,
-    mode,
-    forceConfirmation,
     anchorIdsFor(layout, pinnedMentionIds)
   )
-  const showMeHow = useShowMeHow(chat, setMode, forceConfirmation)
+  const showMeHow = useShowMeHow(chat)
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>
@@ -665,11 +651,11 @@ export function SolChat({
         }
         regionCard={
           region && (
-            <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [], false)} />
+            <RegionCard region={region} onAsk={() => sendWithRegion(ASK_WHAT_IS_THIS, [])} />
           )
         }
         strip={
-          <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={mode} />
+          <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={SOL_SEND_MODE} />
         }
         pillTop={pillTop}
         takeover={layout === 'pill' ? newestPendingCommand(chat.items) : null}
@@ -679,12 +665,8 @@ export function SolChat({
             streaming={chat.streaming}
             page={layout === 'page'}
             projectId={projectId}
-            mode={mode}
-            onModeChange={setMode}
             regionAttached={region !== null}
             onDismissRegion={clearRegion}
-            forceConfirmation={forceConfirmation}
-            onForceConfirmationChange={(checked) => setForceConfirmation(projectId, checked)}
             onSend={sendWithRegion}
             pill={layout === 'pill'}
             footerStart={pillFooterStart}
@@ -692,7 +674,6 @@ export function SolChat({
             onUpload={onUpload}
             onAddNodeFromGraph={onAddNodeFromGraph}
             placeholder={placeholder}
-            bare={layout === 'sidebar'}
           />
         }
       />

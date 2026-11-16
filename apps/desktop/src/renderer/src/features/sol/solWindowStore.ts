@@ -97,6 +97,11 @@ const LOCAL_DEFAULT_ACTION_MODE: SolActionMode = 'do'
 /** The SHARED action mode: main's setting when the bridge is present (every
  *  renderer sees the same value; Ctrl+Space, the tray and every badge agree),
  *  otherwise a local per-surface state. */
+/** SOLUSDEV-327: what every chat surface sends. SOL builds as needed — the server still cards
+ *  destructive and unclassified actions (ADR action-mode amendment) — so no surface offers a
+ *  Guide | Build switch. The plan's "Show me how instead" alone asks for Guide, for one message. */
+export const SOL_SEND_MODE: SolActionMode = 'do'
+
 export function useSolActionMode(): {
   mode: SolActionMode
   setMode: (mode: SolActionMode) => void

@@ -454,12 +454,6 @@ body {
   color: var(--tx);
   background: var(--sur2);
 }
-.sol-pill-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
 .sol-pill-hide {
   background: transparent;
   border: 0;
@@ -1131,13 +1125,6 @@ body {
   border: 1px solid var(--bd);
   border-radius: 6px;
   background: var(--sur);
-}
-.sol-composer-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 0 2px;
 }
 .sol-attach-menu {
   position: absolute;

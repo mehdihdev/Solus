@@ -1,23 +1,15 @@
-// The SOL composer: the message box with its `@` picker, the mode badge,
-// Think harder, the review preference and the routing preview. Moved out of
-// SolChat.tsx (SOLUSDEV-319) so the pill variant has room to grow.
+// The SOL composer: the message box with its `@` picker and Send. Moved out of SolChat.tsx
+// (SOLUSDEV-319) so the pill variant has room to grow. SOLUSDEV-327: no mode badge, Think harder,
+// Confirm every change or routing line on any surface — SOL builds, routes and asks for
+// confirmation as needed (every send is Build, auto-routed, no forced confirmation).
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Mono } from '../../components/ui/Mono'
-import { Switch } from '../../components/ui/Switch'
 import { Icons } from '../../components/ui/icons.constants'
 import { takeDraft } from './pinnedContextStore'
-import { ClassifyIndicator } from './ClassifyIndicator'
 import { COMPOSER_ATTR } from './commandHotkey'
-import { ModeBadge } from './ModeBadge'
-import { Segmented } from '../../components/ui/Segmented'
-import { MODE_LABEL } from './solWindowStore'
 import { useSolSessionStore } from './solSessionStore'
 import type { Entity } from '../../lib/api/resources'
-import { useClassifyPreview } from './useClassifyPreview'
 import { useMentionPicker, type MentionPicker } from './useMentionPicker'
-import type { SolActionMode } from './solApi'
-
-const MUTED: React.CSSProperties = { fontSize: 11, color: 'var(--mut)' }
 
 /** The `@`-mention picker. A plain listbox — the design system has no combobox,
  *  and one short list does not justify a dependency. */
@@ -295,54 +287,24 @@ function RegionChip({ onDismiss }: { onDismiss: () => void }): React.JSX.Element
   )
 }
 
-function ReviewPreference({
-  checked,
-  onChange,
-  streaming
-}: {
-  checked: boolean
-  onChange: (checked: boolean) => void
-  streaming: boolean
-}): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', gap: 8, alignItems: 'center', ...MUTED }}>
-      <Switch
-        checked={checked}
-        onChange={onChange}
-        ariaLabel="Confirm every change"
-        disabled={streaming}
-      />
-      <span title="Choose before sending. Review each proposed change before SOL applies it.">
-        Confirm every change
-      </span>
-    </div>
-  )
-}
-
-export type ComposerSend = (text: string, mentions: readonly string[], thinkHarder: boolean) => void
+export type ComposerSend = (text: string, mentions: readonly string[]) => void
 
 export function Composer({
   streaming,
   page,
   projectId,
-  mode,
-  onModeChange,
   regionAttached,
   onDismissRegion,
-  forceConfirmation,
-  onForceConfirmationChange,
   onSend,
   pill = false,
   footerStart,
   footerEnd,
   onUpload,
   onAddNodeFromGraph,
-  placeholder,
-  bare = false
+  placeholder
 }: ComposerProps): React.JSX.Element {
   // The page may arrive with a hand-off draft ("Ask SOL" from the Workspace).
   const [input, setInput] = useState(() => (page ? (takeDraft() ?? '') : ''))
-  const classify = useClassifyPreview(input)
   const empty = input.trim() === ''
 
   // All the `@`-picker state lives in its own hook — see useMentionPicker.
@@ -351,10 +313,9 @@ export function Composer({
   const submit = (): void => {
     const text = input.trim()
     if (!text || streaming) return
-    onSend(text, mention.mentionIds, classify.override.thinkHarder)
+    onSend(text, mention.mentionIds)
     setInput('')
     mention.reset()
-    classify.resetOverride() // also drops "Think harder" — it is per message
   }
   const form: FormState = {
     mention,
@@ -363,13 +324,8 @@ export function Composer({
     submit,
     streaming,
     empty,
-    mode,
-    onModeChange,
     regionAttached,
-    onDismissRegion,
-    classify,
-    forceConfirmation,
-    onForceConfirmationChange
+    onDismissRegion
   }
   return pill ? (
     <PillForm {...form} footerStart={footerStart} footerEnd={footerEnd} />
@@ -380,7 +336,6 @@ export function Composer({
       onUpload={onUpload}
       onAddNodeFromGraph={onAddNodeFromGraph}
       placeholder={placeholder}
-      bare={bare}
     />
   )
 }
@@ -393,16 +348,11 @@ interface FormState {
   submit: () => void
   streaming: boolean
   empty: boolean
-  mode: SolActionMode
-  onModeChange: (mode: SolActionMode) => void
   regionAttached: boolean
   onDismissRegion: () => void
-  classify: ReturnType<typeof useClassifyPreview>
-  forceConfirmation: boolean
-  onForceConfirmationChange: (checked: boolean) => void
 }
 
-/** The panel / page composer: the boxed input over a footer of preferences. */
+/** The panel / page / sidebar composer: the boxed input with + and Send. */
 function ColumnForm({
   mention,
   input,
@@ -410,34 +360,20 @@ function ColumnForm({
   submit,
   streaming,
   empty,
-  mode,
-  onModeChange,
   regionAttached,
   onDismissRegion,
-  classify,
-  forceConfirmation,
-  onForceConfirmationChange,
   page,
   onUpload,
   onAddNodeFromGraph,
-  placeholder,
-  bare
+  placeholder
 }: FormState & {
   page: boolean
   onUpload?: (file: File) => void
   onAddNodeFromGraph?: () => void
   placeholder?: string
-  bare?: boolean
 }): React.JSX.Element {
   const attach = Boolean(onUpload || onAddNodeFromGraph)
-  const footerProps = {
-    mode,
-    onModeChange,
-    classify,
-    forceConfirmation,
-    onForceConfirmationChange,
-    streaming
-  }
+
   return (
     <form
       onSubmit={(e) => {
@@ -471,53 +407,8 @@ function ColumnForm({
           />
           <SendButton streaming={streaming} empty={empty} />
         </div>
-        {!bare && <ComposerFooter {...footerProps} />}
       </div>
     </form>
-  )
-}
-
-/** The panel / page composer's preferences row: action mode, Think harder, Confirm every change
- *  and the routing line. The sidebar (SOLUSDEV-327) leaves it out. */
-function ComposerFooter({
-  mode,
-  onModeChange,
-  classify,
-  forceConfirmation,
-  onForceConfirmationChange,
-  streaming
-}: Pick<
-  FormState,
-  'mode' | 'onModeChange' | 'classify' | 'forceConfirmation' | 'onForceConfirmationChange' | 'streaming'
->): React.JSX.Element {
-  return (
-    <div className="sol-composer-foot">
-      {/* SOLUSDEV-252 S3: the SHARED action mode (main's setting under
-          Electron) — the same badge the SOL window header shows. */}
-      <ModeBadge mode={mode} onChange={onModeChange} />
-      {/* S1-W3: one tier up for THIS message. Lives in the classify override
-          state so the routing preview reflects it and the post-send reset
-          clears it — one source, two controls (this and the popover). */}
-      <span style={{ display: 'flex', gap: 6, alignItems: 'center', ...MUTED }}>
-        <Switch
-          checked={classify.override.thinkHarder}
-          onChange={(thinkHarder) => classify.setOverride({ thinkHarder })}
-          ariaLabel="Think harder"
-        />
-        Think harder
-      </span>
-      <ReviewPreference
-        checked={forceConfirmation}
-        onChange={onForceConfirmationChange}
-        streaming={streaming}
-      />
-      <ClassifyIndicator
-        preview={classify.preview}
-        override={classify.override}
-        onOverride={classify.setOverride}
-        onReset={classify.resetOverride}
-      />
-    </div>
   )
 }
 
@@ -555,12 +446,8 @@ export interface ComposerProps {
   streaming: boolean
   page: boolean
   projectId: string | null
-  mode: SolActionMode
-  onModeChange: (mode: SolActionMode) => void
   regionAttached: boolean
   onDismissRegion: () => void
-  forceConfirmation: boolean
-  onForceConfirmationChange: (checked: boolean) => void
   onSend: ComposerSend
   /** SOLUSDEV-319: render as the Ember Pill bar + footer. */
   pill?: boolean
@@ -572,57 +459,15 @@ export interface ComposerProps {
   onAddNodeFromGraph?: () => void
   /** SOLUSDEV-327: the sidebar's per-screen placeholder (column layouts only). */
   placeholder?: string
-  /** SOLUSDEV-327: the sidebar's composer — input, + and Send only, no preferences row. */
-  bare?: boolean
 }
 
-const MODE_OPTIONS = [MODE_LABEL.guide, MODE_LABEL.do] as const
-const modeOf = (label: string): SolActionMode => (label === MODE_LABEL.do ? 'do' : 'guide')
-
-/** The pill's Guide | Build switch — the same shared setting as the badge. */
-function ModeSwitch({
-  mode,
-  onChange
-}: {
-  mode: SolActionMode
-  onChange: (mode: SolActionMode) => void
-}): React.JSX.Element {
-  return (
-    <Segmented
-      options={MODE_OPTIONS}
-      value={MODE_LABEL[mode]}
-      onChange={(label) => onChange(modeOf(label))}
-      size="sm"
-      ariaLabel="SOL action mode"
-    />
-  )
-}
-
-function PillToggle({
-  label,
-  checked,
-  onChange,
-  disabled
-}: {
-  label: string
-  checked: boolean
-  onChange: (checked: boolean) => void
-  disabled?: boolean
-}): React.JSX.Element {
-  return (
-    <span className="sol-pill-toggle">
-      <Switch checked={checked} onChange={onChange} ariaLabel={label} disabled={disabled} />
-      <span aria-hidden>{label}</span>
-    </span>
-  )
-}
 
 interface PillFormProps extends FormState {
   footerStart?: React.ReactNode
   footerEnd?: React.ReactNode
 }
 
-/** SOLUSDEV-319: the Ember Pill bar (orb · input · Guide|Build · send) and its
+/** SOLUSDEV-319: the Ember Pill bar (orb · input · send) and its
  *  footer. Same state and send path as the panel composer — only the layout differs. */
 function PillForm(p: PillFormProps): React.JSX.Element {
   // The shared streaming flag (every SOL surface) — the old window header's signal.
@@ -647,7 +492,6 @@ function PillForm(p: PillFormProps): React.JSX.Element {
           pill
           placeholder={p.regionAttached ? PLACEHOLDER_WITH_REGION : PILL_PLACEHOLDER}
         />
-        <ModeSwitch mode={p.mode} onChange={p.onModeChange} />
         <button
           type="submit"
           className="sol-pill-send"
@@ -670,20 +514,6 @@ function PillForm(p: PillFormProps): React.JSX.Element {
         {p.footerStart}
         {p.regionAttached && <RegionChip onDismiss={p.onDismissRegion} />}
         <span style={{ flex: 1 }} />
-        {/* SOLUSDEV-324: no routing preview here — the wireflow's 30 px footer has
-            no room for it (it squeezed the row onto two lines mid-typing). The
-            page composer keeps it; Think harder below is the pill's override. */}
-        <PillToggle
-          label="Think harder"
-          checked={p.classify.override.thinkHarder}
-          onChange={(thinkHarder) => p.classify.setOverride({ thinkHarder })}
-        />
-        <PillToggle
-          label="Confirm every change"
-          checked={p.forceConfirmation}
-          onChange={p.onForceConfirmationChange}
-          disabled={p.streaming}
-        />
         {p.footerEnd}
       </div>
     </form>

@@ -19,8 +19,8 @@ Frame: native, resizable, draggable, min 360×420, remembers geometry per displa
 `SOL` wordmark · **sees-screen dot**
 (green dot + "sees your screen" when the setting is on; absent when off) · **pin** toggle (always-on-top) ·
 close. Body: `SolChat` (the same chat as the page — shared session per project, so a reply keeps streaming
-across surfaces). Footer: the composer with the existing Guide/Do segmented control replaced by the mode
-badge, `@` mentions, **Think harder** switch, send.
+across surfaces). Footer: the composer — `@` mentions and send (SOLUSDEV-327: no mode control, Think harder or
+Confirm every change; every send is Build, auto-routed, no forced confirmation).
 
 Status line under the header (only when something is degraded, plain language):
 
@@ -130,10 +130,10 @@ tasks** chip in the footer rather than holding the panel open, and closes again 
 **Frame.** Frameless, transparent, always on top, not resizable by hand, 560 px wide. Collapsed it is
 the bar alone:
 
-- Bar (54 px): SOL orb · message input ("Ask SOL, or tell it what to do…") · Guide | Build segmented
-  control (Ctrl+Space still toggles) · amber send arrow.
-- Footer (30 px): the attached-region chip when present · "sees your screen" dot when on · Think harder
-  and Confirm every change as compact toggles · `⌃Space mode` · `⌃⌃ hide`. Degraded-status lines
+- Bar (54 px): SOL orb · message input ("Ask SOL, or tell it what to do…") · amber send arrow.
+  (SOLUSDEV-327 removed the Guide | Build control: the pill always sends Build.)
+- Footer (30 px): the attached-region chip when present · "sees your screen" dot when on ·
+  `⌃⌃ hide`. (SOLUSDEV-327 removed the Think harder and Confirm every change toggles.) Degraded-status lines
   (§B list) render in the footer area, one per line.
 
 **Grows upward.** Once there is anything to show — messages, opened Guide tasks, the region card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,

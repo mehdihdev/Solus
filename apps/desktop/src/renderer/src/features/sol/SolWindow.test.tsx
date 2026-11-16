@@ -88,18 +88,11 @@ describe('SolWindow header', () => {
     expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument()
   })
 
-  it('the Guide | Build switch in the bar is the one action-mode control', async () => {
+  it('the pill offers no action-mode switch — SOL builds as needed (SOLUSDEV-327)', async () => {
     await mount()
-    const modes = screen.getAllByRole('radiogroup', { name: 'SOL action mode' })
-    expect(modes).toHaveLength(1)
-    expect(within(modes[0]).getByRole('radio', { name: 'Guide' })).toHaveAttribute(
-      'aria-checked',
-      'true'
-    )
-    fireEvent.click(within(modes[0]).getByRole('radio', { name: 'Build' }))
-    expect(bridge.setMode).toHaveBeenCalledWith('do')
-    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-    expect(screen.getByRole('radio', { name: 'Build' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByRole('radiogroup', { name: 'SOL action mode' })).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Think harder' })).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Confirm every change' })).toBeNull()
   })
 
   it('follows a workspace selected in the main window', async () => {
