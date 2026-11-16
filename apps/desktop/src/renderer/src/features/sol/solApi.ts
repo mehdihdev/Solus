@@ -197,7 +197,8 @@ export interface StreamSolMessageInput {
   /**
    * SOLUSDEV-319 slice 4: the app the pill was summoned over (sol-drive.md §2.2).
    * Omitted ⇒ the pill's snapshot (null outside the SOL window). Sent as
-   * `front_app` on Build turns only — never on a resume or a wake turn.
+   * `front_app` on `do` turns only — never on a resume or a wake turn. The real gate is the
+   * drive consent: main's snapshot is null unless "SOL can use your mouse and keyboard" is on.
    */
   frontApp?: SolFrontApp | null
   /** Receives each validated stream event in arrival order. */

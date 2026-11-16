@@ -85,7 +85,8 @@ export function useFrontAppSnapshot(
 
 /** SOLUSDEV-327: what every chat surface sends. SOL builds as needed — the server still cards
  *  destructive and unclassified actions (ADR action-mode amendment) — so no surface offers a
- *  Guide | Build switch. The plan's "Show me how instead" alone asks for Guide, for one message. */
+ *  Guide | Build switch. Only the plan's "Show me how instead" (one message) and the bench's
+ *  "explain finding" (read-only by design) still ask for Guide. */
 export const SOL_SEND_MODE: SolActionMode = 'do'
 
 /** The API's `ScreenshotSource` caps (agent/screen.py) — a long window title

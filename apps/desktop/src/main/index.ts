@@ -385,7 +385,6 @@ function openSystemSettingsPane(url: string | undefined): void {
   })
 }
 
-let solSignedIn = false
 function startSol(): void {
   const basics = detectPlatformBasics(process.env, process.platform, process.arch)
   const settings = createSolSettings(realLocalStateDeps)
@@ -921,9 +920,9 @@ function registerCompanionHandlers(): void {
   // A null token is sign-out: the extension windows go with the session.
   ipcMain.handle('bridge:token', (event, token: unknown) => {
     if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
-      solSignedIn = typeof token === 'string' && token.length > 0
+      const signedIn = typeof token === 'string' && token.length > 0
       // SOLUSDEV-324: the signed-out (or next) account never gets this screen.
-      if (!solSignedIn) solWindows?.dropSummonCapture()
+      if (!signedIn) solWindows?.dropSummonCapture()
       sendAccessToken(token)
       hardwareSources?.setToken(token)
       machineReporter?.setToken(token)
