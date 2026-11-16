@@ -25,7 +25,7 @@ export interface PlatformBasics {
 export interface PlatformCapabilities extends PlatformBasics {
   /** Bare-modifier key up/down (double-tap Ctrl, Ctrl-hold gesture). */
   hook: CapabilityState
-  /** `globalShortcut` chords (Ctrl+Space, the fallback chords). */
+  /** `globalShortcut` chords (the summon fallback and circle-mode chords). */
   globalShortcuts: CapabilityState
   /** `desktopCapturer` region capture. */
   capture: CapabilityState

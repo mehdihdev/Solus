@@ -29,17 +29,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDef[] = [
     id: 'sol',
     title: 'SOL',
     group: 'You',
-    keywords: [
-      'answer mode',
-      'action mode',
-      'guide',
-      'expert',
-      'build',
-      'screen',
-      'capture',
-      'ctrl',
-      'gestures'
-    ]
+    keywords: ['answer mode', 'guide', 'expert', 'screen', 'capture', 'ctrl', 'gestures']
   },
   {
     id: 'engineer',

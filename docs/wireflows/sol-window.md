@@ -8,7 +8,6 @@
 | Trigger                                            | Result                                                                                                                                                                                                                                               |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Double-tap Ctrl** (any app focused)              | The SOL window appears on the display under the cursor (saved geometry if any; else 420×640, bottom-right of the work area, 24 px margin) and takes focus. If already open: focus. Never steals focus from a chord — Ctrl+C in Onshape still copies. |
-| **Ctrl+Space**                                     | Toggles the action mode Guide ↔ Build. The composer mode control, tray tooltip and menu radio update. No toast, no sound.                                                                                                                           |
 | **Hold Ctrl + circle** (hook available)            | On release, if the path closes: the window appears (or focuses) showing the **region card** (C). If the path does not close: nothing happens.                                                                                                        |
 | **Ctrl+Shift+C** (hook unavailable)                | Enters _circle mode_ for 10 s: the tray tooltip reads "Circle mode — draw a loop"; the same gesture works without holding Ctrl; ends on a detected loop or after 10 s.                                                                               |
 | **Ctrl+Shift+Space** / **Cmd+Shift+Space** (macOS) | Primary spawn/focus shortcut, independent of native hook support.                                                                                                                                                                                    |
@@ -67,9 +66,10 @@ capture`. See `docs/wireflows/settings.md`.
 ## E. Tray
 
 Icon: the Solus mark; with a small dot overlay while screen intelligence is on. Tooltip:
-`SOL · Guide · sees your screen`. Menu: **Open SOL** · separator · **Guide** / **Build** (radio) ·
-**SOL sees your screen** (checkbox) · separator · shortcuts line (disabled item, e.g. "Ctrl+Shift+Space —
-open (Cmd+Shift+Space on macOS) · Ctrl+Space — mode · Ctrl+Shift+C — circle mode") · **Quit**. On Linux without an indicator host the
+`SOL · sees your screen`. Menu: **Open SOL** · separator ·
+**SOL sees your screen** (checkbox) · **Hold-Ctrl gestures** (checkbox) · separator · shortcuts line
+(disabled item, e.g. "Ctrl+Shift+Space — open (Cmd+Shift+Space on macOS) · Ctrl+Shift+C — circle mode")
+· **Quit**. (SOLUSDEV-327 removed the Guide / Build radio and the Ctrl+Space mode toggle.) On Linux without an indicator host the
 tray is skipped and the window header carries the same state.
 
 ## F. Failure paths to exercise
@@ -77,7 +77,7 @@ tray is skipped and the window header carries the same state.
 - Hook fails to load (linux-arm64 prebuild is x86-64): fallback chords registered, status line says so, no crash, no error dialog.
 - macOS without Accessibility: same fallback + a link to the Accessibility pane.
 - Wayland: capture disabled; the portal may require shortcut approval. If unavailable, the window still opens from the page ("Open SOL window" in the SOL page header).
-- `globalShortcut.register` returns false (another app owns Ctrl+Space): status line names the conflict; mode toggle still works from the composer/tray.
+- `globalShortcut.register` returns false (another app owns a chord): status line names the conflict; the Open SOL window button still works.
 - Two displays with different DPI: window opens on the display under the cursor at the right scale; saved geometry on a display that is gone → reset to default placement.
 - Capture with the setting off → no capture, the one-line card.
 - Ctrl+C / Ctrl+V / Ctrl+Z in another app while SOL runs → untouched.
@@ -90,11 +90,16 @@ key-hook availability. The native double-tap gesture remains optional; no ARM64
 native build is required to summon SOL. Registration failures are surfaced honestly,
 and the Open SOL window button remains available. Wayland support may use the
 Electron GlobalShortcuts portal when supported; missing portal/permission still
-degrades to the clickable path. The header has no mode selector; Settings and the
-composer retain their controls. An already-open SOL window follows main-window
+degrades to the clickable path. The header has no mode selector (SOLUSDEV-327: nor do
+Settings, the tray or the composer — SOL builds as needed). An already-open SOL window follows main-window
 workspace selection changes.
 
-## SOLUSDEV-262 Guide tasks
+## SOLUSDEV-262 Guide tasks — retired by SOLUSDEV-327
+
+SOLUSDEV-327 removed the Guide | Build action mode, and with it this walkthrough picker: the pill
+has no **Guide tasks** chip, and main no longer answers the native walkthrough-target lookup. The
+text below is kept as history. (The guides API is untouched; a later ticket may bring walkthroughs
+back without a mode.)
 
 In Guide mode, offer a walkthrough picker alongside chat in the current SOL window. Choosing
 a trusted task loads its confidence-bearing steps into the existing GuidePanel. Scriptable
@@ -124,8 +129,7 @@ Cmd/Ctrl+Shift+Space, the circle gesture) always show and focus. No geometry is 
 chat with the bar alone (A1), unless SOL is busy (streaming, the latest reply's approvals waiting, or a
 plan running), in which case the user returns to that conversation. The previous conversation stays in
 the SOL page's history; because the active-conversation pointer is shared with the page, the page
-follows to the new chat. In Guide mode the walkthrough picker (SOLUSDEV-262) opens from a **Guide
-tasks** chip in the footer rather than holding the panel open, and closes again on the next summon.
+follows to the new chat. (The SOLUSDEV-262 Guide tasks chip was removed by SOLUSDEV-327.)
 
 **Frame.** Frameless, transparent, always on top, not resizable by hand, 560 px wide. Collapsed it is
 the bar alone:
@@ -136,7 +140,7 @@ the bar alone:
   `⌃⌃ hide`. (SOLUSDEV-327 removed the Think harder and Confirm every change toggles.) Degraded-status lines
   (§B list) render in the footer area, one per line.
 
-**Grows upward.** Once there is anything to show — messages, opened Guide tasks, the region card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
+**Grows upward.** Once there is anything to show — messages, the region card — a panel opens ABOVE the bar and the window grows upward with its bottom edge fixed (max 620 px,
 never past the work-area top; the thread scrolls inside). If growing would cover the point the pointer
 was at when summoned, the pill shifts right of that point when there is room. The panel has no header
 of its own; New chat and history stay on the full SOL page.

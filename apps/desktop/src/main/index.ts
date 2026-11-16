@@ -1,7 +1,6 @@
 // Must stay the first import: refuses a packaged launch with debugging switches
 // before anything else in main runs (ADR-041 amendment 2026-10-28).
 import './packagedGuardBoot'
-import { findNativeGuideTarget, readNativeWindowProperty } from './sol-window/nativeGuideTarget'
 import {
   app,
   shell,
@@ -386,9 +385,7 @@ function openSystemSettingsPane(url: string | undefined): void {
   })
 }
 
-let guideScopeGeneration = 0
-let guideSignedIn = false
-let guideProject: string | null = null
+let solSignedIn = false
 function startSol(): void {
   const basics = detectPlatformBasics(process.env, process.platform, process.arch)
   const settings = createSolSettings(realLocalStateDeps)
@@ -405,9 +402,8 @@ function startSol(): void {
   let hotkeyStatus: HotkeyStatus | null = null
   let lastRegionRefused = false
   const state = (): SolState => {
-    const { actionMode, screenIntelligence, hotkeys: hotkeysEnabled } = settings.get()
+    const { screenIntelligence, hotkeys: hotkeysEnabled } = settings.get()
     return {
-      actionMode,
       screenIntelligence,
       hotkeysEnabled,
       capture: capture.capability(),
@@ -425,7 +421,6 @@ function startSol(): void {
   }
   let hotkeysOn = settings.get().hotkeys
   settings.onChange((next) => {
-    guideScopeGeneration += 1
     if (next.screenIntelligence) lastRegionRefused = false
     else summonShot.clear()
     if (next.hotkeys !== hotkeysOn) {
@@ -440,15 +435,6 @@ function startSol(): void {
       windows,
       settings,
       state,
-      guideScope: () => (guideSignedIn && guideProject ? guideScopeGeneration : null),
-      guideTarget: () =>
-        findNativeGuideTarget({
-          session: basics.session,
-          displays: screen
-            .getAllDisplays()
-            .map((display) => ({ id: String(display.id), bounds: display.bounds })),
-          read: readNativeWindowProperty
-        }),
       openCaptureSettings: () => openSystemSettingsPane(capture.capability().settingsUrl),
       // Re-checked at take time: off means no pixels, whatever is held.
       takeScreen: () => {
@@ -759,7 +745,6 @@ function startSolTray(
     createTray: (image) => new Tray(image as NativeImage),
     buildMenu: (template) => Menu.buildFromTemplate(template),
     onOpen: () => windows.open(),
-    onSetMode: (mode) => settings.setMode(mode),
     onSetScreenIntelligence: (on) => settings.setScreenIntelligence(on),
     onSetHotkeys: (on) => settings.setHotkeys(on),
     onQuit: () => app.quit(),
@@ -796,7 +781,6 @@ function restartSolHotkeys(
         windows.toggle()
         windows.pushSummoned(Date.now())
       },
-      onToggleMode: () => void settings.toggleMode(),
       onRegion: (region) => void onRegion(region),
       onStatus,
       // SOLUS_DEBUG_GESTURE=1: cursor samples + evaluations (coordinates only).
@@ -937,10 +921,9 @@ function registerCompanionHandlers(): void {
   // A null token is sign-out: the extension windows go with the session.
   ipcMain.handle('bridge:token', (event, token: unknown) => {
     if (isMainRendererSender(event) && (typeof token === 'string' || token === null)) {
-      guideScopeGeneration += 1
-      guideSignedIn = typeof token === 'string' && token.length > 0
+      solSignedIn = typeof token === 'string' && token.length > 0
       // SOLUSDEV-324: the signed-out (or next) account never gets this screen.
-      if (!guideSignedIn) solWindows?.dropSummonCapture()
+      if (!solSignedIn) solWindows?.dropSummonCapture()
       sendAccessToken(token)
       hardwareSources?.setToken(token)
       machineReporter?.setToken(token)
@@ -953,8 +936,6 @@ function registerCompanionHandlers(): void {
   // id that is not a single safe path segment.
   ipcMain.handle('bridge:project', (event, projectId: unknown) => {
     if (isMainRendererSender(event) && (typeof projectId === 'string' || projectId === null)) {
-      guideScopeGeneration += 1
-      guideProject = projectId
       setCompanionProject(projectId)
       drive?.setProject(projectId)
       hardwareSources?.setProject(projectId)

@@ -223,9 +223,7 @@ describe('SolWindow pill sizing and busy signal', () => {
 
   it('opens the panel above the bar only when there is something to show', async () => {
     await mount()
-    // A1: summoned, the pill is the bar alone — in Guide mode too.
-    expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
-    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
+    // A1: summoned, the pill is the bar alone.
     expect(screen.queryByRole('region', { name: 'SOL conversation' })).not.toBeInTheDocument()
     act(() => bridge.pushRegion(SOL_REGION))
     expect(screen.getByRole('region', { name: 'SOL conversation' })).toBeInTheDocument()
@@ -296,14 +294,10 @@ describe('SolWindow auth guard (the retired OrbWindow pattern)', () => {
   })
 })
 
-it('opens Guide tasks on demand from the footer, only in Guide mode', async () => {
+it('offers no Guide tasks walkthroughs (SOLUSDEV-327)', async () => {
   await mount()
-  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
-  expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
-  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Guide tasks' })).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
 })
 
 describe('SolWindow summon: resume within 5 s, else a fresh chat (A1)', () => {
@@ -346,15 +340,6 @@ describe('SolWindow summon: resume within 5 s, else a fresh chat (A1)', () => {
     useSolWindowStore.setState({ planRunning: true })
     await mount()
     expect(active()).toBe('plan-chat')
-  })
-
-  it('a fresh re-summon closes Guide tasks again; a resume leaves them open', async () => {
-    await mount()
-    fireEvent.click(screen.getByRole('button', { name: 'Guide tasks' }))
-    summon(true)
-    expect(screen.getByLabelText('Guide tool')).toBeInTheDocument()
-    summon(false)
-    expect(screen.queryByLabelText('Guide tool')).not.toBeInTheDocument()
   })
 })
 
@@ -409,7 +394,6 @@ it('shows the fixture hole diff in the actual SOL window and requires an explici
     })
   })
   await mount()
-  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
     target: { value: 'Add a 6 mm hole' }
   })
@@ -450,7 +434,6 @@ it('two parked approvals render as one plan; Run approves them in order, one at 
     }
   })
   await mount()
-  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), {
     target: { value: 'pull-ups' }
   })
@@ -494,7 +477,6 @@ it('a command card in the pill keeps its own card and never joins the plan', asy
     })
   })
   await mount()
-  act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
   fireEvent.change(screen.getByPlaceholderText(PLACEHOLDER), { target: { value: 'go' } })
   fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   const plan = await screen.findByLabelText('Plan needs your approval')

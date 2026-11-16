@@ -30,8 +30,7 @@ beforeEach(() => {
   localStorage.clear()
   resetSolChatSessions()
   useSolSessionStore.setState({ streaming: false, conversationByProject: {} })
-  // The shared setting says Guide: the surfaces must still send Build.
-  useSolWindowStore.setState({ state: { ...SOL_STATE, actionMode: 'guide' }, region: null })
+  useSolWindowStore.setState({ state: SOL_STATE, region: null })
   vi.mocked(solApi.listSolTurns).mockResolvedValue([])
   vi.mocked(solApi.createSolConversation).mockResolvedValue({ id: 'c1' } as solApi.SolConversation)
   vi.mocked(solApi.streamSolMessage).mockResolvedValue(undefined)

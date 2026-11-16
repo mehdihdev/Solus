@@ -457,9 +457,7 @@ export interface SolChatProps {
    *  SOLUSDEV-319 Ember Pill (panel above, bar below); 'sidebar' is the SOLUSDEV-327 docked
    *  panel — compact rows like 'panel', but it sends the page's anchors (focus, pins). */
   layout?: 'panel' | 'page' | 'pill' | 'sidebar'
-  /** Pill only: content at the top of the panel (status, Guide tasks) — the
-   *  panel opens for it — and the footer's leading/trailing slots. */
-  pillTop?: React.ReactNode
+  /** Pill only: the footer's leading/trailing slots. */
   pillFooterStart?: React.ReactNode
   pillFooterEnd?: React.ReactNode
   /** SOLUSDEV-233: a shared chat instance (the SOL page drives the sidebar and
@@ -501,9 +499,7 @@ function useRegionSend(
       ? Promise.resolve(regionToScreenshot(region))
       : takeSummonScreenshot()
     void pixels
-      .then((screenshot) =>
-        chat.send(text, SOL_SEND_MODE, mentions, false, screenshot, anchors)
-      )
+      .then((screenshot) => chat.send(text, SOL_SEND_MODE, mentions, false, screenshot, anchors))
       .then((ok) => {
         if (ok && region && useSolWindowStore.getState().region === region) clearRegion()
       })
@@ -526,7 +522,6 @@ interface SurfaceParts {
   regionCard: React.ReactNode
   strip: React.ReactNode
   composer: React.ReactNode
-  pillTop?: React.ReactNode
   /** Pill: the pending command card that takes the pill over, or null. */
   takeover?: PendingConfirmation | null
   onDecide?: SolChat['decide']
@@ -537,7 +532,7 @@ function PillSurface(p: SurfaceParts): React.JSX.Element {
   const stackRef = useRef<HTMLDivElement>(null)
   const active = p.takeover != null
   useTakeoverFocusReturn(active, stackRef)
-  const panelOpen = p.hasThread || Boolean(p.regionCard) || Boolean(p.pillTop)
+  const panelOpen = p.hasThread || Boolean(p.regionCard)
   return (
     <div
       ref={stackRef}
@@ -549,7 +544,6 @@ function PillSurface(p: SurfaceParts): React.JSX.Element {
         <div className="sol-pill-normal-inner">
           {panelOpen && (
             <PillPanel>
-              {p.pillTop}
               {p.hasThread && p.thread}
               {p.regionCard}
             </PillPanel>
@@ -599,7 +593,6 @@ export function SolChat({
   projectId,
   layout = 'panel',
   chat: shared,
-  pillTop,
   pillFooterStart,
   pillFooterEnd,
   pinnedMentionIds,
@@ -655,9 +648,12 @@ export function SolChat({
           )
         }
         strip={
-          <ProcessStrip projectId={projectId} refreshSignal={chat.items.length} actionMode={SOL_SEND_MODE} />
+          <ProcessStrip
+            projectId={projectId}
+            refreshSignal={chat.items.length}
+            actionMode={SOL_SEND_MODE}
+          />
         }
-        pillTop={pillTop}
         takeover={layout === 'pill' ? newestPendingCommand(chat.items) : null}
         onDecide={decideInMode}
         composer={

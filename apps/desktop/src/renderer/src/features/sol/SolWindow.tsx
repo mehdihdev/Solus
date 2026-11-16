@@ -4,8 +4,8 @@
 // signing in stays a main-window flow (the retired OrbWindow's guard, kept).
 //
 // SOLUSDEV-319: the Ember Pill. A transparent, frameless window that main sizes
-// from the height measured here: the bar (orb · input · Guide|Build · send) and
-// footer sit at the bottom, the panel (Guide tasks, the thread, the region
+// from the height measured here: the bar (orb · input · send) and
+// footer sit at the bottom, the panel (the thread, the region
 // card) grows above them. Esc and the hide button hide it through main; it
 // reports busy (streaming, approval parked, plan running) so blur leaves it up.
 //
@@ -22,7 +22,6 @@ import { useAuthStore } from '../../store/authStore'
 import { useWorkspaceStore, WORKSPACE_STORAGE_KEY } from '../../store/workspaceStore'
 import type { SolState } from '../../../../main/sol-window/solWindow'
 import { SolChat } from './SolChat'
-import { GuideTasks } from '../guide/GuideTasks'
 import { selectSession, startNewChat, useSolChatStore } from './solChatStore'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { connectSolBridge, useFrontAppSnapshot, useSolWindowStore } from './solWindowStore'
@@ -42,36 +41,13 @@ function statusLines(state: SolState | null): string[] {
   return lines.filter((line) => line !== '')
 }
 
-interface GuideToggle {
-  open: boolean
-  onToggle: () => void
-}
-
-function FooterStart({
-  state,
-  guide
-}: {
-  state: SolState | null
-  guide: GuideToggle
-}): React.JSX.Element {
+function FooterStart({ state }: { state: SolState | null }): React.JSX.Element {
   return (
     <>
       <Mono size={9.5} color="var(--tx)">
         SOL
       </Mono>
       {state?.screenIntelligence && <span className="sol-window-sees">sees your screen</span>}
-      {/* A1: summoned, the pill is the bar alone — the walkthrough picker
-          (SOLUSDEV-262) opens on demand instead of holding the panel open. */}
-      {state?.actionMode === 'guide' && (
-        <button
-          type="button"
-          className="sol-pill-chip"
-          aria-pressed={guide.open}
-          onClick={guide.onToggle}
-        >
-          Guide tasks
-        </button>
-      )}
     </>
   )
 }
@@ -86,13 +62,7 @@ function Notice({ children }: { children: React.ReactNode }): React.JSX.Element 
   return <div className="sol-pill-bar sol-pill-notice">{children}</div>
 }
 
-function Body({
-  projectId,
-  guide
-}: {
-  projectId: string | null
-  guide: GuideToggle
-}): React.JSX.Element {
+function Body({ projectId }: { projectId: string | null }): React.JSX.Element {
   const status = useAuthStore((s) => s.status)
   const state = useSolWindowStore((s) => s.state)
   if (status === 'loading') {
@@ -109,8 +79,7 @@ function Body({
     <SolChat
       projectId={projectId}
       layout="pill"
-      pillTop={guide.open && state?.actionMode === 'guide' && projectId ? <GuideTasks /> : null}
-      pillFooterStart={<FooterStart state={state} guide={guide} />}
+      pillFooterStart={<FooterStart state={state} />}
       pillFooterEnd={FOOTER_END}
     />
   )
@@ -150,15 +119,10 @@ type PillPhase = 'in' | 'leaving'
  *  everything (messages, draft, scroll). The old conversation stays in the SOL
  *  page's history; the pointer is shared with the page by design. Returns the
  *  motion phase main last cued. */
-function useSummons(projectId: string | null, onFresh: () => void): PillPhase {
+function useSummons(projectId: string | null): PillPhase {
   const [phase, setPhase] = useState<PillPhase>('in')
-  const latest = useRef(onFresh)
-  useEffect(() => {
-    latest.current = onFresh
-  })
   useEffect(() => {
     if (!projectId) return
-    latest.current()
     startFresh(projectId)
   }, [projectId])
   useEffect(() => {
@@ -166,7 +130,6 @@ function useSummons(projectId: string | null, onFresh: () => void): PillPhase {
       if (event.kind === 'leaving') return setPhase('leaving')
       setPhase('in')
       if (event.resume) return
-      latest.current()
       if (projectId) startFresh(projectId)
     })
     return off
@@ -251,8 +214,7 @@ export function SolWindow(): React.JSX.Element {
   const region = useSolWindowStore((s) => s.region)
   const ref = useRef<HTMLDivElement>(null)
   const projectId = project?.id ?? null
-  const [guideOpen, setGuideOpen] = useState(false)
-  const phase = useSummons(projectId, () => setGuideOpen(false))
+  const phase = useSummons(projectId)
   const [cap] = useState(() => pillHeightCap(window.screen.availHeight))
   // The first getState() is what tells main this renderer is up (markReady)
   // and flushes a region captured before the window finished loading.
@@ -270,10 +232,7 @@ export function SolWindow(): React.JSX.Element {
       data-phase={phase}
       style={{ '--sol-pill-max-h': `${cap}px` } as React.CSSProperties}
     >
-      <Body
-        projectId={projectId}
-        guide={{ open: guideOpen, onToggle: () => setGuideOpen((open) => !open) }}
-      />
+      <Body projectId={projectId} />
       {lines.length > 0 && (
         <div className="sol-window-status">
           {lines.map((line) => (

@@ -130,7 +130,6 @@ const pillEvents = (w: Fake): unknown[] =>
   w.sent.filter((m) => m.channel === SOL_WINDOW_CHANNELS.pill).map((m) => m.payload)
 
 const STATE: SolState = {
-  actionMode: 'guide',
   screenIntelligence: false,
   hotkeysEnabled: true,
   capture: { mode: 'available', message: '' },
@@ -166,7 +165,6 @@ function registerWith(
         hide: () => void calls.push('hide')
       },
       settings: {
-        setMode: (m) => void calls.push(`mode:${m}`),
         setScreenIntelligence: (b) => void calls.push(`si:${b}`),
         setHotkeys: (b) => void calls.push(`hk:${b}`)
       },
@@ -213,15 +211,13 @@ describe('IPC registration', () => {
     expect(main.calls).toEqual([])
   })
 
-  it('registers the eleven invokes on the shared constants and returns the state', () => {
+  it('registers the nine invokes on the shared constants and returns the state', () => {
     const { handlers, calls } = registerWith(() => true)
     const c = SOL_WINDOW_CHANNELS
     expect([...handlers.keys()].sort()).toEqual(
       [
         c.open,
         c.getState,
-        c.guideTarget,
-        c.setMode,
         c.setScreenIntelligence,
         c.setHotkeys,
         c.openCaptureSettings,
@@ -233,13 +229,14 @@ describe('IPC registration', () => {
     )
     expect(handlers.get(c.getState)?.(EVENT)).toEqual(STATE) // marks the sender ready
     expect(handlers.get(c.open)?.(EVENT)).toEqual(STATE)
-    handlers.get(c.setMode)?.(EVENT, 'do')
-    handlers.get(c.setMode)?.(EVENT, 'expert') // not a mode: ignored
     handlers.get(c.setScreenIntelligence)?.(EVENT, true)
     handlers.get(c.setScreenIntelligence)?.(EVENT, 'yes')
     handlers.get(c.setHotkeys)?.(EVENT, false)
     handlers.get(c.setHotkeys)?.(EVENT, 'off') // not a boolean: ignored
-    expect(calls).toEqual(['ready', 'open', 'mode:do', 'si:true', 'hk:false'])
+    expect(calls).toEqual(['ready', 'open', 'si:true', 'hk:false'])
+    // SOLUSDEV-327: SOL builds as needed — no mode or walkthrough-target channel.
+    expect(c).not.toHaveProperty('setMode')
+    expect(c).not.toHaveProperty('guideTarget')
   })
 
   it('a foreign sender gets null and no action', async () => {
@@ -695,44 +692,3 @@ function registerWindowRegionReadinessTests(): void {
     expect(m.isSender(h.windows[0].handle.webContents)).toBe(false)
   })
 }
-
-it('native lookup rejects late mode/scope changes and never queries for foreign senders', async () => {
-  let generation = 1
-  let mode: 'guide' | 'do' = 'guide'
-  let finish!: (value: null) => void
-  const lookup = vi.fn(
-    () =>
-      new Promise<null>((resolve) => {
-        finish = resolve
-      })
-  )
-  const handlers = new Map<string, (event: IpcMainInvokeEvent) => unknown>()
-  registerSolIpcHandlers(
-    { handle: (channel, fn) => void handlers.set(channel, fn) },
-    {
-      windows: {
-        open: vi.fn(),
-        markReady: vi.fn(),
-        isSender: () => true,
-        resize: vi.fn(),
-        setBusy: vi.fn(),
-        hide: vi.fn()
-      },
-      settings: { setMode: vi.fn(), setScreenIntelligence: vi.fn(), setHotkeys: vi.fn() },
-      state: () => ({ ...STATE, actionMode: mode }),
-      guideScope: () => generation,
-      guideTarget: lookup
-    },
-    (event) => event === EVENT
-  )
-  const handler = handlers.get(SOL_WINDOW_CHANNELS.guideTarget)!
-  expect(await handler({} as IpcMainInvokeEvent)).toBeNull()
-  expect(lookup).not.toHaveBeenCalled()
-  const pending = handler(EVENT)
-  generation += 2 // project A → B → A
-  finish(null)
-  expect(await pending).toBeNull()
-  mode = 'do'
-  expect(await handler(EVENT)).toBeNull()
-  expect(lookup).toHaveBeenCalledTimes(1)
-})

@@ -1,4 +1,4 @@
-// SOLUSDEV-319: the Ember Pill's panel (Guide tasks, the thread, the region
+// SOLUSDEV-319: the Ember Pill's panel (the thread, the region
 // card) above the bar. The section's height follows its body's measured natural
 // height through a critically damped spring (pillSpring.ts), written straight to
 // the element each frame — opening from zero, growing as a reply streams in,

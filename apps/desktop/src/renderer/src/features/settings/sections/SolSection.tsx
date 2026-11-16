@@ -1,6 +1,7 @@
 // Settings › SOL (SOLUSDEV-318, from the SOLUSDEV-252 Preferences rows): the
 // ADR-016 answer mode (backend-persisted) and the desktop SOL window rows —
-// action mode, sees-your-screen, hold-Ctrl gestures — over window.solus.sol.
+// sees-your-screen, hold-Ctrl gestures — over window.solus.sol. SOLUSDEV-327
+// retired the Guide | Build action-mode row: SOL builds as needed.
 // A blocked capture is tagged here; the fix itself is the Needs-attention card.
 // SOLUSDEV-319 adds "SOL can use your mouse and keyboard" (DriveRow).
 import { Segmented } from '../../../components/ui/Segmented'
@@ -13,13 +14,9 @@ import type { DriveSettings } from '../useDriveStatus'
 import { DriveRow } from './DriveRow'
 
 const SOL_MODES = ['Guide', 'Expert'] as const
-const ACTION_MODES = ['Guide', 'Build'] as const
-type ActionModeLabel = (typeof ACTION_MODES)[number]
 
 const ANSWER_COPY =
   'Guide explains its reasoning and links fundamentals. Expert leads with the answer.'
-const ACTION_COPY =
-  'Guide walks you through each step. Build lets SOL make changes after you confirm them.'
 // Wireflow sol-window §D, verbatim.
 const SEES_SCREEN_COPY =
   'When on, SOL can take a picture of your screen when you summon it or circle something, uses it for that one question, and then discards it. Nothing is saved unless you file it. Off means SOL never captures.'
@@ -94,19 +91,9 @@ function DesktopRows({
 }): React.JSX.Element | null {
   const { state, apply } = sol
   if (!state) return null
-  const mode: ActionModeLabel = state.actionMode === 'do' ? 'Build' : 'Guide'
   const blocked = state.screenIntelligence && state.capture.mode !== 'available'
   return (
     <>
-      <Row label="Action mode" description={ACTION_COPY}>
-        <Segmented
-          size="sm"
-          ariaLabel="Action mode"
-          options={ACTION_MODES}
-          value={mode}
-          onChange={(next) => apply((b) => b.setMode(next === 'Build' ? 'do' : 'guide'))}
-        />
-      </Row>
       <Row
         label={<SeesScreenLabel blocked={blocked} onFix={onFix} />}
         description={SEES_SCREEN_COPY}
@@ -161,7 +148,7 @@ export function SolSection({
         </>
       ) : (
         <div style={{ fontSize: 11.5, color: 'var(--mut)', padding: '10px 0 2px' }}>
-          Action mode, screen capture and gestures: Available in the desktop app.
+          Screen capture and gestures: Available in the desktop app.
         </div>
       )}
     </Section>

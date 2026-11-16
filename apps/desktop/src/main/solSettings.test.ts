@@ -48,7 +48,7 @@ describe('read', () => {
     expect(f.warn).not.toHaveBeenCalled()
   })
 
-  it('reads a well-formed file and ignores unknown fields, the retired pin and geometry too', () => {
+  it('reads a well-formed file and ignores unknown fields, the retired pin, geometry and mode', () => {
     const f = fakeFs({
       [CONFIG]: JSON.stringify({
         schema_version: 1,
@@ -61,7 +61,6 @@ describe('read', () => {
       })
     })
     expect(createSolSettings(f.deps).get()).toEqual({
-      actionMode: 'do',
       screenIntelligence: true,
       hotkeys: true,
       drive: false
@@ -91,16 +90,16 @@ describe('read', () => {
     const s = createSolSettings(f.deps)
     expect(s.get()).toEqual(DEFAULT_SOL_SETTINGS)
     expect(f.warn).toHaveBeenCalledTimes(1)
-    s.setMode('do')
-    expect(JSON.parse(f.files.get(CONFIG) ?? '').sol.actionMode).toBe('do')
+    s.setHotkeys(false)
+    expect(JSON.parse(f.files.get(CONFIG) ?? '').sol.hotkeys).toBe(false)
   })
 
   it('a newer schema_version is read-only: defaults, warning, no write', () => {
     const raw = JSON.stringify({ schema_version: SOL_CONFIG_SCHEMA_VERSION + 1, sol: {} })
     const f = fakeFs({ [CONFIG]: raw })
     const s = createSolSettings(f.deps)
-    s.setMode('do')
-    expect(s.get().actionMode).toBe('do') // in-memory still works for this run
+    s.setHotkeys(false)
+    expect(s.get().hotkeys).toBe(false) // in-memory still works for this run
     expect(f.files.get(CONFIG)).toBe(raw)
     expect(f.warn).toHaveBeenCalled()
   })
@@ -117,7 +116,6 @@ describe('write', () => {
     expect(doc.other).toEqual({ keep: true })
     expect(doc.schema_version).toBe(SOL_CONFIG_SCHEMA_VERSION)
     expect(doc.sol).toEqual({
-      actionMode: 'guide',
       screenIntelligence: true,
       hotkeys: false,
       drive: true
@@ -126,10 +124,14 @@ describe('write', () => {
     expect(createSolSettings(f.deps).get()).toEqual(doc.sol)
   })
 
-  it('toggleMode flips guide ↔ do and returns the new mode', () => {
-    const s = createSolSettings(fakeFs().deps)
-    expect(s.toggleMode()).toBe('do')
-    expect(s.toggleMode()).toBe('guide')
+  it('a stored Guide | Build mode is dropped on the next write (SOLUSDEV-327)', () => {
+    const f = fakeFs({
+      [CONFIG]: JSON.stringify({ schema_version: 1, sol: { actionMode: 'guide' } })
+    })
+    const s = createSolSettings(f.deps)
+    expect(s.get()).not.toHaveProperty('actionMode')
+    s.setDrive(true)
+    expect(JSON.parse(f.files.get(CONFIG) ?? '').sol).not.toHaveProperty('actionMode')
   })
 
   it('a failing write warns and never throws', () => {
@@ -138,8 +140,8 @@ describe('write', () => {
       throw new Error('EACCES')
     }
     const s = createSolSettings(f.deps)
-    expect(() => s.setMode('do')).not.toThrow()
-    expect(s.get().actionMode).toBe('do')
+    expect(() => s.setDrive(true)).not.toThrow()
+    expect(s.get().drive).toBe(true)
     expect(f.warn).toHaveBeenCalledTimes(1)
   })
 })
@@ -149,8 +151,8 @@ describe('onChange', () => {
     const s = createSolSettings(fakeFs().deps)
     const cb = vi.fn()
     const off = s.onChange(cb)
-    s.setMode('do')
-    expect(cb).toHaveBeenCalledWith(expect.objectContaining({ actionMode: 'do' }))
+    s.setScreenIntelligence(true)
+    expect(cb).toHaveBeenCalledWith(expect.objectContaining({ screenIntelligence: true }))
     off()
     s.setHotkeys(false)
     expect(cb).toHaveBeenCalledTimes(1)

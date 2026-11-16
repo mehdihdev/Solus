@@ -60,13 +60,12 @@ describe('SolSection — desktop rows (SOLUSDEV-252)', () => {
   it('outside Electron, says the rows live in the desktop app and renders no controls', () => {
     render(<Harness data={settingsData()} bridge={null} />)
     expect(screen.getByText(/Available in the desktop app/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('Action mode')).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Hold-Ctrl gestures' })).toBeNull()
   })
 
   it('reflects the desktop state with the wireflow §D copy under its label', async () => {
-    render(<Harness data={settingsData()} bridge={fakeSolBridge({ ...off, actionMode: 'do' })} />)
-    expect(await screen.findByLabelText('Action mode')).toHaveTextContent('Build')
-    expect(screen.getByRole('switch', { name: 'SOL sees your screen' })).toHaveAttribute(
+    render(<Harness data={settingsData()} bridge={fakeSolBridge(off)} />)
+    expect(await screen.findByRole('switch', { name: 'SOL sees your screen' })).toHaveAttribute(
       'aria-checked',
       'false'
     )
@@ -81,12 +80,17 @@ describe('SolSection — desktop rows (SOLUSDEV-252)', () => {
     ).toBeInTheDocument()
   })
 
-  it('drives the bridge: Build → setMode("do"), the switches → their setters', async () => {
+  it('offers no Guide | Build action mode — SOL builds as needed (SOLUSDEV-327)', async () => {
+    render(<Harness data={settingsData()} bridge={fakeSolBridge(off)} />)
+    await screen.findByRole('switch', { name: 'SOL sees your screen' })
+    expect(screen.queryByLabelText('Action mode')).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Build' })).toBeNull()
+  })
+
+  it('drives the bridge: the switches → their setters', async () => {
     const bridge = fakeSolBridge(off)
     render(<Harness data={settingsData()} bridge={bridge} />)
-    await userEvent.click(await screen.findByRole('radio', { name: 'Build' }))
-    expect(bridge.setMode).toHaveBeenCalledWith('do')
-    await userEvent.click(screen.getByRole('switch', { name: 'SOL sees your screen' }))
+    await userEvent.click(await screen.findByRole('switch', { name: 'SOL sees your screen' }))
     expect(bridge.setScreenIntelligence).toHaveBeenCalledWith(true)
     await userEvent.click(screen.getByRole('switch', { name: 'Hold-Ctrl gestures' }))
     expect(bridge.setHotkeys).toHaveBeenCalledWith(false)
@@ -116,9 +120,10 @@ describe('SolSection — desktop rows (SOLUSDEV-252)', () => {
   it('follows sol:state pushes from main', async () => {
     const bridge = fakeSolBridge(off)
     render(<Harness data={settingsData()} bridge={bridge} />)
-    expect(await screen.findByLabelText('Action mode')).toHaveTextContent('Guide')
-    act(() => bridge.pushState({ ...off, actionMode: 'do' }))
-    expect(screen.getByRole('radio', { name: 'Build' })).toHaveAttribute('aria-checked', 'true')
+    const sees = await screen.findByRole('switch', { name: 'SOL sees your screen' })
+    expect(sees).toHaveAttribute('aria-checked', 'false')
+    act(() => bridge.pushState({ ...off, screenIntelligence: true }))
+    expect(sees).toHaveAttribute('aria-checked', 'true')
   })
 
   it('reports a rejected change in plain language', async () => {

@@ -7,11 +7,11 @@ ADR-035 (hosting patterns), ADR-033 (tool knowledge is global and tenant-free).
 
 ## The three shapes, one gate
 
-| Tool | READ | OPERATION | WRITE (through the approval card) | Diff on the card |
-| --- | --- | --- | --- | --- |
-| **Onshape** (REST, customer OAuth; `connectors/onshape_ops.py`) | `list_documents`, `list_elements`, `get_feature_tree`, `get_variables`, … | `get_mass_properties`, `get_body_details` | `set_variable` (read-merge-write of the WHOLE table), `add_feature`, `update_feature` | the operation's own `preview` |
-| **KiCad** (owned fork over the bridge; `integrations/mcp/kicad`) | `extract_project_netlist`, `get_project_structure` | `analyze_schematic_connections`, `analyze_bom` | `set_symbol_property` (byte splice, workspace-confined, atomic) | `bridge/previews.py` reads the netlist first: `R1 · Value: 4.7k → 4k7` |
-| **Fusion** (Autodesk's own loopback server, ADR-031 vendor-run; `integrations/mcp/fusion`) | — | — | — | — |
+| Tool                                                                                       | READ                                                                      | OPERATION                                      | WRITE (through the approval card)                                                     | Diff on the card                                                       |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Onshape** (REST, customer OAuth; `connectors/onshape_ops.py`)                            | `list_documents`, `list_elements`, `get_feature_tree`, `get_variables`, … | `get_mass_properties`, `get_body_details`      | `set_variable` (read-merge-write of the WHOLE table), `add_feature`, `update_feature` | the operation's own `preview`                                          |
+| **KiCad** (owned fork over the bridge; `integrations/mcp/kicad`)                           | `extract_project_netlist`, `get_project_structure`                        | `analyze_schematic_connections`, `analyze_bom` | `set_symbol_property` (byte splice, workspace-confined, atomic)                       | `bridge/previews.py` reads the netlist first: `R1 · Value: 4.7k → 4k7` |
+| **Fusion** (Autodesk's own loopback server, ADR-031 vendor-run; `integrations/mcp/fusion`) | —                                                                         | —                                              | —                                                                                     | —                                                                      |
 
 Every write reaches the tool only through `confirmations.decide_confirmation`, which re-runs
 the preview at approve time and refuses on divergence; `requires_confirmation` comes from the
@@ -77,7 +77,8 @@ Guide permits read-only context inspection and never dispatches a mutation. Buil
 wire compatibility and existing confirmation admission. The S4 hole fixture uses the gated
 onshape.add_feature path and proves actual diff → explicit decision → write. It does not claim
 that separately authorized SOLUSDEV-261 routine-policy actions have been revoked. Attachment
-shortcut semantics prevail: Ctrl+Space toggles mode; existing summon shortcut stays unchanged.
+shortcut semantics prevail: existing summon shortcut stays unchanged. (SOLUSDEV-327 removed the
+Ctrl+Space mode toggle, the Guide | Build setting and the native Guide-target lookup below.)
 
 Native Guide target discovery is main-process read-only and sender-authenticated. On X11 it
 uses pinned xprop/xwininfo argument arrays with time/output bounds, an exact normalized

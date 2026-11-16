@@ -1,21 +1,14 @@
 // SOLUSDEV-252 S3: the renderer mirror of the main process's SOL state
 // (sol:state pushes) and the one in-memory circled region (sol:region).
 // Runtime-only — nothing here persists; pixels never leave this process.
-import { act, renderHook } from '@testing-library/react'
+import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useAuthStore } from '../../store/authStore'
-import {
-  SOL_REGION,
-  SOL_STATE,
-  fakeSolBridge,
-  installSolBridge,
-  uninstallSolBridge
-} from './solWindow.fixtures'
+import { SOL_REGION, SOL_STATE, fakeSolBridge, uninstallSolBridge } from './solWindow.fixtures'
 import {
   connectSolBridge,
   disconnectSolBridge,
   regionToScreenshot,
-  useSolActionMode,
   useSolWindowStore
 } from './solWindowStore'
 
@@ -34,8 +27,8 @@ describe('connectSolBridge', () => {
     await act(async () => connectSolBridge(bridge))
     expect(bridge.getState).toHaveBeenCalledTimes(1)
     expect(useSolWindowStore.getState().state).toEqual(SOL_STATE)
-    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-    expect(useSolWindowStore.getState().state?.actionMode).toBe('do')
+    act(() => bridge.pushState({ ...SOL_STATE, screenIntelligence: true }))
+    expect(useSolWindowStore.getState().state?.screenIntelligence).toBe(true)
     act(() => bridge.pushRegion(SOL_REGION))
     expect(useSolWindowStore.getState().region).toBe(SOL_REGION)
   })
@@ -100,28 +93,5 @@ describe('regionToScreenshot', () => {
     expect(shot.source?.app).toHaveLength(128)
     expect(shot.source?.title).toHaveLength(256)
     expect(regionToScreenshot({ ...SOL_REGION, source: null }).source).toBeNull()
-  })
-})
-
-describe('useSolActionMode', () => {
-  it('outside Electron keeps a local mode with the composer default (Do)', () => {
-    const { result } = renderHook(() => useSolActionMode())
-    expect(result.current.mode).toBe('do')
-    act(() => result.current.setMode('guide'))
-    expect(result.current.mode).toBe('guide')
-  })
-
-  it('inside Electron reads the shared mode and toggles through the bridge', async () => {
-    const bridge = fakeSolBridge()
-    installSolBridge(bridge)
-    const { result } = renderHook(() => useSolActionMode())
-    await act(async () => undefined)
-    expect(result.current.mode).toBe('guide')
-    act(() => result.current.setMode('do'))
-    expect(bridge.setMode).toHaveBeenCalledWith('do')
-    // The mode flips when main confirms via the state push, not optimistically.
-    expect(result.current.mode).toBe('guide')
-    act(() => bridge.pushState({ ...SOL_STATE, actionMode: 'do' }))
-    expect(result.current.mode).toBe('do')
   })
 })

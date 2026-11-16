@@ -1,10 +1,10 @@
 import type { PlatformBasics } from '../platform/capabilities'
 
 // SOLUSDEV-252 S3: `globalShortcut` chords (docs/architecture/sol-window.md §2-§3).
-// Ctrl+Space toggles the mode; Ctrl+Shift+C enters circle mode (useful on a
-// trackpad even with the hook); CommandOrControl+Shift+Space always summons. A failed registration is a message, never a throw.
+// Ctrl+Shift+C enters circle mode (useful on a trackpad even with the hook);
+// CommandOrControl+Shift+Space always summons. (SOLUSDEV-327 retired the
+// Ctrl+Space Guide | Build toggle — SOL builds as needed.) A failed registration is a message, never a throw.
 export const ACCELERATORS = {
-  toggleMode: 'Control+Space',
   summonFallback: 'CommandOrControl+Shift+Space',
   circleMode: 'Control+Shift+C'
 } as const
@@ -16,7 +16,6 @@ export interface GlobalShortcutApi {
 }
 
 export interface ShortcutStatus {
-  ctrlSpace: boolean
   spawnFallback: boolean
   circleMode: boolean
 }
@@ -26,7 +25,6 @@ export interface GlobalHotkeysOpts {
   available: boolean
   hookAvailable: boolean
   platform?: PlatformBasics['platform']
-  onToggleMode(): void
   onSummon(): void
   onCircleMode(): void
 }
@@ -79,13 +77,12 @@ export function registerGlobalHotkeys(
   }
   if (!opts.available) {
     return {
-      shortcuts: { ctrlSpace: false, spawnFallback: false, circleMode: false },
+      shortcuts: { spawnFallback: false, circleMode: false },
       messages,
       stop: () => {}
     }
   }
   const shortcuts: ShortcutStatus = {
-    ctrlSpace: tryRegister(ACCELERATORS.toggleMode, opts.onToggleMode),
     spawnFallback: tryRegister(ACCELERATORS.summonFallback, opts.onSummon),
     circleMode: tryRegister(ACCELERATORS.circleMode, opts.onCircleMode)
   }

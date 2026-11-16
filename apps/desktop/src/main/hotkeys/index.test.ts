@@ -13,7 +13,6 @@ interface Harness {
   advance(ms: number): void
   fire(acc: string): void
   onSummon: ReturnType<typeof vi.fn>
-  onToggleMode: ReturnType<typeof vi.fn>
   onRegion: ReturnType<typeof vi.fn>
   onStatus: ReturnType<typeof vi.fn>
 }
@@ -42,7 +41,6 @@ function harness(opts: { hook: boolean; wayland?: boolean }): Harness {
       ? { down: () => cbs.down(), up: () => cbs.up(), other: () => cbs.other() }
       : null,
     onSummon: vi.fn(),
-    onToggleMode: vi.fn(),
     onRegion: vi.fn(),
     onStatus: vi.fn(),
     fire: (acc) => shortcuts.get(acc)?.(),
@@ -85,7 +83,6 @@ function harness(opts: { hook: boolean; wayland?: boolean }): Harness {
       },
       loadHook,
       onSummon: () => h.onSummon(),
-      onToggleMode: () => h.onToggleMode(),
       onRegion: (region, display) => h.onRegion(region, display),
       onStatus: (status) => h.onStatus(status)
     }
@@ -173,8 +170,6 @@ function registerDriveQuietTests(): void {
     expect(handle.status().circleModeActive).toBe(false) // ended, not polling through the step
     h.fire(ACCELERATORS.summonFallback)
     expect(h.onSummon).toHaveBeenCalledTimes(1)
-    h.fire(ACCELERATORS.toggleMode)
-    expect(h.onToggleMode).toHaveBeenCalledTimes(1)
   })
 }
 
@@ -241,11 +236,7 @@ function registerFallbackCircleTests(): void {
     const h = harness({ hook: false })
     const handle = startHotkeys(h.deps)
     expect(handle.status().mode).toBe('fallback')
-    expect(handle.status().shortcuts).toEqual({
-      ctrlSpace: true,
-      spawnFallback: true,
-      circleMode: true
-    })
+    expect(handle.status().shortcuts).toEqual({ spawnFallback: true, circleMode: true })
     h.fire(ACCELERATORS.circleMode)
     expect(handle.status().circleModeActive).toBe(true)
     drawCircle(h, 500, 400, 100)
@@ -255,8 +246,6 @@ function registerFallbackCircleTests(): void {
     expect(handle.status().circleModeActive).toBe(false)
     h.fire(ACCELERATORS.summonFallback)
     expect(h.onSummon).toHaveBeenCalledTimes(1)
-    h.fire(ACCELERATORS.toggleMode)
-    expect(h.onToggleMode).toHaveBeenCalledTimes(1)
   })
 
   it('fallback: a hesitation mid-loop keeps the stroke (live gate 2026-09-07: a 300 ms stall must not split a circle)', () => {
@@ -313,22 +302,18 @@ function registerHotkeyStatusAndTeardownTests(): void {
   it('Wayland: attempts the portal shortcut and dispatches summon', () => {
     const h = harness({ hook: false, wayland: true })
     const handle = startHotkeys(h.deps)
-    expect(handle.status().shortcuts).toEqual({
-      ctrlSpace: true,
-      spawnFallback: true,
-      circleMode: true
-    })
+    expect(handle.status().shortcuts).toEqual({ spawnFallback: true, circleMode: true })
     h.fire(ACCELERATORS.summonFallback)
     expect(h.onSummon).toHaveBeenCalledTimes(1)
   })
 
-  it('a taken Ctrl+Space shows in the summary', () => {
+  it('a taken chord shows in the summary', () => {
     const h = harness({ hook: true })
     const real = h.deps.globalShortcut.register
-    h.deps.globalShortcut.register = (acc, cb) => acc !== ACCELERATORS.toggleMode && real(acc, cb)
+    h.deps.globalShortcut.register = (acc, cb) => acc !== ACCELERATORS.circleMode && real(acc, cb)
     const handle = startHotkeys(h.deps)
-    expect(handle.status().shortcuts.ctrlSpace).toBe(false)
-    expect(handle.status().summary).toMatch(/Ctrl\+Space is unavailable; use Open SOL window/)
+    expect(handle.status().shortcuts.circleMode).toBe(false)
+    expect(handle.status().summary).toMatch(/Ctrl\+Shift\+C is unavailable; use Open SOL window/)
   })
 
   it('stop() releases the hook, the shortcuts and the sampler', () => {
@@ -341,7 +326,7 @@ function registerHotkeyStatusAndTeardownTests(): void {
     const polls = getCursor.mock.calls.length
     h.advance(100)
     expect(getCursor.mock.calls.length).toBe(polls)
-    h.fire(ACCELERATORS.toggleMode)
-    expect(h.onToggleMode).not.toHaveBeenCalled()
+    h.fire(ACCELERATORS.summonFallback)
+    expect(h.onSummon).not.toHaveBeenCalled()
   })
 }

@@ -59,6 +59,11 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 1. [ ] Ask something that cites a graph node. Click an `[entity:…]` citation chip. Expected: the Workspace opens with that node focused.
 2. [ ] Ask SOL to delete a graph link. Expected: a confirmation card appears in the sidebar; nothing changes until Approve; Reject clears it. A routine edit (e.g. renaming a note) may run without a card — SOL builds as needed.
 3. [ ] On the SOL page, the pill and the sidebar: no Guide/Build control, no Think harder, no Confirm every change and no routing line anywhere in the composer.
+4. [ ] Settings → SOL: there is **no Action mode** row (Answer mode Guide/Expert is still there, with sees-your-screen and Hold-Ctrl gestures).
+5. [ ] Tray menu: Open SOL · SOL sees your screen · Hold-Ctrl gestures · the shortcuts line (no "Ctrl+Space — mode") · Quit. **No Guide / Build radio.** Tooltip reads `SOL` (or `SOL · sees your screen`).
+6. [ ] Focus another app and press **Ctrl+Space**. Expected: Solus does nothing (the OS or that app keeps the key, e.g. input-source switching on macOS).
+7. [ ] Summon the pill (double-tap Ctrl or ⌘⇧Space): the footer has no **Guide tasks** chip.
+8. [ ] If `~/.solus/config.json` had `"actionMode": "guide"` from an older build: relaunch, toggle any SOL setting, and confirm the key is gone from the file.
 
 ## 8. Motion and accessibility
 
@@ -84,12 +89,12 @@ conversation per project with the SOL page and the SOL pill. Spec: `docs/wireflo
 | Section               | Pass | Notes |
 | --------------------- | ---- | ----- |
 | 1 Toggle and shortcut |      |       |
-| 2 Per-screen memory   |      |       |
+| 2 It follows you      |      |       |
 | 3 Header and greeting |      |       |
 | 4 One conversation    |      |       |
 | 5 Expand / pop out    |      |       |
 | 6 Width and fit       |      |       |
-| 7 Thread behaviour    |      |       |
+| 7 Thread / no modes   |      |       |
 | 8 Motion / a11y       |      |       |
 | 9 Edge cases          |      |       |
 | 10 Data collection    |      |       |

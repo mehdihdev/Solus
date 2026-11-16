@@ -40,7 +40,7 @@ const renderWith = (status: DriveStatus): FakeDriveBridge => {
 describe('SolSection — SOL can use your mouse and keyboard (sol-drive.md §5)', () => {
   it('has no row without the drive bridge', async () => {
     render(<Harness bridge={null} />)
-    await screen.findByLabelText('Action mode')
+    await screen.findByRole('switch', { name: 'Hold-Ctrl gestures' })
     expect(screen.queryByRole('switch', { name: LABEL })).toBeNull()
   })
 
