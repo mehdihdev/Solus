@@ -1,4 +1,19 @@
-import type { BenchDeviceRecent, BenchSignalSeries } from '../../lib/api/resources'
+import type {
+  BenchChannelDisplay,
+  BenchDeviceRecent,
+  BenchSignalSeries
+} from '../../lib/api/resources'
+
+const DISPLAYS: readonly BenchChannelDisplay[] = [
+  'plot',
+  'angle',
+  'orientation',
+  'video',
+  'scan',
+  'points',
+  'state',
+  'text'
+]
 
 export function benchSocketUrl(base: string, session: string): string {
   const url = new URL(base)
@@ -23,6 +38,21 @@ function list(value: unknown, max: number): unknown[] {
   if (!Array.isArray(value) || value.length > max) throw new Error('Invalid telemetry list')
   return value
 }
+function finite(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('Invalid range')
+  return value
+}
+/** A channel's declared display and display range (SOLUSDEV-326), checked like the rest. */
+function presentation(row: Record<string, unknown>): Pick<BenchSignalSeries, 'display' | 'range'> {
+  const display = DISPLAYS.find((known) => known === row.display)
+  if (row.display !== undefined && display === undefined) throw new Error('Invalid display')
+  const shown = display ? { display } : {}
+  if (row.range === undefined) return shown
+  const range = record(row.range)
+  const [min, max] = [finite(range.min), finite(range.max)]
+  if (min >= max) throw new Error('Invalid range')
+  return { ...shown, range: { min, max } }
+}
 function series(value: unknown): BenchSignalSeries {
   const row = record(value)
   const role = row.display_role
@@ -31,6 +61,7 @@ function series(value: unknown): BenchSignalSeries {
   return {
     signal: text(row.signal, 128),
     display_role: role,
+    ...presentation(row),
     points: list(row.points, 128).map((item) => {
       const point = record(item)
       const timestamp = text(point.timestamp, 64)

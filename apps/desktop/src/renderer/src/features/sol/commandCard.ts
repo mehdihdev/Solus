@@ -5,18 +5,23 @@
 import type { PendingConfirmation } from '../../lib/api/solStream'
 import type { ConfirmationOutcome } from '../../lib/api/resources'
 
-/** Tools whose card shows the command header, accepts Cmd/Ctrl+Enter and
- *  resumes the turn once approved (code-command-execution.md §5.5). */
-export const COMMAND_TOOLS: ReadonlySet<string> = new Set([
+/** Tools an approved call of which SOL resumes after (code-command-execution.md §5.5). The
+ *  server's list (agent/command_gate.py COMMAND_TOOLS) is the authority and refuses any other
+ *  resume; pytest writes it to shared-types/fixtures/action-gate/_resume_tools.json and
+ *  commandCard.test.ts holds this copy to that file. Never edit one side alone. */
+export const RESUME_TOOLS: ReadonlySet<string> = new Set([
   'code.exec',
   'code.process_start',
   'code.run',
   'code.test',
   'code.install',
   'code.create_environment',
-  'code.profile_capture',
-  'code.process_input'
+  'code.profile_capture'
 ])
+
+/** Tools whose card shows the command header and accepts Cmd/Ctrl+Enter: the resuming ones and
+ *  input to a running process, which SOL is woken for instead (§11.3). Presentation only. */
+export const COMMAND_TOOLS: ReadonlySet<string> = new Set([...RESUME_TOOLS, 'code.process_input'])
 
 /** Tools whose approved call streams incremental output (§5.4). drive.step's
  *  output is its progress lines (sol-drive.md §4), read by the A3 strip. */
@@ -34,6 +39,10 @@ const FIRST_ARG = /^\s*\[\s*("(?:[^"\\]|\\.)*")/
 
 export function isCommandTool(tool: string): boolean {
   return COMMAND_TOOLS.has(tool)
+}
+
+export function resumesAfterApproval(tool: string): boolean {
+  return RESUME_TOOLS.has(tool)
 }
 
 export function hasCommandOutput(tool: string): boolean {

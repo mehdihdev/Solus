@@ -26,6 +26,20 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 const optionalText = (value: unknown): boolean =>
   value === undefined || value === null || typeof value === 'string'
+const finite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value)
+/** A brain's measured clock (SOLUSDEV-326): absent, or every field well-formed. */
+function validClock(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (record(value) &&
+      finite(value.offset_ms) &&
+      finite(value.jitter_ms) &&
+      typeof value.measured_at === 'string' &&
+      Number.isFinite(Date.parse(value.measured_at)) &&
+      typeof value.method === 'string')
+  )
+}
 function validNode(value: unknown): boolean {
   return (
     record(value) &&
@@ -36,6 +50,7 @@ function validNode(value: unknown): boolean {
       value.brain_kind as string | null | undefined
     ) &&
     ['category', 'channel', 'software', 'presence'].every((key) => optionalText(value[key])) &&
+    validClock(value.clock) &&
     (value.evidence === undefined ||
       (Array.isArray(value.evidence) &&
         value.evidence.every(

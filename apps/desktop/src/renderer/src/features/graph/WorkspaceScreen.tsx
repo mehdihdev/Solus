@@ -8,7 +8,6 @@ import { isWidgetRegistration, widgetRegistrationProjection } from './widgetRegi
 import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import { Icons } from '../../components/ui/icons.constants'
-import { useDetectedDevicesFeed } from './hardware/useDetectedDevicesFeed'
 import type { Entity, Relation, Source } from '../../lib/api/resources'
 import type { Point } from '../../lib/api/workspace'
 import { ScreenEmptyState } from '../workspace/ScreenEmptyState'
@@ -18,9 +17,6 @@ import { useOfflineReason, type OfflineReason } from '../workspace/workspaceOnli
 import { NodeSidebar, type EdgeSelection } from './sidebar/NodeSidebar'
 import { useFindings, type FindingsBySubject } from './useFindings'
 import { baseSourceId, isAccountAnchor, withAccountAnchors } from './accountAnchors'
-import { placementNearRail } from './hardware/deviceCardRules'
-import { PendingDeviceCards } from './hardware/PendingDeviceCards'
-import { editableRobot } from './robots/robotSession'
 import { askSolAbout } from '../sol/pinnedContextStore'
 import { sectionOf, subsectionOf, useSolusNodes } from './useSolusNodes'
 import { findSolusEntry, targetLabel } from './solusActions'
@@ -32,8 +28,6 @@ import { reconcileWorkspaceFocus } from './workspaceFocus'
 import { useAuthStore } from '../../store/authStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import { useWorkspaceGraph, type GraphSummary } from './useWorkspaceGraph'
-import { useOptimisticGraph } from './useOptimisticGraph'
-import { mergeOptimistic } from './graphCache'
 import { useWorkspaceLayout, type MoveOrigin } from './useWorkspaceLayout'
 import { RobotTopologyGraph } from './robots/RobotTopologyGraph'
 import { useWorkspaceStore } from '../../store/workspaceStore'
@@ -180,7 +174,7 @@ function LayoutStatus({ layout }: { layout: WorkspaceLayout }): React.JSX.Elemen
 }
 
 interface AddRequest {
-  tab: 'service' | 'hardware'
+  tab: 'service'
   sequence: number
 }
 
@@ -198,7 +192,6 @@ interface GraphBodyProps {
   renderContent: (entity: Entity) => React.ReactNode
   toolbar: React.ReactNode
   reveal?: { entityId: string; sequence: number }
-  overlay?: React.ReactNode
   onSuggestionsChanged?: () => void
   onSelectEdge?: (relation: Relation) => void
   selectedEdgeId?: string | null
@@ -220,7 +213,6 @@ function WorkspaceGraphBody({
   renderContent,
   toolbar,
   reveal,
-  overlay,
   onSuggestionsChanged,
   onSelectEdge,
   selectedEdgeId,
@@ -250,7 +242,6 @@ function WorkspaceGraphBody({
       positions={layout.positions}
       focusedId={focusedId}
       reveal={reveal}
-      overlay={overlay}
       onSelect={onSelect}
       onMove={onMove}
       onContextMenu={onContextMenu}
@@ -310,8 +301,8 @@ function GraphCounts({
 }
 
 export interface WorkspaceScreenProps {
-  openAddRequest?: { tab: 'hardware'; sequence: number }
-  onAddRequestConsumed?: (sequence: number) => void
+  /** The Add modal's Hardware row: the shell opens the Hardware page (SOLUSDEV-326). */
+  onOpenHardware?: () => void
   onOpenBench?: () => void
   /** The design's Ask SOL: the node is pinned to the active chat and the SOL page opens. */
   onOpenSol?: () => void
@@ -358,102 +349,23 @@ function useWorkspaceReveal(entities: readonly Entity[], onGraphChanged: () => v
   return { reveal, onReveal, onServiceSelected }
 }
 
-/** Seed the machine-wide device store on every stream 'ready' (a reconnect may
- *  have missed a change); offline / runner-absent stays an honest "never seeded". */
-
-/** One-shot placement for a robot confirmed from the rail: once the id is live
- *  and has no saved position, move it near the rail — then forget it. */
-function useRailPlacement(
-  layout: WorkspaceLayout,
-  entities: readonly Entity[] | null
-): (robotId: string) => void {
-  const pending = useRef(new Map<string, Point>())
-  const { positions, move, status } = layout
-  useEffect(() => {
-    // A graph refetch re-creates the layout session; wait for its positions.
-    if (!entities || (status !== 'ready' && status !== 'saving')) return
-    for (const [id, point] of pending.current) {
-      if (!entities.some((entity) => entity.id === id)) continue
-      pending.current.delete(id)
-      if (!positions[id]) move(id, point)
-    }
-  }, [entities, positions, move, status])
-  return useCallback((robotId: string) => {
-    pending.current.set(robotId, placementNearRail())
-  }, [])
-}
-
-/** The canvas-edge device rail: pending devices as compact cards; a confirmed
- *  robot is shown at once (optimistic), refetched, revealed, and lands near the
- *  rail once its id is live. `entities` stays the authoritative snapshot so the
- *  placement replays when the refetch arrives (an optimistic id is never live). */
-function useDeviceRail(
-  projectId: string | null,
-  entities: readonly Entity[] | null,
-  layout: WorkspaceLayout,
-  onGraphChanged: () => void,
-  onReveal: (entityId: string) => void,
-  onOptimistic: (entity: Entity) => void
-): React.ReactNode {
-  const mode = useSettingsStore((state) => state.solMode)
-  const place = useRailPlacement(layout, entities)
-  const robots = useMemo(
-    () =>
-      (entities ?? []).filter((entity) => projectId !== null && editableRobot(entity, projectId)),
-    [entities, projectId]
-  )
-  const onCreated = useCallback(
-    (robot: Entity) => {
-      place(robot.id)
-      onOptimistic(robot)
-      onGraphChanged()
-      onReveal(robot.id)
-    },
-    [place, onOptimistic, onGraphChanged, onReveal]
-  )
-  return useMemo(
-    () =>
-      projectId ? (
-        <PendingDeviceCards
-          projectId={projectId}
-          mode={mode}
-          robots={robots}
-          entities={entities}
-          onCreated={onCreated}
-        />
-      ) : null,
-    [projectId, mode, robots, entities, onCreated]
-  )
-}
-
 function useWorkspaceSnapshot() {
   const [graphRevision, setGraphRevision] = useState(0)
   const [validation, setValidation] = useState(0)
   const summary = useWorkspaceGraph(graphRevision, validation)
   const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
-  const { onDevices, seed } = useDetectedDevicesFeed(projectId)
-  const validateGraph = useCallback(() => {
-    setValidation((value) => value + 1)
-    seed()
-  }, [seed])
+  const validateGraph = useCallback(() => setValidation((value) => value + 1), [])
   useGraphFocusReconciliation(projectId, summary)
   const focusedId = useFocusStore((state) => state.focusedEntityId)
-  // Optimistic entities join BEFORE the anchors, so a just-confirmed robot is a
-  // root like a real one; the sidebar routes on this list too.
-  const optimistic = useOptimisticGraph(summary.entities)
-  const base = useMemo(
-    () =>
-      mergeOptimistic(
-        { entities: summary.entities ?? [], relations: summary.relations },
-        optimistic.entities
-      ),
-    [summary.entities, summary.relations, optimistic.entities]
-  )
   // Presentation only: anchors are concatenated upstream of the unmodified index.
   const merged = useMemo(() => {
-    const registered = widgetRegistrationProjection(projectId ?? '', base.entities, base.relations)
+    const registered = widgetRegistrationProjection(
+      projectId ?? '',
+      summary.entities ?? [],
+      summary.relations
+    )
     return withAccountAnchors(registered.entities, registered.relations, summary.sources)
-  }, [base, summary.sources, projectId])
+  }, [summary.entities, summary.relations, summary.sources, projectId])
   const [selectedAnchorId, setSelectedAnchorId] = useState<string | null>(null)
   // Local like the anchor: a drawn edge the user clicked (synthetic ids never arrive here).
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
@@ -480,7 +392,7 @@ function useWorkspaceSnapshot() {
   const select = useWorkspaceSelection(projectId, setSelectedAnchorId, setSelectedEdgeId)
   const [addRequest, setAddRequest] = useState<AddRequest>()
   const onOpenAdd = useCallback(
-    (tab: 'service' | 'hardware') =>
+    (tab: 'service') =>
       setAddRequest((previous) => ({ tab, sequence: (previous?.sequence ?? 0) + 1 })),
     []
   )
@@ -492,11 +404,8 @@ function useWorkspaceSnapshot() {
   return {
     summary,
     projectId,
-    onDevices,
     validateGraph,
     focusedId,
-    optimistic,
-    base,
     merged,
     selectedAnchor,
     selectedEdgeId,
@@ -514,33 +423,18 @@ function useWorkspaceSnapshot() {
   }
 }
 
-/** Opens the add dialog once per externally issued request sequence. */
-function useOpenAddRequest(
-  { openAddRequest, onAddRequestConsumed }: WorkspaceScreenProps,
-  onOpenAdd: (tab: 'service' | 'hardware') => void
-): void {
-  const handledAddSequence = useRef<number | null>(null)
-  useEffect(() => {
-    if (!openAddRequest || handledAddSequence.current === openAddRequest.sequence) return
-    handledAddSequence.current = openAddRequest.sequence
-    onOpenAdd(openAddRequest.tab)
-    onAddRequestConsumed?.(openAddRequest.sequence)
-  }, [openAddRequest, onAddRequestConsumed, onOpenAdd])
-}
-
 interface WorkspaceSyncInput {
   projectId: ReturnType<typeof useWorkspaceSnapshot>['projectId']
   summary: GraphSummary
   validateGraph: ReturnType<typeof useWorkspaceSnapshot>['validateGraph']
-  onDevices: ReturnType<typeof useWorkspaceSnapshot>['onDevices']
 }
 
 /** Live workspace events plus widget registrations for the current project. */
 function useWorkspaceSync(
-  { projectId, summary, validateGraph, onDevices }: WorkspaceSyncInput,
+  { projectId, summary, validateGraph }: WorkspaceSyncInput,
   onGraphChanged: (removedId?: string) => void
 ) {
-  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph, onDevices)
+  const liveError = useWorkspaceEvents(projectId, onGraphChanged, validateGraph)
   const registrations = useWidgetRegistrations(
     projectId,
     summary.status === 'ready',
@@ -554,11 +448,8 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
   const {
     summary,
     projectId,
-    onDevices,
     validateGraph,
     focusedId,
-    optimistic,
-    base,
     merged,
     selectedAnchor,
     selectedEdgeId,
@@ -574,7 +465,6 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     onOpenAdd,
     onGraphChanged
   } = useWorkspaceSnapshot()
-  useOpenAddRequest(callbacks, onOpenAdd)
   const findings = useFindings(projectId)
   // A confirmed or declined edge: the graph re-reads (the server also emits
   // graph.changed) and the panel closes.
@@ -583,11 +473,11 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     clearEdge()
   }, [onGraphChanged, clearEdge])
   const { liveError, registrations } = useWorkspaceSync(
-    { projectId, summary, validateGraph, onDevices },
+    { projectId, summary, validateGraph },
     onGraphChanged
   )
   // The reveal follows the authoritative snapshot: an entity is navigated to and
-  // selected once, at its real level (an optimistic part has no parent yet).
+  // selected once, at its real level.
   const { reveal, onReveal, onServiceSelected } = useWorkspaceReveal(
     summary.entities ?? [],
     onGraphChanged
@@ -599,18 +489,9 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     onGraphChanged,
     onReveal,
     summary.entities,
-    summary.relations,
-    optimistic.add
+    summary.relations
   )
   const nodes = useSolusNodes(projectId, onGraphChanged)
-  const rail = useDeviceRail(
-    projectId,
-    summary.entities,
-    layout,
-    onGraphChanged,
-    onReveal,
-    optimistic.add
-  )
   const { renderContent, toolbar } = useWorkspaceContent(
     merged,
     robots,
@@ -635,7 +516,6 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     findings: findings.bySubject,
     focusedId,
     reveal,
-    rail,
     layout,
     copy,
     select,
@@ -644,7 +524,6 @@ function useProjectWorkspace(callbacks: WorkspaceScreenProps) {
     toolbar,
     liveError,
     registrations,
-    base,
     robots,
     onReveal,
     onOpenAdd,
@@ -675,7 +554,6 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
     findings,
     focusedId,
     reveal,
-    rail,
     layout,
     copy,
     select,
@@ -684,14 +562,13 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
     toolbar,
     liveError,
     registrations,
-    base,
     robots,
     onReveal,
     onOpenAdd,
     onGraphChanged
   } = useProjectWorkspace(callbacks)
   const selectedEntity =
-    selectedAnchor ?? base.entities.find((entity) => entity.id === focusedId) ?? null
+    selectedAnchor ?? summary.entities?.find((entity) => entity.id === focusedId) ?? null
   const hasSelection = Boolean(selectedEntity || selectedEdge)
   // The design's ✕ / Escape: drop the selection but keep the neighbourhood cache warm.
   const closePanel = (): void => {
@@ -722,7 +599,6 @@ function ProjectWorkspace(callbacks: WorkspaceScreenProps): React.JSX.Element {
           projectId={projectId}
           focusedId={selectedAnchor ? selectedAnchor.id : focusedId}
           reveal={reveal}
-          overlay={rail}
           layout={layout}
           copy={copy}
           onSelect={select}
@@ -809,7 +685,7 @@ function useWorkspaceContent(
   projectId: string | null,
   onServiceSelected: ReturnType<typeof useWorkspaceReveal>['onServiceSelected'],
   addRequest: AddRequest | undefined,
-  { onOpenBench, onOpenWidget }: WorkspaceScreenProps
+  { onOpenBench, onOpenWidget, onOpenHardware }: WorkspaceScreenProps
 ) {
   const mode = useSettingsStore((state) => state.solMode)
   const robotContent = robots.renderContent
@@ -826,7 +702,7 @@ function useWorkspaceContent(
           onOpenWidget={onOpenWidget}
         />
       ) : entity.type === 'integration_account' ? null : entity.type === 'physical_robot' ||
-        entity.type === 'robot_category' ? (
+        entity.type === 'robot_category' /* a legacy row only (SOLUSDEV-326) */ ? (
         robotContent(entity)
       ) : (
         solusContent(entity)
@@ -839,12 +715,12 @@ function useWorkspaceContent(
       <WorkspaceAdd
         projectId={projectId}
         onSelected={onServiceSelected}
-        hardware={robots.hardware}
         openRequest={addRequest}
         solusUpload={solusUpload}
+        onOpenHardware={onOpenHardware}
       />
     ),
-    [projectId, onServiceSelected, robots.hardware, addRequest, solusUpload]
+    [projectId, onServiceSelected, addRequest, solusUpload, onOpenHardware]
   )
   return { renderContent, toolbar }
 }

@@ -3,7 +3,9 @@
 The binding is the USB serial; the tty path is resolved from it on EVERY open through the
 `/dev/serial/by-id` alias (which embeds the serial), so a reconnect after re-enumeration
 reopens the same physical device, never whatever inherited its old tty number. Baud and
-timeout come from the robot's config; the port is opened exclusively (one master per bus).
+timeout come from the robot's config. Every open claims the device from the serial owner
+(SOLUSDEV-326, `serial_owner`): one holder per device, the port opened exclusively, busy a typed
+error. A rate change re-rates the open port; it never reopens it.
 """
 
 from __future__ import annotations
@@ -15,6 +17,12 @@ import serial as pyserial
 from solus_api.hardware.config import TransportBinding, TransportKind
 
 from livebench.hardware.channel import Frame, TransportRegistry
+from livebench.hardware.serial_owner import (
+    SERIAL_OWNER,
+    RawPort,
+    SerialOwner,
+    current_claimant,
+)
 from livebench.local import resolve_serial_device
 
 DEFAULT_BAUD: Final = 115200
@@ -24,18 +32,21 @@ _TIMEOUT_RANGE_S: Final = (0.001, 5.0)
 
 
 class SerialPortLike(Protocol):
-    """The slice of pyserial a channel needs (injectable in tests)."""
+    """The slice of a serial port a channel needs: the owner's held port, or a listener on a
+    session's (injectable in tests)."""
 
-    def write(self, data: bytes) -> int | None: ...
+    baudrate: int
 
-    def read(self, size: int) -> bytes: ...
+    def write(self, data: bytes, /) -> int | None: ...
+
+    def read(self, size: int = 1, /) -> bytes: ...
 
     def reset_input_buffer(self) -> None: ...
 
     def close(self) -> None: ...
 
 
-PortOpener = Callable[..., SerialPortLike]
+PortOpener = Callable[..., RawPort]
 Resolver = Callable[..., str]
 
 
@@ -64,6 +75,14 @@ class UsbSerialChannel:
     def flush_input(self) -> None:
         self.port.reset_input_buffer()
 
+    def retune(self, baud: int) -> int:
+        """Run at `baud` and return the rate in effect: a re-rate of the open port, never a reopen
+        (a reopen pulses DTR, which restarts an auto-reset board). A session's port that an
+        interrogation listens on keeps the session's rate."""
+        self.port.baudrate = baud
+        self.params["baud"] = self.port.baudrate
+        return self.port.baudrate
+
     def close(self) -> None:
         self.port.close()
 
@@ -83,7 +102,10 @@ def open_usb_serial(
     *,
     opener: PortOpener = pyserial.Serial,
     resolver: Resolver = resolve_serial_device,
+    owner: SerialOwner = SERIAL_OWNER,
 ) -> UsbSerialChannel:
+    """The bound device's channel, claimed from the serial owner for the claimant in force
+    (`serial_owner.claiming`; a session's outside one)."""
     baud = int(_bounded(params, "baud", DEFAULT_BAUD, _BAUD_RANGE))
     timeout = _bounded(params, "timeout_s", DEFAULT_TIMEOUT_S, _TIMEOUT_RANGE_S)
     confirmed = params.get("confirmed_device_path")
@@ -93,11 +115,16 @@ def open_usb_serial(
         vid=binding.vid,  # a port binding must still front the bound device
         pid=binding.pid,
     )
-    port = opener(path, baud, timeout=timeout, write_timeout=timeout, exclusive=True)
+    port = owner.claim(
+        binding.device_ref,
+        current_claimant(),
+        lambda: opener(path, baud, timeout=timeout, write_timeout=timeout, exclusive=True),
+        timeout_s=timeout,
+    )
     return UsbSerialChannel(
         port,
         binding.model_copy(update={"last_seen_path": path}),
-        {"baud": baud, "timeout_s": timeout},
+        {"baud": port.baudrate, "timeout_s": timeout},
     )
 
 
@@ -106,8 +133,11 @@ def register_usb_serial(
     *,
     opener: PortOpener = pyserial.Serial,
     resolver: Resolver = resolve_serial_device,
+    owner: SerialOwner = SERIAL_OWNER,
 ) -> None:
     registry.register(
         TransportKind.USB_SERIAL,
-        lambda binding, params: open_usb_serial(binding, params, opener=opener, resolver=resolver),
+        lambda binding, params: open_usb_serial(
+            binding, params, opener=opener, resolver=resolver, owner=owner
+        ),
     )

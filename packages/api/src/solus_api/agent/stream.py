@@ -17,7 +17,7 @@ from typing import Any, Final, Literal, Self
 from pydantic import BaseModel, ConfigDict
 
 from solus_api.agent.tools import ToolCall, ToolResult
-from solus_api.agent.tools.untrusted import redact_text, redact_value
+from solus_api.agent.tools.untrusted import REDACTED, redact_text, redact_value
 
 #: The bounds of a `research_sources` frame, defined ONCE: agent/research.py takes its title and
 #: query limits from here, and the desktop validator (researchSources.ts) drops the whole payload
@@ -36,6 +36,9 @@ REASONING_PROPOSING_CAP: Final = 400
 #: the route stores no more, and the desktop validator (solStream.ts) drops a frame past them.
 THINKING_CHUNK_CAP: Final = 2_000
 THINKING_TURN_CAP: Final = 24_000
+#: The bound of a `tool_call` frame's `working` line (SOLUSDEV-326): the tool's own line for what a
+#: call is doing (agent/cards.py `working_line`), cut to it after masking.
+WORKING_CAP: Final = 160
 
 
 def _masked(text: str, cap: int) -> str:
@@ -136,15 +139,20 @@ class AgentEvent(BaseModel):
         )
 
     @classmethod
-    def tool_call(cls, call: ToolCall) -> Self:
+    def tool_call(cls, call: ToolCall, *, working: str | None = None) -> Self:
         # redact_value (SOLX-04 SEC-H3): model-proposed args stream to the
         # browser BEFORE validation/dispatch — a secret-shaped value the model
         # echoes must not cross the wire in the clear. Persistence already
         # redacts (_persist_turn); the live frame gets the same gate.
-        return cls(
-            type=AgentEventType.TOOL_CALL,
-            data={"call_id": call.call_id, "tool": call.tool, "args": redact_value(call.args)},
-        )
+        data = {"call_id": call.call_id, "tool": call.tool, "args": redact_value(call.args)}
+        if working:
+            # SOLUSDEV-326: the tool's own line (agent/cards.py), prose built from the same
+            # model arguments, so masked token by token and cut after masking. Absent without one.
+            # A model value in it is one chip (cards.chip): masking or the cut that moves a chip's
+            # edge leaves its words outside it, so that line is masked whole, as a card's texts.
+            shown = _masked(working, WORKING_CAP)
+            data["working"] = shown if shown.count("`") == working.count("`") else REDACTED
+        return cls(type=AgentEventType.TOOL_CALL, data=data)
 
     @classmethod
     def tool_confirmation(
@@ -155,6 +163,7 @@ class AgentEvent(BaseModel):
         args: dict[str, Any],
         summary: str,
         preview: list[dict[str, Any]] | None = None,
+        card: dict[str, Any] | None = None,
     ) -> Self:
         """A destructive action awaiting approval (SOLUS-ONS-A5).
 
@@ -162,6 +171,8 @@ class AgentEvent(BaseModel):
         because a user cannot meaningfully approve an opaque id. The client
         decides via `POST .../sol/confirmations/{confirmation_id}` and sends back
         a decision only; the arguments that execute are the stored ones.
+        `card` (SOLUSDEV-326) is the Solus-authored card stored when the call
+        parked, null when its tool authors none — presentation only.
         """
         return cls(
             type=AgentEventType.TOOL_CONFIRMATION,
@@ -172,6 +183,7 @@ class AgentEvent(BaseModel):
                 "summary": summary,
                 # The diff being approved, generic across tool kinds.
                 "preview": preview or [],
+                "card": card,
             },
         )
 

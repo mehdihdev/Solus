@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Final, Literal, Self
+from typing import Annotated, Any, Final, Literal, Self, get_args
 
 import yaml
 from pydantic import Field, ValidationError, field_validator, model_validator
@@ -28,7 +28,13 @@ from solus_api.hardware.config import (
     TransportKind,
     unit_for_mode,
 )
-from solus_api.services.physical_robots import ROBOT_CATEGORIES
+
+#: The seven part categories: the library's PartDefinition vocabulary (the YAMLs require one).
+#: Robots no longer have category nodes and no request body takes one (SOLUSDEV-326).
+RobotCategory = Literal[
+    "sensors", "actuators", "controllers", "end_effectors", "power", "structure", "wiring"
+]
+ROBOT_CATEGORIES: Final[frozenset[str]] = frozenset(get_args(RobotCategory))
 
 DEFINITIONS_DIR: Final = Path(__file__).parent / "definitions"
 ID_PATTERN: Final = r"^[a-z0-9][a-z0-9.-]{0,63}$"

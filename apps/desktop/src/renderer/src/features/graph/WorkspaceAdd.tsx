@@ -26,9 +26,10 @@ export interface SolusUpload {
 interface WorkspaceAddProps {
   projectId: string | null
   onSelected: SelectService
-  hardware?: React.ReactNode
   /** A sequence-keyed request (like the navigator's `reveal`) to open the panel on a tab. */
-  openRequest?: { tab: 'service' | 'hardware'; sequence: number }
+  openRequest?: { tab: 'service'; sequence: number }
+  /** The Hardware row: the modal closes and the shell opens the Hardware page (SOLUSDEV-326). */
+  onOpenHardware?: () => void
   solusUpload?: SolusUpload
 }
 
@@ -46,7 +47,6 @@ function accountName(account: Connection): string {
 }
 
 function targetName(target: AddTarget, account: Connection | null, solusTarget: string): string {
-  if (target.kind === 'hardware') return 'this project'
   if (target.kind === 'solus') return `.solus › ${solusTarget}`
   return account ? accountName(account) : 'an account'
 }
@@ -82,7 +82,7 @@ function useAddModel({ projectId, onSelected, openRequest }: WorkspaceAddProps):
   const requestSequence = openRequest?.sequence
   useEffect(() => {
     if (requestSequence === undefined || !requestedTab) return
-    setTarget(requestedTab === 'hardware' ? { kind: 'hardware' } : FIRST_ACCOUNT)
+    setTarget(FIRST_ACCOUNT)
     setOpen(true)
   }, [requestSequence, requestedTab])
   const account = resolveAccount(target, state.accounts)
@@ -133,20 +133,13 @@ function useAddModel({ projectId, onSelected, openRequest }: WorkspaceAddProps):
 
 function AddPane({
   model,
-  hardware,
   solusUpload,
   solusTarget
-}: Pick<WorkspaceAddProps, 'hardware' | 'solusUpload'> & {
+}: Pick<WorkspaceAddProps, 'solusUpload'> & {
   model: AddModel
   solusTarget: string
 }): React.JSX.Element {
   const { target, account, catalog, state, project, picks, toggle } = model
-  if (target.kind === 'hardware')
-    return (
-      <div className="add-modal-pane" role="tabpanel">
-        {hardware ?? <p>No hardware added.</p>}
-      </div>
-    )
   if (target.kind === 'solus')
     return (
       <SolusUploadPane
@@ -249,13 +242,12 @@ export function WorkspaceAdd(props: WorkspaceAddProps): React.JSX.Element {
                 selected={account ? { kind: 'account', id: account.id } : target}
                 onSelect={choose}
                 onRefresh={() => void catalog.loadAccounts(true)}
+                onOpenHardware={() => {
+                  close()
+                  props.onOpenHardware?.()
+                }}
               />
-              <AddPane
-                model={model}
-                hardware={props.hardware}
-                solusUpload={props.solusUpload}
-                solusTarget={solusTarget}
-              />
+              <AddPane model={model} solusUpload={props.solusUpload} solusTarget={solusTarget} />
             </div>
             <AddFooter model={model} solusUpload={props.solusUpload} solusTarget={solusTarget} />
           </div>

@@ -122,3 +122,29 @@ it('fails closed on revoked access without reconnecting', () => {
     vi.useRealTimers()
   }
 })
+
+it('decodes a channel display and display range and refuses malformed ones', () => {
+  const labelled = structuredClone(frame) as unknown as {
+    devices: { signals: Record<string, unknown>[] }[]
+  }
+  Object.assign(labelled.devices[0].signals[0], {
+    display: 'angle',
+    range: { min: -90, max: 90 }
+  })
+  const [device] = decodeBenchFrame(JSON.stringify(labelled), 'p', 's')
+  expect(device.signals[0].display).toBe('angle')
+  expect(device.signals[0].range).toEqual({ min: -90, max: 90 })
+  expect(decodeBenchFrame(JSON.stringify(frame), 'p', 's')[0].signals[0].range).toBeUndefined()
+  for (const bad of [
+    { display: 'sparkline' },
+    { range: { min: 2, max: 1 } },
+    { range: { min: 0 } },
+    { range: 'wide' }
+  ]) {
+    const broken = structuredClone(frame) as unknown as {
+      devices: { signals: Record<string, unknown>[] }[]
+    }
+    Object.assign(broken.devices[0].signals[0], bad)
+    expect(() => decodeBenchFrame(JSON.stringify(broken), 'p', 's')).toThrow()
+  }
+})

@@ -7,6 +7,8 @@
 //
 // The frame parser is a pure function so the interesting behaviour — partial
 // chunks, multi-frame chunks, malformed JSON — is testable without a network.
+import type { Card } from '@solus/shared-types'
+import { isCard } from './card'
 import { joinUrl } from './client'
 
 /** Event types SOL streams. Unknown types are ignored, not fatal: the backend
@@ -39,6 +41,9 @@ export interface PendingConfirmation {
   readonly tool: string
   readonly summary: string
   readonly preview: readonly ConfirmationRow[]
+  /** SOLUSDEV-326: the Solus-authored card, when the tool authors one. Presentation only: its
+   *  text is built from model-proposed arguments, so it renders as text, never as markup. */
+  readonly card?: Card
 }
 
 function asRows(value: unknown): ConfirmationRow[] {
@@ -60,13 +65,14 @@ function asRows(value: unknown): ConfirmationRow[] {
 /** Read a `tool_confirmation` event's payload, or null when it is unusable.
  *  Defensive because the payload crosses a process boundary. */
 export function toPendingConfirmation(event: SolEvent): PendingConfirmation | null {
-  const { confirmation_id: id, tool, summary, preview } = event.data
+  const { confirmation_id: id, tool, summary, preview, card } = event.data
   if (typeof id !== 'string' || typeof tool !== 'string') return null
   return {
     confirmationId: id,
     tool,
     summary: typeof summary === 'string' ? summary : tool,
-    preview: asRows(preview)
+    preview: asRows(preview),
+    ...(isCard(card) ? { card } : {})
   }
 }
 

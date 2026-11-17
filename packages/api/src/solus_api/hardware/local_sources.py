@@ -24,6 +24,8 @@ from solus_contracts.hardware_local_state import (
 _REF = re.compile(r"source:([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z")
 _FORMATS = {".json", ".yaml", ".yml", ".toml", ".py"}
 MAX_SOURCE_BYTES = 256 * 1024
+#: What one review may read at once (the propose body's `source_refs` bound).
+MAX_SOURCE_REFS = 32
 
 
 class LocalSourceError(Exception):
@@ -109,6 +111,22 @@ class LocalHardwareSources:
             return None
         except (OSError, ValueError):
             raise LocalSourceError("relink_required") from None
+
+    def source_refs(self, project_id: uuid.UUID, account_id: uuid.UUID) -> list[str]:
+        """The opaque references of every source this account authorized in this project, sorted,
+        at most `MAX_SOURCE_REFS` (SOLUSDEV-326: SOL's inspection reads them; the renderer's picker
+        was their only supplier). Never a path."""
+        return [ref for ref, _ in self.listed_sources(project_id, account_id)]
+
+    def listed_sources(self, project_id: uuid.UUID, account_id: uuid.UUID) -> list[tuple[str, str]]:
+        """`source_refs` with each source's suffix, from the account's state alone: no source is
+        opened, so one that moved or changed is still listed (`read_source` refuses it)."""
+        account = self._account(project_id, account_id)
+        sources = account.sources if account is not None else {}
+        return [
+            (f"source:{key}", Path(sources[key].path).suffix.lower())
+            for key in sorted(sources)[:MAX_SOURCE_REFS]
+        ]
 
     def read_source(
         self, project_id: uuid.UUID, account_id: uuid.UUID, source_ref: str

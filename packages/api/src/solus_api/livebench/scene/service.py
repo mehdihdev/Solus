@@ -246,10 +246,13 @@ class SceneService:
             if attrs.get("source_digest") != digest([source.version, source.attrs]):
                 raise APIError(409, "source_changed", "Reimport the changed source before mapping.")
         config = await resolve_runtime_config(self.session, self.project_id, robot.id)
+        # Each part's device key is on the brain its row sits behind (SOLUSDEV-326).
         accepted = {
-            str(item.part_entity_id): part_ref(config.identity.device_ref, item.address)
-            for item in config.bus_map
-            if item.part_entity_id and config.identity
+            str(item.part_entity_id): part_ref(bound.device_ref, item.address)
+            for brain in config.per_brain()
+            if (bound := brain.identity) is not None
+            for item in brain.bus_map
+            if item.part_entity_id
         }
         joints = {item["name"]: item for item in attrs["model"]["joints"]}
         used_joints: set[str] = set()

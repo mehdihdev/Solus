@@ -108,6 +108,7 @@ class ClientErrorPayload(BaseModel):
         "root",
         "home",
         "workspace",
+        "hardware",
         "bench",
         "sol",
         "store",
@@ -149,7 +150,15 @@ class SolSidebarToggledPayload(BaseModel):
 
     action: Literal["open", "close", "expand", "pop_out"]
     screen: Literal[
-        "home", "workspace", "bench", "store", "billing", "settings", "alert", "ext-page"
+        "home",
+        "workspace",
+        "bench",
+        "hardware",
+        "store",
+        "billing",
+        "settings",
+        "alert",
+        "ext-page",
     ]
     via: Literal["button", "shortcut", "header", "escape"]
 

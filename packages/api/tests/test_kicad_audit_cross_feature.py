@@ -192,7 +192,7 @@ async def test_bom_aggregates_kicad_parts_by_mpn_with_quantities(
         await scan_project(session, project_id)
         await link_from_fingerprint(session, project_id=project_id)
         await session.commit()
-        rows = (await load_inputs(session, project_id)).rows()
+        rows = (await load_inputs(session, project_id, viewer_id=None)).rows()
 
     by_mpn = {row.part_number: row for row in rows}
     assert {r: row.quantity for r, row in by_mpn.items()} == {
@@ -218,7 +218,9 @@ async def test_bom_keeps_a_cad_part_and_its_kicad_twin_as_one_row_only_after_lin
 
     async with maker() as session:
         unlinked = [
-            r for r in (await load_inputs(session, project_id)).rows() if r.part_number == MCU_MPN
+            r
+            for r in (await load_inputs(session, project_id, viewer_id=None)).rows()
+            if r.part_number == MCU_MPN
         ]
     assert len(unlinked) == 2  # same MPN string across domains is NOT merged on its own
 
@@ -227,7 +229,9 @@ async def test_bom_keeps_a_cad_part_and_its_kicad_twin_as_one_row_only_after_lin
         await link_from_fingerprint(session, project_id=project_id)
         await session.commit()
         linked = [
-            r for r in (await load_inputs(session, project_id)).rows() if r.part_number == MCU_MPN
+            r
+            for r in (await load_inputs(session, project_id, viewer_id=None)).rows()
+            if r.part_number == MCU_MPN
         ]
     assert len(linked) == 1
     assert {s.domain for s in linked[0].sources} == {"electrical", "mechanical"}

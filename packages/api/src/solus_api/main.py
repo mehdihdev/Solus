@@ -55,10 +55,10 @@ from solus_api.graph.live_access import StreamLimiter
 from solus_api.graph.resolver import CachingEntityResolver, DbEntityResolver
 from solus_api.graph.search_text import SOLUS_PAYLOAD_TEXT_STATEMENTS
 from solus_api.graph.telemetry import TelemetryPlumbing
-from solus_api.hardware import hardware_router, library_router
+from solus_api.hardware import expected_router, hardware_router, library_router
 from solus_api.hardware.connections import HardwareConnections
 from solus_api.hardware.device_watch import DeviceWatcher, watcher_wanted
-from solus_api.livebench.bench_router import BenchEventRing, ObserverEventIn
+from solus_api.livebench.bench_router import BenchEventRing
 from solus_api.livebench.bench_router import router as bench_router
 from solus_api.livebench.findings.envelopes import EnvelopeCache
 from solus_api.livebench.findings.rules import SIGNAL_RULES
@@ -496,9 +496,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.state.bench_sessions = SessionManager(
         app.state.telemetry_plumbing,
         observer_factory=getattr(app.state.bench_local, "session_observers", None),
-        event_sink=lambda project_id, event: app.state.bench_events.append(
-            project_id, ObserverEventIn.model_validate(event)
-        ),
+        event_sink=app.state.bench_events.record,
         # SOLUSDEV-321 P2-T3: a robot session's window evaluator — its own ticker over the parts'
         # buffered telemetry, raising what the live-signal rules find. Built per session; the
         # artifact store (assigned below) is read when a session starts, for the baseline run.
@@ -534,8 +532,9 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     # it to subscribed sessions on THIS process only (never Redis).
     # A production API never watches its own host's ports for tenants, even if a future
     # image ships livebench: the watcher exists only for the local runtime.
+    # SOLUSDEV-326: each change is written into this machine's device memory.
     app.state.device_watch = (
-        DeviceWatcher(app.state.graph_hub, app.state.bench_local)
+        DeviceWatcher(app.state.graph_hub, app.state.bench_local, sessions=app.state.sessionmaker)
         if watcher_wanted(resolved_settings.app_env, app.state.bench_local)
         else None
     )
@@ -650,6 +649,7 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
     app.include_router(solus_config.router)
     app.include_router(hardware_router.router)
     app.include_router(library_router.router)
+    app.include_router(expected_router.router)
     app.include_router(workspace_layout.router)
     app.include_router(entities.router)
     app.include_router(edges.router)
@@ -662,9 +662,11 @@ def create_app(settings: Settings | None = None, engine: AsyncEngine | None = No
 
     app.include_router(isaac_connection.router)
     app.include_router(sol.router)
-    from solus_api.routers import outcomes, sol_confirmations, usage_turns
+    from solus_api.routers import outcomes, sol_cards, sol_confirmations, usage_turns
 
     app.include_router(sol_confirmations.router)
+    # SOLUSDEV-326: the Hardware page's open-card slot.
+    app.include_router(sol_cards.router)
     # SOLUSDEV-321 P8: proposal outcomes and the caller's own usage rows, per project.
     app.include_router(outcomes.router)
     app.include_router(usage_turns.router)

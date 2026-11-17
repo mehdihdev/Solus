@@ -8,6 +8,7 @@ import uuid
 from typing import Any
 
 import pytest
+from conftest import sole_brain
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.hardware.config import EntityHardwareConfig
@@ -28,7 +29,7 @@ async def _configured_robot(
     created = await client.post(
         _hw_url(project_id, "robots", robot_id, "parts"),
         headers=headers,
-        json={"name": "Existing sensor", "category": "sensors", "specs": {}},
+        json={"name": "Existing sensor", "specs": {}},
     )
     assert created.status_code == 201, created.text
     part_id = created.json()["data"]["entity"]["id"]
@@ -65,7 +66,8 @@ async def _stored(db: AsyncSession, project_id: str, robot_id: str) -> dict[str,
 
 
 def _connection(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: config[key] for key in ("identity", "protocol", "bus_map", "disambiguated_by")}
+    # SOLUSDEV-326: each brain in `identity` carries its own protocol.
+    return {key: config[key] for key in ("identity", "bus_map", "disambiguated_by")}
 
 
 @pytest.mark.parametrize("operation", ["promote", "put", "library"])
@@ -119,8 +121,8 @@ async def test_detect_confirm_preserves_existing_firmware_robot_context(
     before = await _stored(db, project_id, robot_id)
     local = _DetectLocal()
     proposal = _wire_proposal()
-    proposal["identity"] = before["identity"]
-    proposal["params"] = before["protocol"]["params"]
+    proposal["identity"] = sole_brain(before)["binding"]
+    proposal["params"] = sole_brain(before)["protocol"]["params"]
     local.proposal = proposal
     app.state.bench_local = local
     response = await client.post(
@@ -144,9 +146,9 @@ async def test_detect_confirm_preserves_existing_firmware_robot_context(
     old_config = EntityHardwareConfig.model_validate(before)
     new_config = EntityHardwareConfig.model_validate(after)
     for path in (
-        "identity.binding",
-        "protocol.driver_id",
-        "protocol.params.baud",
+        "identity.0.binding.binding",
+        "identity.0.protocol.driver_id",
+        "identity.0.protocol.params.baud",
         "bus_map.0.address",
         "component.firmware.version",
         "disambiguated_by",
@@ -198,8 +200,8 @@ async def test_detect_conflict_preserves_saved_config_and_graph(
         binding.attrs = {**binding.attrs, "enabled": False, "disabled_reason": "ownership_changed"}
     await db.commit()
     proposal = _wire_proposal()
-    proposal["identity"] = dict(before["identity"])
-    proposal["params"] = dict(before["protocol"]["params"])
+    proposal["identity"] = dict(sole_brain(before)["binding"])
+    proposal["params"] = dict(sole_brain(before)["protocol"]["params"])
     if conflict == "identity":
         proposal["identity"]["binding"] = "different-serial"
     elif conflict == "driver":

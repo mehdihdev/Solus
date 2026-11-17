@@ -104,6 +104,35 @@ def with_turn[T, R](
     return bound
 
 
+#: SOLUSDEV-326: the conversation a call runs in, bound by the ROUTE (not the runner) around the
+#: dispatch it hands the runner: the one it verified the caller owns. A tool that files into the
+#: conversation (`ask_user`) reads it here, never from a model or a client.
+_CONVERSATION: Final[ContextVar[uuid.UUID | None]] = ContextVar(
+    "sol_turn_conversation_id", default=None
+)
+
+
+def current_conversation_id() -> uuid.UUID | None:
+    """The conversation of the SOL call running now, or None outside one."""
+    return _CONVERSATION.get()
+
+
+def with_conversation[T, R](
+    dispatch: Callable[[T], Awaitable[R]], conversation_id: uuid.UUID
+) -> Callable[[T], Awaitable[R]]:
+    """`dispatch`, with `conversation_id` bound while each call runs; unbound after, even on a
+    raise."""
+
+    async def bound(call: T) -> R:
+        token = _CONVERSATION.set(conversation_id)
+        try:
+            return await dispatch(call)
+        finally:
+            _CONVERSATION.reset(token)
+
+    return bound
+
+
 def current_perception() -> PerceptionTurn | None:
     """The perception of the SOL turn a call is running in, or None outside one."""
     return _PERCEPTION.get()

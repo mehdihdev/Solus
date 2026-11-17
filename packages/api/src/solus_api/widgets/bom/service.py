@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.tools.shapes import ToolErrorCode
 from solus_api.agent.tools.tool import ToolException
+from solus_api.graph.read_scope import visible_to
 from solus_api.models import Domain, GraphEdge, GraphEntity, utcnow
 from solus_api.widgets.bom.rows import (
     CANONICAL_KIND,
@@ -72,7 +73,11 @@ class BomConfig:
         }
 
 
-async def load_inputs(session: AsyncSession, project_id: uuid.UUID) -> BomInputs:
+async def load_inputs(
+    session: AsyncSession, project_id: uuid.UUID, *, viewer_id: uuid.UUID | None
+) -> BomInputs:
+    """The BOM as `viewer_id` may see it (SOLUSDEV-326, docs/api/hardware.md §1a): parts another
+    member has not added to the graph are no rows; None is what every member may see."""
     kinds = [*DESIGN_KINDS, CANONICAL_KIND, ITEM_KIND]
     entities = list(
         await session.scalars(
@@ -81,6 +86,7 @@ async def load_inputs(session: AsyncSession, project_id: uuid.UUID) -> BomInputs
                 GraphEntity.project_id == project_id,
                 GraphEntity.kind.in_(kinds),
                 GraphEntity.deleted_at.is_(None),
+                visible_to(viewer_id),
             )
             .order_by(GraphEntity.id)
             .limit(ENTITY_CAP + 1)

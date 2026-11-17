@@ -7,7 +7,7 @@ import { blankItem } from './solChatItems'
 import type { ChatItem } from './solChatStore'
 import { ThinkingBlock } from './ThinkingBlock'
 
-const step = (callId: string, tool: string, ok: boolean | null) => ({
+const step = (callId: string, tool: string, ok: boolean | null): ChatItem['trace'][number] => ({
   callId,
   tool,
   ok,
@@ -65,6 +65,55 @@ describe('ThinkingBlock', () => {
       'running'
     )
     expect(screen.getByText(/TIMEOUT/)).toBeInTheDocument()
+  })
+
+  describe('a parked step', () => {
+    const TOOL = 'hardware.inspect_device'
+    const parked = (parkedAs: NonNullable<ChatItem['trace'][number]['parked']>): ChatItem =>
+      thinkingItem({
+        trace: [
+          { callId: 'c1', tool: TOOL, ok: false, errorCode: 'unauthorized', parked: parkedAs }
+        ],
+        confirmations: [{ confirmationId: 'conf-1', tool: TOOL, summary: 's', preview: [] }]
+      })
+    const row = (): HTMLElement => screen.getByText('Inspect device').closest('[data-step]')!
+
+    it('waits for the person’s OK with a neutral mark, never ✕ or the gate’s code', () => {
+      render(<ThinkingBlock item={parked({ confirmationId: 'conf-1' })} />)
+      expect(row()).toHaveAttribute('data-step', 'parked')
+      expect(row()).toHaveTextContent(`${TOOL} → waiting for your OK`)
+      expect(row()).not.toHaveTextContent(/✕|unauthorized/)
+    })
+
+    it('says what the person decided', () => {
+      const { unmount } = render(
+        <ThinkingBlock item={parked({ confirmationId: 'conf-1', decision: 'approve' })} />
+      )
+      expect(row()).toHaveTextContent(`${TOOL} → approved by you`)
+      unmount()
+      render(<ThinkingBlock item={parked({ confirmationId: 'conf-1', decision: 'reject' })} />)
+      expect(row()).toHaveTextContent(`${TOOL} → rejected by you`)
+      expect(row()).not.toHaveTextContent(/✕|unauthorized/)
+    })
+
+    it('whose card is no longer known to be open only says it asked', () => {
+      // A reloaded turn, or a question answered: nothing here says it still waits.
+      render(<ThinkingBlock item={{ ...parked({}), confirmations: [] }} />)
+      expect(row()).toHaveAttribute('data-step', 'parked')
+      expect(row()).toHaveTextContent(`${TOOL} → asked for your OK`)
+    })
+
+    it('a real refusal still reads as one', () => {
+      render(
+        <ThinkingBlock
+          item={thinkingItem({
+            trace: [{ callId: 'c1', tool: TOOL, ok: false, errorCode: 'unauthorized' }]
+          })}
+        />
+      )
+      expect(row()).toHaveAttribute('data-step', 'error')
+      expect(row()).toHaveTextContent(`${TOOL} → unauthorized`)
+    })
   })
 
   it('stays live while the turn runs, even after SOL writes text before a tool', () => {

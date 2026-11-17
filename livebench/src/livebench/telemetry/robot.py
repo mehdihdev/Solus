@@ -12,12 +12,19 @@ the same device on link loss (USB re-enumeration keeps stable paths via
 /dev/serial/by-id, which is what callers should pass).
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import ClassVar
 from uuid import UUID
 
 import serial as pyserial
 
+from livebench.hardware.serial_owner import (
+    SERIAL_OWNER,
+    Claimant,
+    HeldPort,
+    RawPort,
+    SerialOwner,
+)
 from livebench.telemetry.observing_source import EventSink, Observer, ObservingSource
 from livebench.telemetry.reconnect import ReconnectingSource
 from livebench.telemetry.serial_source import SerialPacketSource
@@ -37,7 +44,8 @@ def _observed(
 
 
 class SerialRobotConnection(PacketStreamLiveConnection):
-    """A robot on a serial link, streaming LB-06 JSON lines."""
+    """A robot on a serial link, streaming LB-06 JSON lines. Each open of its port claims the
+    device from the serial owner (SOLUSDEV-326): exclusive, one holder, busy a typed error."""
 
     provider: ClassVar[str] = "serial"
 
@@ -50,11 +58,26 @@ class SerialRobotConnection(PacketStreamLiveConnection):
         observers: Sequence[Observer] = (),
         on_event: EventSink | None = None,
         project_id: UUID | None = None,
+        user_id: UUID | None = None,
+        device_ref: str | None = None,
+        opener: Callable[..., RawPort] = pyserial.Serial,
+        owner: SerialOwner = SERIAL_OWNER,
     ) -> "SerialRobotConnection":
-        pyserial.Serial(device, baud, timeout=_DEFAULT_TIMEOUT_S).close()  # fail fast
+        """`device_ref` keys the device in the owner; a device with no binding is keyed by path.
+        The device is claimed as `user_id`'s session in `project_id`."""
+        claimant = Claimant.of("session", project_id, user_id)
+
+        def held() -> HeldPort:
+            return owner.hold(
+                device_ref or device,
+                claimant,
+                lambda: opener(device, baud, timeout=_DEFAULT_TIMEOUT_S, exclusive=True),
+            )
+
+        held().close()  # fail fast: absent or busy fails here, not inside the reconnect loop
 
         def factory() -> PacketSource:
-            return SerialPacketSource(pyserial.Serial(device, baud, timeout=_DEFAULT_TIMEOUT_S))
+            return SerialPacketSource(held())
 
         source = _observed(ReconnectingSource(factory), observers, on_event)
         return cls(source=source, project_id=project_id)

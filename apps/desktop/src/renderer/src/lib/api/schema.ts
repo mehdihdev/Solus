@@ -1667,6 +1667,27 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/projects/{project_id}/hardware/entities/{entity_id}/graph': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    /**
+     * Put In Graph
+     * @description Add a robot (with its own hardware) or a lone part to the workspace graph, or take it
+     *     out (SOLUSDEV-326, docs/api/hardware.md §1a). Only hardware the caller can see.
+     */
+    put: operations['put_in_graph_api_v1_projects__project_id__hardware_entities__entity_id__graph_put']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/projects/{project_id}/hardware/entities/{entity_id}/config': {
     parameters: {
       query?: never
@@ -1865,7 +1886,7 @@ export interface paths {
     }
     /**
      * List Unassigned
-     * @description Connector-sourced parts no robot category owns yet (From a file).
+     * @description Part-like entities no robot owns yet (From a file), less another member's un-added parts.
      */
     get: operations['list_unassigned_api_v1_projects__project_id__hardware_unassigned_get']
     put?: never
@@ -1902,12 +1923,39 @@ export interface paths {
     }
     /**
      * List Detected
-     * @description Devices on this machine at whichever level is honestly known (opens no port).
+     * @description Devices on this machine at whichever level is honestly known (opens no port), each with
+     *     what the caller may know of it (§4, SOLUSDEV-326): what binds it, their "Not now", and —
+     *     for the machine's owner — when it was last seen.
      */
     get: operations['list_detected_api_v1_projects__project_id__hardware_detected_get']
     put?: never
     post?: never
     delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/hardware/devices/dismissals': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /**
+     * Dismiss Device
+     * @description The caller's "Not now" to a device on this machine (§4): kept across restarts and
+     *     replugs until they clear it. Their own list comes back.
+     */
+    post: operations['dismiss_device_api_v1_projects__project_id__hardware_devices_dismissals_post']
+    /**
+     * Clear Device Dismissals
+     * @description Forget every "Not now" the caller said on this machine ("+ Add hardware").
+     */
+    delete: operations['clear_device_dismissals_api_v1_projects__project_id__hardware_devices_dismissals_delete']
     options?: never
     head?: never
     patch?: never
@@ -2162,6 +2210,27 @@ export interface paths {
     put?: never
     /** Import Part */
     post: operations['import_part_api_v1_projects__project_id__hardware_library_parts__definition_id__import_post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/hardware/expected': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * List Expected
+     * @description What the caller's workspace describes and nothing has answered yet: planned rows of the
+     *     robots they may see, sensor topics, sketches and MCU symbols.
+     */
+    get: operations['list_expected_api_v1_projects__project_id__hardware_expected_get']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -2694,6 +2763,26 @@ export interface paths {
      *     gate's own `expired` / `stale` (SOLUSDEV-321 P8).
      */
     post: operations['decide_tool_confirmation_api_v1_projects__project_id__sol_confirmations__confirmation_id__post']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/projects/{project_id}/sol/cards/open': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /**
+     * Open Cards
+     * @description The slot's card: the caller's oldest open card here, and how many more wait (`queued`).
+     */
+    get: operations['open_cards_api_v1_projects__project_id__sol_cards_open_get']
+    put?: never
+    post?: never
     delete?: never
     options?: never
     head?: never
@@ -4185,19 +4274,6 @@ export interface components {
       row_id: string
       /** Function Name */
       function_name?: string | null
-      /**
-       * Category
-       * @default actuators
-       * @enum {string}
-       */
-      category:
-        | 'sensors'
-        | 'actuators'
-        | 'controllers'
-        | 'end_effectors'
-        | 'power'
-        | 'structure'
-        | 'wiring'
     }
     /**
      * ActionMode
@@ -4235,18 +4311,6 @@ export interface components {
     AttachIn: {
       /** Entity Ids */
       entity_ids: string[]
-      /**
-       * Category
-       * @enum {string}
-       */
-      category:
-        | 'sensors'
-        | 'actuators'
-        | 'controllers'
-        | 'end_effectors'
-        | 'power'
-        | 'structure'
-        | 'wiring'
     }
     /**
      * AttachmentIn
@@ -4279,6 +4343,42 @@ export interface components {
         | components['schemas']['HardwareRealConfig']
         | components['schemas']['ReplayRealConfig']
     }
+    /**
+     * BrainClock
+     * @description A brain's clock against the host (`brain.attrs.clock`), as measured. Recorded here only:
+     *     applying the offset to ingest timestamps belongs to the Live Bench (telemetry-packet.md §3).
+     */
+    BrainClock: {
+      /** Offset Ms */
+      offset_ms: number
+      /** Jitter Ms */
+      jitter_ms: number
+      /**
+       * Measured At
+       * Format: date-time
+       */
+      measured_at: string
+      /** Method */
+      method: string
+    }
+    /**
+     * BrainIdentity
+     * @description One brain of a stored config: what it is (`kind`), how this host reaches it (`binding`,
+     *     absent until a device is bound), the brain of this config it is reached through (`via`, a
+     *     device ref) and its driver (`protocol`).
+     */
+    BrainIdentity: {
+      /**
+       * Kind
+       * @default host
+       * @enum {string}
+       */
+      kind: 'host' | 'mcu' | 'onboard'
+      binding?: components['schemas']['PortableTransportBinding'] | null
+      /** Via */
+      via?: string | null
+      protocol?: components['schemas']['ProtocolBinding'] | null
+    }
     /** BranchItem */
     BranchItem: {
       /** Name */
@@ -4290,6 +4390,10 @@ export interface components {
      * BusMapEntry
      * @description `{protocol, address, part, model}` — servo ids, CAN node ids, autopilot
      *     system:component ids all fit one shape. Never a `servo_id` field.
+     *
+     *     `brain` is the device ref of the brain the row sits behind (`None` = the config's only
+     *     brain). A per-brain driver document never carries one, so its dump omits the key and the
+     *     v1 driver input reads exactly as before.
      */
     BusMapEntry: {
       /** Protocol */
@@ -4300,6 +4404,8 @@ export interface components {
       part_entity_id?: string | null
       /** Model */
       model?: string | null
+      /** Brain */
+      brain?: string | null
     }
     /** CadBinding */
     CadBinding: {
@@ -4338,6 +4444,62 @@ export interface components {
      * @enum {string}
      */
     CalibrationMode: 'degrees' | 'range_0_100' | 'range_m100_100' | 'linear' | 'raw'
+    /**
+     * Card
+     * @description The Solus-authored presentation of a parked call (SOLUSDEV-326).
+     *
+     *     Computed once when the call parks, from its STORED arguments, by the tool; stored beside the
+     *     row. Presentation only: never part of the consent or of the stale check, never a `DiffRow`.
+     *     The same copy in Guide and Expert; Guide adds `more`. `resumes` is set by the server: SOL
+     *     continues after any decision on this card.
+     */
+    Card: {
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: 'offer' | 'approval' | 'step' | 'problem'
+      /** Title */
+      title: string
+      /** Body */
+      body: string
+      /** More */
+      more?: string | null
+      field?: components['schemas']['CardField'] | null
+      /** Primary */
+      primary: string
+      /** Secondary */
+      secondary?: string | null
+      /** Receipt */
+      receipt: string
+      /**
+       * Resumes
+       * @default false
+       */
+      resumes: boolean
+    }
+    /**
+     * CardField
+     * @description A value the card shows, such as a proposed robot name. It is never sent back: an edit
+     *     becomes the person's answer turn, so the stored arguments never change.
+     */
+    CardField: {
+      /** Label */
+      label: string
+      /** Value */
+      value: string
+    }
+    /**
+     * ChannelRange
+     * @description A channel's DISPLAY range, in its unit: what the chart spans at least. Never a motion
+     *     bound — envelopes and limits keep their own precedence.
+     */
+    ChannelRange: {
+      /** Min */
+      min: number
+      /** Max */
+      max: number
+    }
     /**
      * CheckoutSessionCreate
      * @description Start a Stripe Checkout. `subscription` needs plan+interval (basic/pro,
@@ -4419,8 +4581,8 @@ export interface components {
        */
       schema_version: 2
       component?: components['schemas']['PartConfig'] | null
-      identity?: components['schemas']['PortableTransportBinding'] | null
-      protocol?: components['schemas']['ProtocolBinding'] | null
+      /** Identity */
+      identity?: components['schemas']['BrainIdentity'][]
       /** Bus Map */
       bus_map?: components['schemas']['BusMapEntry'][]
       /** Disambiguated By */
@@ -4518,6 +4680,20 @@ export interface components {
       /** Reason */
       reason?: string | null
     }
+    /**
+     * DeviceNotice
+     * @description `MessageCreate.notice`: something was plugged in. The server checks the device is on the
+     *     caller's own machine now and writes the turn text itself (authored by Solus).
+     */
+    DeviceNotice: {
+      /**
+       * Kind
+       * @constant
+       */
+      kind: 'device'
+      /** Device Ref */
+      device_ref: string
+    }
     /** DismissBody */
     DismissBody: {
       /**
@@ -4525,6 +4701,11 @@ export interface components {
        * @default 24
        */
       cooldown_hours: number
+    }
+    /** DismissalIn */
+    DismissalIn: {
+      /** Device Ref */
+      device_ref: string
     }
     /**
      * DocumentAdd
@@ -4596,8 +4777,8 @@ export interface components {
        */
       schema_version: 2
       component?: components['schemas']['PartConfig'] | null
-      identity?: components['schemas']['PortableTransportBinding'] | null
-      protocol?: components['schemas']['ProtocolBinding'] | null
+      /** Identity */
+      identity?: components['schemas']['BrainIdentity'][]
       /** Bus Map */
       bus_map?: components['schemas']['BusMapEntry'][]
       /** Disambiguated By */
@@ -4669,6 +4850,30 @@ export interface components {
        * Format: uuid
        */
       robot_id: string
+    }
+    /** ExpectedParts */
+    ExpectedParts: {
+      /** Expected */
+      expected: components['schemas']['ExpectedRow'][]
+      /** Sources */
+      sources: string[]
+      /** More */
+      more: number
+    }
+    /** ExpectedPartsEnvelope */
+    ExpectedPartsEnvelope: {
+      data: components['schemas']['ExpectedParts']
+    }
+    /** ExpectedRow */
+    ExpectedRow: {
+      /** Name */
+      name: string
+      /** What */
+      what: string
+      /** Robot Id */
+      robot_id: string | null
+      /** Source */
+      source: string
     }
     /**
      * ExpertiseOverride
@@ -4986,18 +5191,6 @@ export interface components {
       name: string
       /** Parent Id */
       parent_id?: string | null
-      /** Category */
-      category?:
-        | (
-            | 'sensors'
-            | 'actuators'
-            | 'controllers'
-            | 'end_effectors'
-            | 'power'
-            | 'structure'
-            | 'wiring'
-          )
-        | null
       config?: components['schemas']['ConfigDraft'] | null
     }
     /** HardwareRealConfig */
@@ -5143,6 +5336,11 @@ export interface components {
       source_entity_id?: string | null
       /** Source Revision */
       source_revision?: string | null
+    }
+    /** InGraphIn */
+    InGraphIn: {
+      /** In Graph */
+      in_graph: boolean
     }
     /** InstallBody */
     InstallBody: {
@@ -5432,6 +5630,8 @@ export interface components {
       /** Resume Confirmation Id */
       resume_confirmation_id?: string | null
       process_prompt?: components['schemas']['ProcessPrompt'] | null
+      notice?: components['schemas']['DeviceNotice'] | null
+      answer?: components['schemas']['QuestionAnswer'] | null
       /** @default guide */
       action_mode: components['schemas']['ActionMode']
       /**
@@ -5552,6 +5752,35 @@ export interface components {
         [key: string]: unknown
       }
     }
+    /**
+     * OpenCard
+     * @description One parked call with a card, as the Hardware page's slot shows it.
+     */
+    OpenCard: {
+      /** Confirmation Id */
+      confirmation_id: string
+      /** Conversation Id */
+      conversation_id: string
+      /** Tool */
+      tool: string
+      card: components['schemas']['Card']
+      /** Expires At */
+      expires_at: string
+    }
+    /**
+     * OpenCards
+     * @description `GET .../sol/cards/open`: the caller's oldest pending, unexpired card in this project,
+     *     across their conversations, and how many more wait.
+     */
+    OpenCards: {
+      card?: components['schemas']['OpenCard'] | null
+      /** Queued */
+      queued: number
+    }
+    /** OpenCardsEnvelope */
+    OpenCardsEnvelope: {
+      data: components['schemas']['OpenCards']
+    }
     /** OutcomeListOut */
     OutcomeListOut: {
       /** Data */
@@ -5620,18 +5849,6 @@ export interface components {
       expected_parent_id: string | null
       /** Version */
       version: number
-      /** Category */
-      category?:
-        | (
-            | 'sensors'
-            | 'actuators'
-            | 'controllers'
-            | 'end_effectors'
-            | 'power'
-            | 'structure'
-            | 'wiring'
-          )
-        | null
     }
     /** PartCalibration */
     PartCalibration: {
@@ -5668,35 +5885,11 @@ export interface components {
       robot_id?: string | null
       /** Name */
       name?: string | null
-      /** Category */
-      category?:
-        | (
-            | 'sensors'
-            | 'actuators'
-            | 'controllers'
-            | 'end_effectors'
-            | 'power'
-            | 'structure'
-            | 'wiring'
-          )
-        | null
     }
     /** PartIn */
     PartIn: {
       /** Name */
       name: string
-      /**
-       * Category
-       * @enum {string}
-       */
-      category:
-        | 'sensors'
-        | 'actuators'
-        | 'controllers'
-        | 'end_effectors'
-        | 'power'
-        | 'structure'
-        | 'wiring'
       /** Specs */
       specs?: {
         [key: string]: string | number | boolean | null
@@ -5887,6 +6080,24 @@ export interface components {
       by: components['schemas']['FieldProvenance']
       /** Source */
       source?: string | null
+    }
+    /**
+     * QuestionAnswer
+     * @description `MessageCreate.answer`: the person's answer to an open `ask_user` card they own. Choice 0
+     *     is the primary button, 1 the secondary; the server writes the turn text itself. It may also
+     *     name an open card of theirs that shows a `field`: an edit, choice 0 with `text` the new
+     *     value, which expires the card without deciding it.
+     */
+    QuestionAnswer: {
+      /** Question Id */
+      question_id: string
+      /**
+       * Choice
+       * @enum {integer}
+       */
+      choice: 0 | 1
+      /** Text */
+      text?: string | null
     }
     /** RejectIn */
     RejectIn: {
@@ -6212,8 +6423,8 @@ export interface components {
     SelectBody: {
       /** Candidate Id */
       candidate_id: string
-      /** Category Entity Id */
-      category_entity_id?: string | null
+      /** Robot Entity Id */
+      robot_entity_id?: string | null
       /**
        * Quantity
        * @default 1
@@ -6542,12 +6753,24 @@ export interface components {
       /** Events */
       events?: components['schemas']['ObserverEventIn'][]
     }
-    /** TelemetryChannel */
+    /**
+     * TelemetryChannel
+     * @description A declared signal. `range` and `display` are optional presentation (SOLUSDEV-326);
+     *     `display` defaults to `plot` and is never null. An absent range and a `plot` display are left
+     *     out of dumps, so a plain channel reads, digests and asks for provenance exactly as before.
+     */
     TelemetryChannel: {
       /** Name */
       name: string
       /** Unit */
       unit?: string | null
+      range?: components['schemas']['ChannelRange'] | null
+      /**
+       * Display
+       * @default plot
+       * @enum {string}
+       */
+      display: 'plot' | 'angle' | 'orientation' | 'video' | 'scan' | 'points' | 'state' | 'text'
     }
     /**
      * ToolFamily
@@ -6665,6 +6888,7 @@ export interface components {
       presence?: string | null
       /** Evidence */
       evidence?: components['schemas']['Evidence'][]
+      clock?: components['schemas']['BrainClock'] | null
     }
     /**
      * TopologyProvenance
@@ -10327,6 +10551,44 @@ export interface operations {
       }
     }
   }
+  put_in_graph_api_v1_projects__project_id__hardware_entities__entity_id__graph_put: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        entity_id: string
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['InGraphIn']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
   get_entity_config_api_v1_projects__project_id__hardware_entities__entity_id__config_get: {
     parameters: {
       query?: never
@@ -10910,6 +11172,76 @@ export interface operations {
       }
     }
   }
+  dismiss_device_api_v1_projects__project_id__hardware_devices_dismissals_post: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['DismissalIn']
+      }
+    }
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  clear_device_dismissals_api_v1_projects__project_id__hardware_devices_dismissals_delete: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': {
+            [key: string]: unknown
+          }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
   propose_detected_api_v1_projects__project_id__hardware_detected__device_ref__propose_post: {
     parameters: {
       query?: never
@@ -11452,6 +11784,37 @@ export interface operations {
           'application/json': {
             [key: string]: unknown
           }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  list_expected_api_v1_projects__project_id__hardware_expected_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ExpectedPartsEnvelope']
         }
       }
       /** @description Validation Error */
@@ -12751,6 +13114,37 @@ export interface operations {
           'application/json': {
             [key: string]: unknown
           }
+        }
+      }
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HTTPValidationError']
+        }
+      }
+    }
+  }
+  open_cards_api_v1_projects__project_id__sol_cards_open_get: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        project_id: string
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['OpenCardsEnvelope']
         }
       }
       /** @description Validation Error */

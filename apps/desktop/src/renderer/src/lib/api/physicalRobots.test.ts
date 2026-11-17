@@ -2,12 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from './client'
 import { ApiError } from './envelope.types'
 import type { Entity } from './resources'
-import {
-  createPhysicalRobot,
-  renamePhysicalRobot,
-  deletePhysicalRobot,
-  listRobotOrphans
-} from './physicalRobots'
+import { createPhysicalRobot, renamePhysicalRobot, deletePhysicalRobot } from './physicalRobots'
 
 const robot: Entity = {
   id: 'r1',
@@ -24,8 +19,6 @@ const client = (): ApiClient => ({ request: vi.fn(), requestPage: vi.fn() })
 
 describe('physical robot API', () => {
   registerRobotMutationTests()
-
-  registerRetainedPartPaginationTests()
 })
 
 function registerRobotMutationTests(): void {
@@ -93,21 +86,5 @@ function registerRobotMutationTests(): void {
       status: 409
     })
     expect(api.request).toHaveBeenCalledTimes(1)
-  })
-}
-
-function registerRetainedPartPaginationTests(): void {
-  it('reads bounded persistent orphan pages and escapes the cursor', async () => {
-    const api = client()
-    const page = { data: [{ id: 'part' }], meta: { has_next: false } }
-    vi.mocked(api.requestPage).mockResolvedValue(page)
-    expect(await listRobotOrphans('p1', null, api)).toBe(page)
-    expect(api.requestPage).toHaveBeenLastCalledWith(
-      '/projects/p1/entities?orphaned_from_robot=true&limit=24'
-    )
-    await listRobotOrphans('p1', 'next/+?', api)
-    expect(api.requestPage).toHaveBeenLastCalledWith(
-      '/projects/p1/entities?orphaned_from_robot=true&limit=24&cursor=next%2F%2B%3F'
-    )
   })
 }

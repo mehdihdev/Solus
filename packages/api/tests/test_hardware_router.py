@@ -15,7 +15,7 @@ from conftest import BOB, add_member, create_project, create_team, me
 from httpx import AsyncClient
 from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
 from solus_api.hardware.links import LinkSuggestion, LinkTier, persist_suggestions
-from solus_api.models import DataEvent, GraphEdge, GraphEntity, User
+from solus_api.models import DataEvent, Domain, GraphEdge, GraphEntity, User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,19 +55,6 @@ async def _hw_get_config(
     return dict(resp.json()["data"])
 
 
-async def _hw_category(db: AsyncSession, robot_id: str, category: str) -> uuid.UUID:
-    node = await db.scalar(
-        select(GraphEntity).where(
-            GraphEntity.kind == "robot_category",
-            GraphEntity.attrs["robot_id"].astext == robot_id,
-            GraphEntity.attrs["category"].astext == category,
-            GraphEntity.deleted_at.is_(None),
-        )
-    )
-    assert node is not None
-    return node.id
-
-
 def _serial_arm_for(robot_id: str) -> dict[str, Any]:
     raw = json.loads((FIXTURES / "serial_arm.json").read_text())
     raw["robot_entity_id"] = robot_id
@@ -89,7 +76,6 @@ async def _saved_serial_arm(
             kind="part",
             name="Fixture actuator",
             parent_id=robot_id,
-            category="actuators",
         )
         mapping[old_id] = part["entity"]["id"]
     raw["parts"] = {mapping[key]: value for key, value in raw["parts"].items()}
@@ -252,16 +238,72 @@ async def test_get_config_for_an_unknown_robot_is_404(
     assert resp.status_code == 404, resp.text
 
 
-async def test_get_config_for_a_robot_category_entity_is_404(
+async def test_get_config_for_a_legacy_robot_category_entity_is_404(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
+    """A retired category node (SOLUSDEV-326) is never a robot."""
     project_id, _ = await _hw_project(client, alice_headers)
     robot = await _robot(client, alice_headers, project_id)
-    category_id = await _hw_category(db, robot["id"], "sensors")
+    category = GraphEntity(
+        project_id=uuid.UUID(project_id),
+        kind="robot_category",
+        domain=Domain.PROJECT,
+        origin="manual",
+        name="Sensors",
+        attrs={"robot_id": robot["id"], "category": "sensors"},
+    )
+    db.add(category)
+    await db.commit()
     resp = await client.get(
-        _hw_url(project_id, "robots", str(category_id), "config"), headers=alice_headers
+        _hw_url(project_id, "robots", str(category.id), "config"), headers=alice_headers
     )
     assert resp.status_code == 404, resp.text
+
+
+async def test_no_hardware_body_takes_the_retired_category(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326 P2: a robot contains its parts directly, so the `category` P1 accepted and
+    ignored is gone from every body — naming one is an unknown field, 422, writing nothing."""
+    from test_hardware_ownership import _create
+
+    project_id, _ = await _hw_project(client, alice_headers)
+    robot = await _robot(client, alice_headers, project_id)
+    spare = await _create(client, alice_headers, project_id, kind="part", name="Spare")
+    part_id = spare["entity"]["id"]
+    keyed = {**alice_headers, "Idempotency-Key": str(uuid.uuid4())}
+    retired = {"category": "actuators"}
+    confirm = {"target": {"kind": "new", "name": "Arm"}, "start_session": False}
+    parent = {"parent_id": robot["id"], "expected_parent_id": None, "version": 0}
+    for method, path, headers, body in (
+        ("POST", ("entities",), keyed, {"kind": "part", "name": "Elbow", **retired}),
+        ("PATCH", ("parts", part_id, "parent"), alice_headers, {**parent, **retired}),
+        ("POST", ("robots", robot["id"], "parts"), alice_headers, {"name": "Elbow", **retired}),
+        (
+            "POST",
+            ("robots", robot["id"], "parts", "attach"),
+            alice_headers,
+            {"entity_ids": [part_id], **retired},
+        ),
+        (
+            "POST",
+            ("detected", "usb:ABC", "confirm"),
+            alice_headers,
+            {**confirm, "accepted": [{"row_id": "usb:ABC/1", **retired}]},
+        ),
+    ):
+        response = await client.request(
+            method, _hw_url(project_id, *path), headers=headers, json=body
+        )
+        assert response.status_code == 422, (path, response.text)
+    parts = await db.scalars(
+        select(GraphEntity.name).where(
+            GraphEntity.project_id == uuid.UUID(project_id), GraphEntity.kind == "part"
+        )
+    )
+    assert list(parts) == ["Spare"]
+    listed = await client.get(_hw_url(project_id, "parts"), headers=alice_headers)
+    assert [row["parent_id"] for row in listed.json()["data"]] == [None]
 
 
 async def test_get_config_without_a_bearer_token_is_401(
@@ -285,21 +327,21 @@ async def test_post_parts_creates_a_contained_planned_part_recorded_in_the_confi
     resp = await client.post(
         _hw_url(project_id, "robots", robot["id"], "parts"),
         headers=alice_headers,
-        json={"name": "Bosch BMP390", "category": "sensors", "specs": specs},
+        json={"name": "Bosch BMP390", "specs": specs},
     )
     assert resp.status_code == 201, resp.text
     data = resp.json()["data"]
     entity = data["entity"]
     assert entity["type"] == "part"
     assert entity["name"] == "Bosch BMP390"
-    assert entity["properties"]["category"] == "sensors"
+    assert "category" not in entity["properties"]  # robots contain parts (SOLUSDEV-326)
+    assert entity["properties"]["robot_id"] == robot["id"]
     assert entity["properties"]["specs"] == specs
     assert "config_entry_id" in data
 
-    category_id = await _hw_category(db, robot["id"], "sensors")
     edge = await db.scalar(
         select(GraphEdge).where(
-            GraphEdge.src_id == category_id,
+            GraphEdge.src_id == uuid.UUID(robot["id"]),
             GraphEdge.dst_id == uuid.UUID(entity["id"]),
             GraphEdge.relation_type == "contains",
             GraphEdge.deleted_at.is_(None),
@@ -324,7 +366,7 @@ async def test_post_parts_creates_a_contained_planned_part_recorded_in_the_confi
     assert resolved
 
 
-async def test_post_parts_accepts_an_explicit_lifecycle_state(
+async def test_post_parts_accepts_an_explicit_lifecycle_state_without_a_category(
     client: AsyncClient, alice_headers: dict[str, str]
 ) -> None:
     project_id, _ = await _hw_project(client, alice_headers)
@@ -334,7 +376,6 @@ async def test_post_parts_accepts_an_explicit_lifecycle_state(
         headers=alice_headers,
         json={
             "name": "BLHeli_32 35A ESC",
-            "category": "actuators",
             "specs": {"interface": "PWM", "supply_v": 16.0, "rated_output": "35 A"},
             "lifecycle": "ordered",
         },
@@ -348,10 +389,10 @@ async def test_post_parts_accepts_an_explicit_lifecycle_state(
 @pytest.mark.parametrize(
     "body",
     [
-        {"name": "Thing", "category": "not_a_category", "specs": {}},
-        {"name": "Thing", "category": "sensors", "specs": {f"k{i}": i for i in range(33)}},
-        {"name": "Thing", "category": "sensors", "specs": {}, "unexpected": True},
-        {"name": "  ", "category": "sensors", "specs": {}},
+        {"name": "Thing", "category": "sensors", "specs": {}},  # retired (SOLUSDEV-326 P2)
+        {"name": "Thing", "specs": {f"k{i}": i for i in range(33)}},
+        {"name": "Thing", "specs": {}, "unexpected": True},
+        {"name": "  ", "specs": {}},
     ],
 )
 async def test_post_parts_rejects_invalid_bodies(
@@ -377,7 +418,7 @@ async def test_post_lifecycle_promotes_the_part_without_changing_its_entity_or_e
         await client.post(
             _hw_url(project_id, "robots", robot["id"], "parts"),
             headers=alice_headers,
-            json={"name": "Bosch BMP390", "category": "sensors", "specs": {"interface": "I2C"}},
+            json={"name": "Bosch BMP390", "specs": {"interface": "I2C"}},
         )
     ).json()["data"]
     part_id = created["entity"]["id"]
@@ -431,7 +472,7 @@ async def test_post_lifecycle_rejects_an_unknown_state(
         await client.post(
             _hw_url(project_id, "robots", robot["id"], "parts"),
             headers=alice_headers,
-            json={"name": "Bosch BMP390", "category": "sensors", "specs": {}},
+            json={"name": "Bosch BMP390", "specs": {}},
         )
     ).json()["data"]
     resp = await client.post(
@@ -577,7 +618,7 @@ async def test_a_non_member_gets_404_on_every_hardware_route(
         resp = await client.post(
             _hw_url(project_id, "robots", robot["id"], "parts"),
             headers=bob_headers,
-            json={"name": "X", "category": "sensors", "specs": {}},
+            json={"name": "X", "specs": {}},
         )
     elif route == "suggestions_get":
         resp = await client.get(_hw_url(project_id, "suggestions"), headers=bob_headers)
@@ -602,7 +643,7 @@ async def test_a_viewer_cannot_read_or_write_hardware_config(
         await client.post(
             _hw_url(project_id, "robots", robot["id"], "parts"),
             headers=alice_headers,
-            json={"name": "Bosch BMP390", "category": "sensors", "specs": {}},
+            json={"name": "Bosch BMP390", "specs": {}},
         )
     ).json()["data"]
     rows = await persist_suggestions(
@@ -625,7 +666,7 @@ async def test_a_viewer_cannot_read_or_write_hardware_config(
     post_part = await client.post(
         _hw_url(project_id, "robots", robot["id"], "parts"),
         headers=bob_headers,
-        json={"name": "X", "category": "sensors", "specs": {}},
+        json={"name": "X", "specs": {}},
     )
     assert post_part.status_code == 403, post_part.text
 
@@ -664,7 +705,7 @@ async def test_write_routes_emit_data_events_when_consented(
         await client.post(
             _hw_url(project_id, "robots", robot["id"], "parts"),
             headers=alice_headers,
-            json={"name": "Bosch BMP390", "category": "sensors", "specs": {}},
+            json={"name": "Bosch BMP390", "specs": {}},
         )
     ).json()["data"]
 
@@ -704,35 +745,40 @@ async def test_the_session_a_bind_starts_names_its_robot_and_its_owner(
 ) -> None:
     """SOLUSDEV-321 P2-T3 (C2): the session started after a device is bound is the robot's — the
     session manager is told the robot and the binding member, so the robot's window evaluator
-    runs (and reads as that member)."""
+    runs (and reads as that member). SOLUSDEV-326: it opens through the one shared opener, from
+    the detection service the decide route and SOL's tools share."""
     from types import SimpleNamespace
 
-    from solus_api.hardware import hardware_router
+    from solus_api.hardware import detection_service
 
     starts: list[dict[str, Any]] = []
+    planned: list[GraphEntity] = []
 
     class _Manager:
         async def start(self, project_id: uuid.UUID, **kwargs: Any) -> Any:
             starts.append(kwargs)
             return SimpleNamespace(id=uuid.uuid4())
 
-    async def runtime_config(*args: Any) -> Any:
-        identity = SimpleNamespace(device_ref="usb:BOUND", binding="BOUND")
-        return SimpleNamespace(
-            identity=identity, protocol=SimpleNamespace(driver_id="x", params={})
-        )
+    async def opened() -> Any:
+        return None
 
-    async def entity_config(*args: Any) -> Any:
-        return SimpleNamespace(id=uuid.uuid4()), None
+    opener = SimpleNamespace(
+        label="Robot Follower (usb:BOUND)", device={"device_ref": "usb:BOUND"}, open=opened
+    )
 
-    monkeypatch.setattr(hardware_router, "resolve_runtime_config", runtime_config)
-    monkeypatch.setattr(hardware_router, "read_entity_config", entity_config)
-    monkeypatch.setattr(hardware_router, "prepare_local_hardware", lambda *a, **k: {})
-    monkeypatch.setattr(hardware_router, "get_session_manager", lambda request: _Manager())
+    async def plan(local: Any, session: Any, project_id: uuid.UUID, subject: GraphEntity) -> Any:
+        planned.append(subject)
+        return SimpleNamespace()
+
+    async def prepare(local: Any, plan: Any, account_id: uuid.UUID) -> Any:
+        return opener
+
+    monkeypatch.setattr(detection_service, "plan_session", plan)
+    monkeypatch.setattr(detection_service, "prepare_session", prepare)
     robot, account = GraphEntity(id=uuid.uuid4(), name="Follower"), uuid.uuid4()
 
-    session_id, error = await hardware_router._start_robot_session(
-        cast(Any, None),
+    session_id, error = await detection_service.start_robot_session(
+        cast(Any, _Manager()),
         object(),
         uuid.uuid4(),
         robot,
@@ -741,6 +787,7 @@ async def test_the_session_a_bind_starts_names_its_robot_and_its_owner(
         account_id=account,
     )
 
-    assert error is None and session_id is not None
+    assert error is None and session_id is not None and planned == [robot]
     (kwargs,) = starts
     assert (kwargs["robot_entity_id"], kwargs["owner_user_id"]) == (robot.id, account)
+    assert kwargs["open_conn"] is opened and kwargs["device"] is opener.device

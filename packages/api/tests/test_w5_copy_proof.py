@@ -270,13 +270,13 @@ async def test_cad_decline_memory_and_explicit_attachment(
     attached = await client.post(
         f"{base}/robots/{robot_id}/parts/attach",
         headers=alice_headers,
-        json={"entity_ids": [str(part_id)], "category": "end_effectors"},
+        json={"entity_ids": [str(part_id)]},
     )
     assert attached.status_code == 200, attached.text
     repeated = await client.post(
         f"{base}/robots/{robot_id}/parts/attach",
         headers=alice_headers,
-        json={"entity_ids": [str(part_id)], "category": "end_effectors"},
+        json={"entity_ids": [str(part_id)]},
     )
     assert repeated.status_code == 200, repeated.text
     count = await db.scalar(

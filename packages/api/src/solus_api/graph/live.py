@@ -43,7 +43,7 @@ import contextlib
 import json
 import logging
 import uuid
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any, NamedTuple
 
 from solus_contracts.live_events import CHANNEL_KINDS, ChannelKind, channel_name
@@ -149,6 +149,11 @@ class Subscription:
         self.channels = channels
         self.closed = False
         self.queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=_QUEUE_DEPTH)
+
+
+def _viewer(subscription: Subscription) -> uuid.UUID | None:
+    """The person a subscription reads as: its user channel (a project stream carries one)."""
+    return next((c.scope_id for c in subscription.channels if c.kind == "user"), None)
 
 
 def graph_changed_frame(
@@ -316,7 +321,34 @@ class LiveHub:
         machine's session."""
         self._deliver(Channel.project(project_id), json.dumps(frame, separators=(",", ":")))
 
-    def _deliver(self, target: Channel | uuid.UUID, payload: str) -> None:
+    def local_viewers(self, project_id: uuid.UUID) -> set[uuid.UUID | None]:
+        """Who reads this project's stream in THIS process: the person each subscription's user
+        channel names, None for a reader naming no one (a pre-ADR-037 queue)."""
+        readers = self._subscriptions.get(Channel.project(project_id), ())
+        viewers: set[uuid.UUID | None] = {_viewer(subscription) for subscription in readers}
+        return viewers | ({None} if self._subscribers.get(project_id) else set())
+
+    def publish_local_each(
+        self, project_id: uuid.UUID, frames: Mapping[uuid.UUID | None, dict[str, Any]]
+    ) -> None:
+        """`publish_local`, each reader receiving the frame of the person they are
+        (`local_viewers`) and a reader with no frame nothing (SOLUSDEV-326): for a frame about
+        this machine that names what one member alone may know."""
+        target = Channel.project(project_id)
+        for viewer, frame in frames.items():
+            self._deliver(
+                target, json.dumps(frame, separators=(",", ":")), only={viewer}.__contains__
+            )
+
+    def _deliver(
+        self,
+        target: Channel | uuid.UUID,
+        payload: str,
+        *,
+        only: Callable[[uuid.UUID | None], bool] | None = None,
+    ) -> None:
+        """`only`: the readers (by the person they are, `_viewer`) this frame is for; None is
+        every reader."""
         if isinstance(target, uuid.UUID):  # legacy callers name a project
             target = Channel.project(target)
         # SSE frames are newline-delimited, so a payload containing a blank line
@@ -333,11 +365,13 @@ class LiveHub:
         # Iterate SNAPSHOTS: a subscriber that disconnects mid-fan-out mutates
         # the sets, and a slow one must not stall its neighbours.
         for subscription in list(self._subscriptions.get(target, ())):
+            if only is not None and not only(_viewer(subscription)):
+                continue
             try:
                 subscription.queue.put_nowait((target, payload))
             except asyncio.QueueFull:
                 logger.debug("dropping frame for a subscriber that is not reading")
-        if target.kind != "project":
+        if target.kind != "project" or (only is not None and not only(None)):
             return
         for queue in list(self._subscribers.get(target.scope_id, ())):
             try:

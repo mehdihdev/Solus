@@ -20,6 +20,7 @@ from solus_api.graph import kinds
 from solus_api.graph.edges import write_edge
 from solus_api.graph.graph_changed_fanout import GraphChangedFanout
 from solus_api.graph.live import LiveHub, graph_changed_frame
+from solus_api.graph.read_scope import GraphReadScope, bind_scope
 from solus_api.models import Domain, GraphEntity, SolusEntry, SolusEntryKind, SolusSection
 from solus_api.routers import sources as sources_module
 from solus_api.services.budgets import (
@@ -240,6 +241,42 @@ async def test_mass_sums_definitions_and_attrs_against_a_constraint(
     await db.commit()
     line = _budget_lines_of((await compute_budgets(db, project_id)).model_dump(mode="json"))["mass"]
     assert (line["current"], line["limit"], line["status"]) == (1.555, 5.0, "unknown")
+
+
+async def test_the_shared_budgets_count_only_hardware_in_the_graph(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326 (docs/api/hardware.md §1a): the stored budgets are every member's, so a part
+    out of the graph is in neither the mass nor the cost line, even when its own onboarder's
+    request triggers the recompute."""
+    project_id = await _budget_project(client, alice_headers)
+    alice = uuid.UUID((await me(client, alice_headers))["id"])
+    hidden = {"mass_kg": 2.0, "in_graph": False, "onboarded_by": str(alice)}
+    db.add_all(
+        [
+            GraphEntity(
+                project_id=project_id,
+                kind=kinds.PART,
+                domain=Domain.MECHANICAL,
+                name="frame",
+                attrs={"mass_kg": 1.0},
+            ),
+            GraphEntity(
+                project_id=project_id,
+                kind=kinds.PART,
+                domain=Domain.MECHANICAL,
+                name="hidden",
+                attrs=hidden,
+            ),
+        ]
+    )
+    await db.commit()
+    with bind_scope(GraphReadScope(project_id, viewer_id=alice)):
+        stored = await store_budgets(db, project_id)
+    await db.commit()
+    lines = _budget_lines_of(stored.payload or {})
+    assert lines["mass"]["current"] == 1.0
+    assert "of 1 rows priced" in lines["cost"]["source"]
 
 
 async def test_an_untrusted_net_name_never_reaches_the_headline(

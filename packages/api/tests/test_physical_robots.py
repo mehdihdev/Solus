@@ -25,16 +25,6 @@ from solus_api.models import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-CATEGORIES = {
-    "sensors": "Sensors",
-    "actuators": "Actuators / motors",
-    "controllers": "Controllers",
-    "end_effectors": "End effectors",
-    "power": "Power",
-    "structure": "Structure",
-    "wiring": "Wiring",
-}
-
 
 def test_creation_schema_documents_an_optional_nonnullable_name() -> None:
     from solus_api.services.physical_robots import PhysicalRobotCreate
@@ -86,16 +76,6 @@ async def _mutate(
     )
 
 
-async def _categories(db: AsyncSession, robot_id: str) -> list[GraphEntity]:
-    return list(
-        await db.scalars(
-            select(GraphEntity)
-            .where(GraphEntity.attrs["robot_id"].astext == robot_id)
-            .execution_options(populate_existing=True)
-        )
-    )
-
-
 def _edge(project_id: str, src: uuid.UUID, dst: uuid.UUID, **extra: Any) -> GraphEdge:
     return GraphEdge(
         project_id=uuid.UUID(project_id),
@@ -108,38 +88,36 @@ def _edge(project_id: str, src: uuid.UUID, dst: uuid.UUID, **extra: Any) -> Grap
     )
 
 
-async def test_two_creations_have_independent_real_graph_trees(
+async def test_two_creations_are_independent_roots_with_nothing_else(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
+    """SOLUSDEV-326: a robot contains its parts directly, so creation writes the root only —
+    no category node and no edge."""
     project_id, _ = await _project(client, alice_headers)
     first = await _create(client, alice_headers, project_id)
     second = await _create(client, alice_headers, project_id, name="  Scout  ")
     assert first["name"] == "Rover"
     assert second["name"] == "Scout"
     assert first["id"] != second["id"]
-    all_ids: set[uuid.UUID] = set()
     for root in (first, second):
         assert root["properties"] == {"hardware_config_ref": None, "transport_refs": None}
         assert root["domain"] == "project"
         assert root["origin"] == "manual" and root["source_id"] is None
-        categories = await _categories(db, root["id"])
-        assert {item.attrs["category"]: item.name for item in categories} == CATEGORIES
-        assert all(
-            item.kind == "robot_category" and item.domain == Domain.PROJECT for item in categories
+        assert uuid.UUID(root["id"]).version == 7
+    nodes = list(
+        await db.scalars(select(GraphEntity).where(GraphEntity.project_id == uuid.UUID(project_id)))
+    )
+    assert {node.id for node in nodes if node.kind == "physical_robot"} == {
+        uuid.UUID(first["id"]),
+        uuid.UUID(second["id"]),
+    }
+    assert not [node for node in nodes if node.kind == "robot_category"]
+    edges = await db.scalars(
+        select(GraphEdge).where(
+            GraphEdge.src_id.in_([uuid.UUID(first["id"]), uuid.UUID(second["id"])])
         )
-        edges = list(
-            await db.scalars(select(GraphEdge).where(GraphEdge.src_id == uuid.UUID(root["id"])))
-        )
-        assert {edge.dst_id for edge in edges} == {item.id for item in categories}
-        assert all(edge.origin == "manual" and edge.source_id is None for edge in edges)
-        ids = {
-            uuid.UUID(root["id"]),
-            *(item.id for item in categories),
-            *(edge.id for edge in edges),
-        }
-        assert len(ids) == 15 and not (ids & all_ids)
-        assert all(item.version == 7 for item in ids)
-        all_ids.update(ids)
+    )
+    assert list(edges) == []
 
 
 @pytest.mark.parametrize("name", ["", " \t\n ", "a" * 513, None, 12, True, []])
@@ -349,8 +327,6 @@ async def test_deletion_retains_real_parts_service_containment_and_unrelated_lin
     project_id, _ = await _project(client, alice_headers)
     first = await _create(client, alice_headers, project_id)
     second = await _create(client, alice_headers, project_id)
-    category = (await _categories(db, first["id"]))[0]
-    other_category = (await _categories(db, second["id"]))[0]
     nodes = [
         GraphEntity(
             project_id=uuid.UUID(project_id),
@@ -364,12 +340,13 @@ async def test_deletion_retains_real_parts_service_containment_and_unrelated_lin
     ]
     db.add_all(nodes)
     await db.flush()
-    owned = [_edge(project_id, category.id, node.id) for node in nodes[:2]]
+    # SOLUSDEV-326: a robot owns its parts through direct `contains` edges.
+    owned = [_edge(project_id, uuid.UUID(first["id"]), node.id) for node in nodes[:2]]
     service = _edge(project_id, nodes[2].id, nodes[0].id)
     service.origin = "connector"
     crosslink = _edge(project_id, nodes[0].id, nodes[1].id)
     crosslink.relation_type = "drives"
-    other_ownership = _edge(project_id, other_category.id, nodes[1].id)
+    other_ownership = _edge(project_id, uuid.UUID(second["id"]), nodes[1].id)
     db.add_all([*owned, service, crosslink, other_ownership])
     await db.commit()
     before = (await client.get(f"/api/v1/projects/{project_id}", headers=alice_headers)).json()[
@@ -390,8 +367,8 @@ async def test_deletion_retains_real_parts_service_containment_and_unrelated_lin
     for edge in owned:
         await db.refresh(edge)
         assert edge.deleted_at is not None
-    for category in await _categories(db, first["id"]):
-        assert category.deleted_at is not None
+    root = await db.get(GraphEntity, uuid.UUID(first["id"]), populate_existing=True)
+    assert root is not None and root.deleted_at is not None
     assert (
         await client.get(_url(project_id, second["id"]), headers=alice_headers)
     ).status_code == 200
@@ -485,11 +462,21 @@ async def test_graph_stamp_includes_deleted_relation_modification(
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     root = await _create(client, alice_headers, project_id)
+    part = GraphEntity(
+        project_id=uuid.UUID(project_id),
+        kind="part",
+        origin="manual",
+        domain=Domain.MECHANICAL,
+        name="Owned part",
+    )
+    db.add(part)
+    await db.flush()
+    edge = _edge(project_id, uuid.UUID(root["id"]), part.id)
+    db.add(edge)
+    await db.commit()
     before = (await client.get(f"/api/v1/projects/{project_id}", headers=alice_headers)).json()[
         "data"
     ]["graph_updated_at"]
-    edge = await db.scalar(select(GraphEdge).where(GraphEdge.src_id == uuid.UUID(root["id"])))
-    assert edge is not None
     edge.deleted_at = utcnow()
     await db.commit()
     after = (await client.get(f"/api/v1/projects/{project_id}", headers=alice_headers)).json()[
@@ -605,9 +592,9 @@ async def test_metadata_events_and_sse_are_published_after_commit(
     ).status_code == 200
     assert len(frames) == 3
     assert all(frame["source_id"] is None and frame["sync_id"] is None for frame in frames)
-    assert frames[0]["counts"]["entities_created"] == 8
-    assert frames[0]["counts"]["relations_created"] == 7
-    assert frames[2]["counts"]["entities_deleted"] == 8
+    assert frames[0]["counts"]["entities_created"] == 1  # the root only (SOLUSDEV-326)
+    assert frames[0]["counts"]["relations_created"] == 0
+    assert frames[2]["counts"]["entities_deleted"] == 1
     events = list(
         await db.scalars(select(DataEvent).where(DataEvent.event_type.like("workspace.robot_%")))
     )

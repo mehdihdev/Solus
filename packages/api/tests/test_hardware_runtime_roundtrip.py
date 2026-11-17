@@ -292,10 +292,9 @@ async def test_child_connection_survives_parent_component_mutation(db: AsyncSess
     await db.commit()
     _, after = await read_entity_config(db, project.id, target)
     assert after is not None and after.component is not None
-    assert after.identity == documents[target].identity
-    assert after.protocol == documents[target].protocol
+    assert after.identity == documents[target].identity  # each brain carries its protocol
     assert after.bus_map == documents[target].bus_map
     assert after.disambiguated_by == "user"
     assert after.component.lifecycle == LifecycleState.LIVE
-    for path, _ in _leaves(child["identity"], "identity"):
+    for path, _ in _leaves(documents[target].model_dump(mode="json")["identity"], "identity"):
         assert after.provenance_of(path) == documents[target].provenance_of(path)

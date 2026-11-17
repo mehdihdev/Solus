@@ -18,7 +18,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
-from typing import Final
+from typing import Final, Protocol
 
 import serial as pyserial
 from solus_api.graph.codec import MAX_PACKET_BYTES
@@ -37,12 +37,23 @@ _US_PER_S: Final = 1_000_000
 _STOP: Final = object()
 
 
+class LinePort(Protocol):
+    """What the reader needs of its port: a pyserial port, or the serial owner's held port."""
+
+    @property
+    def port(self) -> str | None: ...
+
+    def readline(self, size: int | None = -1, /) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
 class SerialPacketSource:
     """LB-06 JSON lines from an open pyserial port, as an async packet stream."""
 
     def __init__(
         self,
-        port: pyserial.Serial,
+        port: LinePort,
         *,
         clock: Callable[[], datetime] | None = None,
         max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,

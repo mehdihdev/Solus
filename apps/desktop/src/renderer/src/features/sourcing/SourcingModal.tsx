@@ -1,5 +1,5 @@
 // SOLUSDEV-246 (STORE ST5) — ONE sourcing panel for two doors: Workspace › Add
-// › Hardware › Sourced (a Physical Robot's category receives the part) and
+// › Hardware › Sourced (a Physical Robot contains the part, SOLUSDEV-326) and
 // BOM › Find compatible parts. Requirement → Solus finds candidates (a metered
 // job) → compare side by side → Select → the part enters the graph as PLANNED.
 import { useEffect, useState } from 'react'
@@ -8,7 +8,7 @@ import type { Entity } from '../../lib/api/resources'
 import { listEntities } from '../../lib/api/resources'
 import type { SourcingDoor } from '../../lib/api/resources.sourcing'
 import { ModalShell } from '../workspace/modals'
-import type { CategoryOption } from './CandidateCompare'
+import type { RobotOption } from './CandidateCompare'
 import { RequirementStep, type CadState, type RequirementMode } from './RequirementStep'
 import {
   Alert,
@@ -32,17 +32,17 @@ export interface SourcingModalProps {
   sourcing?: SourcingData
 }
 
-const CATEGORY_LIMIT = 100
+const ROBOT_LIMIT = 100
 
-/** The Physical Robot categories a sourced part can land under (Workspace door only). */
-function useCategories(projectId: string, door: SourcingDoor): CategoryOption[] {
-  const [categories, setCategories] = useState<CategoryOption[]>([])
+/** The Physical Robots a sourced part can join (Workspace door only). */
+function useRobots(projectId: string, door: SourcingDoor): RobotOption[] {
+  const [robots, setRobots] = useState<RobotOption[]>([])
   useEffect(() => {
     if (door !== 'workspace') return
     let cancelled = false
-    listEntities(projectId, { type: 'robot_category', limit: CATEGORY_LIMIT }).then(
+    listEntities(projectId, { type: 'physical_robot', limit: ROBOT_LIMIT }).then(
       (rows) => {
-        if (!cancelled) setCategories(rows.map((r) => ({ id: r.id, label: r.name })))
+        if (!cancelled) setRobots(rows.map((r) => ({ id: r.id, label: r.name })))
       },
       () => undefined
     )
@@ -50,7 +50,7 @@ function useCategories(projectId: string, door: SourcingDoor): CategoryOption[] 
       cancelled = true
     }
   }, [projectId, door])
-  return categories
+  return robots
 }
 
 function RequirementPhase({
@@ -109,7 +109,7 @@ export function SourcingModal(props: SourcingModalProps): React.JSX.Element {
   const { projectId, door, onClose, onSelected } = props
   const own = useSourcing(projectId)
   const data = props.sourcing ?? own
-  const categories = useCategories(projectId, door)
+  const robots = useRobots(projectId, door)
   const { phase, actions } = data
 
   return (
@@ -129,13 +129,13 @@ export function SourcingModal(props: SourcingModalProps): React.JSX.Element {
         {phase === 'candidates' && data.request && (
           <CandidatesView
             request={data.request}
-            categories={door === 'workspace' ? categories : []}
+            robots={door === 'workspace' ? robots : []}
             busy={data.busy}
             error={data.error}
             onBack={actions.reset}
-            onSelect={(candidateId, categoryId, quantity) =>
+            onSelect={(candidateId, robotId, quantity) =>
               void actions.select(candidateId, {
-                ...(categoryId ? { category_entity_id: categoryId } : {}),
+                ...(robotId ? { robot_entity_id: robotId } : {}),
                 quantity
               })
             }

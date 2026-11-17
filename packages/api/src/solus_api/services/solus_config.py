@@ -25,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from solus_api.core.errors import APIError
 from solus_api.graph import kinds
 from solus_api.graph.edges import retire_edge, write_edge
-from solus_api.hardware.config import EntityHardwareConfig
+from solus_api.graph.read_scope import current_scope
+from solus_api.hardware.config import EntityHardwareConfig, upgrade_identity
 from solus_api.models import (
     Artifact,
     Domain,
@@ -210,10 +211,12 @@ async def add_artifact_entry(
     name: str,
     created_by: uuid.UUID,
     subsection: str | None = None,
+    attrs: Mapping[str, Any] | None = None,
 ) -> SolusEntry:
     """File an already-uploaded artifact: mark it retained, wrap it in a `document`
     node edged from `.solus`, and record the entry. The artifact must be live and
-    belong to THIS project — anything else is 404 (no existence oracle)."""
+    belong to THIS project — anything else is 404 (no existence oracle). `attrs` go on
+    the node beside its own keys (a bench run's visibility, SOLUSDEV-326)."""
     subsection = validate_subsection(section, subsection)
     graph = await SolusGraph.ensure(session, project_id)
     artifact = await session.scalar(
@@ -234,6 +237,7 @@ async def add_artifact_entry(
         name=name,
         origin=ORIGIN,
         attrs={
+            **(attrs or {}),
             "artifact_id": str(artifact.id),
             "media_type": artifact.media_type,
             "size_bytes": artifact.size_bytes,
@@ -272,6 +276,7 @@ async def get_entry(
             SolusEntry.id == entry_id,
             SolusEntry.project_id == project_id,
             SolusEntry.deleted_at.is_(None),
+            current_scope(project_id).entry_predicate(),  # SOLUSDEV-326: not the reader's: 404
         )
     )
     if entry is None:
@@ -335,16 +340,24 @@ async def _sync_goal(
     `goal.status_changed` history row whose "why" is the first linked conversation."""
     wanted = set(meta.linked_run_ids)
     if wanted:
-        known = set(
-            await session.scalars(
-                select(GraphEntity.id).where(
+        # SOLUSDEV-326: a run another member keeps out of the graph is unknown, unless the goal
+        # listed it already (before its robot left the graph).
+        scope, listed = (
+            current_scope(entry.project_id),
+            set(map(str, previous.get("linked_run_ids") or [])),
+        )
+        known = {
+            run_id
+            for run_id, attrs in await session.execute(
+                select(GraphEntity.id, GraphEntity.attrs).where(
                     GraphEntity.project_id == entry.project_id,
                     GraphEntity.id.in_(wanted),
                     GraphEntity.kind == kinds.BENCH_RUN,
                     GraphEntity.deleted_at.is_(None),
                 )
             )
-        )
+            if str(run_id) in listed or not scope.hides(attrs)
+        }
         missing = sorted(map(str, wanted - known))
         if missing:
             raise APIError(422, "validation_error", f"Unknown run in this project: {missing[0]}")
@@ -536,21 +549,38 @@ def serialize_entry(entry: SolusEntry, artifact: Artifact | None = None) -> dict
         "media_type": artifact.media_type if artifact is not None else None,
         "size_bytes": artifact.size_bytes if artifact is not None else None,
         # A CONFIG's validated document, or a text entry's typed metadata (§2.1).
-        "payload": entry.payload,
+        "payload": _shown_payload(entry),
         "created_by": entry.created_by,
         "created_at": entry.created_at,
         "updated_at": entry.updated_at,
     }
 
 
+def _shown_payload(entry: SolusEntry) -> dict[str, Any] | None:
+    """A hardware CONFIG stored before SOLUSDEV-326 reads as the brain list it validates to."""
+    payload = entry.payload
+    if (
+        payload is not None
+        and entry.kind == SolusEntryKind.CONFIG
+        and (entry.section.value, entry.subsection) in _CONFIG_MODELS
+        and payload.get("schema_version") == 2
+    ):
+        return upgrade_identity(payload)
+    return payload
+
+
 async def load_sections(
-    session: AsyncSession, project_id: uuid.UUID
+    session: AsyncSession, project_id: uuid.UUID, *, everyone: bool = False
 ) -> dict[str, list[dict[str, Any]]]:
-    """Every live entry, grouped by section in creation order — the panel's payload."""
+    """Every live entry the reader may see, grouped by section in creation order — the panel's
+    payload. A hardware CONFIG entry whose configured entity is out of the graph is its
+    onboarder's alone (SOLUSDEV-326): the bound scope's viewer, or with `everyone` (a read
+    shared by every member) nobody's."""
+    visible = current_scope(project_id).entry_predicate(everyone=everyone)
     entries = (
         await session.scalars(
             select(SolusEntry)
-            .where(SolusEntry.project_id == project_id, SolusEntry.deleted_at.is_(None))
+            .where(SolusEntry.project_id == project_id, SolusEntry.deleted_at.is_(None), visible)
             .order_by(SolusEntry.created_at, SolusEntry.id)
         )
     ).all()

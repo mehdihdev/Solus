@@ -394,6 +394,13 @@ def make_entry() -> "Callable[..., Any]":
 # so every connector's test imports it from there rather than from this conftest.
 
 
+def sole_brain(config: dict[str, Any]) -> dict[str, Any]:
+    """The one brain of a stored (v2) config dump — SOLUSDEV-326 made `identity` a list of
+    brains, each with its own `binding` and `protocol`."""
+    (brain,) = config["identity"]
+    return dict(brain)
+
+
 async def me(client: AsyncClient, headers: dict[str, str]) -> dict[str, Any]:
     """Fetch (and implicitly auto-provision) the current user."""
     resp = await client.get("/api/v1/users/me", headers=headers)

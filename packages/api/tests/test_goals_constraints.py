@@ -287,3 +287,41 @@ async def test_a_limit_edit_publishes_graph_changed_so_budgets_recompute(
     resp = await _patch_payload(client, alice_headers, project_id, rule["id"], payload)
     assert resp.status_code == 200, resp.text
     assert [(str(p), f["type"]) for p, f in hub.frames] == [(project_id, "graph.changed")]
+
+
+async def test_a_run_another_member_keeps_out_of_the_graph_is_an_unknown_run_to_link(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-326 (hardware.md §1a): a bench run carries its robot's visibility, so linking one
+    another member keeps out of the graph is the 422 of an unknown run (no existence oracle) and
+    writes no edge. Its onboarder links it; a goal that listed a run before it was hidden still
+    saves with it."""
+    project_id, team_id, mine = await _goal_project(client, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, bob, team_id)
+    alice = (await me(client, alice_headers))["id"]
+    hidden, shared = await _seed_runs(db, project_id, 2)
+    hidden.attrs = {"in_graph": False, "onboarded_by": alice}
+    await db.commit()
+    theirs = (
+        await _post(client, bob_headers, project_id, "goals", {"kind": "text", "text": "Bob's"})
+    ).json()["data"]
+
+    async def link(headers: dict[str, str], goal: dict[str, Any], *runs: uuid.UUID) -> Any:
+        payload = {"status": "open", "linked_run_ids": [str(run) for run in runs]}
+        return await _patch_payload(client, headers, project_id, goal["id"], payload)
+
+    refused = await link(bob_headers, theirs, hidden.id)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["error"]["message"] == f"Unknown run in this project: {hidden.id}"
+    assert not await _verified_by(db, theirs["entity_id"])
+    assert (await link(alice_headers, mine, hidden.id)).status_code == 200
+
+    assert (await link(bob_headers, theirs, shared.id)).status_code == 200
+    shared.attrs = {"in_graph": False, "onboarded_by": alice}  # its robot left the graph
+    await db.commit()
+    kept = await link(bob_headers, theirs, shared.id)
+    assert kept.status_code == 200, kept.text

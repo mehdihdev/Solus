@@ -32,7 +32,6 @@ async def test_runtime_refuses_retired_config_graph_without_writing(
             kind="part",
             name="Child fixture",
             parent_id=robot["id"],
-            category="sensors",
         )
     )["entity"]
     await _save(client, alice_headers, project, _connection(robot["id"], part["id"]))

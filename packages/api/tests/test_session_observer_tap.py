@@ -23,7 +23,7 @@ async def test_local_observer_is_session_owned_and_project_scoped():
     assert len(instances) == 2
     instances[0].add.assert_called_once()
     instances[1].add.assert_not_called()
-    sink.assert_called_once_with(first, {"kind": "change_point"})
+    sink.assert_called_once_with(first, {"kind": "change_point"}, None)  # names no device
     await manager.aclose_all()
 
 

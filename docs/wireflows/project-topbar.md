@@ -32,12 +32,12 @@ to it; Escape or click-out closes. Contents are declarative (`MENUS` in
 here does what the rail cannot. **Menu contents are a placeholder pending a
 design**; reshape by editing the constant.
 
-| Menu  | Items                                                                                                                                                                  |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Solus | Home · Settings · Billing · ─ · Sign out                                                                                                                               |
-| View  | Home · Workspace · Live Bench · SOL · Store (active screen checked)                                                                           |
+| Menu  | Items                                                                                                                                                                 |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Solus | Home · Settings · Billing · ─ · Sign out                                                                                                                              |
+| View  | Home · Workspace · Hardware · Live Bench · SOL · Store (active screen checked)                                                                                        |
 | Robot | Connect a tool… (Home › Connected accounts) · Connect a device… (Live Bench) · Ask SOL — disabled with "Open a project to act on its robot." while no project is open |
-| Help  | Documentation ↗ · Report an issue ↗ (https anchors → OS browser)                                                                                                     |
+| Help  | Documentation ↗ · Report an issue ↗ (https anchors → OS browser)                                                                                                    |
 
 Right cluster, unchanged from the previous topbar: bridge pill, search box
 (⌘K), notifications bell with unread badge, `Sign out`. The notifications

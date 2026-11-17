@@ -26,6 +26,7 @@ from solus_api.connectors.contracts import FrozenModel
 from solus_api.core.errors import APIError
 from solus_api.fingerprint.contract import Modality, ModalityMatch
 from solus_api.hardware.config import BusMapEntry, HardwareConfig
+from solus_api.hardware.runtime import bound_refs
 from solus_api.models import HardwareSuggestion, SuggestionStatus, utcnow
 from solus_api.services.solus_graph import lock_project
 
@@ -88,11 +89,9 @@ def _channel_names(config: HardwareConfig) -> set[str]:
 
 
 def _rule_identity(observation: PartObservation, config: HardwareConfig) -> Rule | None:
-    """Bus-enumerated on the robot's own bus identity — the strongest signal."""
+    """Bus-enumerated on one of the robot's own brain identities — the strongest signal."""
     bus = [m for m in observation.evidence if m.modality is Modality.BUS_ENUMERATION]
-    if not bus or observation.device_ref is None or config.identity is None:
-        return None
-    if config.identity.device_ref != observation.device_ref:
+    if not bus or observation.device_ref not in bound_refs(config):
         return None
     score = min(TIER_CEILING[Modality.BUS_ENUMERATION], max(m.confidence for m in bus))
     return score, f"the device {observation.device_ref} is this robot's bus identity"
@@ -126,9 +125,9 @@ def _models_agree(left: str | None, right: str | None) -> bool:
 
 
 def _rule_bus_map(observation: PartObservation, config: HardwareConfig) -> Rule | None:
-    """A whole device whose bus map equals an identity-less robot's — the library-imported
-    platform and the same machine on the wire reconcile to one robot."""
-    if observation.subject_kind != "device" or not observation.bus_map or config.identity:
+    """A whole device whose bus map equals an identity-less robot's (no brain bound to a
+    device) — the library-imported platform and the same machine on the wire reconcile."""
+    if observation.subject_kind != "device" or not observation.bus_map or bound_refs(config):
         return None
     if not any(m.modality is Modality.BUS_ENUMERATION for m in observation.evidence):
         return None

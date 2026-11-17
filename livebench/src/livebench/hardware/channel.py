@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from solus_api.hardware.config import TransportBinding, TransportKind
+from solus_api.livebench.sessions import DeviceBusyError
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,8 @@ class Channel(Protocol):
 
 
 class TransportUnavailableError(RuntimeError):
-    """The transport cannot open this identity here (absent, busy, or not installed)."""
+    """The transport cannot open this identity here (absent, or not installed). A device another
+    holder has open raises `DeviceBusyError` instead (SOLUSDEV-326): busy is not silence."""
 
 
 Opener = Callable[[TransportBinding, Mapping[str, Any]], Channel]
@@ -77,7 +79,7 @@ class TransportRegistry:
             )
         try:
             return opener(binding, dict(params))
-        except TransportUnavailableError:
+        except (TransportUnavailableError, DeviceBusyError):
             raise
         except Exception as exc:
             raise TransportUnavailableError(

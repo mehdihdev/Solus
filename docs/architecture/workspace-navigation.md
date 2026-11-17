@@ -1,6 +1,6 @@
 # Architecture — Workspace navigation, Integrations and inspector
 
-**Last updated:** 2026-09-11. **Status:** integrated SOLUSDEV-250/260 navigation, retaining
+**Last updated:** 2026-11-16 (SOLUSDEV-326 Hardware screen, entry points, plug-in toast). **Status:** integrated SOLUSDEV-250/260 navigation, retaining
 explicitly identified 254/255/256 follow-up design, extending
 W1–W4 (SOLUSDEV-240/242). Governing decisions: ADR-001/005/008/025/027/030/034.
 [Wireflow](../wireflows/workspace.md), [workspace routes](../api/workspace.md),
@@ -23,6 +23,61 @@ flowchart LR
   Inspector --> Action[Explicit Ask SOL / note / import]
   Action --> Existing[Existing project conversation and .solus entry services]
 ```
+
+## Shell screens, the rail and the Hardware entry points (SOLUSDEV-326)
+
+The shell's main screens are `shellStore.MainScreen`: `home`, `workspace`, `hardware`, `bench`,
+`sol`, `store`, `billing`, `settings`. Their labels and rail items are data in
+`features/workspace/railItems.tsx`; `WorkspaceShell` owns the route and the screen table. The
+rail is icon-only (tooltip and `aria-label` carry the name), in this order: Home, Workspace,
+**Hardware** (`Icons.hardware`, the chip glyph), Live Bench, SOL, then the Store and the
+installed extension tabs, with Billing and Settings at the bottom. The same screen is in the
+View menu (`menuBar.constants.ts`) and the ⌘K palette's pages (`paletteItems.ts`; the word
+"hardware" finds the Hardware page, no longer Live Bench), and `hardware` is a client-error
+surface (`ERROR_SURFACES`, `SURFACE_LABELS`, and the API's `client.error` surface list).
+
+`features/hardware/HardwareScreen.tsx` is the page. Every way in is plain shell navigation to
+`hardware`, with no hand-off state:
+
+| Entry point                                     | How                                                           |
+| ----------------------------------------------- | ------------------------------------------------------------- |
+| Rail item, View › Hardware, ⌘K "Hardware"       | `go('hardware')`                                              |
+| Workspace Add modal › Hardware row              | `WorkspaceScreen.onOpenHardware`: the modal closes, then `go` |
+| Live Bench "Add hardware" and the device banner | the `onAddHardware` prop the shell gives `BenchScreen`        |
+| Plug-in toast "Open Hardware"                   | the shell toast's `screen: 'hardware'` (`viewToast`)          |
+
+The Bench → Workspace Add request (`useAddHardwareRequest`, `openAddRequest`) is deleted: the Add
+modal holds no hardware onboarding.
+
+**Device rows are read once, by the shell.** `features/hardware/useDeviceStream.ts` is mounted by
+`WorkspaceShell` for the open project. It subscribes to the project event stream through
+`useWorkspaceEvents` for `hardware.devices_changed` frames and seeds once from
+`GET /projects/{id}/hardware/detected` through the typed client; the rows live in
+`features/hardware/deviceStore.ts` (Zustand) for the Hardware page. A frame is the full list and
+supersedes a seed still in flight; the rows belong to one project and are dropped on a project
+change and on sign-out. A failed seed leaves the rows empty (a hosted API lists no local devices).
+
+**Plug-in toast.** A device _arrives_ when a row becomes an offer: it has a `device_ref`, no
+`bound_to`, is not `dismissed`, and its `state` has settled to `inspected`, `busy` or `unknown`
+([hardware route plan, "Device memory and Not now"](../api/hardware.md)), and it was not an offer
+in the previous rows. `inspecting` waits; a null `state` (not this reader's machine, or no
+inspection owed) never counts; the rows present when the list first loads are the baseline, not
+arrivals. On an arrival while the current screen is not Hardware, the shell shows its ordinary
+toast, "Something was plugged in", whose action opens the Hardware page. An arrival is an edge,
+so a later frame carrying the same row raises nothing. While the Hardware page is open there is
+no toast: the page starts SOL's turn for the device itself (`features/hardware/usePlugInNotice.ts`:
+`MessageCreate.notice`, once per arrival, 2 s after it, queued behind a live turn).
+
+**The page** (`HardwareScreen`) reads the open project from `workspaceStore` and takes no props
+from the shell. It has no SOL panel of its own: SOL is the shell's sidebar (`SolSidebarHost`,
+mounted beside every screen in `WorkspaceShell`). The page drives its card slot with
+`useSolChat(projectId, 'hardware')`, and on the Hardware route the sidebar opens the same project
+session with the same surface, so a card pressed in the slot and a message typed in the sidebar
+are turns of one session, each sent as Build with confirmation. On that route the sidebar hides
+the rows that carry a card (the slot shows them), draws no process strip and always docks.
+The slot (`CardSlot`), "Done so far" and the parts list (`PartsList`) are the page's own; the list
+reads through the typed client and takes device rows from `deviceStore`. Flow and copy:
+[hardware wireflow](../wireflows/hardware-onboarding.md).
 
 ## Real graph identity and presentation
 
@@ -48,10 +103,22 @@ separate until identity is proven.
 
 `.solus` remains the real top-level configuration node with seven section entities (and subsection nodes, SOLUSDEV-320) and real
 entry/artifact graph identities. Text remains authoritative in solus_entries. Robots remain
-independent manual roots with existing category nodes, but empty categories may collapse/hide
-in presentation. Parts may remain unassigned and independently configured. Retained parts are
-reachable through Hardware search and the inspector even when provider containment supplies
-their normal presentation parent. Group membership and canvas position never assign hardware.
+independent manual roots that contain their parts directly (SOLUSDEV-326: one manual
+`contains` edge from the robot to each part; category nodes are retired, and a legacy row is
+only tolerated). Parts may remain unassigned and independently configured. A manual part no
+robot holds is listed on the Hardware page under "Not on a robot" (the robot sidebar's Unassigned
+parts list and its paging are removed, SOLUSDEV-326 P3); a connector's part keeps its provider
+document as its presentation parent. Group membership and canvas position never assign hardware.
+
+Hardware its onboarder has not added to the graph (SOLUSDEV-326, `properties.in_graph === false`;
+[hardware route plan §1a](../api/hardware.md)) reaches only the onboarder's snapshot; the API
+leaves it out of everyone else's. `graphIndex.buildNavigationIndex` keeps the snapshot whole, so
+the sidebar and the palette can still find it, but its `onCanvas` test (`inGraph`) gives such an
+entity no card: it is never a root, never a child and never an end of a drawn link. This holds
+for its onboarder too. `revealScope` returns nothing for it, so ⌘K or a reveal request never
+selects a node that has no card (the Hardware page is where it opens). Adding it to the
+graph (`PUT …/hardware/entities/{id}/graph`) publishes `graph.changed`, and the next snapshot
+draws it for everyone.
 
 ## Edges with meaning (SOLUSDEV-320)
 
@@ -157,7 +224,7 @@ IDs and makes no provider call. Manual robot edits publish graph hints after com
 
 `NodeSidebar` mounts only for a selection (entity, account anchor or edge) and shares one chrome
 (`sidebar/PanelChrome.tsx`: domain dot, `panelLabel`, ✕, title, real facts; footer strip).
-Robot/category routes to the robot sidebar; `.solus` root/section/entry routes to its sidebar
+Robot (and a legacy category row) routes to the robot sidebar; `.solus` root/section/entry routes to its sidebar
 (now with the Add / Edit · Upload · Ask SOL footer); account anchors use local account details;
 other real entities show `ConnectionsPanel` — the cached neighbourhood's edges touching the node
 as cards (`edgeSentence`, status pill from open findings on either endpoint) — instead of the

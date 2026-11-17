@@ -164,3 +164,23 @@ class TestBindingOf:
         )
         at_port = identify_port(device="/dev/x", vid=1, pid=2, serial=None, location="3-1.2")
         assert binding_of(at_port) == ("port-3-1.2", "port_position")
+
+    def test_a_serial_that_cannot_be_a_binding_falls_back_to_the_port(self) -> None:
+        """SOLUSDEV-326: a device-supplied serial is untrusted (§7). One a binding cannot hold
+        (a slash, whitespace, more than 128 characters) is treated as absent, like a forged
+        `port-` serial: the port position stands in, else the device has no binding."""
+        from livebench.recognition.passive import binding_of
+
+        for odd in ("AB 12", "AB/12", "S" * 129, "TAB\tX"):
+            at_port = identify_port(device="/dev/x", vid=1, pid=2, serial=odd, location="3-1.2")
+            assert binding_of(at_port) == ("port-3-1.2", "port_position"), odd
+            assert binding_of(identify_port(device="/dev/x", vid=1, pid=2, serial=odd)) == (
+                None,
+                "none",
+            )
+        assert binding_of(identify_port(device="/dev/x", vid=1, pid=2, serial="S" * 128)) == (
+            "S" * 128,
+            "serial",
+        )
+        odd_port = identify_port(device="/dev/x", vid=1, pid=2, serial=None, location="3 1.2")
+        assert binding_of(odd_port) == (None, "none")

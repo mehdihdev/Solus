@@ -58,10 +58,12 @@ function SolSidebarPanel({
   navigate: (screen: MainScreen) => void
 }): React.JSX.Element {
   const ref = useRef<HTMLElement>(null)
-  const fit = useWindowFit()
+  const fit = useWindowFit(screen)
   const resize = useSidebarResize()
   const projectId = useWorkspaceStore((s) => s.project?.id ?? null)
-  const chat = useSolChat(projectId)
+  // SOLUSDEV-326: on Hardware every turn parks a card, and cards stay in the page's slot.
+  const onHardware = screen === 'hardware'
+  const chat = useSolChat(projectId, onHardware ? 'hardware' : undefined)
   const solus = useSolusConfig(projectId)
   const pins = usePinnedContextStore((s) => selectPins(s, projectId, chat.activeConversationId))
   const focusedName = useFocusStore((s) => selectFocusedEntity(s)?.name ?? null)
@@ -115,6 +117,7 @@ function SolSidebarPanel({
           chat={chat}
           pinnedMentionIds={pinIds}
           placeholder={copy.placeholder}
+          cardsInSlot={onHardware}
           onAddNodeFromGraph={() => navigate('workspace')}
           onFocusEntity={(target) => openCitation(target, solus.sections, navigate)}
           emptyState={

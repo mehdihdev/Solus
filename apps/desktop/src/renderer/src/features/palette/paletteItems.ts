@@ -46,7 +46,8 @@ interface ScreenSpec {
 const SCREENS: readonly ScreenSpec[] = [
   { screen: 'home', label: 'Home', keywords: ['projects', 'teams', 'accounts'] },
   { screen: 'workspace', label: 'Workspace', keywords: ['graph', 'nodes', 'parts'] },
-  { screen: 'bench', label: 'Live Bench', keywords: ['telemetry', 'sim', 'devices', 'hardware'] },
+  { screen: 'hardware', label: 'Hardware', keywords: ['devices', 'robot', 'parts', 'connect'] },
+  { screen: 'bench', label: 'Live Bench', keywords: ['telemetry', 'sim', 'devices'] },
   { screen: 'sol', label: 'SOL', keywords: ['agent', 'chat', 'ask'] },
   { screen: 'store', label: 'Store', keywords: ['extensions', 'widgets'] },
   { screen: 'billing', label: 'Billing', keywords: ['plan', 'credits', 'subscription'] },

@@ -16,6 +16,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Query, Request, Response
@@ -32,6 +33,7 @@ from pydantic_core import PydanticCustomError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from solus_api.agent.cards import working_line
 from solus_api.agent.command_gate import completion_events
 from solus_api.agent.confirmations import (
     ParkedCall,
@@ -84,8 +86,10 @@ from solus_api.agent.tools import ToolRegistry
 from solus_api.agent.tools.knowledge import load_knowledge_notes, with_knowledge_notes
 from solus_api.agent.tools.shapes import ToolCall, ToolError, ToolErrorCode, ToolResult
 from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
+from solus_api.agent.turn_context import with_conversation
 from solus_api.agent.turn_limits import turn_limits
 from solus_api.bridge.registry import BridgeSessionRegistry
+from solus_api.contracts.action_gate import DeviceNotice, QuestionAnswer
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
@@ -126,7 +130,9 @@ from solus_api.orchestration.gates import (
     check_frequency_cap,
 )
 from solus_api.orchestration.providers import ProviderRefusalError, ProviderTransientError
+from solus_api.routers.sol_cards import answer_prompt, close_question
 from solus_api.routers.sol_confirmations import sync_enqueuer
+from solus_api.routers.sol_notice import notice_prompt, record_notice
 from solus_api.routers.sol_resume import (
     ResumeTicket,
     check_resume,
@@ -305,8 +311,35 @@ class ScreenshotIn(StrictModel):
             raise APIError(422, "validation_error", str(exc)) from exc
 
 
+#: The turns Solus writes the words of, each with what it may not be combined with and the 422's
+#: reason: a resume and a wake carry no words or pixels from the person (SOLUSDEV-317), a notice
+#: nothing else at all, an answer no words but its own (SOLUSDEV-326, action-gate §Cards 4–5).
+_EXCLUSIVE = (
+    (
+        "process_prompt",
+        ("content", "screenshot", "resume_confirmation_id"),
+        "a wake carries no content, screenshot or resume",
+    ),
+    (
+        "resume_confirmation_id",
+        ("content", "screenshot"),
+        "a resume carries no content or screenshot",
+    ),
+    (
+        "notice",
+        ("content", "screenshot", "resume_confirmation_id", "process_prompt", "answer"),
+        "a notice carries no content, screenshot, resume, wake or answer",
+    ),
+    (
+        "answer",
+        ("content", "notice", "resume_confirmation_id", "process_prompt"),
+        "an answer carries no content, notice, resume or wake",
+    ),
+)
+
+
 class MessageCreate(StrictModel):
-    #: Required unless `resume_confirmation_id` is set (SOLUSDEV-317 §5.5).
+    #: Required unless Solus writes the turn's words (`_EXCLUSIVE`, SOLUSDEV-317 §5.5).
     content: str | None = Field(default=None, min_length=1, max_length=MAX_MESSAGE_CHARS)
     #: SOLUSDEV-317 §5.5: continue after a decided command card. Mutually
     #: exclusive with `content` and `screenshot` — a resume carries no words or
@@ -315,6 +348,13 @@ class MessageCreate(StrictModel):
     #: SOLUSDEV-317 §11.2: wake SOL for a waiting interactive process. Mutually
     #: exclusive with `content`, `screenshot` and `resume_confirmation_id`.
     process_prompt: ProcessPrompt | None = None
+    #: SOLUSDEV-326 (action-gate contract §Cards 4): something was plugged into the person's own
+    #: machine. The server checks the device is there now and writes the turn's words itself.
+    notice: DeviceNotice | None = None
+    #: SOLUSDEV-326 (§Cards 5): the person's answer to an open `ask_user` card of theirs, or
+    #: their edit of an open card that shows a field. The server closes it and writes the turn's
+    #: words from the chosen button and their text.
+    answer: QuestionAnswer | None = None
     #: SOLX-01: how SOL may act on this message — guide (explain + point) or do
     #: (operate the tool). Guide is the safe default; per-action resolution
     #: inside a turn is the reasoning loop's refinement (SOL-02) on top of this
@@ -387,30 +427,28 @@ class MessageCreate(StrictModel):
             self.process_prompt is not None or self.resume_confirmation_id is not None
         ):
             raise ValueError("a resume or wake carries no front_app")
-        if self.process_prompt is not None:
-            if (
-                self.content is not None
-                or self.screenshot is not None
-                or self.resume_confirmation_id is not None
+        for kind, others, reason in _EXCLUSIVE:
+            if getattr(self, kind) is not None and any(
+                getattr(self, other) is not None for other in others
             ):
-                raise ValueError("a wake carries no content, screenshot or resume")
-            return self
-        if self.resume_confirmation_id is None and self.content is None:
+                raise ValueError(reason)
+        if self.content is None and not self.solus_written():
             # Reported as the field's own `missing` error (the API.md shape a
             # required `content` always had); the error handler redacts `input`.
             raise ValidationError.from_exception_data(
                 type(self).__name__,
                 [{"type": "missing", "loc": ("content",), "input": {}}],
             )
-        if self.resume_confirmation_id is not None and (
-            self.content is not None or self.screenshot is not None
-        ):
-            raise ValueError("a resume carries no content or screenshot")
         if self.front_app is not None and self.action_mode is not ActionMode.DO:
             # Security L-5: only a Build turn may put the front app before the model
             # or offer `drive.step {app: "front"}`; a Guide turn's copy is ignored.
             self.front_app = None
         return self
+
+    def solus_written(self) -> bool:
+        """Whether Solus writes this turn's words — a resume, a wake, or (SOLUSDEV-326) a notice
+        or an answer — so the person's `content` is neither needed nor taken."""
+        return any(getattr(self, kind) is not None for kind, _, _ in _EXCLUSIVE)
 
 
 def _tool_descriptors(registry: ToolRegistry) -> list[dict[str, Any]]:
@@ -529,6 +567,8 @@ async def list_conversation_confirmations(
                 "summary": row.summary,
                 "preview": row.preview,
                 "expires_at": row.expires_at.isoformat(),
+                # SOLUSDEV-326: the card stored when it parked, null when its tool authors none.
+                "card": row.card,
             }
             for row in rows
         ]
@@ -861,6 +901,7 @@ def _drain_parked(parked: list[ParkedCall], parked_tools: set[str]) -> Iterator[
                 args=request.args,
                 summary=request.summary,
                 preview=request.preview,
+                card=request.card,
             )
         )
 
@@ -1068,8 +1109,9 @@ async def _turn_prompt(
     call_cap_bytes: int,
 ) -> tuple[str, ResumeTicket | None, WakeTicket | None]:
     """The turn's prompt: the person's words, or the Solus-authored instruction
-    of a resume (§5.5) or a wake (§11.2), each admitted by its own checks."""
-    continuing = body.resume_confirmation_id is not None or body.process_prompt is not None
+    of a resume (§5.5) or a wake (§11.2), or the words Solus writes for a device
+    notice or an answer (SOLUSDEV-326), each admitted by its own checks."""
+    continuing = body.solus_written()
     content = "" if continuing else (body.content or "").strip()
     if not continuing and not content:
         raise APIError(422, "validation_error", "Message content must not be blank")
@@ -1087,6 +1129,10 @@ async def _turn_prompt(
             call_cap_bytes=call_cap_bytes,
         )
         return wake_prompt(wake), None, wake
+    if body.notice is not None:
+        return await notice_prompt(session, ctx, body.notice), None, None
+    if body.answer is not None:
+        return await answer_prompt(session, ctx, conversation_id, body.answer), None, None
     return content, None, None
 
 
@@ -1110,7 +1156,7 @@ async def _admit_resume(
     )
 
 
-async def _record_user_message(
+async def _admit_message(
     session: AsyncSession,
     ctx: ProjectCtx,
     conversation_id: uuid.UUID,
@@ -1119,10 +1165,37 @@ async def _record_user_message(
     attribution: Any,
     screenshot: ScreenshotBlock | None,
 ) -> None:
+    """The person's turn (SOLUSDEV-326): a device notice is Solus-authored and logs no message;
+    an answer closes its card (a question, or an edited card) in the same transaction as the
+    turn that answers it, after the budget gates, so a refused turn never spends the card."""
+    if body.notice is not None:
+        await record_notice(session, ctx, conversation_id, content, body.notice)
+        return
+    answered = None
+    if body.answer is not None:
+        answered = await close_question(session, ctx, conversation_id, body.answer)
+    await _record_user_message(
+        session, ctx, conversation_id, content, body, attribution, screenshot, answered
+    )
+
+
+async def _record_user_message(
+    session: AsyncSession,
+    ctx: ProjectCtx,
+    conversation_id: uuid.UUID,
+    content: str,
+    body: MessageCreate,
+    attribution: Any,
+    screenshot: ScreenshotBlock | None,
+    answered: dict[str, Any] | None = None,
+) -> None:
     # Phase 4 H2: the transcript stores the ORIGINAL text with the attribution
     # on `attrs`; the Solus-authored framing exists only in model input. S3: a
     # screenshot leaves dims + app only — never pixels (sol-window.md §8.3).
     user_attrs: dict[str, Any] = {}
+    if answered is not None:
+        # SOLUSDEV-326: which card this turn answers and with which button; an edit says so.
+        user_attrs["answer"] = answered
     if attribution:
         user_attrs["extension_slug"] = attribution.slug
     if screenshot is not None:
@@ -1193,6 +1266,15 @@ async def post_message(
     content, ticket, wake = await _turn_prompt(
         session, ctx, conversation_id, body, bridge, settings.bridge_tool_call_max_bytes
     )
+    # SOLUSDEV-326: the server forces confirmation on exactly two turns the person did not type.
+    # A device notice is started by a plug-in and carries a device-chosen serial, and a card
+    # resume continues one; neither may auto-run an owned routine because a client left
+    # `force_confirmation` off. Every other turn — an answer to a question included — keeps the
+    # flag its surface sent. The Hardware surface always sends it; since SOLUSDEV-327 no control
+    # lets the person turn it on or off.
+    force_confirmation = (
+        body.force_confirmation or body.notice is not None or (ticket is not None and ticket.card)
+    )
     # S3: decode + sniff BEFORE admission — a bad attachment is a 422, not a spent turn.
     screenshot = body.screenshot.decode() if body.screenshot is not None else None
 
@@ -1243,9 +1325,7 @@ async def post_message(
     if ticket is not None:
         await _admit_resume(session, ctx, conversation_id, ticket)
     elif wake is None:
-        await _record_user_message(
-            session, ctx, conversation_id, content, body, attribution, screenshot
-        )
+        await _admit_message(session, ctx, conversation_id, content, body, attribution, screenshot)
     await session.commit()
     # sol-drive.md §2.2: `drive.step` offers `front` only for this turn's drivable,
     # window-bound front app, rebuilt on the caller's own companion scope.
@@ -1302,6 +1382,8 @@ async def post_message(
                 team_id=ctx.team.id,
                 user_id=ctx.user.id,
                 conversation_id=conversation_id,
+                # SOLUSDEV-326: the card keeps its Guide-mode `more` only for a Guide reader.
+                sol_mode=ctx.user.sol_mode,
             )
             await parking.commit()
         # An invalid-args refusal carries no confirmation_id — nothing was
@@ -1315,7 +1397,7 @@ async def post_message(
     # tool's description as a fenced note (global table, never project data).
     descriptors = with_knowledge_notes(tuple(registry.list()), await load_knowledge_notes(session))
     routine_policy = BuildExecutionPolicy(
-        registry, body.action_mode, force_confirmation=body.force_confirmation
+        registry, body.action_mode, force_confirmation=force_confirmation
     )
     turn_sync = create_turn_sync(request, settings, ctx, sessionmaker)
 
@@ -1341,18 +1423,23 @@ async def post_message(
         # itself: a runner holds nothing it could invoke ungated (CLAUDE.md §7)
         # and, in guide mode, nothing that could mutate (SOLX-01).
         tools=descriptors,
-        dispatch=build_mode_dispatch(
-            body.action_mode,
-            descriptors,
-            build_dispatch(
-                registry,
-                park,
-                routine_policy=routine_policy,
-                routine_outcome=routine_outcome,
-                routine_start=turn_sync.start,
+        dispatch=with_conversation(
+            build_mode_dispatch(
+                body.action_mode,
+                descriptors,
+                build_dispatch(
+                    registry,
+                    park,
+                    routine_policy=routine_policy,
+                    routine_outcome=routine_outcome,
+                    routine_start=turn_sync.start,
+                ),
+                # SOLUSDEV-322 P2-T2: Guide consults a tool's per-call hook too.
+                registry=registry,
             ),
-            # SOLUSDEV-322 P2-T2: Guide consults a tool's per-call hook too.
-            registry=registry,
+            # SOLUSDEV-326: `ask_user` files its question into THIS conversation, the one
+            # `_turn_prompt` verified the caller owns — never one a model or client names.
+            conversation_id,
         ),
         executed_build_calls=routine_policy.executed_calls,
         systems=systems,
@@ -1374,6 +1461,9 @@ async def post_message(
             body.preferences.expertise if body.preferences is not None else None,
         ),
         action_mode=body.action_mode,
+        # SOLUSDEV-326: every action parks a card (the Hardware page always asks), so the prompt
+        # says so.
+        force_confirmation=force_confirmation,
         think_harder=body.think_harder,
         # Entities the user pointed at with `@`. They lead the neighbourhood's
         # anchors, so SOL grounds on the node meant rather than the one
@@ -1408,7 +1498,8 @@ async def post_message(
         research_cache=getattr(request.app.state, "research_cache", None),
         # A wake or resume prompt is Solus-authored and embeds the ticket's program: it can say
         # "search", and it is not the person asking for the web.
-        research_allowed=ticket is None and wake is None,
+        # SOLUSDEV-326: nor a notice's or an answer's, whose words Solus wrote too.
+        research_allowed=not body.solus_written(),
         # Model-call identity (ADR-018). Without these the gateway silently
         # skips every rate limit and every debit, so LlmRunner refuses outright.
         user_id=ctx.user.id,
@@ -1432,6 +1523,8 @@ async def post_message(
         screenshot=screenshot,
         # SOLUSDEV-319 slice 4: this turn's front app — never stored.
         front_app=body.front_app,
+        # SOLUSDEV-326: each `tool_call` frame's line, from the tools of THIS turn's registry.
+        working=partial(working_line, registry),
     )
     stream = _run_and_persist(
         runner=runner,

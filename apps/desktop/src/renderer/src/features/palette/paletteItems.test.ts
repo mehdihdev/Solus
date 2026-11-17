@@ -6,7 +6,8 @@ import {
   projectItems,
   searchItems,
   teamItems,
-  withIndexScores
+  withIndexScores,
+  type PaletteItem
 } from './paletteItems'
 
 const team = (team_id: string, name: string): TeamSummary => ({
@@ -41,12 +42,24 @@ describe('pageItems', () => {
     expect(labels).toEqual([
       'Home',
       'Workspace',
+      'Hardware',
       'Live Bench',
       'SOL',
       'Store',
       'Billing',
       'Settings'
     ])
+  })
+
+  it('finds Hardware — not Live Bench — by the word hardware (SOLUSDEV-326)', () => {
+    const page = (label: string): PaletteItem | undefined =>
+      pageItems([]).find((item) => item.label === label)
+    expect(page('Hardware')).toMatchObject({
+      key: 'page:hardware',
+      target: { type: 'screen', screen: 'hardware' }
+    })
+    expect(page('Hardware')?.keywords).toEqual(expect.arrayContaining(['devices', 'robot']))
+    expect(page('Live Bench')?.keywords).not.toContain('hardware')
   })
 
   it('appends installed extension pages after the screens', () => {
@@ -60,7 +73,7 @@ describe('pageItems', () => {
   })
 
   it('gives each screen a stable key and a screen target', () => {
-    expect(pageItems([])[2]).toMatchObject({
+    expect(pageItems([])[3]).toMatchObject({
       key: 'page:bench',
       target: { type: 'screen', screen: 'bench' }
     })

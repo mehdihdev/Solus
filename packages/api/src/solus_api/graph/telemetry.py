@@ -119,10 +119,21 @@ class TelemetryPlumbing:
             if not devices:
                 del self._observed_devices[project_id]
 
-    def observed_device_ids(self, project_id: UUID) -> list[str]:
-        """Recent arrival evidence only; this never opens or owns a device."""
+    def observed_device_ids(
+        self, project_id: UUID, *, exclude: frozenset[UUID] = frozenset()
+    ) -> list[str]:
+        """Recent arrival evidence only; this never opens or owns a device. A device whose
+        packets land on an entity in `exclude` (one the reader may not see) is left out."""
         self._expire_observed_devices(self._clock())
-        return sorted(self._observed_devices.get(project_id, {}))
+        return sorted(
+            device
+            for device in self._observed_devices.get(project_id, {})
+            if self._observed_entities.get((project_id, device)) not in exclude
+        )
+
+    async def resolve(self, project_id: UUID, device_id: str) -> UUID | None:
+        """The entity a real session's packets from `device_id` land on (never per viewer)."""
+        return await self._resolver.resolve(project_id, device_id)
 
     def _observe_device(self, project_id: UUID, device_id: str) -> None:
         now = self._clock()
@@ -277,12 +288,15 @@ class TelemetryPlumbing:
         return RecentValuesView(entity_id=entity_id, signals=series)
 
     async def _collect(
-        self, project_id: UUID, wanted: set[str] | None
+        self, project_id: UUID, wanted: set[str] | None, exclude: frozenset[UUID]
     ) -> dict[str, list[RecentSample]]:
         """Gather buffered samples across the project, grouped by signal name (aggregated across
-        entities). `wanted` narrows to specific signals when provided."""
+        entities). `wanted` narrows to specific signals when provided; `exclude`d entities (the
+        reader may not see them) are skipped."""
         grouped: dict[str, list[RecentSample]] = {}
         for entity_id in await self._buffer.entity_ids(project_id):
+            if entity_id in exclude:
+                continue
             for signal in await self._buffer.signal_names(project_id, entity_id):
                 if wanted is not None and signal not in wanted:
                     continue
@@ -292,10 +306,14 @@ class TelemetryPlumbing:
         return grouped
 
     async def get_telemetry(
-        self, project_id: UUID, window: TelemetryWindow
+        self,
+        project_id: UUID,
+        window: TelemetryWindow,
+        *,
+        exclude: frozenset[UUID] = frozenset(),
     ) -> TelemetrySummaryView:
         wanted = set(window.signals) if window.signals is not None else None
-        grouped = await self._collect(project_id, wanted)
+        grouped = await self._collect(project_id, wanted, exclude)
         if not grouped:
             return TelemetrySummaryView(windows=[])
 

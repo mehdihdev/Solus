@@ -7,7 +7,7 @@ import { Mono } from '../../components/ui/Mono'
 import { Spinner } from '../../components/ui/Spinner'
 import type { Entity } from '../../lib/api/resources'
 import type { SourcingDoor, SourcingRequestApi, TorqueApi } from '../../lib/api/resources.sourcing'
-import { CandidateCompare, type CategoryOption } from './CandidateCompare'
+import { CandidateCompare, type RobotOption } from './CandidateCompare'
 import { RulesEditor } from './RulesEditor'
 import { linkHost, rulesSummary, safeHttps, torqueLine } from './sourcingLogic'
 import type { SourcingData } from './useSourcing'
@@ -82,17 +82,17 @@ export function FailedView({
 
 export function CandidatesView({
   request,
-  categories,
+  robots,
   busy,
   error,
   onSelect,
   onBack
 }: {
   request: SourcingRequestApi
-  categories: readonly CategoryOption[]
+  robots: readonly RobotOption[]
   busy: boolean
   error: string | null
-  onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
+  onSelect: (candidateId: string, robotId: string | undefined, quantity: number) => void
   onBack: () => void
 }): React.JSX.Element {
   return (
@@ -106,7 +106,7 @@ export function CandidatesView({
         candidates={request.candidates}
         excluded={request.excluded}
         currency="USD"
-        categories={categories}
+        robots={robots}
         busy={busy}
         onSelect={onSelect}
       />
@@ -132,8 +132,7 @@ export function SelectedView({
   onDone: () => void
 }): React.JSX.Element {
   const cad = safeHttps(entity.properties?.vendor_cad_url as string | undefined)
-  const where =
-    door === 'workspace' ? ' under the category you chose — see it in the Workspace' : ''
+  const where = door === 'workspace' ? ' in the robot you chose — see it in the Workspace' : ''
   return (
     <div style={{ marginTop: 12 }} data-testid="sourcing-selected">
       <div style={{ fontSize: 14, fontWeight: 600 }}>{entity.name} is planned</div>

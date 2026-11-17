@@ -30,30 +30,53 @@ from livebench.hardware.repo_config import (
     match_configs,
     scan_repo,
 )
+from livebench.hardware.serial_owner import Claimant, current_claimant
 from livebench.local import LocalDevice, list_devices
 from livebench.plugins import load_all
 from livebench.recognition.passive import identify_port
 from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
 from solus_api.hardware.config import BusMapEntry, TransportBinding, TransportKind, part_ref
+from solus_api.livebench.sessions import DeviceBusyError
 
 
 class _Chan:
+    """A transport that cannot re-rate an open channel. Every probe flushes it first, so
+    `flushes` counts the probes it heard."""
+
     kind = TransportKind.USB_SERIAL
 
     def __init__(self, identity: TransportBinding, params: Mapping[str, Any]) -> None:
         self.identity = identity
         self.params = dict(params)
+        self.claimant = current_claimant()  # the claim in force when the transport opened
         self.closed = False
+        self.flushes = 0
 
     def send(self, frame: Frame) -> None: ...
 
     def recv(self, max_bytes: int = 4096) -> Frame | None:
         return None
 
-    def flush_input(self) -> None: ...
+    def flush_input(self) -> None:
+        self.flushes += 1
 
     def close(self) -> None:
         self.closed = True
+
+
+class _SerialChan(_Chan):
+    """A serial port: the rate changes on the open port (SOLUSDEV-326), never by a reopen."""
+
+    def retune(self, baud: int) -> int:
+        self.params["baud"] = baud
+        return baud
+
+
+class _ListenedChan(_Chan):
+    """A session's port an interrogation listens on: it keeps the session's rate."""
+
+    def retune(self, baud: int) -> int:
+        return int(self.params["baud"])
 
 
 def _bus_evidence(ref: str) -> ModalityMatch:
@@ -91,15 +114,16 @@ class _BusAt1M:
         )
 
 
-def _detection_registries(opened: list[_Chan], *, busy: bool = False) -> Registries:
+def _detection_registries(
+    opened: list[_Chan], *, failure: Exception | None = None, channel: type[_Chan] = _Chan
+) -> Registries:
     transports = TransportRegistry()
 
     def opener(binding: TransportBinding, params: Mapping[str, Any]) -> Channel:
-        if busy:
-            raise TransportUnavailableError("port busy")
-        channel = _Chan(binding, params)
-        opened.append(channel)
-        return channel
+        if failure is not None:
+            raise failure
+        opened.append(channel(binding, params))
+        return opened[-1]
 
     transports.register(TransportKind.USB_SERIAL, opener)
     interrogators = InterrogatorRegistry()
@@ -130,25 +154,88 @@ def test_enumerate_reports_each_device_at_its_honest_level() -> None:
     assert all(isinstance(d, DetectedDevice) for d in devices)
 
 
-def test_interrogate_tries_candidate_params_and_stops_at_the_first_answer() -> None:
+def test_one_odd_usb_serial_does_not_blank_the_list() -> None:
+    """SOLUSDEV-326: a serial no binding can hold falls back to the device's port position (or
+    to no binding) — it never fails the enumeration every other device is in."""
+    odd = identify_port(
+        device="/dev/ttyUSB1", vid=0x1A86, pid=0x7523, serial="AB 12/3", location="1-1.2"
+    )
+    long = identify_port(device="/dev/ttyUSB2", vid=0x1A86, pid=0x7523, serial="S" * 200)
+    devices = enumerate_devices(
+        list_devices=lambda: [
+            LocalDevice(odd, None, False),
+            LocalDevice(CH343, "/dev/serial/by-id/usb-1a86-5B42134331", False),
+            LocalDevice(long, None, True),
+        ]
+    )
+    assert [d.device_ref for d in devices] == ["usb:port-1-1.2", "usb:5B42134331", None]
+    assert [d.identity_basis for d in devices] == ["port_position", "serial", "none"]
+
+
+def test_interrogate_re_rates_one_open_port_and_stops_at_the_first_answer() -> None:
+    """SOLUSDEV-326: a reopen per rate pulsed DTR (an auto-reset board restarted, and stayed
+    silent in its bootloader); the port is opened once and re-rated in place."""
+    opened: list[_Chan] = []
+    identity = TransportBinding(kind=TransportKind.USB_SERIAL, binding="5B42134331")
+    results = interrogate_device(
+        identity,
+        registries=_detection_registries(opened, channel=_SerialChan),
+        candidate_params=({"baud": 115200}, {"baud": 1_000_000}, {"baud": 9600}),
+        budget_s=0.05,
+        scope="project-a",
+        member="alice",
+    )
+    (channel,) = opened
+    assert channel.closed and channel.flushes == 2  # heard at 115200, then answered at 1 M
+    assert channel.claimant == Claimant("interrogation", "project-a", "alice")
+    assert len(results) == 1 and results[0].params["baud"] == 1_000_000
+    assert set(results[0].params) == {"baud", "timeout_s", "protocol_version"}
+    assert results[0].bus_map[0].address == "1"
+
+
+def test_a_channel_that_cannot_re_rate_is_heard_once_at_the_rate_it_opened_with() -> None:
     opened: list[_Chan] = []
     identity = TransportBinding(kind=TransportKind.USB_SERIAL, binding="5B42134331")
     results = interrogate_device(
         identity,
         registries=_detection_registries(opened),
-        candidate_params=({"baud": 115200}, {"baud": 1_000_000}, {"baud": 9600}),
+        candidate_params=({"baud": 115200}, {"baud": 1_000_000}),
         budget_s=0.05,
     )
-    assert [c.params["baud"] for c in opened] == [115200, 1_000_000]
-    assert all(c.closed for c in opened)
-    assert len(results) == 1 and results[0].params["baud"] == 1_000_000
-    assert results[0].bus_map[0].address == "1"
+    (channel,) = opened
+    assert results == [] and channel.flushes == 1 and channel.closed
 
 
-def test_interrogate_reports_nothing_when_the_port_is_busy_or_silent() -> None:
+def test_a_listened_session_port_is_heard_once_at_its_own_rate() -> None:
+    opened: list[_Chan] = []
     identity = TransportBinding(kind=TransportKind.USB_SERIAL, binding="5B42134331")
+    interrogate_device(
+        identity,
+        registries=_detection_registries(opened, channel=_ListenedChan),
+        candidate_params=({"baud": 9600}, {"baud": 115200}, {"baud": 57_600}),
+        budget_s=0.05,
+    )
+    (channel,) = opened
+    assert channel.flushes == 1 and channel.closed
+
+
+def test_a_busy_device_is_a_typed_error_never_silence() -> None:
+    identity = TransportBinding(kind=TransportKind.USB_SERIAL, binding="5B42134331")
+    busy = DeviceBusyError("usb:5B42134331", "session")
+    with pytest.raises(DeviceBusyError) as raised:
+        interrogate_device(
+            identity, registries=_detection_registries([], failure=busy), budget_s=0.05
+        )
+    assert raised.value is busy
+
+
+def test_interrogate_reports_nothing_when_the_port_is_unavailable_or_silent() -> None:
+    identity = TransportBinding(kind=TransportKind.USB_SERIAL, binding="5B42134331")
+    absent = TransportUnavailableError("no such port")
     assert (
-        interrogate_device(identity, registries=_detection_registries([], busy=True), budget_s=0.05)
+        interrogate_device(
+            identity, registries=_detection_registries([], failure=absent), budget_s=0.05
+        )
         == []
     )
     opened: list[_Chan] = []
@@ -159,6 +246,10 @@ def test_interrogate_reports_nothing_when_the_port_is_busy_or_silent() -> None:
         budget_s=0.05,
     )
     assert silent == [] and all(c.closed for c in opened)
+    unasked = interrogate_device(
+        identity, registries=_detection_registries(opened), candidate_params=(), budget_s=0.05
+    )
+    assert unasked == [] and len(opened) == 1  # no candidate: nothing is opened
 
 
 def _bridge_device() -> DetectedDevice:

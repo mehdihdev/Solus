@@ -13,6 +13,7 @@ from livebench.hardware.channel import (
     as_bus_port,
 )
 from solus_api.hardware.config import TransportBinding, TransportKind
+from solus_api.livebench.sessions import DeviceBusyError
 
 
 class _LoopbackChannel:
@@ -94,6 +95,20 @@ def test_an_opener_that_cannot_open_surfaces_as_unavailable() -> None:
     with pytest.raises(TransportUnavailableError) as excinfo:
         registry.open(_binding(), {})
     assert "usb:5B42134331" in str(excinfo.value)
+
+
+def test_a_busy_device_keeps_its_typed_error_through_the_registry() -> None:
+    """SOLUSDEV-326: busy is not "unavailable" — callers map it to 409 device_busy."""
+    registry = TransportRegistry()
+    busy = DeviceBusyError("usb:5B42134331", "upload")
+
+    def taken(binding: TransportBinding, params: Mapping[str, Any]) -> Channel:
+        raise busy
+
+    registry.register(TransportKind.USB_SERIAL, taken)
+    with pytest.raises(DeviceBusyError) as excinfo:
+        registry.open(_binding(), {})
+    assert excinfo.value is busy
 
 
 def test_as_bus_port_adapts_a_channel_to_request_response_byte_calls() -> None:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
@@ -25,10 +25,11 @@ from livebench.definitions.usb_boards import (
     VENDOR_FAMILY_TABLE,
     BoardClass,
 )
-from livebench.hardware.channel import TransportUnavailableError
+from livebench.hardware.channel import Channel, TransportUnavailableError
 from livebench.hardware.interrogator import Interrogation, interrogate
 from livebench.hardware.registries import Registries
 from livebench.hardware.repo_config import RepoConfigMatch
+from livebench.hardware.serial_owner import Claimant, claiming
 from livebench.recognition.passive import binding_of
 
 logger = logging.getLogger(__name__)
@@ -169,31 +170,60 @@ def enumerate_devices(
     return devices
 
 
+def _rates(channel: Channel, candidates: Sequence[Mapping[str, Any]]) -> Iterator[None]:
+    """Put the open channel at each candidate rate in turn, re-rated in place. A channel that
+    cannot re-rate is heard once, at the rate it opened with; a rate already heard (a session's
+    port, listened to, keeps its own) is not heard twice; a rate the port refuses is skipped."""
+    retune = getattr(channel, "retune", None)
+    if not callable(retune):
+        yield
+        return
+    heard: set[int | None] = set()
+    for params in candidates:
+        try:
+            rate = retune(int(params["baud"])) if "baud" in params else None
+        except (OSError, ValueError) as exc:
+            ref = channel.identity.device_ref
+            logger.info("rate %s refused on %s: %s", params["baud"], ref, type(exc).__name__)
+            continue
+        if rate not in heard:
+            heard.add(rate)
+            yield
+
+
 def interrogate_device(
     identity: TransportBinding,
     *,
     registries: Registries,
     candidate_params: Sequence[Mapping[str, Any]] = DEFAULT_CANDIDATE_PARAMS,
     budget_s: float = DEFAULT_BUDGET_S,
+    scope: str | None = None,
+    member: str | None = None,
 ) -> list[Interrogation]:
-    """Open the transport at each candidate parameter set and ask the registry; stop at the
-    first set that gets an answer. A busy or absent port is silence, never an error."""
-    for params in candidate_params:
-        try:
-            channel = registries.transports.open(
-                identity, {**params, "timeout_s": min(budget_s, _PROBE_TIMEOUT_S)}
-            )
-        except TransportUnavailableError as exc:
-            logger.info("interrogation skipped %s: %s", identity.device_ref, exc)
-            return []
-        try:
+    """Open the transport ONCE and listen at each candidate parameter set, stopping at the first
+    that gets an answer. A serial port is re-rated in place (SOLUSDEV-326): a reopen per rate
+    pulsed DTR, restarting an auto-reset board that then stayed silent in its bootloader. The open
+    claims the device from the serial owner for `member` (the caller) in `scope` (its project), so
+    that member's own session is listened to instead of refused. An absent device is silence; a
+    busy one raises `DeviceBusyError` — busy is never silence."""
+    if not candidate_params:
+        return []
+    first = {**candidate_params[0], "timeout_s": min(budget_s, _PROBE_TIMEOUT_S)}
+    try:
+        with claiming(Claimant("interrogation", scope, member)):
+            channel = registries.transports.open(identity, first)
+    except TransportUnavailableError as exc:
+        logger.info("interrogation skipped %s: %s", identity.device_ref, exc)
+        return []
+    try:
+        for _ in _rates(channel, candidate_params):
             results = interrogate(channel, registries.interrogators, budget_s=budget_s)
-        finally:
-            channel.close()
-        if results:
-            opened = dict(getattr(channel, "params", {})) or dict(params)
-            return [dataclasses.replace(r, params={**opened, **r.params}) for r in results]
-    return []
+            if results:
+                opened = dict(getattr(channel, "params", {})) or dict(first)
+                return [dataclasses.replace(r, params={**opened, **r.params}) for r in results]
+        return []
+    finally:
+        channel.close()
 
 
 @dataclass(frozen=True)

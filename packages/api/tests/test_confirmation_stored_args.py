@@ -13,6 +13,7 @@ not void the card, while a changed Target must.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
 
@@ -20,11 +21,12 @@ import pytest
 from jsonschema.exceptions import SchemaError
 from solus_api.agent.confirmations import (
     INFORMATIONAL_LABELS,
+    ParkedCall,
     decide_confirmation,
     request_confirmation,
 )
 from solus_api.agent.tools.registry import ToolRegistry
-from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolErrorCode
+from solus_api.agent.tools.shapes import ToolCall, ToolDescriptor, ToolErrorCode, ToolResult
 from solus_api.agent.tools.tool import ToolException
 from solus_api.models import (
     ConfirmationStatus,
@@ -135,7 +137,7 @@ async def _park(
     registry: ToolRegistry,
     args: dict[str, Any],
     scope: tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID],
-):  # type: ignore[no-untyped-def]
+) -> ParkedCall:
     project_id, team_id, user_id, conversation_id = scope
     async with maker() as db:
         parked = await request_confirmation(
@@ -155,9 +157,10 @@ async def _park(
 async def _decide(
     maker: async_sessionmaker[AsyncSession],
     registry: ToolRegistry,
-    confirmation_id: uuid.UUID,
+    confirmation_id: uuid.UUID | None,
     scope: tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID],
-):  # type: ignore[no-untyped-def]
+) -> ToolResult:
+    assert confirmation_id is not None
     project_id, _, user_id, _ = scope
     async with maker() as db:
         result = await decide_confirmation(
@@ -234,6 +237,50 @@ async def test_the_duplicate_check_compares_stored_args(
 
     assert again.confirmation_id == first.confirmation_id
     assert len(await _rows(maker)) == 1
+
+
+class AsyncStampedTool(StampedTool):
+    """SOLUSDEV-326 P2-T5: a tool whose stamp reads Solus's own state (what its card shows) awaits
+    it; `hang` outlasts the gate's bound."""
+
+    def __init__(self, *, hang: bool = False) -> None:
+        super().__init__()
+        self.hang = hang
+
+    async def stored_args(self, args: dict[str, Any]) -> dict[str, Any]:  # type: ignore[override]
+        if self.hang:
+            await asyncio.sleep(30)
+        return super().stored_args(args)
+
+
+async def test_an_awaitable_stamp_is_awaited_and_its_refusal_parks_nothing(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    scope = await _scope(maker)
+    parked = await _park(maker, _registry(AsyncStampedTool()), {"intent": "Rotate it"}, scope)
+    assert parked.confirmation_id is not None
+    assert parked.args == {"intent": "Rotate it", "window": WINDOW}
+
+    refused = await _park(maker, _registry(AsyncStampedTool()), {"intent": "no window"}, scope)
+    assert refused.confirmation_id is None and refused.result.error is not None
+    assert refused.result.error.code is ToolErrorCode.INVALID_ARGS
+    assert len(await _rows(maker)) == 1
+
+
+async def test_a_stamp_that_outlasts_its_bound_parks_nothing(
+    maker: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from solus_api.agent import confirmations
+
+    monkeypatch.setattr(confirmations, "_PREVIEW_TIMEOUT_SECONDS", 0.05)
+    scope = await _scope(maker)
+    tool = AsyncStampedTool(hang=True)
+
+    parked = await _park(maker, _registry(tool), {"intent": "Rotate it"}, scope)
+
+    assert parked.confirmation_id is None and parked.result.error is not None
+    assert parked.result.error.code is ToolErrorCode.TOOL_ERROR
+    assert await _rows(maker) == [] and tool.ran == []
 
 
 # --------------------------------------------------------------- deciding

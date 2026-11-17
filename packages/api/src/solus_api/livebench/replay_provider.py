@@ -24,7 +24,7 @@ from solus_api.hardware.config import (
     ProtocolBinding,
     ProvenanceRecord,
 )
-from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.runtime import brains_of, resolve_runtime_config
 from solus_api.hardware.store import robot_root
 
 if TYPE_CHECKING:
@@ -122,7 +122,8 @@ async def replay_session(
         suffix=".json",
         max_bytes=MAX_RECORDING_BYTES,
     )
-    config = await resolve_runtime_config(session, project_id, robot.id)
+    # A capture replays as the robot's first brain (SOLUSDEV-326), as its own v1 document.
+    config = brains_of(await resolve_runtime_config(session, project_id, robot.id))[0]
     if config.identity is None:
         raise APIError(
             422,

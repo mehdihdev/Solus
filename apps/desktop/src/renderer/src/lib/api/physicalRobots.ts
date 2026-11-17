@@ -1,4 +1,4 @@
-import { api, type ApiClient, type Page } from './client'
+import { api, type ApiClient } from './client'
 import type { Entity } from './resources'
 
 export interface RobotRemoval {
@@ -48,15 +48,4 @@ export async function deletePhysicalRobot(
     method: 'DELETE',
     ifMatch: versionOf(entity)
   })
-}
-
-/** Persistent, bounded discovery; a retained service parent does not hide a part. */
-export function listRobotOrphans(
-  projectId: string,
-  cursor: string | null = null,
-  client: ApiClient = api
-): Promise<Page<Entity[]>> {
-  const query = new URLSearchParams({ orphaned_from_robot: 'true', limit: '24' })
-  if (cursor) query.set('cursor', cursor)
-  return client.requestPage<Entity[]>(`/projects/${projectId}/entities?${query}`)
 }

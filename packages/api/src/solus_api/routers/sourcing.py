@@ -88,7 +88,8 @@ class RequestBody(TorqueBody):
 class SelectBody(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     candidate_id: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{16}$")]
-    category_entity_id: uuid.UUID | None = None
+    #: The Physical Robot that contains the new part (Workspace door); omit for the project.
+    robot_entity_id: uuid.UUID | None = None
     quantity: Annotated[int, Field(ge=1, le=100_000)] = 1
 
 
@@ -333,7 +334,7 @@ async def select_candidate(
         request=row,
         candidate=candidate,
         user_id=ctx.user.id,
-        category_id=body.category_entity_id,
+        robot_id=body.robot_entity_id,
         quantity=body.quantity,
     )
     _emit(

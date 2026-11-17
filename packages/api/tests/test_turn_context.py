@@ -166,3 +166,27 @@ async def test_two_turns_running_at_once_each_read_their_own_id() -> None:
         with_turn(dispatch, first, second)("first"), with_turn(dispatch, second, first)("second")
     )
     assert seen == {"first": (first, second), "second": (second, first)}
+
+
+async def test_with_conversation_binds_the_routes_conversation_only_while_each_call_runs() -> None:
+    """SOLUSDEV-326: the route binds the conversation it verified around the dispatch it hands the
+    runner, so a tool that files into the conversation (`ask_user`) names that one — never one a
+    model or client chose. Outside a call nothing is bound; a raising call still unbinds."""
+    from solus_api.agent.turn_context import current_conversation_id, with_conversation
+
+    conversation = uuid.uuid4()
+    seen: list[uuid.UUID | None] = []
+
+    async def dispatch(call: str) -> str:
+        seen.append(current_conversation_id())
+        if call == "boom":
+            raise RuntimeError(call)
+        return call
+
+    bound = with_conversation(dispatch, conversation)
+    assert current_conversation_id() is None
+    assert await bound("ask") == "ask"
+    with pytest.raises(RuntimeError):
+        await bound("boom")
+    assert seen == [conversation, conversation]
+    assert current_conversation_id() is None

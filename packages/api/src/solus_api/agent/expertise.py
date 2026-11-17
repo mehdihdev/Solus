@@ -350,7 +350,8 @@ def _kind_or_path(
 
 
 async def _questions(session: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> list[str]:
-    """The member's own last MAX_QUESTIONS USER turns in conversations they own here."""
+    """The member's own last MAX_QUESTIONS USER turns in conversations they own here, leaving
+    out the turns Solus wrote (a device notice) and their answers to SOL's questions."""
     rows = await session.scalars(
         select(ConversationTurn.content)
         .join(Conversation, Conversation.id == ConversationTurn.conversation_id)
@@ -360,6 +361,10 @@ async def _questions(session: AsyncSession, project_id: uuid.UUID, user_id: uuid
             Conversation.deleted_at.is_(None),
             ConversationTurn.project_id == project_id,
             ConversationTurn.role == TurnRole.USER,
+            # A device notice is Solus's words around a device-chosen serial, never a question.
+            ConversationTurn.attrs["authored_by"].astext.is_distinct_from("solus"),
+            # Nor is an answer to SOL's question: it opens with a button label the model wrote.
+            ConversationTurn.attrs["answer"].is_(None),
         )
         .order_by(ConversationTurn.created_at.desc())
         .limit(MAX_QUESTIONS)

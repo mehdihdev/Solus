@@ -218,11 +218,16 @@ async def test_shared_host_keeps_software_per_robot_and_retires_changed_endpoint
         await client.get(_hw_url(project, "robots", first, "topology"), headers=alice_headers)
     ).json()["data"]
     assert unchanged == before
-    config["identity"]["binding"] = "replacement-usb"
+    # SOLUSDEV-326: the v1 adapter never drops a brain (another device joins as a second one);
+    # replacing the robot's device is a per-entity configuration write.
+    entity_url = _hw_url(project, "entities", second["id"], "config")
+    current = (await client.get(entity_url, headers=alice_headers)).json()["data"]
+    replaced = current["config"]
+    replaced["identity"][0]["binding"]["binding"] = "replacement-usb"
     saved = await client.put(
-        _hw_url(project, "robots", second["id"], "config"),
-        headers=alice_headers,
-        json={"config": config},
+        entity_url,
+        headers={**alice_headers, "If-Match": str(current["version"])},
+        json={"config": replaced},
     )
     assert saved.status_code == 200, saved.text
     changed = (
@@ -231,6 +236,61 @@ async def test_shared_host_keeps_software_per_robot_and_retires_changed_endpoint
         )
     ).json()["data"]
     assert not any(n["brain_kind"] == "host" for n in changed["nodes"])
+
+
+@pytest.mark.asyncio
+async def test_confirming_a_second_endpoint_on_the_host_keeps_the_first(
+    client: AsyncClient, app: FastAPI, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326: a host attach is scoped to its endpoint, so the robot's second USB brain
+    joins the same host and USB bus instead of erasing the first one's wire."""
+    project, robot, body, provider = await setup_host(client, app, alice_headers, db)
+    entity_url = _hw_url(project, "entities", robot, "config")
+    current = (await client.get(entity_url, headers=alice_headers)).json()["data"]
+    config = current["config"]
+    first = f"usb:{config['identity'][0]['binding']['binding']}"
+    user = {"by": "user", "source": None}
+    config["identity"].append({"kind": "host", "binding": {"kind": "usb_serial", "binding": "B2"}})
+    config["provenance"]["identity.1"] = user
+    for index, row in enumerate(config["bus_map"]):
+        row["brain"] = first
+        config["provenance"][f"bus_map.{index}.brain"] = user
+    saved = await client.put(
+        entity_url,
+        headers={**alice_headers, "If-Match": str(current["version"])},
+        json={"config": config},
+    )
+    assert saved.status_code == 200, saved.text
+    url = _hw_url(project, "robots", robot, "topology", "host")
+
+    async def confirm(endpoint: str, device_ref: str) -> dict[str, Any]:
+        provider.device_ref = device_ref
+        requested = {**body, "endpoint_id": endpoint}
+        proposal = await client.post(url + "/propose", headers=alice_headers, json=requested)
+        assert proposal.status_code == 200, proposal.text
+        digest = proposal.json()["data"]["proposal_digest"]
+        response = await client.post(
+            url + "/confirm",
+            headers={**alice_headers, "Idempotency-Key": str(uuid.uuid4())},
+            json={**requested, "proposal_digest": digest},
+        )
+        assert response.status_code == 200, response.text
+        return dict(response.json()["data"])
+
+    topology = (
+        await client.get(_hw_url(project, "robots", robot, "topology"), headers=alice_headers)
+    ).json()["data"]
+    second = next(n["id"] for n in topology["nodes"] if n["name"] == "usb:B2")
+    await confirm(body["endpoint_id"], first)
+    result = await confirm(second, "usb:B2")
+    host = next(n["id"] for n in result["nodes"] if n["brain_kind"] == "host")
+    (usb,) = [e["target"] for e in result["edges"] if e["source"] == host]
+    assert {e["target"] for e in result["edges"] if e["source"] == usb} == {
+        body["endpoint_id"],
+        second,
+    }
+    read = await client.get(_hw_url(project, "robots", robot, "topology"), headers=alice_headers)
+    assert read.json()["data"] == result
 
 
 @pytest.mark.asyncio

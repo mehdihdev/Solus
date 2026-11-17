@@ -5495,6 +5495,74 @@
         }
       }
     },
+    "/api/v1/projects/{project_id}/hardware/entities/{entity_id}/graph": {
+      "put": {
+        "summary": "Put In Graph",
+        "description": "Add a robot (with its own hardware) or a lone part to the workspace graph, or take it\nout (SOLUSDEV-326, docs/api/hardware.md \u00a71a). Only hardware the caller can see.",
+        "operationId": "put_in_graph_api_v1_projects__project_id__hardware_entities__entity_id__graph_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InGraphIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Put In Graph Api V1 Projects  Project Id  Hardware Entities  Entity Id  Graph Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{project_id}/hardware/entities/{entity_id}/config": {
       "get": {
         "summary": "Get Entity Config",
@@ -6375,7 +6443,7 @@
     "/api/v1/projects/{project_id}/hardware/unassigned": {
       "get": {
         "summary": "List Unassigned",
-        "description": "Connector-sourced parts no robot category owns yet (From a file).",
+        "description": "Part-like entities no robot owns yet (From a file), less another member's un-added parts.",
         "operationId": "list_unassigned_api_v1_projects__project_id__hardware_unassigned_get",
         "security": [
           {
@@ -6519,7 +6587,7 @@
     "/api/v1/projects/{project_id}/hardware/detected": {
       "get": {
         "summary": "List Detected",
-        "description": "Devices on this machine at whichever level is honestly known (opens no port).",
+        "description": "Devices on this machine at whichever level is honestly known (opens no port), each with\nwhat the caller may know of it (\u00a74, SOLUSDEV-326): what binds it, their \"Not now\", and \u2014\nfor the machine's owner \u2014 when it was last seen.",
         "operationId": "list_detected_api_v1_projects__project_id__hardware_detected_get",
         "security": [
           {
@@ -6547,6 +6615,110 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response List Detected Api V1 Projects  Project Id  Hardware Detected Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/devices/dismissals": {
+      "post": {
+        "summary": "Dismiss Device",
+        "description": "The caller's \"Not now\" to a device on this machine (\u00a74): kept across restarts and\nreplugs until they clear it. Their own list comes back.",
+        "operationId": "dismiss_device_api_v1_projects__project_id__hardware_devices_dismissals_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DismissalIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Dismiss Device Api V1 Projects  Project Id  Hardware Devices Dismissals Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear Device Dismissals",
+        "description": "Forget every \"Not now\" the caller said on this machine (\"+ Add hardware\").",
+        "operationId": "clear_device_dismissals_api_v1_projects__project_id__hardware_devices_dismissals_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Clear Device Dismissals Api V1 Projects  Project Id  Hardware Devices Dismissals Delete"
                 }
               }
             }
@@ -7589,6 +7761,52 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Import Part Api V1 Projects  Project Id  Hardware Library Parts  Definition Id  Import Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/hardware/expected": {
+      "get": {
+        "summary": "List Expected",
+        "description": "What the caller's workspace describes and nothing has answered yet: planned rows of the\nrobots they may see, sensor topics, sketches and MCU symbols.",
+        "operationId": "list_expected_api_v1_projects__project_id__hardware_expected_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpectedPartsEnvelope"
                 }
               }
             }
@@ -10309,6 +10527,52 @@
                   "type": "object",
                   "additionalProperties": true,
                   "title": "Response Decide Tool Confirmation Api V1 Projects  Project Id  Sol Confirmations  Confirmation Id  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project_id}/sol/cards/open": {
+      "get": {
+        "summary": "Open Cards",
+        "description": "The slot's card: the caller's oldest open card here, and how many more wait (`queued`).",
+        "operationId": "open_cards_api_v1_projects__project_id__sol_cards_open_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenCardsEnvelope"
                 }
               }
             }
@@ -15867,20 +16131,6 @@
               }
             ],
             "title": "Function Name"
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "sensors",
-              "actuators",
-              "controllers",
-              "end_effectors",
-              "power",
-              "structure",
-              "wiring"
-            ],
-            "title": "Category",
-            "default": "actuators"
           }
         },
         "additionalProperties": false,
@@ -15957,24 +16207,11 @@
             "maxItems": 64,
             "minItems": 1,
             "title": "Entity Ids"
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "sensors",
-              "actuators",
-              "controllers",
-              "end_effectors",
-              "power",
-              "structure",
-              "wiring"
-            ],
-            "title": "Category"
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["entity_ids", "category"],
+        "required": ["entity_ids"],
         "title": "AttachIn"
       },
       "AttachmentIn": {
@@ -16050,6 +16287,82 @@
         "required": ["mode", "config"],
         "title": "BenchSessionIn"
       },
+      "BrainClock": {
+        "properties": {
+          "offset_ms": {
+            "type": "number",
+            "title": "Offset Ms"
+          },
+          "jitter_ms": {
+            "type": "number",
+            "minimum": 0.0,
+            "title": "Jitter Ms"
+          },
+          "measured_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Measured At"
+          },
+          "method": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Method"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["offset_ms", "jitter_ms", "measured_at", "method"],
+        "title": "BrainClock",
+        "description": "A brain's clock against the host (`brain.attrs.clock`), as measured. Recorded here only:\napplying the offset to ingest timestamps belongs to the Live Bench (telemetry-packet.md \u00a73)."
+      },
+      "BrainIdentity": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["host", "mcu", "onboard"],
+            "title": "Kind",
+            "default": "host"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PortableTransportBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "pattern": "^[a-z0-9]+:[^/\\s]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via"
+          },
+          "protocol": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProtocolBinding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BrainIdentity",
+        "description": "One brain of a stored config: what it is (`kind`), how this host reaches it (`binding`,\nabsent until a device is bound), the brain of this config it is reached through (`via`, a\ndevice ref) and its driver (`protocol`)."
+      },
       "BranchItem": {
         "properties": {
           "name": {
@@ -16103,13 +16416,26 @@
               }
             ],
             "title": "Model"
+          },
+          "brain": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160,
+                "pattern": "^[a-z0-9]+:[^/\\s]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brain"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": ["protocol", "address"],
         "title": "BusMapEntry",
-        "description": "`{protocol, address, part, model}` \u2014 servo ids, CAN node ids, autopilot\nsystem:component ids all fit one shape. Never a `servo_id` field."
+        "description": "`{protocol, address, part, model}` \u2014 servo ids, CAN node ids, autopilot\nsystem:component ids all fit one shape. Never a `servo_id` field.\n\n`brain` is the device ref of the brain the row sits behind (`None` = the config's only\nbrain). A per-brain driver document never carries one, so its dump omits the key and the\nv1 driver input reads exactly as before."
       },
       "CadBinding": {
         "properties": {
@@ -16178,6 +16504,119 @@
         "type": "string",
         "enum": ["degrees", "range_0_100", "range_m100_100", "linear", "raw"],
         "title": "CalibrationMode"
+      },
+      "Card": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["offer", "approval", "step", "problem"],
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 400,
+            "title": "Body"
+          },
+          "more": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "More"
+          },
+          "field": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CardField"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "primary": {
+            "type": "string",
+            "maxLength": 24,
+            "minLength": 1,
+            "title": "Primary"
+          },
+          "secondary": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 24,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary"
+          },
+          "receipt": {
+            "type": "string",
+            "maxLength": 160,
+            "title": "Receipt"
+          },
+          "resumes": {
+            "type": "boolean",
+            "title": "Resumes",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["kind", "title", "body", "primary", "receipt"],
+        "title": "Card",
+        "description": "The Solus-authored presentation of a parked call (SOLUSDEV-326).\n\nComputed once when the call parks, from its STORED arguments, by the tool; stored beside the\nrow. Presentation only: never part of the consent or of the stale check, never a `DiffRow`.\nThe same copy in Guide and Expert; Guide adds `more`. `resumes` is set by the server: SOL\ncontinues after any decision on this card."
+      },
+      "CardField": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["label", "value"],
+        "title": "CardField",
+        "description": "A value the card shows, such as a proposed robot name. It is never sent back: an edit\nbecomes the person's answer turn, so the stored arguments never change."
+      },
+      "ChannelRange": {
+        "properties": {
+          "min": {
+            "type": "number",
+            "title": "Min"
+          },
+          "max": {
+            "type": "number",
+            "title": "Max"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["min", "max"],
+        "title": "ChannelRange",
+        "description": "A channel's DISPLAY range, in its unit: what the chart spans at least. Never a motion\nbound \u2014 envelopes and limits keep their own precedence."
       },
       "CheckoutSessionCreate": {
         "properties": {
@@ -16367,24 +16806,12 @@
             ]
           },
           "identity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PortableTransportBinding"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "protocol": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProtocolBinding"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "items": {
+              "$ref": "#/components/schemas/BrainIdentity"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Identity"
           },
           "bus_map": {
             "items": {
@@ -16604,6 +17031,26 @@
         "type": "object",
         "title": "DeclineBody"
       },
+      "DeviceNotice": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "device",
+            "title": "Kind"
+          },
+          "device_ref": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Device Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["kind", "device_ref"],
+        "title": "DeviceNotice",
+        "description": "`MessageCreate.notice`: something was plugged in. The server checks the device is on the\ncaller's own machine now and writes the turn text itself (authored by Solus)."
+      },
       "DismissBody": {
         "properties": {
           "cooldown_hours": {
@@ -16617,6 +17064,21 @@
         "additionalProperties": false,
         "type": "object",
         "title": "DismissBody"
+      },
+      "DismissalIn": {
+        "properties": {
+          "device_ref": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "pattern": "^[a-z0-9]+:[^/\\s]+$",
+            "title": "Device Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["device_ref"],
+        "title": "DismissalIn"
       },
       "DocumentAdd": {
         "properties": {
@@ -16735,24 +17197,12 @@
             ]
           },
           "identity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/PortableTransportBinding"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "protocol": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ProtocolBinding"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "items": {
+              "$ref": "#/components/schemas/BrainIdentity"
+            },
+            "type": "array",
+            "maxItems": 16,
+            "title": "Identity"
           },
           "bus_map": {
             "items": {
@@ -16911,6 +17361,72 @@
         "type": "object",
         "required": ["kind", "robot_id"],
         "title": "ExistingRobotTarget"
+      },
+      "ExpectedParts": {
+        "properties": {
+          "expected": {
+            "items": {
+              "$ref": "#/components/schemas/ExpectedRow"
+            },
+            "type": "array",
+            "title": "Expected"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "more": {
+            "type": "integer",
+            "title": "More"
+          }
+        },
+        "type": "object",
+        "required": ["expected", "sources", "more"],
+        "title": "ExpectedParts"
+      },
+      "ExpectedPartsEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ExpectedParts"
+          }
+        },
+        "type": "object",
+        "required": ["data"],
+        "title": "ExpectedPartsEnvelope"
+      },
+      "ExpectedRow": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "what": {
+            "type": "string",
+            "title": "What"
+          },
+          "robot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Robot Id"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": ["name", "what", "robot_id", "source"],
+        "title": "ExpectedRow"
       },
       "ExpertiseOverride": {
         "properties": {
@@ -17696,26 +18212,6 @@
             ],
             "title": "Parent Id"
           },
-          "category": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "sensors",
-                  "actuators",
-                  "controllers",
-                  "end_effectors",
-                  "power",
-                  "structure",
-                  "wiring"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Category"
-          },
           "config": {
             "anyOf": [
               {
@@ -18062,6 +18558,18 @@
         "type": "object",
         "required": ["robot_id", "artifact_id", "name", "format"],
         "title": "ImportModel"
+      },
+      "InGraphIn": {
+        "properties": {
+          "in_graph": {
+            "type": "boolean",
+            "title": "In Graph"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["in_graph"],
+        "title": "InGraphIn"
       },
       "InstallBody": {
         "properties": {
@@ -18706,6 +19214,26 @@
               }
             ]
           },
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeviceNotice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuestionAnswer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "action_mode": {
             "$ref": "#/components/schemas/ActionMode",
             "default": "guide"
@@ -19038,6 +19566,75 @@
         "title": "ObserverEventIn",
         "description": "Wire shape of an edge-observer event (mirrors livebench's ObserverEvent)."
       },
+      "OpenCard": {
+        "properties": {
+          "confirmation_id": {
+            "type": "string",
+            "title": "Confirmation Id"
+          },
+          "conversation_id": {
+            "type": "string",
+            "title": "Conversation Id"
+          },
+          "tool": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Tool"
+          },
+          "card": {
+            "$ref": "#/components/schemas/Card"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmation_id",
+          "conversation_id",
+          "tool",
+          "card",
+          "expires_at"
+        ],
+        "title": "OpenCard",
+        "description": "One parked call with a card, as the Hardware page's slot shows it."
+      },
+      "OpenCards": {
+        "properties": {
+          "card": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenCard"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queued": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Queued"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["queued"],
+        "title": "OpenCards",
+        "description": "`GET .../sol/cards/open`: the caller's oldest pending, unexpired card in this project,\nacross their conversations, and how many more wait."
+      },
+      "OpenCardsEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/OpenCards"
+          }
+        },
+        "type": "object",
+        "required": ["data"],
+        "title": "OpenCardsEnvelope"
+      },
       "OutcomeListOut": {
         "properties": {
           "data": {
@@ -19231,26 +19828,6 @@
             "type": "integer",
             "minimum": 0.0,
             "title": "Version"
-          },
-          "category": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "sensors",
-                  "actuators",
-                  "controllers",
-                  "end_effectors",
-                  "power",
-                  "structure",
-                  "wiring"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Category"
           }
         },
         "additionalProperties": false,
@@ -19395,26 +19972,6 @@
               }
             ],
             "title": "Name"
-          },
-          "category": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "sensors",
-                  "actuators",
-                  "controllers",
-                  "end_effectors",
-                  "power",
-                  "structure",
-                  "wiring"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Category"
           }
         },
         "additionalProperties": false,
@@ -19428,19 +19985,6 @@
             "maxLength": 512,
             "minLength": 1,
             "title": "Name"
-          },
-          "category": {
-            "type": "string",
-            "enum": [
-              "sensors",
-              "actuators",
-              "controllers",
-              "end_effectors",
-              "power",
-              "structure",
-              "wiring"
-            ],
-            "title": "Category"
           },
           "specs": {
             "additionalProperties": {
@@ -19473,7 +20017,7 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": ["name", "category"],
+        "required": ["name"],
         "title": "PartIn"
       },
       "PartLimits": {
@@ -19967,6 +20511,36 @@
         "type": "object",
         "required": ["by"],
         "title": "ProvenanceRecord"
+      },
+      "QuestionAnswer": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "choice": {
+            "type": "integer",
+            "enum": [0, 1],
+            "title": "Choice"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["question_id", "choice"],
+        "title": "QuestionAnswer",
+        "description": "`MessageCreate.answer`: the person's answer to an open `ask_user` card they own. Choice 0\nis the primary button, 1 the secondary; the server writes the turn text itself. It may also\nname an open card of theirs that shows a `field`: an edit, choice 0 with `text` the new\nvalue, which expires the card without deciding it."
       },
       "RejectIn": {
         "properties": {
@@ -20749,7 +21323,7 @@
             "pattern": "^[0-9a-f]{16}$",
             "title": "Candidate Id"
           },
-          "category_entity_id": {
+          "robot_entity_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -20759,7 +21333,7 @@
                 "type": "null"
               }
             ],
-            "title": "Category Entity Id"
+            "title": "Robot Entity Id"
           },
           "quantity": {
             "type": "integer",
@@ -21636,12 +22210,38 @@
               }
             ],
             "title": "Unit"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display": {
+            "type": "string",
+            "enum": [
+              "plot",
+              "angle",
+              "orientation",
+              "video",
+              "scan",
+              "points",
+              "state",
+              "text"
+            ],
+            "title": "Display",
+            "default": "plot"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": ["name"],
-        "title": "TelemetryChannel"
+        "title": "TelemetryChannel",
+        "description": "A declared signal. `range` and `display` are optional presentation (SOLUSDEV-326);\n`display` defaults to `plot` and is never null. An absent range and a `plot` display are left\nout of dumps, so a plain channel reads, digests and asks for provenance exactly as before."
       },
       "ToolFamily": {
         "type": "string",
@@ -21927,6 +22527,16 @@
             "type": "array",
             "maxItems": 32,
             "title": "Evidence"
+          },
+          "clock": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BrainClock"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

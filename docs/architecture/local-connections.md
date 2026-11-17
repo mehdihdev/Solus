@@ -1,6 +1,6 @@
 # Architecture — Local connections and the bench-session seam
 
-**Last updated:** 2026-09-07. SOLUSDEV-72 foundation; approved SOLUSDEV-251/253
+**Last updated:** 2026-11-15 (SOLUSDEV-326 one hardware session opener). SOLUSDEV-72 foundation; approved SOLUSDEV-251/253
 hardware configuration/discovery/recovery amendments below specify target behavior.
 
 How a local stream (simulator, serial robot, replay) is started, owned, and torn down. Companion
@@ -51,11 +51,24 @@ tap (closing over the ctx-derived project id — §7 tenant binding), subscribes
 and retains the last window summary. Stop is idempotent `aclose()` (pump cancelled, partial
 window flushed, subprocesses/ports closed). App-lifespan shutdown closes every session.
 
+**Hardware sessions open through one opener (SOLUSDEV-326).** The bench route's `robot` and
+`hardware` providers, the confirm-and-connect coordinator (`hardware/connections.py`) and the
+session a bound suggestion starts all call `hardware/local_runtime.py`. `plan_session` does the
+host check and reads the config and its brains; `prepare_session` builds the private per-brain
+driver documents off-loop, with no database; `SessionOpener.open` runs inside `start`. Each brain
+this host reaches opens its own `LiveConnection`. With two or more, a `BrainsConnection` merges
+them into the one session's connection: one tap and batch callback fed by every brain, the best
+brain's link status (one brain down is not the robot down), merged device facts, and one close.
+The brains it could not open are listed on the session's `device.unreachable`. The cap counts
+the robot once.
+
 **The window evaluator (SOLUSDEV-321 P2-T3).**
 
-- _Who gets one._ A session that knows its root entity has one `WindowEvaluator`
-  (`solus_api/livebench/findings/window_evaluator.py`). The root is `robot_entity_id`: the robot,
-  or a part bound on its own. Its owner is the member who started the session or bound the robot.
+- _Who gets one._ A session that knows its robot has one `WindowEvaluator`
+  (`solus_api/livebench/findings/window_evaluator.py`). The robot is `robot_entity_id`. Its owner
+  is the member who started the session or bound the robot. A part bound on its own also names
+  itself there, so who may see the session follows the part, but it is started with
+  `evaluate=False` and runs none (SOLUSDEV-326).
 - _How it is built._ The manager's `evaluator_factory` builds it. `main.py` wires the factory with
   the plumbing's own telemetry buffer, the one shared envelope cache, the live-signal rules and
   the event ring.

@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 from httpx import AsyncClient
-from solus_api.models import GraphEdge, GraphEntity, SolusEntry
+from solus_api.models import Domain, GraphEdge, GraphEntity, SolusEntry
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_hardware_router import _hw_project, _hw_url, _robot, _saved_serial_arm
@@ -90,9 +90,11 @@ async def test_accepted_config_persists_idempotent_topology_without_changing_run
     assert [(e.id, e.configured_entity_id, e.payload) for e in entries] == snapshots
 
 
-def test_cycles_and_ambiguous_parents_are_rejected() -> None:
+def test_cycles_are_rejected_and_a_second_parent_is_not() -> None:
+    """SOLUSDEV-326: the topology is a DAG — a part may sit under two brains; only a cycle is
+    refused (this test refused the second parent before)."""
     from solus_api.core.errors import APIError
-    from solus_api.hardware.topology import TopologyEdge, _validate_tree
+    from solus_api.hardware.topology import TopologyEdge, _reject_cycles
 
     a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
 
@@ -100,9 +102,10 @@ def test_cycles_and_ambiguous_parents_are_rejected() -> None:
         return TopologyEdge(id=uuid.uuid4(), source=src, target=dst)
 
     with pytest.raises(APIError, match="cycle"):
-        _validate_tree({a, b}, [edge(a, b), edge(b, a)], [])
-    with pytest.raises(APIError, match="ambiguous"):
-        _validate_tree({a, b, c}, [edge(a, c), edge(b, c)], [a, b])
+        _reject_cycles({a, b}, [edge(a, b), edge(b, a)], [])
+    with pytest.raises(APIError, match="cycle"):
+        _reject_cycles({a, b, c}, [edge(a, c), edge(b, c), edge(c, b)], [a])
+    _reject_cycles({a, b, c}, [edge(a, c), edge(b, c)], [a, b])
 
 
 @pytest.mark.asyncio
@@ -236,7 +239,62 @@ async def test_disabled_binding_removes_wiring_without_changing_part(
     await db.commit()
     result = await read_topology(db, uuid.UUID(project), uuid.UUID(robot["id"]))
     assert not any(e.target == part_id for e in result.edges)
-    assert any(n.id == part_id and n.category == "actuators" for n in result.nodes)
+    # Still the robot's part (it contains it); no category is written any more (SOLUSDEV-326).
+    assert any(n.id == part_id and n.category is None for n in result.nodes)
+
+
+@pytest.mark.asyncio
+async def test_contained_parts_join_the_topology_with_only_a_legacy_label(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326: what the robot contains is a node. A category shows only where an old
+    label survives — on the re-pointed edge, or on a manual part — never a provider's."""
+    from solus_api.hardware.topology import read_topology
+    from test_hardware_attach import _connector_parts
+
+    project, team = await _hw_project(client, alice_headers)
+    robot = await _robot(client, alice_headers, project)
+    pid, rid = uuid.UUID(project), uuid.UUID(robot["id"])
+    [cad_id] = await _connector_parts(db, project, team, ["CAD bracket"])
+    cad = await db.get(GraphEntity, cad_id)
+    assert cad is not None
+    cad.attrs = {"category": "Brackets"}  # a provider fact, not a Solus label
+    moved, legacy, fresh = (
+        GraphEntity(
+            project_id=pid,
+            kind="part",
+            domain=Domain.MECHANICAL,
+            origin="manual",
+            name=name,
+            attrs=attrs,
+        )
+        for name, attrs in (("Moved", {}), ("Legacy", {"category": "power"}), ("Fresh", {}))
+    )
+    db.add_all([moved, legacy, fresh])
+    await db.flush()
+    for part_id, attrs in (
+        (moved.id, {"category": "sensors", "moved_by": "a32600000001"}),
+        (legacy.id, {}),
+        (fresh.id, {}),
+        (cad_id, {}),
+    ):
+        db.add(
+            GraphEdge(
+                project_id=pid,
+                src_id=rid,
+                dst_id=part_id,
+                relation_type="contains",
+                domain_pair="mechanical<->project",
+                origin="manual",
+                attrs=attrs,
+            )
+        )
+    await db.commit()
+    result = await read_topology(db, pid, rid)
+    labels = {node.id: node.category for node in result.nodes}
+    assert labels == {moved.id: "sensors", legacy.id: "power", fresh.id: None, cad_id: None}
+    assert set(result.roots) == set(labels)  # contained, not wired
+    assert all(node.role == "part" for node in result.nodes)
 
 
 @pytest.mark.asyncio

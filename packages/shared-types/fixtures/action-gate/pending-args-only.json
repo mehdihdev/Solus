@@ -10,6 +10,10 @@
   "preview": [
     { "label": "board", "before": null, "after": "arduino:avr:nano" },
     { "label": "port", "before": null, "after": "/dev/ttyUSB0" },
-    { "label": "sketch", "before": null, "after": "firmware/motor_ctl/motor_ctl.ino" }
+    {
+      "label": "sketch",
+      "before": null,
+      "after": "firmware/motor_ctl/motor_ctl.ino"
+    }
   ]
 }

@@ -8,7 +8,18 @@ import type { SolActionMode, SolScreenshot } from './solApi'
 import type { SolusSection } from '../../lib/api/resources'
 import type { ContextUsedInfo } from './solStream'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
+import { workingLine } from './solChatItems'
 import {
+  answerQuestion,
+  resumeCard as resumeCardInStore,
+  sendNotice as sendNoticeInStore,
+  surfaceSettings,
+  type DecidedCard,
+  type SolSurface
+} from './solCardTurns'
+import {
+  afterLiveTurn,
+  cardDecided as cardDecidedInStore,
   decideConfirmation,
   fileArtifact as fileArtifactInStore,
   selectConversation as selectConversationInStore,
@@ -20,11 +31,17 @@ import {
   type ChatArtifact,
   type ChatItem,
   type ChatStatus,
-  type SendOptions,
+  type SendOptions as StoreSendOptions,
   type TraceEntry
 } from './solChatStore'
 
-export type { ChatArtifact, ChatItem, ChatStatus, TraceEntry }
+export type { ChatArtifact, ChatItem, ChatStatus, SolSurface, TraceEntry }
+
+/** What a send may carry beside its text. `conversationId` (SOLUSDEV-326) posts it to that
+ *  conversation — the one a card was asked in — opening it first. */
+export interface SendOptions extends StoreSendOptions {
+  conversationId?: string
+}
 
 export interface SolChat {
   items: readonly ChatItem[]
@@ -64,9 +81,33 @@ export interface SolChat {
   ) => Promise<void>
   /** SOLUSDEV-252 S5: file a turn's artifact into a `.solus` section (once). */
   fileArtifact: (artifactId: string, section: SolusSection) => Promise<void>
+  /** SOLUSDEV-326: what SOL is doing now, in the running tool's own words; null when it has
+   *  something to say or nothing runs. */
+  working: string | null
+  /** A device was plugged in (`MessageCreate.notice`): the server writes the turn. */
+  sendNotice: (deviceRef: string) => Promise<boolean>
+  /** Answer an open question card (`MessageCreate.answer`): 0 is its primary button. Never the
+   *  decide route. `conversationId` is where the question was asked, when not the open chat. */
+  answer: (
+    questionId: string,
+    choice: 0 | 1,
+    text?: string,
+    conversationId?: string,
+    /** The mode the answering surface is in; a forcing surface overrides it. Omitted, Guide. */
+    actionMode?: SolActionMode,
+    /** Called once the answer turn was let through (it may have waited behind a live one). */
+    onAdmitted?: () => void
+  ) => Promise<boolean>
+  /** A card was decided outside the thread (the page's slot): its row leaves the thread too.
+   *  `null` is a refusal — the card is over with nothing approved or rejected. */
+  cardDecided: (confirmationId: string, decision: 'approve' | 'reject' | null) => void
+  /** SOL continues after a card decided outside the thread, in the card's own conversation. */
+  resumeCard: (card: DecidedCard) => Promise<void>
 }
 
-export function useSolChat(projectId: string | null): SolChat {
+/** `surface` (SOLUSDEV-326): on 'hardware' every turn this chat starts — typed, notice, answer,
+ *  resume — goes as Build with confirmation, whatever mode the caller passes (`surfaceSettings`). */
+export function useSolChat(projectId: string | null, surface?: SolSurface): SolChat {
   const session = useSolChatStore((s) => selectSession(s, projectId))
   const conversationId = useSolSessionStore((s) => selectConversationId(s, projectId))
 
@@ -80,11 +121,25 @@ export function useSolChat(projectId: string | null): SolChat {
   // S2-A: callbacks keyed on the project only, so memoised rows downstream
   // (onDecide) do not re-render on every store tick of a streaming turn.
   const send = useCallback<SolChat['send']>(
-    (content, actionMode, mentions, thinkHarder, screenshot, options) =>
-      projectId
-        ? sendMessage(projectId, content, actionMode, mentions, thinkHarder, screenshot, options)
-        : Promise.resolve(false),
-    [projectId]
+    async (content, actionMode, mentions, thinkHarder, screenshot, options) => {
+      if (!projectId) return false
+      const { conversationId: target, forceConfirmation, ...anchors } = options ?? {}
+      const turn = surfaceSettings(surface, actionMode, forceConfirmation)
+      const start = (): Promise<boolean> =>
+        sendMessage(projectId, content, turn.actionMode, mentions, thinkHarder, screenshot, {
+          ...anchors,
+          ...(turn.forceConfirmation === undefined
+            ? {}
+            : { forceConfirmation: turn.forceConfirmation })
+        })
+      // Into a card's own conversation: wait for the live turn, then open it — never cut it off.
+      // The Hardware surface waits too: its slot stays pressable while SOL replies, and a refused
+      // press would vanish without a word.
+      return target || surface === 'hardware'
+        ? afterLiveTurn(projectId, target, start, false)
+        : start()
+    },
+    [projectId, surface]
   )
   const selectConversation = useCallback<SolChat['selectConversation']>(
     (id) => {
@@ -102,10 +157,47 @@ export function useSolChat(projectId: string | null): SolChat {
             projectId,
             confirmationId,
             decision,
-            actionMode ? { actionMode } : undefined
+            surface || actionMode ? surfaceSettings(surface, actionMode ?? 'guide') : undefined
           )
         : Promise.resolve(),
+    [projectId, surface]
+  )
+  // SOLUSDEV-326: the card turns. Off a forcing surface an answer goes in the mode its caller is
+  // in (Guide when it names none — a model-written question never switches the turn to Build) and
+  // every one of them carries the session's own "Confirm every change" (`force` in solCardTurns).
+  // A notice and a card resume go as Build, where a card can park; the server forces confirmation
+  // on both, whatever is sent.
+  const sendNotice = useCallback<SolChat['sendNotice']>(
+    (deviceRef) =>
+      projectId
+        ? sendNoticeInStore(projectId, deviceRef, surfaceSettings(surface, 'do'))
+        : Promise.resolve(false),
+    [projectId, surface]
+  )
+  const answer = useCallback<SolChat['answer']>(
+    (questionId, choice, text, target, actionMode, onAdmitted) =>
+      projectId
+        ? answerQuestion(
+            projectId,
+            { questionId, choice, text, conversationId: target },
+            surfaceSettings(surface, actionMode ?? 'guide'),
+            onAdmitted
+          )
+        : Promise.resolve(false),
+    [projectId, surface]
+  )
+  const cardDecided = useCallback<SolChat['cardDecided']>(
+    (confirmationId, decision) => {
+      if (projectId) cardDecidedInStore(projectId, confirmationId, decision)
+    },
     [projectId]
+  )
+  const resumeCard = useCallback<SolChat['resumeCard']>(
+    (card) =>
+      projectId
+        ? resumeCardInStore(projectId, card, surfaceSettings(surface, 'do'))
+        : Promise.resolve(),
+    [projectId, surface]
   )
 
   const fileArtifact = useCallback<SolChat['fileArtifact']>(
@@ -126,8 +218,25 @@ export function useSolChat(projectId: string | null): SolChat {
       selectConversation,
       startNewChat,
       decide,
-      fileArtifact
+      fileArtifact,
+      working: workingLine(session.items),
+      sendNotice,
+      answer,
+      cardDecided,
+      resumeCard
     }),
-    [session, conversationId, send, selectConversation, startNewChat, decide, fileArtifact]
+    [
+      session,
+      conversationId,
+      send,
+      selectConversation,
+      startNewChat,
+      decide,
+      fileArtifact,
+      sendNotice,
+      answer,
+      cardDecided,
+      resumeCard
+    ]
   )
 }

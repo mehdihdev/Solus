@@ -22,6 +22,8 @@ import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 import { useAccountEvents } from '../live/useAccountEvents'
 import { useLiveProject } from './useLiveProject'
 import { usePaletteStore } from '../palette/paletteStore'
+import { useDeviceStream } from '../hardware/useDeviceStream'
+import { useDeviceStore } from '../hardware/deviceStore'
 
 const workspaceActions = vi.hoisted(() => ({ enabled: false }))
 vi.mock('../graph/WorkspaceScreen', async (importOriginal) => {
@@ -30,10 +32,8 @@ vi.mock('../graph/WorkspaceScreen', async (importOriginal) => {
     ...actual,
     WorkspaceScreen: (props: import('../graph/WorkspaceScreen').WorkspaceScreenProps) =>
       workspaceActions.enabled ? (
-        <div data-testid="workspace-actions" data-request={props.openAddRequest?.tab ?? ''}>
-          <button onClick={() => props.onAddRequestConsumed?.(props.openAddRequest?.sequence ?? 0)}>
-            Consume hardware request
-          </button>
+        <div data-testid="workspace-actions">
+          <button onClick={props.onOpenHardware}>Hardware row in Add</button>
           <button onClick={props.onOpenBench}>Open registered Live Bench</button>
           <button onClick={() => props.onOpenWidget?.('scope')}>Open registered scope</button>
         </div>
@@ -62,6 +62,10 @@ vi.mock('./useProjectSwitcher', () => ({ useProjectSwitcher: vi.fn() }))
 
 // The live account channel opens a real stream; the shell tests only prove it mounts once.
 vi.mock('../live/useAccountEvents', () => ({ useAccountEvents: vi.fn() }))
+
+// The device stream opens a real subscription and a GET; its behaviour is proven in
+// useDeviceStream.test.tsx — the shell only mounts it once with the project and the screen.
+vi.mock('../hardware/useDeviceStream', () => ({ useDeviceStream: vi.fn() }))
 
 // The live project-name refetch is proven in useLiveProject.test.ts; the shell only mounts it.
 vi.mock('./useLiveProject', () => ({ useLiveProject: vi.fn() }))
@@ -847,18 +851,86 @@ function extensionStoreAndSignoutTests(): void {
   })
 }
 
-it('opens and consumes the existing Workspace Hardware request without reopening it later', async () => {
-  workspaceActions.enabled = true
-  useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Robot' } })
-  renderShell()
-  await userEvent.click(screen.getByText('Live Bench'))
-  await userEvent.click(screen.getByText('Add hardware from bench'))
-  expect(await screen.findByTestId('workspace-actions')).toHaveAttribute('data-request', 'hardware')
-  await userEvent.click(screen.getByText('Consume hardware request'))
-  expect(screen.getByTestId('workspace-actions')).toHaveAttribute('data-request', '')
-  await userEvent.click(screen.getByText('Live Bench'))
-  await userEvent.click(screen.getByText('Workspace'))
-  expect(screen.getByTestId('workspace-actions')).toHaveAttribute('data-request', '')
+describe('WorkspaceShell — the Hardware screen and its entry points (SOLUSDEV-326)', () => {
+  const linked = (): void => {
+    useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Robot' } })
+  }
+  const onHardware = async (): Promise<void> => {
+    expect(await screen.findByRole('heading', { level: 1, name: 'Hardware' })).toBeInTheDocument()
+    expect(document.querySelector('[data-screen-label="Hardware"]')).not.toBeNull()
+    expect(useShellStore.getState().lastMain).toBe('hardware')
+    expect(screen.getByLabelText('Hardware')).toHaveAttribute('data-active', 'true')
+  }
+
+  it('puts Hardware in the rail between Workspace and Live Bench, icon-only like the rest', async () => {
+    renderShell()
+    expect(
+      railIds()
+        .filter((id) => id !== 'rail-bell')
+        .slice(0, 5)
+    ).toEqual(['rail-home', 'rail-workspace', 'rail-hardware', 'rail-bench', 'rail-sol'])
+    const item = screen.getByLabelText('Hardware')
+    expect(item).toHaveAttribute('title', 'Hardware')
+    expect(item.querySelector('svg')).toHaveAttribute('viewBox', '0 0 16 16')
+    await userEvent.click(item)
+    await onHardware()
+  })
+
+  it('opens Hardware from the View menu', async () => {
+    renderShell()
+    await userEvent.click(screen.getByRole('button', { name: 'View' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Hardware' }))
+    await onHardware()
+  })
+
+  it("the bench's Add hardware opens the Hardware screen", async () => {
+    workspaceActions.enabled = true
+    linked()
+    renderShell()
+    await userEvent.click(screen.getByText('Live Bench'))
+    await userEvent.click(screen.getByText('Add hardware from bench'))
+    await onHardware()
+  })
+
+  it("the Workspace Add modal's Hardware row opens the Hardware screen", async () => {
+    workspaceActions.enabled = true
+    linked()
+    renderShell()
+    await userEvent.click(screen.getByText('Workspace'))
+    await userEvent.click(screen.getByText('Hardware row in Add'))
+    await onHardware()
+  })
+
+  it('mounts the device stream once, with the project and the current screen', async () => {
+    linked()
+    renderShell()
+    expect(useDeviceStream).toHaveBeenLastCalledWith('p1', 'home')
+    await userEvent.click(screen.getByLabelText('Hardware'))
+    expect(useDeviceStream).toHaveBeenLastCalledWith('p1', 'hardware')
+  })
+
+  it("the plug-in toast's action opens the Hardware screen", async () => {
+    renderShell()
+    act(() =>
+      useShellStore.getState().setToast({
+        kind: 'ok',
+        title: 'Something was plugged in',
+        body: 'Open Hardware to see it.',
+        action: 'Open Hardware',
+        screen: 'hardware'
+      })
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Open Hardware' }))
+    await onHardware()
+    expect(useShellStore.getState().toast).toBeNull()
+  })
+
+  it('drops the device rows on sign-out', async () => {
+    renderShell()
+    useDeviceStore.getState().setDevices('p1', [])
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(useDeviceStore.getState().projectId).toBeNull()
+  })
 })
 
 describe('WorkspaceShell — ⌘K command palette (SOLUSDEV-317)', () => {

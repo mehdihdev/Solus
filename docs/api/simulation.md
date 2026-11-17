@@ -937,8 +937,9 @@ appliable, predicted, matrix: {changed, changed_count, truncated}, apply, next}`
 4. **`apply_sim_change(subject_id, quantity, change)`** is always gated: `requires_confirmation` and
    never passed to `register_owned_routine`, so no Build policy runs it without its card. In Build
    mode each call parks its card. In Guide mode the mode layer refuses the call before any card is
-   built (`build_mode_dispatch`: Guide mode can explain the change, and the person switches to
-   Build mode to carry it out). It also requires a complete preview, so a preview that fails
+   built (`build_mode_dispatch`: Guide mode can explain the change; the turn only explains, so SOL
+   describes the change and its steps instead of running it. The refusal names no switch: since
+   SOLUSDEV-327 the person has none). It also requires a complete preview, so a preview that fails
    refuses the park.
    - **The preview** shows the simulation, the owning domain, the change (a config field's before
      and after with the config version, or the constraints line) and what happens after approval.
@@ -1022,9 +1023,9 @@ twin into a model. It is a static card whose preview IS the gap report; approval
 - **graph**: one `joint` entity per moving joint (kind `joint`, origin `system`, domain
   simulation, `external_ref = solus:sim-joint:<robot>:<parent>:<child>:<feature>`, attrs
   `{robot_id, type, unit, mate_feature_id, parent_part_id, child_part_id, actuator_part_id, axis,
-  origin_m, lower, upper, limits_source}`, reassigned on a rerun), then the `simulation_model` v2
+origin_m, lower, upper, limits_source}`, reassigned on a rerun), then the `simulation_model` v2
   through `SimulationModelService.create(origin="system", extra_attrs={robot_id, scene_model_id,
-  source_entity_id, cad_microversion, requested_by, gaps, artifacts})`; its `contains` edges bind
+source_entity_id, cad_microversion, requested_by, gaps, artifacts})`; its `contains` edges bind
   every part and joint. `_validate` compares only `attrs["simulation_model"]`, so the same
   definition is `status: "reused"` (its `cad_microversion` and `gaps` refreshed) and a changed one
   is a new model beside the old. The job emits `sim.model_generated`.

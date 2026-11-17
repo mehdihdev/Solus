@@ -42,11 +42,18 @@ function storedOutcome(value: unknown): Pick<TraceEntry, 'ok' | 'errorCode'> | n
   }
 }
 
-/** A stored tool row as a step, or null when its attrs are unproven. */
+/** The server's words for a row the gate parked (routers/sol.py `_tool_turn_summary`). It writes
+ *  them from what the gate parked that turn, never from the error code a real refusal shares. */
+const PARKED_WORDS = 'parked, awaiting your approval'
+
+/** A stored tool row as a step, or null when its attrs are unproven. A row the server stored as
+ *  parked is a parked step; whether it was decided since is not in the row. */
 export function toStoredStep(turn: SolTurn): TraceEntry | null {
   const call = storedCall(turn.attrs.call)
   const outcome = storedOutcome(turn.attrs.result)
-  return call && outcome ? { ...call, ...outcome } : null
+  if (!call || !outcome) return null
+  const parked = !outcome.ok && turn.content === `${call.tool} → ${PARKED_WORDS}`
+  return { ...call, ...outcome, ...(parked ? { parked: {} } : {}) }
 }
 
 export function foldToolTurns(turns: readonly SolTurn[]): ChatItem[] {

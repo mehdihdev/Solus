@@ -1,7 +1,7 @@
 // The robot sidebar (SOLUSDEV-250 P4): everything the robot card and the delete modal
 // used to offer, plus what the graph snapshot and the per-robot reads can prove —
-// categories from `contains` edges, connection from active real bench sessions, pending
-// suggestions, provenance tags only when the config carries them. Nothing invented.
+// the parts the robot `contains` directly (SOLUSDEV-326), connection from active real bench
+// sessions, pending suggestions, provenance tags only when the config carries them.
 import { beforeEach, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -18,8 +18,7 @@ import { usePhysicalRobots } from '../robots/usePhysicalRobots'
 vi.mock('../../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
   renamePhysicalRobot: vi.fn(),
-  deletePhysicalRobot: vi.fn(),
-  listRobotOrphans: vi.fn()
+  deletePhysicalRobot: vi.fn()
 }))
 vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/hardware')>()),
@@ -27,8 +26,7 @@ vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
   acceptHardwareSuggestion: vi.fn(),
   rejectHardwareSuggestion: vi.fn(),
   getHardwareConfig: vi.fn(),
-  listUnassignedParts: vi.fn(),
-  attachParts: vi.fn()
+  getEntityHardwareConfig: vi.fn()
 }))
 vi.mock('../../../lib/api/resources', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/resources')>()),
@@ -46,18 +44,13 @@ const robot: Entity = {
   origin: 'manual',
   version: 1
 }
+// A legacy row only: migration a32600000001 retired every category node.
 const sensors: Entity = {
   ...robot,
   id: 'cat-sensors',
   name: 'Sensors',
   type: 'robot_category',
   properties: { robot_id: robot.id, category: 'sensors' }
-}
-const actuators: Entity = {
-  ...sensors,
-  id: 'cat-actuators',
-  name: 'Actuators / motors',
-  properties: { robot_id: robot.id, category: 'actuators' }
 }
 const imu: Entity = {
   ...robot,
@@ -75,12 +68,6 @@ const motor: Entity = {
   domain: 'mechanical',
   source_key: null
 }
-const orphan: Entity = {
-  ...motor,
-  id: 'orphan-1',
-  name: 'Spare servo',
-  properties: { category: 'actuators' }
-}
 const contains = (from: Entity, to: Entity): Relation => ({
   id: `${from.id}>${to.id}`,
   type: 'contains',
@@ -89,12 +76,7 @@ const contains = (from: Entity, to: Entity): Relation => ({
 })
 // Reads are cached per snapshot array, so every test gets a fresh one (see beforeEach).
 let ENTITIES: Entity[] = []
-const RELATIONS = [
-  contains(robot, sensors),
-  contains(robot, actuators),
-  contains(sensors, imu),
-  contains(actuators, motor)
-]
+const RELATIONS = [contains(robot, imu), contains(robot, motor)]
 const session = (device_ref: string | null): resources.BenchSession => ({
   id: 's1',
   mode: 'real',
@@ -152,17 +134,16 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 beforeEach(() => {
   vi.resetAllMocks()
-  ENTITIES = [robot, sensors, actuators, imu, motor]
+  ENTITIES = [robot, imu, motor]
   useAuthStore.setState({ status: 'authenticated', user: { email: 'robot@example.invalid' } })
   useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover' } })
   useSettingsStore.setState({ solMode: 'Guide' })
-  vi.mocked(hardwareApi.listUnassignedParts).mockResolvedValue({
-    data: [],
-    meta: { has_next: false }
-  })
   vi.mocked(resources.listBenchSessions).mockResolvedValue([])
   vi.mocked(hardwareApi.listHardwareSuggestions).mockResolvedValue([])
   vi.mocked(hardwareApi.getHardwareConfig).mockRejectedValue(new ApiError(404, 'not_found', 'No'))
+  vi.mocked(hardwareApi.getEntityHardwareConfig).mockRejectedValue(
+    new ApiError(404, 'not_found', 'No')
+  )
   vi.mocked(api.renamePhysicalRobot).mockResolvedValue({ ...robot, name: 'Scout', version: 2 })
   vi.mocked(api.deletePhysicalRobot).mockResolvedValue({
     deleted_entity_id: robot.id,
@@ -170,26 +151,26 @@ beforeEach(() => {
   })
 })
 
-it('lists the seven categories in order with counts from the snapshot, empty ones honestly', async () => {
+it('lists the parts the robot contains, with a count from the snapshot', async () => {
   render(<Harness />)
   expect(screen.getByRole('heading', { name: 'Rover' })).toBeInTheDocument()
-  const headings = within(screen.getByRole('region', { name: 'Parts' }))
-    .getAllByRole('heading', { level: 3 })
-    .map((heading) => heading.textContent)
-  expect(headings).toEqual([
-    'Sensors · 1',
-    'Actuators / motors · 1',
-    'Controllers · 0',
-    'End effectors · 0',
-    'Power · 0',
-    'Structure · 0',
-    'Wiring · 0'
-  ])
-  expect(screen.getByRole('button', { name: 'Reveal Wrist IMU' })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Reveal Drive motor' })).toBeInTheDocument()
-  expect(screen.getAllByText(/none yet/)).toHaveLength(5)
+  const parts = screen.getByRole('region', { name: 'Parts' })
+  expect(within(parts).getByRole('heading', { level: 3 })).toHaveTextContent('Parts · 2')
+  expect(
+    within(parts)
+      .getAllByRole('listitem')
+      .map((row) => row.getAttribute('aria-label'))
+  ).toEqual(['Wrist IMU', 'Drive motor'])
+  expect(screen.queryByText(/none yet/)).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Reveal Wrist IMU' }))
   expect(reveal).toHaveBeenCalledWith(imu.id)
+})
+
+it('says honestly when the robot contains nothing yet', () => {
+  render(<Harness entities={[robot]} relations={[]} />)
+  const parts = screen.getByRole('region', { name: 'Parts' })
+  expect(within(parts).getByRole('heading', { level: 3 })).toHaveTextContent('Parts · 0')
+  expect(within(parts).getByText('none yet — assign hardware from Add')).toBeInTheDocument()
 })
 
 it('reports streaming when an active real session matches a part device ref', async () => {
@@ -277,39 +258,39 @@ it('tags a part with its config provenance only when the wire carries one', asyn
   ).toBeNull()
 })
 
-it('offers Attach to <robot> on each unassigned part and refreshes after attaching', async () => {
-  vi.mocked(hardwareApi.listUnassignedParts).mockResolvedValue({
-    data: [orphan],
-    meta: { has_next: false }
-  })
-  vi.mocked(hardwareApi.attachParts).mockResolvedValue({
-    attached: [orphan.id],
-    skipped: [],
-    config_entry_id: 'entry'
+// SOLUSDEV-326: any of the robot's brains known only by its USB port position earns the note
+// (a port-position binding is `port-<location>`; its device ref is `usb:port-<location>`).
+it.each([
+  ['port-5-1.2.3', 'identity from the USB port — keep it in this port'],
+  ['5B42134331', null]
+])('notes a brain identified by its USB port (%s)', async (binding, note) => {
+  vi.mocked(hardwareApi.getEntityHardwareConfig).mockResolvedValue({
+    entry_id: 'entry',
+    entity_id: robot.id,
+    version: 1,
+    config: {
+      schema_version: 2,
+      entity_id: robot.id,
+      identity: [
+        { kind: 'mcu', binding: { kind: 'usb_serial', binding: 'AAAA' } },
+        { kind: 'mcu', binding: { kind: 'usb_serial', binding } }
+      ]
+    }
   })
   render(<Harness />)
-  expect(await screen.findByRole('button', { name: 'Reveal Spare servo' })).toBeInTheDocument()
-  expect(screen.getByRole('combobox', { name: 'Category' })).toHaveValue('actuators')
-  await userEvent.click(screen.getByRole('button', { name: 'Attach to Rover' }))
-  expect(hardwareApi.attachParts).toHaveBeenCalledExactlyOnceWith('p1', robot.id, {
-    entity_ids: [orphan.id],
-    category: 'actuators'
-  })
-  await waitFor(() => expect(changed).toHaveBeenCalledOnce())
+  await waitFor(() =>
+    expect(hardwareApi.getEntityHardwareConfig).toHaveBeenCalledExactlyOnceWith('p1', robot.id)
+  )
+  if (note) expect(await screen.findByText(note)).toBeInTheDocument()
+  else expect(screen.queryByText(/keep it in this port/)).toBeNull()
 })
 
-it('keeps an attach failure visible', async () => {
-  vi.mocked(hardwareApi.listUnassignedParts).mockResolvedValue({
-    data: [orphan],
-    meta: { has_next: false }
-  })
-  vi.mocked(hardwareApi.attachParts).mockRejectedValue(
-    new ApiError(409, 'conflict', 'Spare servo already belongs to another robot')
-  )
+it('lists no unassigned parts: lone parts live on the Hardware page (SOLUSDEV-326)', async () => {
   render(<Harness />)
-  await userEvent.click(await screen.findByRole('button', { name: 'Attach to Rover' }))
-  expect(await screen.findByRole('alert')).toHaveTextContent(/already belongs/)
-  expect(changed).not.toHaveBeenCalled()
+  await act(async () => {})
+  expect(screen.queryByText('Unassigned parts')).toBeNull()
+  expect(screen.queryByRole('button', { name: /^Attach to/ })).toBeNull()
+  expect(Object.keys(import.meta.glob('../robots/RobotOrphans.tsx'))).toEqual([])
 })
 
 it('renames from the heading, trims the name, and cancels cleanly', async () => {
@@ -348,7 +329,7 @@ it('keeps a failed rename draft, refreshes conflicts, and retries only with a fr
   expect(screen.getByRole('button', { name: 'Save name' })).toBeDisabled()
   expect(changed).toHaveBeenCalledOnce()
   const refreshed = { ...robot, name: 'Updated by teammate', version: 2 }
-  view.rerender(<Harness entities={[refreshed, sensors, actuators, imu, motor]} />)
+  view.rerender(<Harness entities={[refreshed, imu, motor]} />)
   expect(screen.getByRole('textbox', { name: 'Robot name' })).toHaveValue('Scout')
   expect(screen.getByText('Current name: Updated by teammate')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Save name' }))
@@ -404,8 +385,14 @@ it('keeps a deletion failure visible without claiming parts were unassigned', as
   expect(changed).not.toHaveBeenCalled()
 })
 
-it('shows a category’s parts and the Guide/Expert line', () => {
-  render(<Harness selected={sensors.id} />)
+it('still shows a legacy category row’s parts and the Guide/Expert line', () => {
+  render(
+    <Harness
+      entities={[robot, sensors, imu, motor]}
+      relations={[contains(robot, sensors), contains(sensors, imu), contains(robot, motor)]}
+      selected={sensors.id}
+    />
+  )
   expect(screen.getByRole('heading', { name: 'Sensors' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Reveal Wrist IMU' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Reveal Drive motor' })).not.toBeInTheDocument()
@@ -452,20 +439,3 @@ it.each([
     ).toHaveTextContent(label)
   }
 )
-
-it('explains a serial-less USB port binding in the sidebar', async () => {
-  vi.mocked(hardwareApi.getHardwareConfig).mockResolvedValue({
-    entry_id: 'entry',
-    robot_entity_id: robot.id,
-    config: {
-      schema_version: 1,
-      robot_entity_id: robot.id,
-      identity: { kind: 'usb_serial', binding: 'usb:port-3-1.2' },
-      provenance: {}
-    }
-  })
-  render(<Harness />)
-  expect(
-    await screen.findByText('identity from the USB port — keep it in this port')
-  ).toBeInTheDocument()
-})

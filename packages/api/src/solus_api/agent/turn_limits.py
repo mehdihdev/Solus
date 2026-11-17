@@ -26,11 +26,12 @@ GUIDE_TOOL_CALLS: Final = 8
 #: `estimate_tokens(system_prompt(SolMode.GUIDE, None, None, with_screenshot=True,
 #: action_mode=ActionMode.DO, nonce=…))` plus
 #: `estimate_tokens(tools_text(tool_specs(model_visible(registry.list()), nonce=…)))`, rounded up
-#: to the next 1,000. Last re-measured after the SOLUSDEV-322 merge of main (67 in-process tools,
-#: SOLUSDEV-319 drive/front-app notes + SOLUSDEV-322 simulation note): 14,461.
-#: `tests/test_sol_turn_limits.py` re-measures it and fails when the default no longer covers
-#: the measurement or sits more than 2,000 tokens above it.
-FIXED_PROMPT_TOKENS: Final = 15_000
+#: to the next 1,000. Last re-measured for SOLUSDEV-326 P2-T5 with `hardware_local` and
+#: `graph_hub` bound and `hardware=True` (82 tools: the hub adds `simulate`, `apply_sim_change`
+#: and the six hardware card tools to P2-T4's 74): 18,411 — 17,258 with the hub and no card
+#: tools; 15,527 at P2-T4, which bound no hub. `tests/test_sol_turn_limits.py` re-measures it and
+#: fails when the default no longer covers the measurement or sits more than 2,000 tokens above it.
+FIXED_PROMPT_TOKENS: Final = 19_000
 
 
 @dataclass(frozen=True, slots=True)

@@ -66,8 +66,13 @@ robot's `external_ref`); and the caller's own machine — the one their live bri
 in this project, and only when they own its row: hostname, OS, architecture, up to 8 tool versions
 and the last 5 `recent_commands`, each `command_redacted`, `cwd` and `output_tail` redacted and
 capped at 200 characters. A teammate's machine, and its commands, never renders; no id the client
-sends selects it. A failed read means no card this turn, never a failed message. `render_card`
-holds the card to 300 tokens by `estimate_tokens`, dropping `.solus` subsection detail, then source
+sends selects it. SOLUSDEV-326 adds two lines that are the caller's own: the devices a machine
+they own remembers as plugged in now (`attrs.devices`, `present`) that nothing they may see binds
+and they did not dismiss (`device_memory.annotate`, at most 5, `headline (device ref)`), and the
+oldest card waiting for them in this project (`cards.oldest_open_card`, the slot's own query:
+title, tool, kind, and how many more wait). A failed read means no card this turn, never a failed
+message. `render_card` holds the card to 300 tokens by `estimate_tokens`, dropping `.solus`
+subsection detail, then source
 capabilities, then every robot and every source but the first (`+N more`; a list read at its
 50-row limit counts as `50+`; a robot with an active session sorts first), and clipping what still
 overflows (the oldest command goes first); every rendered string is redacted and capped (names at

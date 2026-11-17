@@ -12,8 +12,8 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
 
 ## 1. Where it lives
 
-- Every shell route except the SOL page itself: Home, Workspace, Live Bench, Store, Billing,
-  Settings, an alert, an extension page. On the SOL page the sidebar is not rendered — the page
+- Every shell route except the SOL page itself: Home, Workspace, Hardware, Live Bench, Store,
+  Billing, Settings, an alert, an extension page. On the SOL page the sidebar is not rendered — the page
   already is SOL — and the topbar toggle is hidden.
 - **One conversation per project, shared by all three surfaces.** The sidebar drives the same
   per-project chat session as the page (`useSolChat(projectId)`, `solChatStore`): moving between
@@ -65,19 +65,34 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
 - **Composer:** input, `@` picker and Send only — no preferences row, like every SOL surface
   (sol-page.md: Build, auto-routed, no forced confirmation).
   Short per-screen placeholder so it fits one line at 320px (`Ask about the workspace`,
-  `Ask about the bench`, generic `Ask SOL anything`). Sends from the sidebar carry the Workspace
+  `Ask about the bench`, Hardware `Ask SOL, or tell it what you have`, generic
+  `Ask SOL anything`). Sends from the sidebar carry the Workspace
   focus and the chat's pinned nodes exactly as the page does (`focus`, `pins`).
 - **Proactive notes** (SOL speaking first, with actions under the note): the panel renders any
   SOL message the session holds, so when a later ticket (Live Bench) adds proactive notes they
   appear here with their action buttons. This ticket adds no proactive trigger of its own.
 - **Width:** default 360px; drag the left edge between 320 and 480px; the width is remembered
   (same storage as §2). Keyboard: the resize handle is a focusable `separator` — ←/→ step 16px.
+- **On Hardware** (SOLUSDEV-326; `hardware-onboarding.md`). The sidebar is the Hardware screen's
+  only SOL panel, and its chat is the Hardware surface (`useSolChat(projectId, 'hardware')`), the
+  same session the page's card slot drives:
+  - **Forced confirmation.** Every turn it starts — a typed message, a chip, an answer, a
+    decision made in the thread and its resume — goes as `action_mode: "do"` with
+    `force_confirmation: true`, so a gated call parks a card. This is the one exception to "no
+    forced confirmation" above.
+  - **Card rows stay in the slot.** A parked row that carries a card is not drawn in the thread
+    (`cardsInSlot`): the page's slot shows it. A row with no card (a command, a CAD edit) stays
+    in the thread and is decided there.
+  - **No process strip.** The running-processes strip is not rendered.
 
 ## 4. Fit
 
 - Window ≥ 1100px wide: the panel **docks** — the screen beside it reflows narrower.
 - Window < 1100px: the panel **overlays** the screen's right edge with a soft shadow; the screen
   keeps its width.
+- **On Hardware it always docks**, at any window width: an overlay would cover the card's buttons
+  at the page's right edge. The page's narrow layouts follow the room left beside the panel
+  (`hardware-onboarding.md` §Narrow widths).
 
 ## 5. Motion
 
@@ -99,18 +114,20 @@ its end state.
 
 ## 6. Per-screen copy (Solus-authored)
 
-| Screen    | Tag            | Greeting                                                                 | Suggestions                                                               |
-| --------- | -------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
-| Workspace | `WORKSPACE`    | "I can see the workspace graph. Ask about any node, or how two connect." | What does this project's graph cover? · Is anything wired inconsistently? |
-| Bench     | `LIVE BENCH`   | "I'm watching the bench with you. Ask about a signal or what to test."   | What should I test first? · What can I put on the bench?                  |
-| Home      | `HOME`         | "Ask about this project, or what changed since you were last here."      | What changed recently? · What should I work on next?                      |
-| Others    | screen in caps | "Ask SOL about this project."                                            | —                                                                         |
+| Screen    | Tag            | Greeting                                                                                    | Suggestions                                                               |
+| --------- | -------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Workspace | `WORKSPACE`    | "I can see the workspace graph. Ask about any node, or how two connect."                    | What does this project's graph cover? · Is anything wired inconsistently? |
+| Bench     | `LIVE BENCH`   | "I'm watching the bench with you. Ask about a signal or what to test."                      | What should I test first? · What can I put on the bench?                  |
+| Hardware  | `HARDWARE`     | "SOL sees what is plugged into this computer. Plug something in, or tell it what you have." | What is plugged in? · What does the workspace describe that isn't here?   |
+| Home      | `HOME`         | "Ask about this project, or what changed since you were last here."                         | What changed recently? · What should I work on next?                      |
+| Others    | screen in caps | "Ask SOL about this project."                                                               | —                                                                         |
 
 ## 7. Data collection
 
 `sol.sidebar_toggled` (client event, consent-gated like every client event): payload
 `{action: open|close|expand|pop_out, screen, via: button|shortcut|header|escape}` — ids and
-enums only, never message text.
+enums only, never message text. `screen` is one of `home`, `workspace`, `bench`, `hardware`,
+`store`, `billing`, `settings`, `alert`, `ext-page` (the API refuses any other value).
 
 ## 8. States
 

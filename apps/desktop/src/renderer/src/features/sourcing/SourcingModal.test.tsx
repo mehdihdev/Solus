@@ -1,5 +1,5 @@
 // SOLUSDEV-246 (STORE ST5) — the sourcing panel: describe or derive, compare,
-// exclusions with reasons, select into a category as PLANNED, vendor CAD link.
+// exclusions with reasons, select into a robot as PLANNED (SOLUSDEV-326), vendor CAD link.
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -55,10 +55,10 @@ const entity = (over: Partial<resources.Entity>): resources.Entity =>
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(resources.listEntities).mockImplementation(async (_p, filters) => {
-    if (filters?.type === 'robot_category')
+    if (filters?.type === 'physical_robot')
       return [
-        entity({ id: 'cat-wire', type: 'robot_category', name: 'Wiring' }),
-        entity({ id: 'cat-act', type: 'robot_category', name: 'Actuators / motors' })
+        entity({ id: 'robot-arm', type: 'physical_robot', name: 'Arm' }),
+        entity({ id: 'robot-rover', type: 'physical_robot', name: 'Rover' })
       ]
     return [
       entity({ id: 'asm-1', name: 'Arm assembly', properties: { is_assembly: true } }),
@@ -189,7 +189,7 @@ function sourcingCandidateComparisonTests(): void {
     )
   })
 
-  it('compares candidates side by side, labels grounding, shows exclusions with the rule text, and selects into a category', async () => {
+  it('compares candidates side by side, labels grounding, shows exclusions with the rule text, and selects into a robot', async () => {
     const a = actions()
     render(
       <SourcingModal
@@ -219,15 +219,19 @@ function sourcingCandidateComparisonTests(): void {
     expect(excluded).toHaveTextContent(
       "Supplier 'Acme Motors' is excluded: Export-controlled vendor"
     )
-    // Select the cited stepper into Actuators, quantity 2.
-    const category = await screen.findByLabelText('Category for NEMA 23 23HS22-2804S')
-    // Motors default to the Actuators category even when it is not listed first.
-    await waitFor(() => expect(category).toHaveValue('cat-act'))
+    // Select the cited stepper into the Rover, quantity 2; the first robot is the default.
+    const robot = await screen.findByLabelText('Robot for NEMA 23 23HS22-2804S')
+    await waitFor(() => expect(robot).toHaveValue('robot-arm'))
+    expect(resources.listEntities).toHaveBeenCalledWith('p1', {
+      type: 'physical_robot',
+      limit: 100
+    })
+    await userEvent.selectOptions(robot, 'robot-rover')
     await userEvent.clear(screen.getByLabelText('Quantity for NEMA 23 23HS22-2804S'))
     await userEvent.type(screen.getByLabelText('Quantity for NEMA 23 23HS22-2804S'), '2')
     await userEvent.click(screen.getByRole('button', { name: 'Select NEMA 23 23HS22-2804S' }))
     expect(a.select).toHaveBeenCalledWith('aaaaaaaaaaaaaaaa', {
-      category_entity_id: 'cat-act',
+      robot_entity_id: 'robot-rover',
       quantity: 2
     })
   })

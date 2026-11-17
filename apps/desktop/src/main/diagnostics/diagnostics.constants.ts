@@ -23,6 +23,7 @@ export const ERROR_SURFACES = [
   'root',
   'home',
   'workspace',
+  'hardware',
   'bench',
   'sol',
   'store',

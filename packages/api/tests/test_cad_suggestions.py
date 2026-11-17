@@ -28,7 +28,7 @@ async def setup_graph(
     response = await client.post(
         f"/api/v1/projects/{project_id}/hardware/robots/{robot_id}/parts/attach",
         headers=headers,
-        json={"entity_ids": [str(known)], "category": "end_effectors"},
+        json={"entity_ids": [str(known)]},
     )
     assert response.status_code == 200
     edge = GraphEdge(
@@ -123,20 +123,11 @@ async def test_ambiguous_robot_owners_never_propose(
 
     project, _, cad, edge = await setup_graph(client, alice_headers, db)
     other = await _attach_robot(client, alice_headers, str(project))
-    category = await db.scalar(
-        select(GraphEntity).where(
-            GraphEntity.project_id == project,
-            GraphEntity.kind == "robot_category",
-            GraphEntity.attrs["robot_id"].astext == other,
-            GraphEntity.attrs["category"].astext == "end_effectors",
-        )
-    )
-    assert category is not None
     # Corrupt/ambiguous dual ownership is refused, not selected by query order.
     db.add(
         GraphEdge(
             project_id=project,
-            src_id=category.id,
+            src_id=uuid.UUID(other),
             dst_id=edge.dst_id,
             relation_type="contains",
             domain_pair="project<->mechanical",
@@ -145,6 +136,24 @@ async def test_ambiguous_robot_owners_never_propose(
     )
     await db.flush()
     assert await propose_cad_suggestions(db, project, cad, await actor(db)) == []
+
+
+async def test_a_category_era_suggestion_refuses_accept(
+    client: Any, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """Evidence stored before SOLUSDEV-326 names `robot:category` targets; today's names robot
+    ids, so accepting the old row is a 409 asking for a fresh review (fail-safe)."""
+    project, robot, cad, _ = await setup_graph(client, alice_headers, db)
+    user = await actor(db)
+    [suggestion] = await propose_cad_suggestions(db, project, cad, user)
+    assert suggestion.evidence[0]["evidence"]["targets"] == [str(robot)]
+    stale = [dict(item) for item in suggestion.evidence]
+    stale[0]["evidence"] = {**stale[0]["evidence"], "targets": [f"{robot}:end_effectors"]}
+    suggestion.evidence = stale
+    await decide_suggestion(db, project, suggestion.id, True, user)
+    with pytest.raises(APIError) as exc:
+        await accept_cad_suggestion(db, project, suggestion, user)
+    assert exc.value.status_code == 409
 
 
 async def test_stale_pending_proposal_is_superseded_on_explicit_refresh(
@@ -252,13 +261,13 @@ async def test_listing_filters_hidden_cad_references_without_mutating_history(
     db: AsyncSession,
     hidden_subject: bool,
 ) -> None:
-    from solus_api.hardware.cad_suggestions import filter_visible_cad_suggestions
+    from solus_api.hardware.cad_suggestions import filter_visible_suggestions
     from solus_api.models import Source, SourceType, SuggestionStatus
 
     project, _, cad, edge = await setup_graph(client, alice_headers, db)
     user = await actor(db)
     [suggestion] = await propose_cad_suggestions(db, project, cad, user)
-    assert await filter_visible_cad_suggestions(db, project, user, [suggestion]) == [suggestion]
+    assert await filter_visible_suggestions(db, project, user, [suggestion]) == [suggestion]
     part = await db.get(GraphEntity, cad if hidden_subject else edge.dst_id)
     assert part is not None and part.source_id is not None
     base = await db.get(Source, part.source_id)
@@ -276,7 +285,7 @@ async def test_listing_filters_hidden_cad_references_without_mutating_history(
     await db.flush()
     part.source_id = hidden.id
     await db.flush()
-    assert await filter_visible_cad_suggestions(db, project, user, [suggestion]) == []
+    assert await filter_visible_suggestions(db, project, user, [suggestion]) == []
     assert suggestion.status is SuggestionStatus.PENDING
     await db.commit()
     response = await client.get(
@@ -286,13 +295,13 @@ async def test_listing_filters_hidden_cad_references_without_mutating_history(
     assert response.json()["data"] == []
     # Legacy device decisions do not depend on CAD revision evidence.
     suggestion.subject_kind = "device"
-    assert await filter_visible_cad_suggestions(db, project, user, [suggestion]) == [suggestion]
+    assert await filter_visible_suggestions(db, project, user, [suggestion]) == [suggestion]
 
 
 async def test_listing_hides_malformed_cad_evidence(
     client: Any, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
-    from solus_api.hardware.cad_suggestions import filter_visible_cad_suggestions
+    from solus_api.hardware.cad_suggestions import filter_visible_suggestions
 
     project, _, cad, _ = await setup_graph(client, alice_headers, db)
     user = await actor(db)
@@ -303,4 +312,4 @@ async def test_listing_hides_malformed_cad_evidence(
             "evidence": {**suggestion.evidence[0]["evidence"], "counterpart_id": "not-a-graph-id"},
         }
     ]
-    assert await filter_visible_cad_suggestions(db, project, user, [suggestion]) == []
+    assert await filter_visible_suggestions(db, project, user, [suggestion]) == []

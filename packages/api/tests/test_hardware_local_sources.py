@@ -170,3 +170,22 @@ def test_replacement_during_read_is_refused(
     monkeypatch.setattr(os, "read", read)
     with pytest.raises(LocalSourceError, match="relink_required"):
         reader.read_source(project, account, ref)
+
+
+def test_source_refs_list_the_accounts_own_references_sorted_bounded_and_path_free(
+    source: SourceFixture,
+) -> None:
+    """SOLUSDEV-326 P2-T4: SOL's inspection reads every source the member authorized; the
+    renderer's picker was their only supplier. Opaque references only, at most 32."""
+    reader, selected, state, project, account, ref = source
+    assert reader.source_refs(project, account) == [ref]
+    assert reader.source_refs(project, uuid.uuid4()) == []  # another account's: none
+    assert reader.source_refs(uuid.uuid4(), account) == []  # no state for that project
+    document = json.loads(state.read_text())
+    entry = document["accounts"][str(account)]["sources"][ref.removeprefix("source:")]
+    many = {str(uuid.uuid4()): entry for _ in range(40)}
+    document["accounts"][str(account)]["sources"] = many
+    state.write_text(json.dumps(document))
+    refs = reader.source_refs(project, account)
+    assert refs == sorted(f"source:{key}" for key in many)[:32]
+    assert not any(str(selected) in found for found in refs)

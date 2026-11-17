@@ -31,7 +31,6 @@
     "Switch": "apps/desktop/src/renderer/src/components/ui/Switch.tsx",
     "Wordmark": "apps/desktop/src/renderer/src/components/ui/Wordmark.tsx",
     "GraphCard": "apps/desktop/src/renderer/src/features/graph/navigation/GraphCard.tsx",
-    "DeviceCard": "apps/desktop/src/renderer/src/features/graph/hardware/DeviceCard.tsx",
     "ExtensionCard": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
     "ExtensionIconTile": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
     "PublisherBadge": "apps/desktop/src/renderer/src/features/extensions/ExtensionCard.tsx",
@@ -51,7 +50,6 @@
     "FrameSkeleton": "apps/desktop/src/renderer/src/features/extensions/frame/FrameStates.tsx",
     "FrameCard": "apps/desktop/src/renderer/src/features/extensions/frame/FrameStates.tsx",
     "TwoStepDelete": "apps/desktop/src/renderer/src/features/graph/sidebar/TwoStepDelete.tsx",
-    "LabeledSelect": "apps/desktop/src/renderer/src/features/graph/hardware/LabeledSelect.tsx",
     "Section": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
     "Row": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
     "InlineError": "apps/desktop/src/renderer/src/features/settings/settingsUi.tsx",
@@ -179,9 +177,6 @@
       "cardMode": "column"
     },
     "TitleBar": {
-      "cardMode": "column"
-    },
-    "DeviceCard": {
       "cardMode": "column"
     }
   },

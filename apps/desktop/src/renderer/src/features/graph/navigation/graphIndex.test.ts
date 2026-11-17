@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { Entity, Relation } from '../../../lib/api/resources'
+import type { GraphNavigatorProps } from './GraphNavigator'
 import { buildNavigationIndex, projectCrossLinks } from './graphIndex'
 import { layoutLevel, levelBounds, CARD_HEIGHT, CARD_WIDTH } from './layout'
 import { NodeTypeRegistry } from './nodeTypes'
+import { revealScope } from './revealScope'
 
 const node = (id: string, type = 'part'): Entity => ({
   id,
@@ -89,6 +91,44 @@ describe('graph navigation index', () => {
     )
     expect(index.children.get('root')?.map((e) => e.id)).toEqual(['child'])
     expect(index.crossLinks).toEqual([])
+  })
+})
+
+describe('hardware not yet added to the graph (SOLUSDEV-326)', () => {
+  it('keeps hardware not yet added to the graph off the canvas but in the snapshot', () => {
+    const hidden = (id: string, type = 'part'): Entity => ({
+      ...node(id, type),
+      properties: { in_graph: false, onboarded_by: 'me' }
+    })
+    const entities = [
+      node('board'),
+      hidden('robot', 'physical_robot'),
+      hidden('servo'),
+      { ...node('added'), properties: { in_graph: true } }
+    ]
+    const index = buildNavigationIndex(entities, [
+      edge('1', 'robot', 'servo'),
+      edge('2', 'board', 'servo', 'connected_to'),
+      edge('3', 'board', 'added')
+    ])
+    expect(index.roots.map((e) => e.id)).toEqual(['board'])
+    expect(index.children.get('board')?.map((e) => e.id)).toEqual(['added'])
+    expect(index.crossLinks).toEqual([])
+    expect(index.entities.get('robot')?.properties?.in_graph).toBe(false)
+  })
+
+  it('never reveals hardware not yet added to the graph (it has no card to select)', () => {
+    const entities = [node('board'), { ...node('servo'), properties: { in_graph: false } }]
+    const props = { projectId: 'p' } as GraphNavigatorProps
+    const index = buildNavigationIndex(entities, [])
+    expect(revealScope(props, index, 'servo')).toBeNull()
+    expect(revealScope(props, index, 'board')).toEqual({ index })
+    const scoped: GraphNavigatorProps = {
+      ...props,
+      scopeRootIds: ['root'],
+      scopeGraph: () => ({ entities, relations: [] })
+    }
+    expect(revealScope(scoped, buildNavigationIndex([], []), 'servo')).toBeNull()
   })
 })
 

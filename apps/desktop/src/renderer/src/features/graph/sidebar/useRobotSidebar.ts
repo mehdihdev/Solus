@@ -1,16 +1,16 @@
-// What the robot sidebar can prove (SOLUSDEV-250 P4): the category tree from the graph
-// snapshot alone, and three per-robot reads — active real bench sessions, pending link
-// suggestions, config provenance — cached per robot for the life of one snapshot, so
-// selecting never refetches and a revision bump is the only refresh.
+// What the robot sidebar can prove (SOLUSDEV-250 P4): the parts the robot `contains`
+// directly (SOLUSDEV-326) from the graph snapshot alone, and four per-robot reads — active
+// real bench sessions, pending link suggestions, config provenance, the robot's own brains —
+// cached per robot for the life of one snapshot, so selecting never refetches and a revision
+// bump is the only refresh.
 import { useEffect, useState } from 'react'
 import {
-  ROBOT_CATEGORIES,
-  ROBOT_CATEGORY_LABELS,
+  getEntityHardwareConfig,
   getHardwareConfig,
   listHardwareSuggestions,
+  type EntityHardwareConfigOut,
   type HardwareConfig,
-  type HardwareSuggestion,
-  type RobotCategory
+  type HardwareSuggestion
 } from '../../../lib/api/hardware'
 import {
   listBenchSessions,
@@ -18,12 +18,6 @@ import {
   type Entity,
   type Relation
 } from '../../../lib/api/resources'
-
-export interface CategoryRow {
-  key: RobotCategory
-  label: string
-  parts: Entity[]
-}
 
 export function childrenOf(
   id: string,
@@ -36,25 +30,6 @@ export function childrenOf(
       .map((edge) => edge.to_entity_id)
   )
   return entities.filter((entity) => ids.has(entity.id))
-}
-
-/** The seven categories in ROBOT_CATEGORIES order; a category the snapshot lacks is empty. */
-export function robotCategories(
-  robot: Entity,
-  entities: readonly Entity[],
-  relations: readonly Relation[]
-): CategoryRow[] {
-  const nodes = childrenOf(robot.id, entities, relations).filter(
-    (entity) => entity.type === 'robot_category'
-  )
-  return ROBOT_CATEGORIES.map((key) => {
-    const node = nodes.find((entity) => entity.properties?.category === key)
-    return {
-      key,
-      label: ROBOT_CATEGORY_LABELS[key],
-      parts: node ? childrenOf(node.id, entities, relations) : []
-    }
-  })
 }
 
 export type Connection = 'streaming' | 'none' | 'unknown'
@@ -88,15 +63,25 @@ function provenanceTags(config: HardwareConfig): Record<string, string> {
   return Object.fromEntries(Object.entries(tags).map(([id, by]) => [id, by.join('/')]))
 }
 
+/** A brain known only by its USB port position (binding `port-<location>`, device ref
+ *  `usb:port-<location>`) stays this robot's only while it stays in that port. */
+function portNote(own: EntityHardwareConfigOut): string {
+  const byPort = (own.config?.identity ?? []).some(
+    (brain) => brain.binding?.kind === 'usb_serial' && brain.binding.binding.startsWith('port-')
+  )
+  return byPort ? 'identity from the USB port — keep it in this port' : ''
+}
+
 async function readRobot(
   projectId: string,
   robotId: string,
   parts: readonly Entity[]
 ): Promise<RobotReads> {
-  const [sessions, suggestions, config] = await Promise.allSettled([
+  const [sessions, suggestions, config, own] = await Promise.allSettled([
     listBenchSessions(projectId, { status: 'active', mode: 'real' }),
     listHardwareSuggestions(projectId),
-    getHardwareConfig(projectId, robotId)
+    getHardwareConfig(projectId, robotId),
+    getEntityHardwareConfig(projectId, robotId)
   ])
   return {
     connection: sessions.status === 'fulfilled' ? connectionOf(sessions.value, parts) : 'unknown',
@@ -105,10 +90,7 @@ async function readRobot(
         ? suggestions.value.filter((suggestion) => suggestion.candidate_robot_id === robotId)
         : [],
     provenance: config.status === 'fulfilled' ? provenanceTags(config.value.config) : {},
-    identityNote:
-      config.status === 'fulfilled' && config.value.config.identity?.binding.startsWith('usb:port-')
-        ? 'identity from the USB port — keep it in this port'
-        : ''
+    identityNote: own.status === 'fulfilled' ? portNote(own.value) : ''
   }
 }
 
@@ -126,8 +108,7 @@ function cachedRead(
   CACHE.set(entities, perSnapshot)
   const hit = perSnapshot.get(robot.id)
   if (hit) return hit
-  const parts = robotCategories(robot, entities, relations).flatMap((row) => row.parts)
-  const read = readRobot(projectId, robot.id, parts)
+  const read = readRobot(projectId, robot.id, childrenOf(robot.id, entities, relations))
   perSnapshot.set(robot.id, read)
   return read
 }

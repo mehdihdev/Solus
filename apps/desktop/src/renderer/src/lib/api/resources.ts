@@ -12,6 +12,7 @@ import {
   type Page
 } from './client'
 import type { SolMode } from '../../store/settingsStore'
+import type { components } from './schema'
 
 export interface TeamSummary {
   team_id: string
@@ -153,6 +154,7 @@ export interface Entity {
   source_id?: string | null
   origin?: string
   version?: number
+  created_at?: string
   properties?: Record<string, unknown>
 }
 
@@ -1522,9 +1524,16 @@ export interface BenchSignalPoint {
   unit?: string | null
 }
 
+/** How the config says to draw a channel (SOLUSDEV-326); absent is a plot. */
+export type BenchChannelDisplay = NonNullable<components['schemas']['TelemetryChannel']['display']>
+
 export interface BenchSignalSeries {
   /** Optional exact channel role declared by the active local driver. */
   display_role?: 'primary' | 'diagnostic' | null
+  /** The channel's declared display, when not a plain plot. */
+  display?: BenchChannelDisplay
+  /** The channel's display range in its unit: the chart spans at least this. Never a bound. */
+  range?: components['schemas']['ChannelRange']
   signal: string
   points: BenchSignalPoint[]
 }

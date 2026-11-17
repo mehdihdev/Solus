@@ -1,0 +1,20 @@
+{
+  "card": {
+    "confirmation_id": "3d9a5f10-2b7c-4e6a-8c1d-9f0e4b2a7c55",
+    "conversation_id": "a4c8e2f6-1b3d-4f5a-9e7c-0d2b6f8a1c33",
+    "tool": "ask_user",
+    "card": {
+      "kind": "offer",
+      "title": "A Raspberry Pi is on your network",
+      "body": "raspberrypi.local. Your launch files expect a camera and a lidar on it.",
+      "more": null,
+      "field": null,
+      "primary": "Connect",
+      "secondary": "Not now",
+      "receipt": "Raspberry Pi connected",
+      "resumes": true
+    },
+    "expires_at": "2026-11-16T10:30:00+00:00"
+  },
+  "queued": 1
+}

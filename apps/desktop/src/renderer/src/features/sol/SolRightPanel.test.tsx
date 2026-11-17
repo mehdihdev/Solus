@@ -19,7 +19,12 @@ const chat: SolChat = {
   selectConversation: vi.fn(),
   startNewChat: vi.fn(),
   decide: vi.fn(),
-  fileArtifact: vi.fn()
+  fileArtifact: vi.fn(),
+  working: null,
+  sendNotice: vi.fn(),
+  answer: vi.fn(),
+  resumeCard: vi.fn(),
+  cardDecided: vi.fn()
 }
 
 describe('SolRightPanel', () => {

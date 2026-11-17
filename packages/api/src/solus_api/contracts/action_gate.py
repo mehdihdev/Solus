@@ -102,6 +102,8 @@ class ToolConfirmationEvent(BaseModel):
     summary: str = Field(max_length=2048)
     #: Empty when the tool offers no preview; the summary is then the consent.
     preview: list[DiffRow] = Field(default_factory=list, max_length=50)
+    #: SOLUSDEV-326: the Solus-authored card, when the tool authors one (presentation only).
+    card: Card | None = None
 
 
 class ConfirmationDecisionRequest(BaseModel):
@@ -149,15 +151,123 @@ def confirmation_decision_path(project_id: str, confirmation_id: str) -> str:
     )
 
 
+# ── SOLUSDEV-326: cards ─────────────────────────────────────────────────────
+
+#: The four kinds a card takes; the Hardware page's slot draws each its own way.
+CARD_KINDS: Final = ("offer", "approval", "step", "problem")
+CardKind = Literal["offer", "approval", "step", "problem"]
+
+OPEN_CARDS_ROUTE: Final = "/api/v1/projects/{project_id}/sol/cards/open"
+
+
+class CardField(BaseModel):
+    """A value the card shows, such as a proposed robot name. It is never sent back: an edit
+    becomes the person's answer turn, so the stored arguments never change."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1, max_length=40)
+    value: str = Field(max_length=200)
+
+
+class Card(BaseModel):
+    """The Solus-authored presentation of a parked call (SOLUSDEV-326).
+
+    Computed once when the call parks, from its STORED arguments, by the tool; stored beside the
+    row. Presentation only: never part of the consent or of the stale check, never a `DiffRow`.
+    The same copy in Guide and Expert; Guide adds `more`. `resumes` is set by the server: SOL
+    continues after any decision on this card.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: CardKind
+    #: At most 8 words, one line; an approval's starts "Approve:".
+    title: str = Field(min_length=1, max_length=80)
+    #: At most 2 lines; `backtick` spans render as code chips.
+    body: str = Field(max_length=400)
+    more: str | None = Field(default=None, max_length=300)
+    field: CardField | None = None
+    primary: str = Field(min_length=1, max_length=24)
+    secondary: str | None = Field(default=None, min_length=1, max_length=24)
+    #: The one line "Done so far" gains on approve.
+    receipt: str = Field(max_length=160)
+    resumes: bool = False
+
+
+class OpenCard(BaseModel):
+    """One parked call with a card, as the Hardware page's slot shows it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirmation_id: str
+    conversation_id: str
+    tool: str = Field(max_length=128)
+    card: Card
+    #: ISO 8601; the page turns an expired card into a Problem with "Ask again".
+    expires_at: str
+
+
+class OpenCards(BaseModel):
+    """`GET .../sol/cards/open`: the caller's oldest pending, unexpired card in this project,
+    across their conversations, and how many more wait."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    card: OpenCard | None = None
+    queued: int = Field(ge=0)
+
+
+class DeviceNotice(BaseModel):
+    """`MessageCreate.notice`: something was plugged in. The server checks the device is on the
+    caller's own machine now and writes the turn text itself (authored by Solus)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["device"]
+    device_ref: str = Field(min_length=1, max_length=512)
+
+
+class QuestionAnswer(BaseModel):
+    """`MessageCreate.answer`: the person's answer to an open `ask_user` card they own. Choice 0
+    is the primary button, 1 the secondary; the server writes the turn text itself. It may also
+    name an open card of theirs that shows a `field`: an edit, choice 0 with `text` the new
+    value, which expires the card without deciding it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: str
+    choice: Literal[0, 1]
+    text: str | None = Field(default=None, max_length=500)
+
+
+def open_cards_path(project_id: str) -> str:
+    """The open-card route with its segment escaped."""
+    return OPEN_CARDS_ROUTE.format(project_id=quote(project_id, safe=""))
+
+
+ToolConfirmationEvent.model_rebuild()  # `card` names Card, defined above it here
+
+
 __all__ = [
+    "CARD_KINDS",
     "CONFIRMATION_DECISION_ROUTE",
     "CONFIRMATION_TTL_MINUTES",
+    "OPEN_CARDS_ROUTE",
+    "Card",
+    "CardField",
+    "CardKind",
     "ConfirmationDecisionRequest",
     "ConfirmationOutcomeEnvelope",
     "ConfirmationStatus",
+    "DeviceNotice",
     "DiffRow",
+    "OpenCard",
+    "OpenCards",
+    "QuestionAnswer",
     "ToolConfirmationEvent",
     "ToolError",
     "ToolResult",
     "confirmation_decision_path",
+    "open_cards_path",
 ]

@@ -1,8 +1,8 @@
-import { memo, useEffect, useRef, useState, type PointerEvent, type ReactNode } from 'react'
+import { memo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import { SolusLogo } from '../../../components/ui/SolusLogo'
 import type { Entity } from '../../../lib/api/resources'
 import type { Point } from '../../../lib/api/workspace'
-import { markAwaited, markSafely } from '../../../lib/perf/marks'
+import { markSafely } from '../../../lib/perf/marks'
 import { integrationLogo } from '../../onboarding/integrationLogos'
 import type { FindingBadge } from '../useFindings'
 import { boundedPoint, CARD_HEIGHT, CARD_WIDTH } from './layout'
@@ -144,10 +144,6 @@ export const GraphCard = memo(function GraphCard(props: GraphCardProps): React.J
   const onEnter = (): void => props.onEnter(entity)
   const content = renderContent?.(entity)
   const previews = props.childPreviews?.slice(0, 4) ?? []
-  // The card of a robot the rail just confirmed is on screen: close the measure.
-  useEffect(() => {
-    markAwaited('hw:node_visible', entity.id)
-  }, [entity.id])
   const body = useBodyDrag(point, onPreview, onMove)
   // A keyboard activation (detail 0) is never the click that follows a drag.
   const unlessDragged =

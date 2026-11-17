@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid6 import uuid7
 
 from solus_api.core.errors import APIError
+from solus_api.graph.read_scope import visibility_attrs
 from solus_api.hardware.config import ConfigDraft, EntityHardwareConfig
 from solus_api.hardware.ownership import assign_parent
 from solus_api.hardware.store import put_entity_config
@@ -23,23 +24,18 @@ from solus_api.schemas import serialize_entity
 from solus_api.services.physical_robots import PhysicalRobotService, RobotName
 from solus_api.services.solus_graph import lock_project
 
-Category = Literal[
-    "sensors", "actuators", "controllers", "end_effectors", "power", "structure", "wiring"
-]
-
 
 class HardwareEntityCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["robot", "part"]
     name: RobotName
     parent_id: uuid.UUID | None = None
-    category: Category | None = None
     config: ConfigDraft | None = None
 
     @model_validator(mode="after")
     def _parent_shape(self) -> HardwareEntityCreate:
-        if self.kind == "robot" and (self.parent_id is not None or self.category is not None):
-            raise ValueError("A robot cannot have a hardware parent or category")
+        if self.kind == "robot" and self.parent_id is not None:
+            raise ValueError("A robot cannot have a hardware parent")
         return self
 
 
@@ -106,13 +102,27 @@ class ReviewedHardwareOperations:
         return encoded
 
     async def create(
-        self, key: uuid.UUID, body: HardwareEntityCreate
+        self,
+        key: uuid.UUID,
+        body: HardwareEntityCreate,
+        *,
+        in_graph: bool = True,
+        onboarded_by: uuid.UUID | None = None,
+        external_ref: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        previous, digest = await self.replay(key, "entity.create", body.model_dump(mode="json"))
+        """`in_graph`/`onboarded_by` come from Solus callers, never the body (SOLUSDEV-326): a
+        part given a parent robot takes the robot's visibility instead. So does a part's
+        `external_ref`, its telemetry identity: SOL's lone board is keyed by its device ref."""
+        # ponytail: `category: None` is the retired body field (SOLUSDEV-326 P2) a key minted
+        # before it went carried; keeping it keeps that key's digest. Constant, so harmless.
+        payload = {**body.model_dump(mode="json"), "category": None}
+        previous, digest = await self.replay(key, "entity.create", payload)
         if previous is not None:
             return dict(previous.response), True
         if body.kind == "robot":
-            entity = await PhysicalRobotService(self.session).create(self.project_id, body.name)
+            entity = await PhysicalRobotService(self.session).create(
+                self.project_id, body.name, in_graph=in_graph, onboarded_by=onboarded_by
+            )
         else:
             entity = GraphEntity(
                 id=uuid7(),
@@ -121,7 +131,8 @@ class ReviewedHardwareOperations:
                 name=body.name,
                 domain=Domain.PROJECT,
                 origin="manual",
-                attrs={"category": body.category} if body.category else {},
+                external_ref=external_ref,
+                attrs=visibility_attrs(in_graph=in_graph, onboarded_by=onboarded_by),
             )
             self.session.add(entity)
             await self.session.flush()
@@ -134,7 +145,8 @@ class ReviewedHardwareOperations:
                 parent_id=body.parent_id,
                 expected_parent_id=None,
                 version=entity.version,
-                category=body.category,
+                actor_id=self.user_id,
+                new=True,
             )
         entry = None
         if body.config is not None:

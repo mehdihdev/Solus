@@ -1,4 +1,3 @@
-import { createUnassignedPart } from './hardware/createUnassignedPart'
 // Workspace screen: honest empty states (SOLUSDEV-152) plus the entity
 // navigator (SOLUSDEV-242) — real entities render as bounded node cards, and
 // selecting one drives the shared focus store (one bounded neighbourhood
@@ -19,16 +18,11 @@ import * as hardwareApi from '../../lib/api/hardware'
 import { clearWorkspaceGraphCache } from './useWorkspaceGraph'
 import { emptySections, SECTION_LABELS } from './useSolusConfig'
 import { streamProjectEvents, type ProjectEvent } from '../../lib/api/projectEvents'
-import { useDetectedDevicesStore } from './hardware/detectedDevicesStore'
-import { placementNearRail } from './hardware/deviceCardRules'
-import { resetDeviceProposals } from './hardware/useDeviceProposals'
 import { reconcileWidgetGraph } from '../../lib/api/widgetGraph'
 import * as edgesApi from '../../lib/api/edges'
 import * as findingsApi from '../../lib/api/findings'
 
 vi.mock('../../lib/api/widgetGraph', () => ({ reconcileWidgetGraph: vi.fn() }))
-
-vi.mock('./hardware/createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
 
 vi.mock('../../lib/api/projectEvents', () => ({ streamProjectEvents: vi.fn() }))
 
@@ -49,16 +43,12 @@ vi.mock('../../lib/api/workspace', () => ({
 vi.mock('../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
   renamePhysicalRobot: vi.fn(),
-  deletePhysicalRobot: vi.fn(),
-  listRobotOrphans: vi.fn()
+  deletePhysicalRobot: vi.fn()
 }))
 
 vi.mock('../../lib/api/hardware', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/api/hardware')>()),
-  createHardwarePart: vi.fn(),
   listDetectedDevices: vi.fn(),
-  proposeDetected: vi.fn(),
-  confirmDetected: vi.fn(),
   listHardwareSuggestions: vi.fn(),
   getHardwareConfig: vi.fn()
 }))
@@ -114,24 +104,6 @@ beforeEach(() => {
     /* no frames by default */
   })
   vi.mocked(hardwareApi.listDetectedDevices).mockResolvedValue([])
-  vi.mocked(hardwareApi.proposeDetected).mockImplementation((_p, ref) =>
-    Promise.resolve({
-      device_ref: ref,
-      level: 'protocol',
-      summary: `M1 bus on ${ref}`,
-      driver_id: 'serial_bus',
-      params: {},
-      rows: [],
-      repo_matches: [],
-      disambiguation: null,
-      confidence: 0.9,
-      evidence: [],
-      tone: 'probably'
-    })
-  )
-  useDetectedDevicesStore.getState().reset()
-  resetDeviceProposals()
-  vi.mocked(robotApi.listRobotOrphans).mockResolvedValue({ data: [], meta: { has_next: false } })
   vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([])
   vi.mocked(workspaceApi.getWorkspaceLayout).mockResolvedValue({ version: 0, positions: {} })
   vi.mocked(findingsApi.listFindings).mockResolvedValue([])
@@ -165,10 +137,6 @@ describe('WorkspaceScreen — unlinked (dev bypass)', () => {
 
 describe('WorkspaceScreen — linked', () => {
   registerRobotDeletionTests()
-
-  registerRobotChildCreationTests()
-
-  registerRootRobotCreationTests()
 
   registerContainmentFocusTests()
 })
@@ -270,127 +238,20 @@ describe('WorkspaceScreen — live hardware events', () => {
     vi.mocked(resources.listAllEntities).mockResolvedValue([entity('e1', 'elbow motor')])
   }
 
-  it('renders no Unassigned parts banner even when orphans exist', async () => {
+  it("draws no device rail and asks nothing about a plugged-in device (onboarding is SOL's)", async () => {
     signIn()
-    vi.mocked(robotApi.listRobotOrphans).mockResolvedValue({
-      data: [entity('orphan', 'Drive motor')],
-      meta: { has_next: false }
-    })
-    render(<WorkspaceScreen />)
-    await screen.findByRole('button', { name: 'Select elbow motor' })
-    expect(screen.queryByText('Unassigned parts')).not.toBeInTheDocument()
-    expect(robotApi.listRobotOrphans).not.toHaveBeenCalled()
-  })
-
-  it('seeds the device store on ready and applies device frames without refetching the graph', async () => {
-    signIn()
-    vi.mocked(hardwareApi.listDetectedDevices).mockResolvedValue([
-      { ...device, device_ref: 'seed' }
-    ])
-    let release: () => void = () => undefined
     vi.mocked(streamProjectEvents).mockImplementation(async function* () {
       yield 'ready' as ProjectEvent
-      await new Promise<void>((resolve) => {
-        release = resolve
-      })
       yield { type: 'hardware.devices_changed', devices: [device] }
     })
     render(<WorkspaceScreen />)
     await screen.findByRole('button', { name: 'Select elbow motor' })
-    await waitFor(() =>
-      expect(useDetectedDevicesStore.getState().devices).toEqual([
-        { ...device, device_ref: 'seed' }
-      ])
-    )
-    expect(hardwareApi.listDetectedDevices).toHaveBeenCalledExactlyOnceWith('p1')
     const listCalls = vi.mocked(resources.listAllEntities).mock.calls.length
-    await act(async () => release())
-    await waitFor(() => expect(useDetectedDevicesStore.getState().devices).toEqual([device]))
+    await act(async () => undefined)
+    expect(document.querySelector('.graph-overlay')).toBeNull()
+    expect(screen.queryByRole('textbox', { name: 'Robot name' })).toBeNull()
+    expect(hardwareApi.listDetectedDevices).not.toHaveBeenCalled()
     expect(resources.listAllEntities).toHaveBeenCalledTimes(listCalls)
-  })
-})
-
-describe('WorkspaceScreen — the canvas-edge device rail', () => {
-  const { signIn, leader, boundPart, rail } = deviceRailFixture()
-
-  it('shows a card for an unbound device and none for a device a part already binds', async () => {
-    signIn()
-    render(<WorkspaceScreen />)
-    await screen.findByRole('button', { name: 'Select Leader' })
-    expect(await screen.findByText('Probably · M1 bus on usb_serial:FREE')).toBeInTheDocument()
-    expect(within(rail()).getAllByRole('article')).toHaveLength(1)
-    expect(screen.queryByText(/usb_serial:BOUND/)).toBeNull()
-    expect(hardwareApi.proposeDetected).toHaveBeenCalledExactlyOnceWith('p1', 'usb_serial:FREE')
-  })
-
-  it('confirms from the rail, shows the robot before the refetch resolves, reveals it and places it near the rail once', async () => {
-    signIn()
-    const arm: resources.Entity = { ...leader, id: 'arm', name: 'Bench arm' }
-    const armPart: resources.Entity = { ...boundPart, id: 'm2', source_key: 'usb_serial:FREE/1' }
-    vi.mocked(hardwareApi.confirmDetected).mockResolvedValue({
-      robot: arm,
-      part_ids: ['m2'],
-      config_entry_id: 'c',
-      session_id: 's',
-      session_error: null
-    })
-    vi.mocked(workspaceApi.saveWorkspaceLayout).mockImplementation(async (_p, layout) => layout)
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [arm],
-      edges: [],
-      truncated: false
-    })
-    render(<WorkspaceScreen />)
-    await userEvent.type(await screen.findByRole('textbox', { name: 'Robot name' }), 'Bench arm')
-    // The refetch is held: the robot must come from the wire's ConfirmOut, not the snapshot.
-    // Every read from here on is held (a slow runner can add live-revision re-reads), and all
-    // of them release together, so the count below is relative to the click, not absolute.
-    const held: Array<() => void> = []
-    const releaseRefetch = (): void => held.splice(0).forEach((release) => release())
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(4, 0, [{ id: 's1' }]))
-    vi.mocked(resources.listAllEntities).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          held.push(() => resolve([leader, boundPart, arm, armPart]))
-        })
-    )
-    const readsBeforeAdd = vi.mocked(resources.listAllEntities).mock.calls.length
-    await userEvent.click(within(rail()).getByRole('button', { name: 'Add' }))
-    expect(hardwareApi.confirmDetected).toHaveBeenCalledExactlyOnceWith(
-      'p1',
-      'usb_serial:FREE',
-      expect.objectContaining({ target: { kind: 'new', name: 'Bench arm' }, start_session: true })
-    )
-    expect(await screen.findByRole('button', { name: 'Select Bench arm' })).toBeInTheDocument()
-    expect(screen.getByTestId('graph-node-arm')).toHaveAttribute('data-domain', 'project')
-    await waitFor(() =>
-      expect(vi.mocked(resources.listAllEntities).mock.calls.length).toBeGreaterThan(readsBeforeAdd)
-    )
-    // Existing defaults may save, but the optimistic robot must not be persisted yet.
-    expect(
-      vi
-        .mocked(workspaceApi.saveWorkspaceLayout)
-        .mock.calls.every(([, layout]) => !Object.hasOwn(layout.positions, 'arm'))
-    ).toBe(true)
-    await act(async () => releaseRefetch())
-    // The authoritative robot replaces the optimistic one — still one card, same name.
-    expect(screen.getAllByRole('button', { name: 'Select Bench arm' })).toHaveLength(1)
-    await waitFor(() =>
-      expect(workspaceApi.saveWorkspaceLayout).toHaveBeenCalledWith(
-        'p1',
-        expect.objectContaining({
-          positions: expect.objectContaining({ arm: placementNearRail() })
-        }),
-        expect.anything()
-      )
-    )
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('arm'))
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Robot name' })).toBeNull())
-    expect(
-      vi
-        .mocked(workspaceApi.saveWorkspaceLayout)
-        .mock.calls.filter(([, layout]) => Object.hasOwn(layout.positions, 'arm'))
-    ).toHaveLength(1)
   })
 })
 
@@ -552,7 +413,8 @@ describe('WorkspaceScreen — transient state boundaries', () => {
 })
 
 function registerRobotDeletionTests(): void {
-  it('clears selected categories after deleting their robot from the overview', async () => {
+  // A legacy category row (SOLUSDEV-326 retired them) is still cleared with its robot.
+  it('clears selected legacy categories after deleting their robot from the overview', async () => {
     useAuthStore.setState({
       status: 'authenticated',
       user: { email: 'robot-qa@example.invalid' },
@@ -619,113 +481,6 @@ function registerRobotDeletionTests(): void {
   })
 }
 
-function registerRobotChildCreationTests(): void {
-  it('describes something new under the robot through Add › Hardware and reveals it', async () => {
-    useAuthStore.setState({
-      status: 'authenticated',
-      user: { email: 'robot-qa@example.invalid' },
-      accessToken: 'robot-qa'
-    })
-    linkProject()
-    // Existing authenticated accounts need not retain the old onboarding flag.
-    useWorkspaceStore.setState({ linked: false })
-    const leader: resources.Entity = {
-      ...entity('leader', 'Leader'),
-      type: 'physical_robot',
-      domain: 'project',
-      origin: 'manual',
-      source_id: null,
-      project_id: 'p1',
-      version: 1
-    }
-    const camera = { ...entity('cam', 'Wrist camera'), origin: 'manual', project_id: 'p1' }
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [leader, camera],
-      edges: [],
-      truncated: false
-    })
-    vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
-      entity: camera,
-      config_entry_id: 'entry-1'
-    })
-    render(<WorkspaceScreen />)
-    await screen.findByRole('button', { name: 'Select Leader' })
-    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
-    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
-    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
-    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Wrist camera')
-    expect(describe.getByRole('combobox', { name: 'Category' })).toHaveValue('sensors')
-    expect(describe.getByRole('combobox', { name: 'Part of' })).toHaveValue('leader')
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 1))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, camera])
-    vi.mocked(workspaceApi.listAllRelations).mockResolvedValue([
-      { id: 'r1', type: 'contains', from_entity_id: 'leader', to_entity_id: 'cam' }
-    ])
-    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
-    await waitFor(() =>
-      expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', 'leader', {
-        name: 'Wrist camera',
-        category: 'sensors',
-        specs: {},
-        lifecycle: 'planned'
-      })
-    )
-    expect(robotApi.createPhysicalRobot).not.toHaveBeenCalled()
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('cam'))
-    expect(await screen.findByRole('button', { name: 'Select Wrist camera' })).toBeInTheDocument()
-  })
-}
-
-function registerRootRobotCreationTests(): void {
-  it('adds the described part unassigned when the project has no robot', async () => {
-    linkProject()
-    const rover: resources.Entity = {
-      ...entity('rover', 'Rover MK2'),
-      type: 'part',
-      domain: 'mechanical',
-      origin: 'manual',
-      source_id: null,
-      project_id: 'p1',
-      version: 1
-    }
-    const bracket = entity('bracket', 'Bracket')
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket])
-    vi.mocked(resources.getGraphNeighborhood).mockResolvedValue({
-      entities: [rover],
-      edges: [],
-      truncated: false
-    })
-    vi.mocked(createUnassignedPart).mockResolvedValue(rover)
-    render(<WorkspaceScreen />)
-    await userEvent.click(await screen.findByRole('button', { name: 'Add' }))
-    await userEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
-    const describe = within(screen.getByRole('region', { name: 'Describe something new' }))
-    await userEvent.type(describe.getByRole('textbox', { name: 'What is it?' }), 'Rover MK2')
-    expect(describe.queryByRole('combobox', { name: 'Part of' })).not.toBeInTheDocument()
-    expect(
-      describe.getByText('This part stays unassigned until you choose a robot.')
-    ).toBeInTheDocument()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([bracket, rover])
-    await userEvent.click(describe.getByRole('button', { name: 'Add' }))
-    await waitFor(() =>
-      expect(createUnassignedPart).toHaveBeenCalledExactlyOnceWith(
-        'p1',
-        'Rover MK2',
-        expect.any(String),
-        expect.any(String)
-      )
-    )
-    expect(robotApi.createPhysicalRobot).not.toHaveBeenCalled()
-    expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
-    expect(await screen.findByRole('button', { name: 'Select Rover MK2' })).toBeInTheDocument()
-    await waitFor(() => expect(useFocusStore.getState().focusedEntityId).toBe('rover'))
-  })
-}
-
 function registerContainmentFocusTests(): void {
   it('serves a ⌘K jump to a nested node: enters its level and focuses it with its path (SOLUSDEV-317)', async () => {
     linkProject()
@@ -779,60 +534,6 @@ function registerContainmentFocusTests(): void {
   })
 }
 
-function deviceRailFixture() {
-  const device = (ref: string): hardwareApi.DetectedDeviceOut => ({
-    transport: 'usb_serial',
-    device_ref: ref,
-    identity: null,
-    level: 'transport',
-    board: null,
-    board_class: 'usb_bridge',
-    mcu_known: false,
-    confidence: 0.4,
-    evidence: [],
-    ambiguous: false,
-    last_seen_path: null
-  })
-  const leader: resources.Entity = {
-    ...entity('leader', 'Leader'),
-    type: 'physical_robot',
-    domain: 'project',
-    origin: 'manual',
-    source_id: null,
-    project_id: 'p1',
-    version: 1
-  }
-  const boundPart: resources.Entity = {
-    ...entity('m1', 'M1'),
-    domain: 'runtime',
-    source_key: 'usb_serial:BOUND/1'
-  }
-  const rail = (): HTMLElement => {
-    const overlay = document.querySelector('.graph-overlay')
-    if (!(overlay instanceof HTMLElement)) throw new Error('no rail')
-    return overlay
-  }
-  function signIn(): void {
-    useAuthStore.setState({
-      status: 'authenticated',
-      user: { email: 'robot-qa@example.invalid' },
-      accessToken: 'robot-qa'
-    })
-    linkProject()
-    vi.mocked(resources.getProject).mockResolvedValue(detailWith(2, 0, [{ id: 's1' }]))
-    vi.mocked(resources.listAllEntities).mockResolvedValue([leader, boundPart])
-    vi.mocked(hardwareApi.listDetectedDevices).mockResolvedValue([
-      device('usb_serial:BOUND'),
-      device('usb_serial:FREE')
-    ])
-    vi.mocked(streamProjectEvents).mockImplementation(async function* () {
-      yield 'ready' as ProjectEvent
-    })
-  }
-
-  return { signIn, leader, boundPart, rail }
-}
-
 it('renders registered Live Bench and widgets at overview and opens existing destinations', async () => {
   linkProject()
   const registration = (id: string, type: string, name: string): resources.Entity => ({
@@ -879,24 +580,17 @@ it('renders registered Live Bench and widgets at overview and opens existing des
   expect(openWidget).toHaveBeenCalledWith('parts-list')
 })
 
-it('opens the Hardware tab for a consumed external request only once', async () => {
+it("the Add modal's Hardware row opens the Hardware page through the shell", async () => {
   linkProject()
   vi.mocked(resources.getProject).mockResolvedValue(detailWith(1, 0))
   vi.mocked(resources.listAllEntities).mockResolvedValue([entity('part', 'Existing part')])
-  const consumed = vi.fn()
-  const view = render(
-    <WorkspaceScreen
-      openAddRequest={{ tab: 'hardware', sequence: 1 }}
-      onAddRequestConsumed={consumed}
-    />
-  )
-  expect(await screen.findByRole('tab', { name: 'Hardware' })).toHaveAttribute(
-    'aria-selected',
-    'true'
-  )
-  expect(consumed).toHaveBeenCalledWith(1)
-  view.rerender(<WorkspaceScreen onAddRequestConsumed={consumed} />)
-  expect(consumed).toHaveBeenCalledTimes(1)
+  const openHardware = vi.fn()
+  render(<WorkspaceScreen onOpenHardware={openHardware} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Add' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Hardware' }))
+  expect(openHardware).toHaveBeenCalledOnce()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'Describe something new' })).toBeNull()
 })
 
 it('initializes legacy registrations and renders the persisted Live Bench after refresh', async () => {

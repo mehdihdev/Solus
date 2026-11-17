@@ -1,30 +1,22 @@
-// The sidebar for a Physical Robot or one of its categories (SOLUSDEV-250 P4,
-// docs/wireflows/workspace.md). Rename, delete, unassigned parts, suggestions and the
-// connection line live here — the card carries none of them. Propose, never assert:
-// counts come from the snapshot, everything else from a read that says so when it failed.
-import { useEffect, useState, type ReactNode } from 'react'
+// The sidebar for a Physical Robot (SOLUSDEV-250 P4, docs/wireflows/workspace.md): the parts
+// it contains directly (SOLUSDEV-326), rename, delete, suggestions and the connection line
+// live here (lone parts are on the Hardware page) — the card carries none of them. Propose, never assert: counts
+// come from the snapshot, everything else from a read that says so when it failed. A legacy
+// `robot_category` row (retired by migration a32600000001) still lists what it contains.
+import { useState, type ReactNode } from 'react'
 import { Button } from '../../../components/ui/Button'
 import {
   acceptHardwareSuggestion,
-  attachParts,
   rejectHardwareSuggestion,
-  type HardwareSuggestion,
-  type RobotCategory
+  type HardwareSuggestion
 } from '../../../lib/api/hardware'
 import type { Entity, Relation } from '../../../lib/api/resources'
 import type { SolMode } from '../../../store/settingsStore'
-import { hardwareErrorText } from '../hardware/detected'
-import { RobotOrphans } from '../robots/RobotOrphans'
+import { hardwareErrorText } from '../hardware/hardwareErrorText'
 import { editableRobot, type RobotSession, type RobotView } from '../robots/robotSession'
 import { RobotRenameEditor } from './RobotRenameEditor'
 import { TwoStepDelete } from './TwoStepDelete'
-import {
-  childrenOf,
-  robotCategories,
-  useRobotReads,
-  type Connection,
-  type RobotReads
-} from './useRobotSidebar'
+import { childrenOf, useRobotReads, type Connection, type RobotReads } from './useRobotSidebar'
 
 export interface RobotSidebarProps {
   entity: Entity
@@ -38,7 +30,6 @@ export interface RobotSidebarProps {
   onReveal: (entityId: string) => void
 }
 
-const ORPHANS_READ = new WeakSet<readonly Entity[]>()
 const CONNECTION: Record<Connection, string> = {
   streaming: 'Connected · session open',
   none: 'Not connected',
@@ -180,24 +171,6 @@ function Suggestions({
   )
 }
 
-function useAttach(
-  projectId: string,
-  robotId: string,
-  onChanged: () => void
-): { attach: (part: Entity, category: RobotCategory) => void; error: string | null } {
-  const [error, setError] = useState<string | null>(null)
-  const attach = async (part: Entity, category: RobotCategory): Promise<void> => {
-    setError(null)
-    try {
-      await attachParts(projectId, robotId, { entity_ids: [part.id], category })
-      onChanged()
-    } catch (failure) {
-      setError(hardwareErrorText(failure))
-    }
-  }
-  return { attach: (part, category) => void attach(part, category), error }
-}
-
 function Heading({
   entity,
   session,
@@ -242,20 +215,15 @@ function Parts({
 }: Pick<RobotSidebarProps, 'entity' | 'mode' | 'entities' | 'relations' | 'onReveal'> & {
   reads: RobotReads | null
 }): React.JSX.Element {
+  const parts = childrenOf(entity.id, entities, relations)
   return (
     <section aria-label="Parts">
-      {robotCategories(entity, entities, relations).map((row) => (
-        <div key={row.key}>
-          <h3>
-            {row.label} · {row.parts.length}
-          </h3>
-          {row.parts.length === 0 ? (
-            <p>{COPY.empty[mode]}</p>
-          ) : (
-            <PartList parts={row.parts} tags={reads?.provenance} onReveal={onReveal} />
-          )}
-        </div>
-      ))}
+      <h3>Parts · {parts.length}</h3>
+      {parts.length === 0 ? (
+        <p>{COPY.empty[mode]}</p>
+      ) : (
+        <PartList parts={parts} tags={reads?.provenance} onReveal={onReveal} />
+      )}
     </section>
   )
 }
@@ -264,33 +232,14 @@ function RobotRail(props: RobotSidebarProps): React.JSX.Element {
   const { entity, session, state, online, mode, entities, relations, onChanged } = props
   const [armed, setArmed] = useState(false)
   const reads = useRobotReads(session.projectId, entity, online, entities, relations)
-  const { attach, error: attachError } = useAttach(session.projectId, entity.id, onChanged)
   const canEdit = online && editableRobot(entity, session.projectId)
   const error = state.error?.key === entity.id ? state.error.message : null
-  // Unassigned parts: one read per snapshot, shared by every robot's sidebar. Deferred a
-  // microtask because this child effect runs before the hook's `session.activate()` effect.
-  useEffect(() => {
-    if (!online || ORPHANS_READ.has(entities)) return
-    ORPHANS_READ.add(entities)
-    void Promise.resolve().then(() => session.load())
-  }, [session, online, entities])
   return (
     <>
       <Heading entity={entity} session={session} state={state} canEdit={canEdit} />
       <Parts {...props} reads={reads} />
       <ConnectionStatus entity={entity} reads={reads} />
       <Suggestions reads={reads} mode={mode} projectId={session.projectId} onChanged={onChanged} />
-      <RobotOrphans
-        session={session}
-        state={state}
-        mode={mode}
-        onAttach={canEdit ? { robotName: entity.name, attach } : undefined}
-        linkReview={{
-          robots: entities.filter((item) => item.type === 'physical_robot'),
-          onChanged
-        }}
-      />
-      {attachError && <p role="alert">{attachError}</p>}
       {canEdit && (
         <TwoStepDelete
           label="Delete robot"
@@ -309,6 +258,7 @@ function RobotRail(props: RobotSidebarProps): React.JSX.Element {
 
 export function RobotSidebar(props: RobotSidebarProps): ReactNode {
   const { entity, mode, entities, relations, onReveal } = props
+  // Only a legacy `robot_category` row takes the branch below; nothing writes one any more.
   if (entity.type !== 'robot_category') return <RobotRail {...props} />
   return (
     <>

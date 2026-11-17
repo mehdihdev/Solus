@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.graph.edges import write_edge
+from solus_api.hardware.config import HardwareConfig, TransportBinding
 from solus_api.hardware.runtime import resolve_runtime_config
-from solus_api.hardware.topology import MARKER, read_topology
+from solus_api.hardware.topology import endpoint_id, read_topology
+from solus_api.livebench.sessions import DeviceBusyError
 from solus_api.models import Domain, GraphEntity, Project, SolusSection, User
 from solus_api.services.artifacts import create_artifact, fetch_artifact_bytes
 from solus_api.services.events import emit_event
@@ -63,16 +65,30 @@ class PresenceService:
     def profiles(self) -> list[dict[str, Any]]:
         return self.provider.profiles() if self.provider else []
 
-    async def binding(self, robot_id: uuid.UUID, brain_id: uuid.UUID) -> tuple[str, str]:
+    async def brain(
+        self, robot_id: uuid.UUID, brain_id: uuid.UUID
+    ) -> tuple[HardwareConfig, TransportBinding]:
+        """The robot's accepted USB serial brain behind topology node `brain_id`, as its own
+        v1 document (SOLUSDEV-326: a robot may have several brains)."""
         topology = await read_topology(self.session, self.project_id, robot_id)
         config = await resolve_runtime_config(self.session, self.project_id, robot_id)
-        if config.identity is None or config.identity.kind.value != "usb_serial":
+        serial = {
+            endpoint_id(self.project_id, identity.device_ref): (brain, identity)
+            for brain in config.per_brain()
+            if (identity := brain.identity) is not None and identity.kind.value == "usb_serial"
+        }
+        if not serial:
             raise APIError(409, "presence_ineligible", "Select an accepted USB connection first")
-        expected = uuid.uuid5(self.project_id, f"{MARKER}:endpoint:{config.identity.device_ref}")
-        if brain_id != expected or not any(
+        if brain_id not in serial or not any(
             n.id == brain_id and n.role == "brain" for n in topology.nodes
         ):
             raise APIError(404, "not_found", "Presence target not found")
+        return serial[brain_id]
+
+    async def binding(self, robot_id: uuid.UUID, brain_id: uuid.UUID) -> tuple[str, str]:
+        """The brain's binding and the digest of its document, when presence firmware may go
+        on it — judged on that brain alone."""
+        config, identity = await self.brain(robot_id, brain_id)
         if (
             config.bus_map
             or config.parts
@@ -89,7 +105,7 @@ class PresenceService:
                 "presence_ineligible",
                 "Configured driver boards cannot receive presence firmware",
             )
-        return config.identity.binding, digest(config.model_dump(mode="json"))
+        return identity.binding, digest(config.model_dump(mode="json"))
 
     async def _wiring(
         self, robot_id: uuid.UUID, brain_id: uuid.UUID, body: PreparePresence
@@ -356,11 +372,19 @@ class PresenceService:
                 await self._check_plan_wiring(attrs)
             except APIError as exc:
                 raise PresenceRefusalError("Wiring changed before upload") from exc
-            await self.provider.upload(attrs["target"], attrs["profile"], binary)
-        except PresenceRefusalError:
+            await self.provider.upload(
+                attrs["target"],
+                attrs["profile"],
+                binary,
+                project_id=self.project_id,
+                user_id=self.user_id,
+            )
+        except (PresenceRefusalError, DeviceBusyError) as exc:
             entity.attrs = {**attrs, "status": "prepared"}
             await self.record_outcome(plan_id, attrs, "unchanged")
             await self.session.commit()
+            if isinstance(exc, DeviceBusyError):  # SOLUSDEV-326: refused before writing, too
+                raise APIError(409, "device_busy", str(exc), details=exc.details()) from None
             raise APIError(
                 409,
                 "presence_in_use",

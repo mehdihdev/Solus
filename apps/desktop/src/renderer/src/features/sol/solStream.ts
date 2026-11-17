@@ -103,7 +103,14 @@ export interface ReasonedItem {
 export type SolStreamEvent =
   | { type: 'token'; text: string }
   | ({ type: 'context_used' } & ContextUsedInfo)
-  | { type: 'tool_call'; callId: string; tool: string; args?: ToolArgs }
+  | {
+      type: 'tool_call'
+      callId: string
+      tool: string
+      args?: ToolArgs
+      /** SOLUSDEV-326: the tool's own line for what this call is doing (masked by the server). */
+      working?: string
+    }
   | { type: 'answer_source'; answer: AnswerSourceInfo }
   | { type: 'budget_reached'; budget: BudgetReachedInfo }
   | {
@@ -161,6 +168,8 @@ const MAX_REASONING_TEXT = 200
 const MAX_PROPOSING = 400
 // SOLUSDEV-326: the server's `thinking` frame bound (agent/stream.py THINKING_CHUNK_CAP).
 const MAX_THINKING_CHUNK = 2_000
+// SOLUSDEV-326: the server's `working` line bound (agent/stream.py WORKING_CAP).
+const MAX_WORKING = 160
 
 /** A non-empty word of at most `cap` characters. */
 function label(value: unknown, cap: number): value is string {
@@ -315,7 +324,15 @@ const VALIDATORS: Record<string, (d: Fields) => SolStreamEvent | null> = {
   tool_call: (d) => {
     if (!str(d.call_id) || !str(d.tool)) return null
     const args = toToolArgs(d.args)
-    return { type: 'tool_call', callId: d.call_id, tool: d.tool, ...(args ? { args } : {}) }
+    // SOLUSDEV-326: over the server's cap is unproven, so the line is left off (the call stays).
+    const working = label(d.working, MAX_WORKING) ? { working: d.working } : {}
+    return {
+      type: 'tool_call',
+      callId: d.call_id,
+      tool: d.tool,
+      ...(args ? { args } : {}),
+      ...working
+    }
   },
   // SOLUSDEV-321 P1-T2 / P1-T3: who answered, and the ceiling a turn reached. Counts and fixed
   // words written by Solus — never model text — bounded all the same.

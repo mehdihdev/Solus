@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable, Mapping
-from typing import Any, Final, NamedTuple
+from typing import TYPE_CHECKING, Any, Final, NamedTuple
 from uuid import UUID
 
 from solus_contracts.relations import EdgeEvidence, EvidenceKind, RelationType
@@ -39,6 +39,9 @@ from solus_api.graph.inference.common import (
 )
 from solus_api.livebench.scene.part_bindings import finite_number
 from solus_api.models import GraphEdge, GraphEntity
+
+if TYPE_CHECKING:
+    from solus_api.hardware.config import BusMapEntry
 
 MODULE: Final = "firmware_edges"
 COMMANDS_CONFIDENCE: Final = 0.8
@@ -130,21 +133,32 @@ def _goal_range(goals: list[GoalLiteral]) -> dict[str, Any] | None:
     }
 
 
-async def _bus_map(
-    session: AsyncSession, project_id: UUID, robot_id: UUID
-) -> dict[str, list[UUID]]:
-    from solus_api.hardware.runtime import resolve_runtime_config
-
-    try:
-        config = await resolve_runtime_config(session, project_id, robot_id)
-    except APIError:
-        return {}
+def _addresses(rows: Iterable[BusMapEntry]) -> dict[str, list[UUID]]:
     by_address: dict[str, list[UUID]] = {}
-    for item in config.bus_map:
+    for item in rows:
         key = normalize_address(item.address)
         if key is not None and item.part_entity_id is not None:
             by_address.setdefault(key, []).append(item.part_entity_id)
     return by_address
+
+
+async def _bus_map(
+    session: AsyncSession, project_id: UUID, robot_id: UUID
+) -> dict[UUID | None, dict[str, list[UUID]]]:
+    """address → parts per brain topology node (SOLUSDEV-326: the same address on two brains
+    is two parts); key None is the whole robot, for evidence on a brain no config names."""
+    from solus_api.hardware.runtime import resolve_runtime_config
+    from solus_api.hardware.topology import endpoint_id
+
+    try:
+        config = await resolve_runtime_config(session, project_id, robot_id)
+    except APIError:
+        return {None: {}}
+    maps: dict[UUID | None, dict[str, list[UUID]]] = {None: _addresses(config.bus_map)}
+    for brain in config.per_brain():
+        if brain.identity is not None:
+            maps[endpoint_id(project_id, brain.identity.device_ref)] = _addresses(brain.bus_map)
+    return maps
 
 
 async def _wired_pins(
@@ -180,14 +194,16 @@ class _FirmwareRun:
     ) -> None:
         self.session, self.project_id, self.writer = session, project_id, writer
         self.goals = goals
-        self.bus_maps: dict[UUID, dict[str, list[UUID]]] = {}
+        self.bus_maps: dict[UUID, dict[UUID | None, dict[str, list[UUID]]]] = {}
         self.pins: dict[UUID, dict[str, list[UUID]]] = {}
         self.code: dict[str, GraphEntity | None] = {}
 
-    async def bus_map(self, robot_id: UUID) -> dict[str, list[UUID]]:
+    async def bus_map(self, robot_id: UUID, brain_id: UUID) -> dict[str, list[UUID]]:
+        """The addresses on the evidence's brain; the whole robot's when no config names it."""
         if robot_id not in self.bus_maps:
             self.bus_maps[robot_id] = await _bus_map(self.session, self.project_id, robot_id)
-        return self.bus_maps[robot_id]
+        maps = self.bus_maps[robot_id]
+        return maps.get(brain_id, maps[None])
 
     async def wired(self, brain_id: UUID) -> dict[str, list[UUID]]:
         if brain_id not in self.pins:
@@ -233,7 +249,7 @@ class _FirmwareRun:
             robot_id = UUID(str(edge.attrs.get("robot_id")))
         except ValueError:
             return
-        matches = (await self.bus_map(robot_id)).get(key, []) if key else []
+        matches = (await self.bus_map(robot_id, edge.src_id)).get(key, []) if key else []
         if len(matches) != 1:
             return
         part = await self.part(matches[0])

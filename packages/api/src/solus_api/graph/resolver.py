@@ -11,8 +11,12 @@ land on the SAME part node. A sim session's packets resolve with `source=<provid
 session's provider, set server-side, never by a packet): besides `external_ref`, a part answers
 when its `attrs.sim_aliases` (rows `{provider, device_id}`, written only by the gated mapping
 tool) holds `{provider: source, device_id}`. ONE query, an `external_ref` hit winning — no second
-round trip per unresolved 50 Hz packet. Without a source nothing changes: the query is the
-pre-322 one.
+round trip per unresolved 50 Hz packet.
+
+SOLUSDEV-326 — a real session (no source) resolves the same way against a part's
+`attrs.ref_aliases`: the `<device ref>/<address>` of every brain the part sits behind, derived
+by `sync_topology` when a part is shared by two brains. A part on one brain has none, so its
+query answers exactly as before.
 """
 
 import time
@@ -28,6 +32,7 @@ from solus_api.graph.read_scope import current_scope
 from solus_api.models import GraphEntity
 
 ALIASES = "sim_aliases"
+REF_ALIASES = "ref_aliases"
 
 
 class EntityResolver(Protocol):
@@ -113,26 +118,30 @@ class DbEntityResolver:
     ) -> UUID | None:
         stmt = select(GraphEntity.id).where(
             GraphEntity.project_id == project_id,
-            current_scope(project_id).entity_predicate(),
+            # SOLUSDEV-326: ingest is never one person's view — hardware its onboarder has not
+            # added to the graph still resolves, and the cache above is not keyed by viewer.
+            current_scope(project_id).entity_predicate(include_hidden=True),
             GraphEntity.deleted_at.is_(None),
         )
         if source is None:
-            stmt = stmt.where(GraphEntity.external_ref == device_id)
+            # ponytail: no index serves `ref_aliases` (none serves a manual external_ref
+            # either; both filter the project's rows). Add one like a32200000002 if it shows.
+            stmt = _with_alias(stmt, device_id, REF_ALIASES, device_id)
         else:
-            stmt = _with_alias(stmt, device_id, source)
+            row = {"provider": source, "device_id": device_id}
+            stmt = _with_alias(stmt, device_id, ALIASES, row)
         async with self._sessionmaker() as session:
             entity_id: UUID | None = await session.scalar(stmt.limit(1))
             return entity_id
 
 
-def _with_alias(stmt: Select[tuple[UUID]], device_id: str, source: str) -> Select[tuple[UUID]]:
-    """`external_ref = :d OR attrs -> 'sim_aliases' @> [{provider: :s, device_id: :d}]`, the
-    `external_ref` hit first. `->` (not subscripting) so the partial GIN index on that expression
-    (`a32200000002`) serves the containment; `attrs ? 'sim_aliases'` is the index's predicate."""
+def _with_alias(
+    stmt: Select[tuple[UUID]], device_id: str, key: str, alias: object
+) -> Select[tuple[UUID]]:
+    """`external_ref = :d OR attrs -> :key @> [alias]`, the `external_ref` hit first. `->` (not
+    subscripting) so the partial GIN index on that expression (`a32200000002`, sim_aliases)
+    serves the containment; `attrs ? :key` is the index's predicate."""
     by_ref = GraphEntity.external_ref == device_id
-    aliases = GraphEntity.attrs.op("->", return_type=JSONB)(ALIASES)
-    by_alias = and_(
-        GraphEntity.attrs.has_key(ALIASES),
-        aliases.contains([{"provider": source, "device_id": device_id}]),
-    )
+    aliases = GraphEntity.attrs.op("->", return_type=JSONB)(key)
+    by_alias = and_(GraphEntity.attrs.has_key(key), aliases.contains([alias]))
     return stmt.where(or_(by_ref, by_alias)).order_by(case((by_ref, 0), else_=1))

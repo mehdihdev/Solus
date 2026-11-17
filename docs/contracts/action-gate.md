@@ -30,15 +30,18 @@ this file is a bug.
 
 ## Where every shape comes from
 
-| Shape                                                                      | Source                                    |
-| -------------------------------------------------------------------------- | ----------------------------------------- |
-| `ConfirmationStatus` (incl. `STALE`)                                       | `solus_api/models.py:176-190`             |
-| `ToolConfirmation` columns (`args`, `summary`, `preview`, `expires_at`, …) | `solus_api/models.py:654-699`             |
-| The decision body                                                          | `solus_api/schemas.py:166-175`            |
-| The decide endpoint                                                        | `solus_api/routers/sol.py:446-494`        |
-| Park / decide / STALE detection / TTL                                      | `solus_api/agent/confirmations.py`        |
-| The streamed `tool_confirmation` event                                     | `solus_api/agent/stream.py:57-81`         |
-| `ToolResult` / `ToolError` / `ToolErrorCode`                               | `solus_api/agent/tools/shapes.py` (W0-04) |
+| Shape                                                                      | Source                                                                      |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `ConfirmationStatus` (incl. `STALE`)                                       | `solus_api/models.py:176-190`                                               |
+| `ToolConfirmation` columns (`args`, `summary`, `preview`, `expires_at`, …) | `solus_api/models.py:654-699`                                               |
+| The decision body                                                          | `solus_api/schemas.py:166-175`                                              |
+| The decide endpoint                                                        | `solus_api/routers/sol.py:446-494`                                          |
+| Park / decide / STALE detection / TTL                                      | `solus_api/agent/confirmations.py`                                          |
+| The streamed `tool_confirmation` event                                     | `solus_api/agent/stream.py:57-81`                                           |
+| `ToolResult` / `ToolError` / `ToolErrorCode`                               | `solus_api/agent/tools/shapes.py` (W0-04)                                   |
+| SOLUSDEV-326: the card at park time, the `working` line                    | `solus_api/agent/cards.py`                                                  |
+| SOLUSDEV-326: `GET …/sol/cards/open`, `MessageCreate.answer`               | `solus_api/routers/sol_cards.py`                                            |
+| SOLUSDEV-326: `MessageCreate.notice`; `ask_user`; the card resume          | `routers/sol_notice.py`; `agent/tools/ask_user.py`; `routers/sol_resume.py` |
 
 ---
 
@@ -250,3 +253,52 @@ must not be retried automatically. Preserve native single-use bindings, project
 and source restrictions, fingerprints and postwrite readback. Unknown/destructive,
 remote publish, installs, hardware, credential/permission operations remain
 manual. No model/fork-supplied metadata can opt into routine execution.
+
+## Cards, open cards, notices and answers — SOLUSDEV-326 (2026-11-16)
+
+Approved in-session on 2026-11-16 (the P2 approval checkpoint); items 4 and 5 amended in-session on
+2026-11-17 (the P3 push point: the notice debounce, an answer's conversation, and an edit answering
+its card). Additive and optional; the decision
+body, `ConfirmationStatus`, approval with the STORED arguments, `invoke_stored` and the STALE
+check are unchanged. Twins: `action-gate.ts`, `solus_api/contracts/action_gate.py`, the fixtures
+`pending-with-card.json` and `open-card.json`, and `_fields.json`.
+
+1. **`Card`** — the Solus-authored presentation of a parked call: `kind` (`offer`, `approval`,
+   `step`, `problem`), `title` (≤ 8 words; an approval's starts "Approve:"), `body` (≤ 2 lines;
+   backtick spans render as code chips), `more` (Guide mode's one-sentence explanation; null in
+   Expert), `field` (`{label, value}`, shown only — an edit becomes the person's answer turn, never
+   arguments), `primary` and `secondary` button labels (≤ 24 characters), `receipt` (the line "Done
+   so far" gains on approve) and `resumes` (server-set). The tool computes it once at park time from
+   the stored arguments; it is stored in the nullable `tool_confirmations.card` column and is never
+   part of the consent or stale keys, and never a `DiffRow`.
+2. **`card` on the existing surfaces** — optional on the `tool_confirmation` frame and on each row
+   of `GET /sol/conversations/{id}/confirmations`.
+3. **`GET /api/v1/projects/{project_id}/sol/cards/open`** → `{data: {card: OpenCard | null,
+queued}}`. `OpenCard` is `{confirmation_id, conversation_id, tool, card, expires_at}`: the
+   caller's oldest PENDING, unexpired row with a non-null `card` in this project, across their
+   non-deleted conversations; `queued` counts the rest. Member role; another user's rows never; a
+   row with no card (Onshape, `code.exec`, drive) never reaches the slot.
+4. **`MessageCreate.notice`** — `{kind: "device", device_ref}`, exclusive with `content`,
+   `screenshot`, `resume_confirmation_id`, `process_prompt` and `answer`. The server checks the
+   device is enumerated on the caller's own machine now (422 otherwise), writes the turn text itself
+   and stores the turn with `attrs.authored_by = "solus"`. A second notice for the same device
+   within 2 s → `409 notice_debounced`.
+5. **`MessageCreate.answer`** — `{question_id, choice: 0 | 1, text?}` (≤ 500 characters) answers an
+   open card the caller owns, posted in the card's own conversation (else 404):
+
+   - an `ask_user` question (a `tool_confirmations` row, `tool = "ask_user"`, with a card): closed,
+     0 → approved, 1 → rejected (as today; no new status); the server writes the user turn from
+     the button's label plus `text`;
+   - a card with a `field` (an edit): `text` is the new value. The server expires the card without
+     deciding it (no dismissal, no event) and writes the turn `<field.label>: "<text>"`.
+
+   Not pending or not theirs → 404. The decide body stays decision-only. Exclusive with `content`,
+   `notice`, `resume_confirmation_id` and `process_prompt`. A typed message still resets the resume
+   chain.
+
+6. **`working`** — an optional Solus-authored line on the `tool_call` frame ("Reading the USB
+   adapter on /dev/ttyUSB0"), from the tool's `working(args)`; redacted like `args`.
+7. **Resume after a card** — `sol_resume` admits a resume after a decided row whose STORED
+   `card.resumes` is true (approve, reject / "Not now", refused), besides today's command tools.
+   Card chains cap at 40 consecutive resumes (commands keep 6). The flag is never client-supplied;
+   the renderer and the server share one parity-tested list.

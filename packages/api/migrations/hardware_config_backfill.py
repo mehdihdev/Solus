@@ -7,16 +7,32 @@ abort rather than inventing a winner or an additional evidence store.
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
-from solus_api.hardware.config import EntityHardwareConfig, _leaf_items
-from solus_api.hardware.migration import split_legacy_document
 from sqlalchemy.engine import Connection
+
+if TYPE_CHECKING:  # the frozen sibling, resolved by path for the type checker
+    from hardware_config_v2 import EntityHardwareConfig, leaf_items, split_legacy_document
+else:
+    # SOLUSDEV-326: the live schema moved on (an identity list), so this revision reads its
+    # payloads with the frozen v2 copy beside it, loaded by path like this module itself.
+    _FROZEN = "solus_hardware_config_v2_260"
+    if _FROZEN not in sys.modules:
+        _spec = spec_from_file_location(_FROZEN, Path(__file__).with_name("hardware_config_v2.py"))
+        assert _spec is not None and _spec.loader is not None
+        sys.modules[_FROZEN] = module_from_spec(_spec)
+        _spec.loader.exec_module(sys.modules[_FROZEN])
+    EntityHardwareConfig = sys.modules[_FROZEN].EntityHardwareConfig
+    leaf_items = sys.modules[_FROZEN].leaf_items
+    split_legacy_document = sys.modules[_FROZEN].split_legacy_document
 
 Row = dict[str, Any]
 _PARTS = {"part", "component", "cad_part", "assembly"}
@@ -34,7 +50,7 @@ def _signature(document: EntityHardwareConfig, field: str) -> tuple[Any, dict[st
     value = document.model_dump(mode="json")[field]
     evidence = {
         path: document.provenance_of(path).model_dump(mode="json")
-        for path, _ in _leaf_items(value, field + ".")
+        for path, _ in leaf_items(value, field + ".")
     }
     return value, evidence
 
@@ -55,7 +71,7 @@ def _merge(first: EntityHardwareConfig, second: EntityHardwareConfig) -> EntityH
                 )
         elif other[field] is not None and other[field] != []:
             merged[field] = other[field]
-            for path, _ in _leaf_items(other[field], field + "."):
+            for path, _ in leaf_items(other[field], field + "."):
                 merged["provenance"][path] = second.provenance_of(path).model_dump(mode="json")
     return EntityHardwareConfig.model_validate(merged)
 

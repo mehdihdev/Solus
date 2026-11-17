@@ -9,8 +9,8 @@
 //   ./.ds-sync/node_modules/.bin/tailwindcss \
 //     -i apps/desktop/src/renderer/src/assets/main.css -o .design-sync/solus-base.css
 
-// Component CSS. hardware.css is already imported by DeviceCard; the rest are
-// imported by container components outside this surface, so we pull them in
+// Component CSS. These are imported by container components outside this
+// surface, so we pull them in
 // here or the class-based styling (.graph-node-*, .widget-*, …) is missing.
 import '../apps/desktop/src/renderer/src/features/canvas/canvas.css'
 import '../apps/desktop/src/renderer/src/features/graph/hardware/hardware.css'
@@ -46,9 +46,6 @@ export { Wordmark } from '../apps/desktop/src/renderer/src/components/ui/Wordmar
 
 // -- Cards & tiles ---------------------------------------------------------
 export { GraphCard } from '../apps/desktop/src/renderer/src/features/graph/navigation/GraphCard'
-// DeviceCard: re-included once the repo renamed deviceCard.ts -> deviceCardRules.ts
-// (SOLUSDEV-260), which removed the case-collision that used to break esbuild.
-export { DeviceCard } from '../apps/desktop/src/renderer/src/features/graph/hardware/DeviceCard'
 export {
   ExtensionCard,
   ExtensionIconTile,
@@ -77,7 +74,6 @@ export { FrameSkeleton, FrameCard } from '../apps/desktop/src/renderer/src/featu
 export { TwoStepDelete } from '../apps/desktop/src/renderer/src/features/graph/sidebar/TwoStepDelete'
 
 // -- Forms & settings ------------------------------------------------------
-export { LabeledSelect } from '../apps/desktop/src/renderer/src/features/graph/hardware/LabeledSelect'
 export { Section, Row, InlineError } from '../apps/desktop/src/renderer/src/features/settings/settingsUi'
 export { StepDots } from '../apps/desktop/src/renderer/src/features/onboarding/StepDots'
 export { GithubButton } from '../apps/desktop/src/renderer/src/features/auth/GithubButton'

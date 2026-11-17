@@ -269,6 +269,30 @@ async def test_alias_of_another_provider_does_not_match(engine: AsyncEngine) -> 
     assert await resolver.resolve(project, SIM_DEVICE, source=SIM) is not None
 
 
+async def test_real_source_resolves_a_parts_ref_alias_with_external_ref_winning(
+    engine: AsyncEngine,
+) -> None:
+    """SOLUSDEV-326: a part behind two brains answers to each brain's `<device>/<address>` —
+    its `attrs.ref_aliases` (derived by `sync_topology`) — in the one real-source query, an
+    `external_ref` hit winning; never under a sim source, never in another project."""
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    project, stranger = await _project(maker, "refs"), await _project(maker, "refs-stranger")
+    second = "usb:FAKE-ARM-0002/9"
+    shared = _part(project, "shared joint")
+    shared.attrs = {"ref_aliases": [REAL_REF, second]}
+    shared_id, ref_id = await _seed(
+        maker, project, shared, _part(project, "by ref", external_ref=REAL_REF)
+    )
+    resolver = DbEntityResolver(maker)
+
+    with _counting_statements(engine) as statements:
+        assert await resolver.resolve(project, second) == shared_id
+    assert len(statements) == 1, statements
+    assert await resolver.resolve(project, REAL_REF) == ref_id != shared_id
+    assert await resolver.resolve(project, second, source=SIM) is None
+    assert await resolver.resolve(stranger, second) is None
+
+
 async def test_unmapped_sim_device_stays_unresolved(engine: AsyncEngine) -> None:
     maker = async_sessionmaker(engine, expire_on_commit=False)
     project = await _project(maker, "unmapped")

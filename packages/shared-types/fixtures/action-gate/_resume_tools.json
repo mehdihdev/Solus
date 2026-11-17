@@ -1,0 +1,9 @@
+[
+  "code.create_environment",
+  "code.exec",
+  "code.install",
+  "code.process_start",
+  "code.profile_capture",
+  "code.run",
+  "code.test"
+]

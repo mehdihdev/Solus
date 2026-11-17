@@ -204,15 +204,15 @@ export function rulesSummary(rules: SourcingRulesApi | null): string {
   return parts.length > 0 ? parts.join(' · ') : 'No rules set'
 }
 
-export interface CategoryOption {
+/** A Physical Robot a sourced part can join (the Workspace door; it contains the part). */
+export interface RobotOption {
   id: string
   label: string
 }
 
-/** Motors land in "Actuators / motors" unless the user says otherwise; else the first category. */
-export function defaultCategory(categories: readonly CategoryOption[]): string {
-  const actuators = categories.find((c) => /^actuators/i.test(c.label))
-  return (actuators ?? categories[0])?.id ?? ''
+/** The first robot unless the user picks another; nothing when the project has none. */
+export function defaultRobot(robots: readonly RobotOption[]): string {
+  return robots[0]?.id ?? ''
 }
 
 /** The host a safe https link goes to, for link text — the user sees where a model-chosen URL leads. */

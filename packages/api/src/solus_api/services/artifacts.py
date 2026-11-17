@@ -12,15 +12,18 @@ import uuid
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 from uuid6 import uuid7
 
 from solus_api.core.errors import APIError
+from solus_api.graph import kinds
+from solus_api.graph.read_scope import current_scope
 from solus_api.models import (
     Artifact,
     ArtifactScope,
+    GraphEntity,
     Project,
     artifact_is_accessible,
     ensure_utc,
@@ -142,6 +145,33 @@ def _ensure_live_and_accessible(
     return artifact
 
 
+#: The `source_tool` of a bench run's saved manifest (`livebench/runs/store.save`).
+CAPTURE_TOOL = "bench.capture"
+
+
+async def _hidden_run_manifest(
+    session: AsyncSession, project_id: uuid.UUID, artifact: Artifact
+) -> bool:
+    """SOLUSDEV-326 (docs/api/hardware.md §1a): a bench run's saved manifest is seen by whoever
+    sees the run, which carries its robot's keys; the same 404 as an unknown artifact. The
+    system view sees all."""
+    scope = current_scope(project_id)
+    if artifact.source_tool != CAPTURE_TOOL or scope.viewer_id is None:
+        return False
+    key = str(artifact.id)
+    runs = await session.scalars(
+        select(GraphEntity.attrs).where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == kinds.BENCH_RUN,
+            or_(
+                GraphEntity.attrs["checkpoint_id"].astext == key,
+                GraphEntity.attrs["summary"]["artifact_id"].astext == key,
+            ),
+        )
+    )
+    return any(scope.hides(attrs) for attrs in runs)
+
+
 async def get_artifact_metadata(
     session: AsyncSession,
     *,
@@ -153,6 +183,8 @@ async def get_artifact_metadata(
 ) -> Artifact:
     artifact = await session.get(Artifact, artifact_id)
     if artifact is not None and artifact.project_id != project_id:
+        artifact = None
+    if artifact is not None and await _hidden_run_manifest(session, project_id, artifact):
         artifact = None
     return _ensure_live_and_accessible(
         artifact,

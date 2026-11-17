@@ -30,7 +30,11 @@ from solus_api.hardware.topology import (
     RobotTopology,
     TopologyEdge,
     TopologyNode,
+    endpoint_id,
+    host_brain_id,
+    host_endpoints,
     read_topology,
+    serving,
 )
 from solus_api.models import (
     Domain,
@@ -187,23 +191,23 @@ class HostTopologyService:
             )
         entry, config = await read_entity_config(self.session, self.project_id, robot_id)
         runtime = await resolve_runtime_config(self.session, self.project_id, robot_id)
-        if (
-            entry is None
-            or runtime.identity is None
-            or runtime.identity.kind.value not in ("usb_serial", "usb_can")
-        ):
+        # The brain behind the chosen endpoint (SOLUSDEV-326: a robot may have several).
+        usb = {
+            endpoint_id(self.project_id, brain.identity.device_ref): brain.identity.device_ref
+            for brain in runtime.per_brain()
+            if brain.identity is not None and brain.identity.kind.value in ("usb_serial", "usb_can")
+        }
+        if entry is None or not usb:
             raise APIError(409, "proposal_changed", "The robot has no accepted USB endpoint")
         topology = await read_topology(self.session, self.project_id, robot_id)
         endpoint = next(
             (n for n in topology.nodes if n.id == body.endpoint_id and n.role == "brain"), None
         )
-        from solus_api.hardware.topology import MARKER
-
-        expected = uuid.uuid5(self.project_id, f"{MARKER}:endpoint:{runtime.identity.device_ref}")
-        if endpoint is None or body.endpoint_id != expected:
+        device_ref = usb.get(body.endpoint_id)
+        if endpoint is None or device_ref is None:
             raise APIError(409, "proposal_changed", "The accepted controller endpoint changed")
         devices = await self.provider.devices()
-        if not any(item.get("device_ref") == runtime.identity.device_ref for item in devices):
+        if not any(item.get("device_ref") == device_ref for item in devices):
             raise APIError(
                 404, "device_not_found", "The accepted USB endpoint is not currently present"
             )
@@ -242,19 +246,20 @@ class HostTopologyService:
             ],
         )
 
-    async def _rows(self, robot_id: uuid.UUID) -> list[GraphEdge]:
-        return list(
-            await self.session.scalars(
-                select(GraphEdge).where(
-                    GraphEdge.project_id == self.project_id,
-                    GraphEdge.attrs["robot_id"].astext == str(robot_id),
-                    GraphEdge.attrs["managed_by"].astext == HOST_MARKER,
-                    GraphEdge.origin == "manual",
-                    GraphEdge.source_id.is_(None),
-                    GraphEdge.deleted_at.is_(None),
-                )
+    async def _rows(self, robot_id: uuid.UUID, endpoint: uuid.UUID) -> list[GraphEdge]:
+        """This robot's live reviewed host edges that serve `endpoint` (SOLUSDEV-326: an attach
+        is scoped per endpoint; the robot → host and host → USB edges serve every endpoint)."""
+        rows = await self.session.scalars(
+            select(GraphEdge).where(
+                GraphEdge.project_id == self.project_id,
+                GraphEdge.attrs["robot_id"].astext == str(robot_id),
+                GraphEdge.attrs["managed_by"].astext == HOST_MARKER,
+                GraphEdge.origin == "manual",
+                GraphEdge.source_id.is_(None),
+                GraphEdge.deleted_at.is_(None),
             )
         )
+        return [row for row in rows if str(endpoint) in host_endpoints(row.attrs)]
 
     async def _preview(
         self,
@@ -264,51 +269,45 @@ class HostTopologyService:
         name: str,
         software: GraphEntity | None,
     ) -> RobotTopology:
-        old = await self._rows(robot_id)
-        old_ids = {e.src_id for e in old} | {e.dst_id for e in old}
-        old_ids.discard(body.endpoint_id)
-        host_id = uuid.uuid5(self.project_id, f"{HOST_MARKER}:host:{body.machine_id}")
+        old = await self._rows(robot_id, body.endpoint_id)
+        retired = [e for e in old if host_endpoints(e.attrs) == {str(body.endpoint_id)}]
+        links = {e.id: e for e in topology.edges if e.id not in {row.id for row in retired}}
+        held = {e.source for e in links.values()} | {e.target for e in links.values()}
+        gone = {e.src_id for e in retired} | {e.dst_id for e in retired}
+        gone -= held | {body.endpoint_id}
+        host_id = host_brain_id(self.project_id, body.machine_id)
         bus_id = uuid.uuid5(host_id, "usb")
         evidence = [Evidence(by="user", source=f"source:{body.local_source_id}")]
         if software is not None:
             evidence.append(Evidence(by="user", source=f"entity:{software.id}"))
-        nodes = [n for n in topology.nodes if n.id not in old_ids]
-        nodes = [
-            n.model_copy(update={"brain_kind": body.endpoint_brain_kind})
+        nodes = {
+            n.id: n.model_copy(update={"brain_kind": body.endpoint_brain_kind})
             if n.id == body.endpoint_id and body.endpoint_brain_kind
             else n
-            for n in nodes
-        ]
-        nodes.extend(
-            [
-                TopologyNode(
-                    id=host_id,
-                    name=name,
-                    role="brain",
-                    brain_kind="host",
-                    channel="local",
-                    software=software.name if software else None,
-                    evidence=evidence,
-                ),
-                TopologyNode(id=bus_id, name="USB", role="bus", channel="usb", evidence=evidence),
-            ]
+            for n in topology.nodes
+            if n.id not in gone
+        }
+        nodes[host_id] = TopologyNode(
+            id=host_id,
+            name=name,
+            role="brain",
+            brain_kind="host",
+            channel="local",
+            software=software.name if software else None,
+            evidence=evidence,
         )
-        edges = [e for e in topology.edges if e.id not in {row.id for row in old}]
+        nodes[bus_id] = TopologyNode(
+            id=bus_id, name="USB", role="bus", channel="usb", evidence=evidence
+        )
         for src, dst in ((host_id, bus_id), (bus_id, body.endpoint_id)):
-            edges.append(
-                TopologyEdge(
-                    id=uuid.uuid5(robot_id, f"{HOST_MARKER}:{src}:{dst}"),
-                    source=src,
-                    target=dst,
-                    protocol="usb",
-                )
-            )
-        targets = {edge.target for edge in edges}
+            edge_id = uuid.uuid5(robot_id, f"{HOST_MARKER}:{src}:{dst}")
+            links[edge_id] = TopologyEdge(id=edge_id, source=src, target=dst, protocol="usb")
+        targets = {edge.target for edge in links.values()}
         return RobotTopology(
             robot_id=robot_id,
-            nodes=sorted(nodes, key=lambda n: str(n.id)),
-            edges=sorted(edges, key=lambda e: str(e.id)),
-            roots=sorted((n.id for n in nodes if n.id not in targets), key=str),
+            nodes=sorted(nodes.values(), key=lambda n: str(n.id)),
+            edges=sorted(links.values(), key=lambda e: str(e.id)),
+            roots=sorted((n for n in nodes if n not in targets), key=str),
         )
 
     async def confirm(
@@ -353,9 +352,9 @@ class HostTopologyService:
     async def _persist(
         self, robot_id: uuid.UUID, body: HostAttachment, topology: RobotTopology
     ) -> None:
-        for previous_edge in await self._rows(robot_id):
-            previous_edge.deleted_at = utcnow()
-        host = next(n for n in topology.nodes if n.brain_kind == "host")
+        declared = await self._release(robot_id, body)
+        host_id = host_brain_id(self.project_id, body.machine_id)
+        host = next(n for n in topology.nodes if n.id == host_id)
         bus_id = uuid.uuid5(host.id, "usb")
         for node in (host, next(n for n in topology.nodes if n.id == bus_id)):
             entity = await self.session.get(GraphEntity, node.id)
@@ -390,20 +389,26 @@ class HostTopologyService:
         ]
         for src, dst, relation in relationships:
             edge_id = uuid.uuid5(robot_id, f"{HOST_MARKER}:{src}:{dst}")
-            attrs = {
+            current = await self.session.get(GraphEdge, edge_id)
+            served = (
+                host_endpoints(current.attrs)
+                if current is not None and current.deleted_at is None
+                else set()
+            )
+            base = {
                 "managed_by": HOST_MARKER,
                 "robot_id": str(robot_id),
-                "endpoint_id": str(body.endpoint_id),
                 "protocol": "usb" if relation == RELATION else None,
                 "address": None,
             }
+            attrs = serving(base, served | {str(body.endpoint_id)})
             if dst == host.id:
                 attrs["software"] = host.software
                 attrs["software_entity_id"] = (
                     str(body.software_entity_id) if body.software_entity_id else None
                 )
             if dst == body.endpoint_id:
-                attrs["brain_kind"] = next(n.brain_kind for n in topology.nodes if n.id == dst)
+                attrs["brain_kind"] = declared
             await write_edge(
                 self.session,
                 project_id=self.project_id,
@@ -419,3 +424,22 @@ class HostTopologyService:
                 managed_by=HOST_MARKER,
             )
         await self.session.flush()
+
+    async def _release(self, robot_id: uuid.UUID, body: HostAttachment) -> str | None:
+        """Let go of this endpoint's previous host edges — an edge still serving another endpoint
+        keeps serving it — and return the brain kind to record: the one this attach declares,
+        else the one declared before (never a config fact copied into the overlay)."""
+        old = await self._rows(robot_id, body.endpoint_id)
+        before = (
+            str(edge.attrs["brain_kind"])
+            for edge in old
+            if edge.dst_id == body.endpoint_id and edge.attrs.get("brain_kind")
+        )
+        declared: str | None = body.endpoint_brain_kind or next(before, None)
+        for edge in old:
+            rest = host_endpoints(edge.attrs) - {str(body.endpoint_id)}
+            if rest:
+                edge.attrs = serving(edge.attrs, rest)
+            else:
+                edge.deleted_at = utcnow()
+        return declared

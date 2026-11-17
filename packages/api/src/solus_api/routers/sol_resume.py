@@ -6,12 +6,15 @@ on without the person retyping "continue". Admission is strict:
 
 * the confirmation belongs to the caller, this project/team and THIS
   conversation (anything else is the same 404 — no existence oracle);
-* it is decided and is one of the command tools;
+* it is decided and is one of the command tools, or (SOLUSDEV-326) its STORED
+  card says it resumes — after an approval, a rejection or "Not now", or a
+  refusal (stale, expired); the flag is the server's, never the client's;
 * each confirmation resumes once — claimed ATOMICALLY on the decision's TOOL
   turn (`attrs.resumed`), so two concurrent requests cannot both start a turn;
   the assistant turn then records `{resume_of: <id>}`;
 * at most `MAX_CONSECUTIVE_RESUMES` resume turns since the last message the
-  person wrote — then SOL waits for them.
+  person wrote after a command, `MAX_CARD_RESUMES` after a card (each card is a
+  person's click) — then SOL waits for them.
 
 Budget pre-flight, the frequency cap and turn limits are applied by the route
 exactly as for a typed message. No user turn is stored.
@@ -38,6 +41,15 @@ from solus_api.models import (
 )
 
 MAX_CONSECUTIVE_RESUMES: Final = 6
+#: SOLUSDEV-326: continuations after cards. Higher than a command's: every card is a person's click.
+MAX_CARD_RESUMES: Final = 40
+#: How a person decided a resuming card, by its row's status: a STALE card was approved (and
+#: refused); an EXPIRED one was answered too late — its decision turn says which way.
+_CARD_DECISIONS: Final = {
+    ConfirmationStatus.APPROVED: "approved",
+    ConfirmationStatus.STALE: "approved",
+    ConfirmationStatus.REJECTED: "declined",
+}
 
 
 #: Solus-authored; it rides the turn's fenced user-message slot.
@@ -48,8 +60,12 @@ class ResumeTicket:
     chain: int  # this resume's position since the person's last message (1-based)
     #: Sanitised basename of the approved argv[0] (`event_program`), or "other".
     program: str = "other"
-    #: Solus-derived from structured result fields, never from command output.
+    #: Solus-derived from structured result fields, never from command output. For a card: how
+    #: the person decided it (`_CARD_DECISIONS`).
     outcome: str = "finished"
+    #: SOLUSDEV-326: the row resumes as a card, not a command. The card's title is built from
+    #: model-proposed args, so it never rides the ticket.
+    card: bool = False
 
 
 def resume_prompt(ticket: ResumeTicket) -> str:
@@ -57,7 +73,15 @@ def resume_prompt(ticket: ResumeTicket) -> str:
     model does not answer about an earlier one (live QA 2026-10-19: a resumed `ls` was
     described as the previous `make` failure, pulled in by the Error logging layer).
     Only sanitised, Solus-derived fields go in; command output stays in the fenced
-    tool history."""
+    tool history. A card's turn (SOLUSDEV-326) names only its tool and confirmation: the
+    card's title is built from model-proposed args and stays in that fenced history too."""
+    if ticket.card:
+        return (
+            f"[Solus] The person {ticket.outcome} the {ticket.tool} card (confirmation "
+            f"{ticket.confirmation_id}). What happened is the newest "
+            "tool turn in the history, the one marked with that confirmation. Continue the task "
+            "from there: take the next step it needs, or say briefly that it is done."
+        )
     return (
         f"[Solus] The person approved {ticket.tool} `{ticket.program}` (confirmation "
         f"{ticket.confirmation_id}) and it {ticket.outcome}. Its full result is the newest "
@@ -106,14 +130,18 @@ async def _chain_length(
     """Continuations since the person's last message: answered resumes
     (assistant turns with `resume_of`) plus CLAIMED ones whose turn is still
     streaming (decision turns marked `resumed`), counted once per confirmation,
-    plus wake turns (§11.2), counted by their waiting TOOL turn."""
+    plus wake turns (§11.2), counted by their waiting TOOL turn. A device notice
+    (SOLUSDEV-326) is a USER turn Solus wrote, sent on plug-in: no message of
+    the person's, so it never resets the chain."""
     scope = (
         ConversationTurn.conversation_id == conversation_id,
         ConversationTurn.project_id == project_id,
     )
     last_user = await session.scalar(
         select(func.max(ConversationTurn.created_at)).where(
-            *scope, ConversationTurn.role == TurnRole.USER
+            *scope,
+            ConversationTurn.role == TurnRole.USER,
+            ConversationTurn.attrs["authored_by"].astext.is_distinct_from("solus"),
         )
     )
     since = () if last_user is None else (ConversationTurn.created_at > last_user,)
@@ -174,9 +202,10 @@ async def check_resume(
     )
     if row is None:
         raise APIError(404, "not_found", "No such action.")
-    if row.status is ConfirmationStatus.PENDING or row.tool not in COMMAND_TOOLS:
+    card = _resumes_as_card(row)
+    if row.status is ConfirmationStatus.PENDING or (not card and row.tool not in COMMAND_TOOLS):
         raise APIError(
-            422, "validation_error", "Only a decided command action can continue the turn."
+            422, "validation_error", "Only a decided command or card can continue the turn."
         )
     decision = await session.scalar(
         select(ConversationTurn).where(
@@ -188,7 +217,7 @@ async def check_resume(
     if decision.attrs.get("resumed") is True:
         raise APIError(409, "already_resumed", "This action already continued the turn.")
     chain = await _chain_length(session, conversation_id, project_id)
-    if chain >= MAX_CONSECUTIVE_RESUMES:
+    if chain >= (MAX_CARD_RESUMES if card else MAX_CONSECUTIVE_RESUMES):
         raise APIError(
             409, "resume_limit", "SOL has continued on its own enough times; send a message."
         )
@@ -198,8 +227,21 @@ async def check_resume(
         chain=chain + 1,
         program=event_program(row.args.get("argv") if isinstance(row.args, dict) else None)
         or "other",
-        outcome=decision_outcome(decision.attrs.get("result"), row.status),
+        outcome=(
+            _CARD_DECISIONS.get(row.status, "answered")
+            if card
+            else decision_outcome(decision.attrs.get("result"), row.status)
+        ),
+        card=card,
     )
+
+
+def _resumes_as_card(row: ToolConfirmation) -> bool:
+    """Whether the row continues the turn as a card: its STORED card says it resumes (the
+    server set that at park time) and its tool is no command, which keeps its own prompt and
+    cap."""
+    card = row.card
+    return row.tool not in COMMAND_TOOLS and isinstance(card, dict) and card.get("resumes") is True
 
 
 async def claim_resume(

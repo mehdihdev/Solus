@@ -13,7 +13,7 @@ from solus_api.core.errors import APIError
 from solus_api.graph import kinds
 from solus_api.graph.read_scope import current_scope
 from solus_api.hardware.config import PartConfig, is_private_source
-from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.runtime import bound_refs, resolve_runtime_config
 from solus_api.hardware.store import configuration_entries, robot_root
 from solus_api.livebench.focus_scope import focus_entity_ids
 from solus_api.livebench.runs.models import PartEvidence, RevisionSnapshot, RunManifest
@@ -131,14 +131,12 @@ async def snapshot(
     # Runtime config supplies confirmed bus-part associations even when the
     # additive visual topology has not yet been populated for an old robot.
     runtime = await resolve_runtime_config(session, project_id, robot_id)
-    if runtime.identity is not None:
-        accepted_devices.add(runtime.identity.device_ref)
+    accepted_devices.update(bound_refs(runtime))  # every brain (SOLUSDEV-326)
     components = dict(runtime.parts)
     for target in entities:
         config = await resolve_runtime_config(session, project_id, target.id)
         components.update(config.parts)
-        if config.identity is not None:
-            accepted_devices.add(config.identity.device_ref)
+        accepted_devices.update(bound_refs(config))
     selected = str((bench.device or {}).get("device_ref") or "")
     if not selected:
         serial = (bench.device or {}).get("serial_number")

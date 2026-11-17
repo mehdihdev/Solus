@@ -12,7 +12,6 @@ from solus_api.core.errors import APIError
 from solus_api.graph.edges import write_edge
 from solus_api.graph.read_scope import resolve_scope
 from solus_api.hardware.presence import digest
-from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.livebench.runs import store as runs
 from solus_api.livebench.runs.models import RunManifest
 from solus_api.models import Domain, GraphEdge, GraphEntity, Source, SourceType
@@ -200,7 +199,7 @@ class WiringService:
         )
 
     async def _probe(
-        self, robot: uuid.UUID, run_id: uuid.UUID
+        self, robot: uuid.UUID, brain: uuid.UUID, run_id: uuid.UUID
     ) -> tuple[Any, list[dict[str, Any]], list[str]]:
         record = await runs.record(self.session, self.project_id, run_id)
         info = runs.summary(record)
@@ -211,11 +210,10 @@ class WiringService:
         manifest = await runs.load(
             self.session, self.presence.store, record, self.presence.user_id, 3600
         )
-        config = await resolve_runtime_config(self.session, self.project_id, robot)
-        assert config.identity is not None
+        _, identity = await self.presence.brain(robot, brain)
         if manifest.robot_id != robot:
             raise APIError(409, "evidence_changed", "Probe recording robot changed")
-        latest, addresses = probe_values(manifest, config.identity.device_ref)
+        latest, addresses = probe_values(manifest, identity.device_ref)
         if not latest and not addresses:
             raise APIError(409, "evidence_unavailable", "No probe observations for this device")
         if len(latest) > 16:
@@ -245,12 +243,12 @@ class WiringService:
         )
 
     async def _evidence(
-        self, robot: uuid.UUID, body: WiringRequest
+        self, robot: uuid.UUID, brain: uuid.UUID, body: WiringRequest
     ) -> tuple[Any, list[dict[str, Any]], list[str]]:
         if body.source_id is not None:
             return await self._schematic(body.source_id, body.wiring)
         if body.run_id is not None:
-            return await self._probe(robot, body.run_id)
+            return await self._probe(robot, brain, body.run_id)
         return (
             {},
             [
@@ -267,7 +265,7 @@ class WiringService:
     ) -> dict[str, Any]:
         await lock_project(self.session, self.project_id)
         binding, config_digest = await self.presence.binding(robot, brain)
-        evidence, observations, unresolved = await self._evidence(robot, body)
+        evidence, observations, unresolved = await self._evidence(robot, brain, body)
         payload = body.model_dump(mode="json", exclude_none=True)
         fingerprint = digest(
             {"request": payload, "binding": binding, "config": config_digest, "evidence": evidence}
@@ -337,7 +335,7 @@ class WiringService:
             raise APIError(409, "wiring_unaccepted", "Accept the wiring proposal first")
         body = WiringRequest.model_validate(entity.attrs["request"])
         binding, config_digest = await self.presence.binding(robot, brain)
-        evidence, _, _ = await self._evidence(robot, body)
+        evidence, _, _ = await self._evidence(robot, brain, body)
         current = digest(
             {
                 "request": body.model_dump(mode="json", exclude_none=True),

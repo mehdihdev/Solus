@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.checkers.interface import Severity
 from solus_api.graph import kinds
 from solus_api.graph.findings import FindingSpec, raise_finding
+from solus_api.graph.read_scope import visible_to
 from solus_api.models import (
     Domain,
     GraphEdge,
@@ -259,6 +260,7 @@ async def _mass_line(session: AsyncSession, project_id: uuid.UUID) -> BudgetLine
                 GraphEntity.project_id == project_id,
                 GraphEntity.kind.in_(MASS_KINDS),
                 GraphEntity.deleted_at.is_(None),
+                visible_to(None),  # SOLUSDEV-326: the stored budgets are every member's
             )
         )
     )
@@ -279,7 +281,7 @@ async def _cost_line(session: AsyncSession, project_id: uuid.UUID) -> BudgetLine
     from solus_api.widgets.bom.rows import totals  # the widget imports services; lazy
     from solus_api.widgets.bom.service import load_config, load_inputs
 
-    inputs = await load_inputs(session, project_id)
+    inputs = await load_inputs(session, project_id, viewer_id=None)  # every member's
     config = await load_config(session, project_id, None)
     summary = totals(inputs.rows(), config.cost_target)
     priced, rows = int(summary["priced_rows"]), int(summary["rows"])

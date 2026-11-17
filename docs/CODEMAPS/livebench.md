@@ -19,16 +19,12 @@ SOL-window wireflow. The completion report and Cowork QA file distinguish live a
 | `hardware/companion_deployment.py` | Default-off local factory; actor-owned target/artifact plan; operator allowlist; fresh authenticated post-restart handshake |
 | `agent/tools/firmware_presence.py`, `companion_deployment.py`; `agent/runtime.py`, `deps.py` | Register destructive tools only when capability exists; complete central confirmation; no raw write endpoint |
 | `deploy/companion.py`, `companion_remote.py` | Provisioned Linux target install/start/rollback/recovery; pinned SSH identity, exact-operation lease; no bootstrap |
-| `features/graph/robots/PresenceCard.tsx`, `PresenceWiringCard.tsx` | Explicit profile, three evidence choices, paginated probe runs, separate review/accept/prepare |
-| `HostMirrorOffer.tsx`, `FirmwareTelemetryOffer.tsx` in the same directory | Selected LOCAL source/manifest → explicit snippet → forced complete machine-file confirmation; no loop start or flash |
-| `features/graph/robots/PartLinkSuggestions.tsx` | Explicit CAD proposal, Accept/Decline and stale-account guards |
 | `features/bench/`, `livebench/runs/` | Saved-config sessions, signal/observer UI, retained manifests, playback/sensor timestamps, deterministic findings/comparison |
 | `livebench/stream.py`, `graph/telemetry.py` | Session WebSocket: bounded first-frame authentication, central project/graph authorization, memory-backed snapshots at up to 10 Hz, heartbeat and resource limits; no hardware control |
 | `features/bench/benchStream.ts`, `BenchRealtime.tsx` | Shared authenticated session feed for main signals, scene and embedded widget; scope masking, bounded reconnect, heartbeat validation and REST fallback |
 | `features/bench/retainedSignals.ts`, `DeviceBenchView.tsx` | Bounded established-channel retention through gaps, independent anomaly requests and honest stale values |
 | `lib/cspConnect.ts` | Exact configured HTTP(S) API and WS(S) origins in renderer connection policy |
 | `features/bench/BenchScreen.tsx`, `DeviceBenchView.tsx`, `bench.css` | One-view panes, presentation pause, responsive eight-second signal grid, persisted names and honest health |
-| `features/graph/hardware/HardwareAddPanel.tsx`, `InlineSupplierResults.tsx` | Three inline creation paths; explicit metered supplier search; no library preview modal |
 | `hardware/library_router.py`, `library_import.py` | Standalone named part import, scoped idempotency, independent provenance config; legacy robot imports retained |
 | `features/workspace/IsaacConnectionPanel.tsx` → `routers/isaac_connection.py` → `services/isaac_connection.py` | Owned bridge probe/status only; bounded evidence, no platform offer or simulator mutation |
 

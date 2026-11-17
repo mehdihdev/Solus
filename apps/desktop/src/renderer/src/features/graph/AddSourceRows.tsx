@@ -1,6 +1,7 @@
 // The Add modal's left column (design template): INTEGRATIONS — one row per connected
 // account (logo tile · login · document count), a `.solus` upload row and a Hardware row.
 // Rows are tabs: the right pane follows the selected one. Only real counts are shown.
+// Hardware is not a tab: it leaves for the Hardware page (SOLUSDEV-326).
 import { Mono } from '../../components/ui/Mono'
 import { SolusLogo } from '../../components/ui/SolusLogo'
 import { Icons } from '../../components/ui/icons.constants'
@@ -10,7 +11,7 @@ import { ProviderMark } from '../workspace/ConnectedAccountsCard'
 import { supportsWorkspaceService } from './serviceAttachments'
 import type { CatalogSnapshot, DocumentListing } from './serviceCatalog'
 
-export type AddTarget = { kind: 'account'; id: string } | { kind: 'solus' } | { kind: 'hardware' }
+export type AddTarget = { kind: 'account'; id: string } | { kind: 'solus' }
 
 export const sameTarget = (a: AddTarget, b: AddTarget): boolean =>
   a.kind === b.kind && (a.kind !== 'account' || b.kind !== 'account' || a.id === b.id)
@@ -26,6 +27,7 @@ function accountSub(account: Connection, listing: DocumentListing | undefined): 
 
 function Row({
   selected,
+  tab = true,
   disabled,
   label,
   tile,
@@ -34,6 +36,8 @@ function Row({
   onSelect
 }: {
   selected: boolean
+  /** False for a row that navigates away instead of choosing the right pane. */
+  tab?: boolean
   disabled?: boolean
   label: string
   tile: React.ReactNode
@@ -44,9 +48,9 @@ function Row({
   return (
     <button
       type="button"
-      role="tab"
+      role={tab ? 'tab' : undefined}
       className="add-source-row"
-      aria-selected={selected}
+      aria-selected={tab ? selected : undefined}
       aria-label={label}
       disabled={disabled}
       onClick={onSelect}
@@ -66,12 +70,14 @@ export function AddSourceRows({
   state,
   selected,
   onSelect,
-  onRefresh
+  onRefresh,
+  onOpenHardware
 }: {
   state: CatalogSnapshot
   selected: AddTarget
   onSelect: (target: AddTarget) => void
   onRefresh: () => void
+  onOpenHardware: () => void
 }): React.JSX.Element {
   return (
     <div
@@ -113,12 +119,13 @@ export function AddSourceRows({
         onSelect={() => onSelect({ kind: 'solus' })}
       />
       <Row
-        selected={selected.kind === 'hardware'}
+        selected={false}
+        tab={false}
         label="Hardware"
-        tile={<Icons.bench size={14} />}
+        tile={<Icons.hardware size={14} />}
         name="Hardware"
-        sub="Devices · search · describe"
-        onSelect={() => onSelect({ kind: 'hardware' })}
+        sub="Opens the Hardware page"
+        onSelect={onOpenHardware}
       />
       <button type="button" className="workspace-refresh" onClick={onRefresh}>
         Refresh accounts

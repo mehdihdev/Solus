@@ -708,3 +708,115 @@ async def test_a_hostile_part_name_is_data_in_the_view_the_csv_and_the_tool_resu
     entry = next(row for row in csv_text.splitlines() if "raw_material" in row)
     assert hostile.split(" ")[0] in entry
     assert "\n" not in entry.rstrip("\r")
+
+
+async def test_a_part_out_of_the_graph_is_a_row_for_its_onboarder_alone(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """SOLUSDEV-326 (docs/api/hardware.md §1a): a part its onboarder has not added to the graph
+    is a BOM row and a CSV line for them alone; once it is added, every member sees it."""
+    team_id, project_id = await _seed_and_install(client, db, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, bob, team_id)
+    alice = await me(client, alice_headers)
+    hidden = {"in_graph": False, "onboarded_by": alice["id"]}
+    part = _entity(project_id, "part", "electrical", "Hidden servo", origin="manual", attrs=hidden)
+    db.add(part)
+    await db.commit()
+
+    async def seen(headers: dict[str, str]) -> tuple[bool, bool]:
+        rows = {row["name"] for row in (await _rows(client, headers, project_id))["rows"]}
+        csv = await client.get(_bom(project_id, "export.csv"), headers=headers)
+        assert csv.status_code == 200, csv.text
+        return "Hidden servo" in rows, "Hidden servo" in csv.text
+
+    assert await seen(alice_headers) == (True, True)
+    assert await seen(bob_headers) == (False, False)
+    part.attrs = {"onboarded_by": alice["id"]}  # added to the graph
+    await db.commit()
+    assert await seen(bob_headers) == (True, True)
+
+
+async def test_a_bom_row_only_hardware_out_of_the_graph_holds_cannot_be_edited(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """SOLUSDEV-326 (§1a): an edit to a BOM row is an overlay every member can read, so a row
+    only hardware out of the graph holds cannot be edited (409, saying what to do) and nothing
+    is written; a teammate cannot delete what they cannot see."""
+    team_id, project_id = await _seed_and_install(client, db, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, bob, team_id)
+    alice = await me(client, alice_headers)
+    hidden = {"in_graph": False, "onboarded_by": alice["id"]}
+    part = _entity(project_id, "part", "electrical", "Hidden servo", origin="manual", attrs=hidden)
+    db.add(part)
+    await db.commit()
+    (row,) = [
+        r
+        for r in (await _rows(client, alice_headers, project_id))["rows"]
+        if r["name"] == "Hidden servo"
+    ]
+    url = _bom(project_id, f"rows/{row['key']}")
+    edited = await client.patch(url, headers=alice_headers, json={"notes": "spare in drawer 3"})
+    assert edited.status_code == 409, edited.text
+    assert edited.json()["error"]["message"] == (
+        "Add Hidden servo to the graph before editing its BOM row."
+    )
+    overlays = await db.scalars(select(GraphEntity).where(GraphEntity.kind == ITEM_KIND))
+    assert not list(overlays)
+    assert (await client.delete(url, headers=bob_headers)).status_code == 404
+
+
+async def test_an_overlay_on_a_shared_row_records_only_what_every_member_sees(
+    client: AsyncClient,
+    db: AsyncSession,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+) -> None:
+    """SOLUSDEV-326: a part-number row holds a teammate-visible part and Alice's hidden one,
+    whose name sorts first in her view. Her edit's overlay takes the row as every member sees it,
+    so its name is never her hidden part's."""
+    team_id, project_id = await _seed_and_install(client, db, alice_headers)
+    bob = await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, bob, team_id)
+    alice = await me(client, alice_headers)
+    hidden = {
+        "in_graph": False,
+        "onboarded_by": alice["id"],
+        "part_number": "STS3215",
+        "lifecycle": "ordered",  # first in her view; the shared row's state is the default
+    }
+    db.add_all(
+        [
+            _entity(
+                project_id, "part", "electrical", "Aaa secret servo", origin="manual", attrs=hidden
+            ),
+            _entity(
+                project_id,
+                "part",
+                "electrical",
+                "Zed servo",
+                origin="manual",
+                attrs={"part_number": "STS3215"},
+            ),
+        ]
+    )
+    await db.commit()
+    (row,) = [
+        r
+        for r in (await _rows(client, alice_headers, project_id))["rows"]
+        if r["part_number"] == "STS3215"
+    ]
+    edited = await client.patch(
+        _bom(project_id, f"rows/{row['key']}"), headers=alice_headers, json={"notes": "spares"}
+    )
+    assert edited.status_code == 200, edited.text
+    (overlay,) = await db.scalars(select(GraphEntity).where(GraphEntity.kind == ITEM_KIND))
+    assert "secret" not in overlay.name and "secret" not in str(overlay.attrs)
+    assert overlay.attrs["state"] == "installed"  # never her hidden part's "ordered"

@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from conftest import add_member, create_project, create_team, me
+from conftest import BOB, add_member, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.agent.tools.shapes import ToolResult
@@ -154,6 +154,7 @@ async def test_put_creates_member_machine_and_contains_edge(
         "tool_versions": {},
         "simulators": {"gazebo": None, "nvidia_smi": False, "ngspice": None},
         "devices": [],
+        "dismissed": {},
         "flash_history": [],
         "recent_commands": [],
     }
@@ -270,6 +271,28 @@ async def test_member_cannot_take_over_another_members_machine(
     assert str(machine.id) == a["id"] and machine.name == "bench-01" and machine.version == 1
     assert machine.attrs["owner_user_id"] == alice_id
     assert len(edges) == 1 and len([n for n in nodes if n.kind == kinds.MEMBER]) == 1
+
+
+async def test_registering_again_keeps_the_machines_device_memory_and_not_nows(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326: what the machine saw and what each member dismissed outlive the companion
+    registering the machine again (an app restart)."""
+    project_id, _, user_id = await _machine_project(client, alice_headers)
+    pid, uid = uuid.UUID(project_id), uuid.UUID(user_id)
+    machine = await upsert_machine(db, pid, uid, COMPANION, MachineIn(**BODY))
+    memory = {
+        "devices": [
+            {"device_ref": "usb:A", "identity_basis": "serial", "headline": "", "last_seen": "T"}
+        ],
+        "dismissed": {user_id: ["usb:A"]},
+    }
+    machine.attrs = {**machine.attrs, **memory}
+    await db.flush()
+
+    again = await upsert_machine(db, pid, uid, COMPANION, MachineIn(**{**BODY, "os": "macos"}))
+
+    assert {key: again.attrs[key] for key in memory} == memory
 
 
 async def test_service_replaces_tool_versions_and_never_touches_recent_commands(
@@ -474,3 +497,48 @@ async def test_preferences_validation_membership_and_role(
     await add_member(client, alice_headers, bob_headers, bob, team_id, role="viewer")
     status, _ = await _put_prefs(client, bob_headers, project_id)
     assert status == 403
+
+
+# ── SOLUSDEV-326: a machine's device memory is its owner's alone ──────────────────
+
+
+async def test_a_machines_device_memory_reaches_its_owner_alone(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """`devices`, `dismissed` and `recent_commands` leave the entity serializer for the machine's
+    owner only — a teammate listing the project's machines sees the rest of the row."""
+    await me(client, alice_headers)
+    bob = await me(client, bob_headers)
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"])
+    machine = await upsert_machine(
+        db,
+        uuid.UUID(project["id"]),
+        uuid.UUID(bob["id"]),
+        COMPANION,
+        MachineIn(hostname="bob-laptop", os="linux", arch="x86_64"),
+    )
+    private = {
+        "devices": [{"device_ref": "usb:PRIVATE", "headline": "Nano", "last_seen": "now"}],
+        "dismissed": {bob["id"]: ["usb:PRIVATE"]},
+        "recent_commands": [{"command_redacted": "bob-flash"}],
+    }
+    machine.attrs = {**machine.attrs, **private}
+    await db.commit()
+    url = f"/api/v1/projects/{project['id']}/entities?type={kinds.MACHINE}"
+
+    async def properties(headers: dict[str, str]) -> dict[str, Any]:
+        response = await client.get(url, headers=headers)
+        assert response.status_code == 200, response.text
+        (row,) = response.json()["data"]
+        found: dict[str, Any] = row["properties"]
+        return found
+
+    theirs = await properties(alice_headers)
+    assert not set(private) & set(theirs)
+    assert theirs["owner_user_id"] == bob["id"] and theirs["hostname"] == "bob-laptop"
+    assert {key: (await properties(bob_headers))[key] for key in private} == private

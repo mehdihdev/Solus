@@ -50,7 +50,8 @@ export function useSidebarPresence(open: boolean, key: string): SidebarPresence 
     } else if (!open && (phase === 'open' || phase === 'entering')) {
       setState({ key, phase: 'leaving' })
       timer.current = setTimeout(
-        () => setState((s) => (s.key === key && s.phase === 'leaving' ? { key, phase: 'closed' } : s)),
+        () =>
+          setState((s) => (s.key === key && s.phase === 'leaving' ? { key, phase: 'closed' } : s)),
         motionMs(SIDEBAR_CLOSE_MS)
       )
     }
@@ -89,19 +90,18 @@ export function useSidebarPresence(open: boolean, key: string): SidebarPresence 
 
 export type SidebarFit = 'dock' | 'overlay'
 
-/** Dock beside the screen on wide windows; overlay its right edge below 1100px. */
-export function useWindowFit(): SidebarFit {
-  const read = (): SidebarFit =>
+/** Dock beside the screen on wide windows; overlay its right edge below 1100px. Never on
+ *  Hardware (SOLUSDEV-326): an overlay would cover the card's buttons at the page's right edge. */
+export function useWindowFit(screen?: string): SidebarFit {
+  const read = (): boolean =>
     typeof window !== 'undefined' && window.innerWidth < SIDEBAR_DOCK_MIN_WINDOW
-      ? 'overlay'
-      : 'dock'
-  const [fit, setFit] = useState<SidebarFit>(read)
+  const [narrow, setNarrow] = useState(read)
   useEffect(() => {
-    const onResize = (): void => setFit(read())
+    const onResize = (): void => setNarrow(read())
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
-  return fit
+  return narrow && screen !== 'hardware' ? 'overlay' : 'dock'
 }
 
 const END_EVENTS = ['pointerup', 'pointercancel', 'blur'] as const

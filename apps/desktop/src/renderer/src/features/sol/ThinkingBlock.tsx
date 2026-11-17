@@ -17,17 +17,34 @@ import { humanizeTool, thoughtSummary, type ThoughtSegment } from './thinking'
 import { TraceArgs } from './TraceArgs'
 import './ThinkingBlock.css'
 
-type StepState = 'running' | 'ok' | 'error'
+type StepState = 'running' | 'ok' | 'error' | 'parked'
 
-const stepState = (step: TraceEntry): StepState =>
-  step.ok === null ? 'running' : step.ok ? 'ok' : 'error'
+function stepState(step: TraceEntry): StepState {
+  if (step.ok === null) return 'running'
+  if (step.parked) return 'parked'
+  return step.ok ? 'ok' : 'error'
+}
 
-const STEP_MARK: Record<StepState, string> = { running: '●', ok: '✓', error: '✕' }
+const STEP_MARK: Record<StepState, string> = { running: '●', ok: '✓', error: '✕', parked: '○' }
 
-function Step({ step }: { step: TraceEntry }): React.JSX.Element {
+/** A parked call is not a failure (the gate answers it `unauthorized`, as it does a refusal): it
+ *  waits for the person while its card is open, then says which way they decided when that is
+ *  known. With neither known (a reloaded turn, an answered question) it only says it asked. */
+function parkedOutcome(parked: NonNullable<TraceEntry['parked']>, open: boolean): string {
+  if (parked.decision) return parked.decision === 'approve' ? 'approved by you' : 'rejected by you'
+  return open ? 'waiting for your OK' : 'asked for your OK'
+}
+
+function stepOutcome(step: TraceEntry, state: StepState, open: boolean): string {
+  if (step.parked && state === 'parked') return parkedOutcome(step.parked, open)
+  if (state === 'running') return 'running…'
+  return state === 'ok' ? 'ok' : (step.errorCode ?? 'error')
+}
+
+/** `open`: the step's parked card is still among the reply's undecided ones. */
+function Step({ step, open }: { step: TraceEntry; open: boolean }): React.JSX.Element {
   const state = stepState(step)
-  const outcome =
-    state === 'running' ? 'running…' : state === 'ok' ? 'ok' : (step.errorCode ?? 'error')
+  const outcome = stepOutcome(step, state, open)
   return (
     <div data-step={state} className="sol-thinking-step sol-thinking-entry">
       <span aria-hidden className="sol-thinking-mark">
@@ -59,12 +76,14 @@ function Body({ item }: { item: ChatItem }): React.JSX.Element {
   const segments = item.thinking?.segments ?? []
   const at = (steps: number): ThoughtSegment[] => segments.filter((s) => s.afterSteps === steps)
   const trailing = segments.filter((s) => s.afterSteps > item.trace.length)
+  const open = (step: TraceEntry): boolean =>
+    item.confirmations.some((c) => c.confirmationId === step.parked?.confirmationId)
   return (
     <div data-testid="thinking-body" className="sol-thinking-body">
       {item.trace.map((step, i) => (
         <Fragment key={step.callId}>
           <Thoughts segments={at(i)} />
-          <Step step={step} />
+          <Step step={step} open={open(step)} />
         </Fragment>
       ))}
       <Thoughts segments={[...at(item.trace.length), ...trailing]} />

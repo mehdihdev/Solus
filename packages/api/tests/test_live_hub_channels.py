@@ -287,6 +287,34 @@ async def test_publish_local_never_touches_redis_and_reaches_project_subscribers
     assert "hardware.devices_changed" in _frame(sub.queue.get_nowait())[1]
 
 
+async def test_publish_local_each_sends_every_local_reader_their_own_frame() -> None:
+    """SOLUSDEV-326: a frame about this machine can name what one member alone may know (their
+    "Not now", the owner's device memory). Each subscription gets the frame of the person its
+    user channel names — a reader naming no one gets the `None` frame, a reader with no frame
+    gets nothing, another project's reader nothing — and Redis is never touched."""
+    redis = _Redis()
+    hub = LiveHub(redis)
+    project, alice, bob, carol = (uuid.uuid4() for _ in range(4))
+    mine = hub.subscribe_channels([Channel.project(project), Channel.user(alice)])
+    theirs = hub.subscribe_channels([Channel.project(project), Channel.user(bob)])
+    nameless = hub.subscribe_channels([Channel.project(project)])
+    legacy = hub.subscribe(project)
+    unframed = hub.subscribe_channels([Channel.project(project), Channel.user(carol)])
+    elsewhere = hub.subscribe_channels([Channel.project(uuid.uuid4()), Channel.user(alice)])
+
+    assert hub.local_viewers(project) == {alice, bob, carol, None}
+    hub.publish_local_each(
+        project, {alice: {"to": "alice"}, bob: {"to": "bob"}, None: {"to": None}}
+    )
+
+    assert json.loads(_frame(mine.queue.get_nowait())[1]) == {"to": "alice"}
+    assert json.loads(_frame(theirs.queue.get_nowait())[1]) == {"to": "bob"}
+    assert json.loads(_frame(nameless.queue.get_nowait())[1]) == {"to": None}
+    assert json.loads(legacy.get_nowait()) == {"to": None}
+    assert unframed.queue.empty() and elsewhere.queue.empty()
+    assert redis.published == []
+
+
 def test_fanout_mode_reports_redis_or_local_only() -> None:
     assert LiveHub().fanout_mode == "local_only"
     assert LiveHub(_Redis()).fanout_mode == "redis"

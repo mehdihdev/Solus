@@ -36,7 +36,7 @@ from sqlalchemy.orm import defer
 from solus_api.agent.interfaces import EdgeRead, EntityRead, GraphContext
 from solus_api.graph.edges import is_candidate
 from solus_api.graph.kinds import MACHINE
-from solus_api.graph.read_scope import current_scope
+from solus_api.graph.read_scope import OWNER_ONLY_MACHINE_ATTRS, current_scope
 from solus_api.models import Domain, GraphEdge, GraphEntity
 
 #: Hard ceiling on traversal depth. Anything deeper is a query, not a neighbourhood — and ADR-027
@@ -280,9 +280,9 @@ async def load_neighborhood(
     )
 
 
-#: A machine's attrs only its owner reads (M38): its command history. The owner-gated readers go
-#: through `agent/project_card.owned_commands`; every model-facing read drops them.
-OWNER_ONLY_MACHINE_ATTRS: Final = frozenset({"recent_commands"})
+# A machine's attrs only its owner reads (M38; SOLUSDEV-326 adds `devices` and `dismissed`) are
+# `read_scope.OWNER_ONLY_MACHINE_ATTRS`. The owner-gated readers go through
+# `agent/project_card.owned_commands`; every model-facing read drops them.
 
 
 def model_facing_attrs(kind: str, attrs: dict[str, Any]) -> dict[str, Any]:

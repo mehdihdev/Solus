@@ -47,8 +47,8 @@ No provider or sync dependency exists in the navigator. Physical robots follow i
 | I1 | `routers/connections.py`, `services/connections.py`, `connectors/integration_cache.py` | Cache-only miss contract, exact account reuse, shared version payloads |
 | Sync gates | `connectors/runtime.py`, `worker.py`, `httpcache.py` | Fail-closed probes, owned renewable flights and bounded accepted jobs |
 
-| Brain graph | `features/graph/robots/RobotTopologyGraph.tsx`, `HostAttachmentCard.tsx` | Reviewed host/USB nesting, robot-scoped projections, category filters |
-| Local evidence | `features/graph/robots/ExtractionReviewCard.tsx`, `hardware/topology_proposals.py` | Native single-file grants → read-only, digest-bound extraction review |
+| Brain graph | `features/graph/robots/RobotTopologyGraph.tsx` | Reviewed host/USB nesting, robot-scoped projections, category filters |
+| Local evidence | `hardware/topology_proposals.py` | Native single-file grants → read-only, digest-bound extraction review |
 | Evidence parsers | `hardware/topology_evidence.py`, `hardware/topology_observations.py`; Live Bench `hardware/topology_extractors.py` | Bounded immutable firmware/config/onboard/schematic candidates |
 | Widget roots | `features/graph/widgetRegistrationProjection.ts`, `useWidgetRegistrations.ts` | Real persisted roots, one-time legacy reconciliation, postcommit graph refresh |
 | Bench sessions | `features/bench/BenchScreen.tsx`, `SavedRobotConnections.tsx` | No-focus discovery, accepted-config connection and explicit disconnected state |

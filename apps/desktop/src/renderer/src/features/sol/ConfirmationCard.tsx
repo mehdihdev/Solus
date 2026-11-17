@@ -21,7 +21,7 @@
 // badges, sandboxed — read from the verbatim rows) and accept Cmd/Ctrl+Enter
 // from the surrounding SOL surface. A running command's output is rendered by
 // the host from the store (CommandOutput), so it outlives this card.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import type { ConfirmationRow, PendingConfirmation } from '../../lib/api/solStream'
 import './ConfirmationCard.css'
@@ -29,6 +29,7 @@ import { CommandCard, type CommandCardVariant } from './CommandApprovalCard'
 import { commandHeader } from './commandCard'
 import { approveShortcut, useRegisterCommandApproval } from './commandHotkey'
 import { usePreviewInView } from './previewInView'
+import { useConfirmationDecision } from './useConfirmationDecision'
 
 /** Mono uppercases by default; a value being approved must render exactly as it
  *  will execute. */
@@ -147,7 +148,7 @@ function CardPreview(props: Parameters<typeof CompletePreview>[0]): React.JSX.El
  *  TWO kinds, and conflating them is its own bug: a TRANSPORT failure leaves the
  *  action genuinely parked, while a server REFUSAL is terminal — the row can
  *  never be approved again, so "still waiting" would be false. */
-function DecisionFailure({
+export function DecisionFailure({
   failed
 }: {
   failed: { message: string; terminal: boolean }
@@ -283,70 +284,4 @@ function ConfirmationDetails({ pending }: { pending: PendingConfirmation }): Rea
       </dl>
     </details>
   )
-}
-
-/** The host's latest onDecide behind a stable identity, so a host that passes
- *  a fresh closure each render does not re-register the keyboard approver. */
-function useLatestDecide(
-  onDecide: ConfirmationCardProps['onDecide']
-): ConfirmationCardProps['onDecide'] {
-  const latest = useRef(onDecide)
-  useEffect(() => {
-    latest.current = onDecide
-  }, [onDecide])
-  return useCallback((decision: ConfirmationDecision) => latest.current(decision), [])
-}
-
-function useConfirmationDecision(hostDecide: ConfirmationCardProps['onDecide']): {
-  busy: ConfirmationDecision | null
-  failed: { message: string; terminal: boolean } | null
-  decide: (decision: ConfirmationDecision) => Promise<void>
-} {
-  const onDecide = useLatestDecide(hostDecide)
-  const [busy, setBusy] = useState<ConfirmationDecision | null>(null)
-  const [failed, setFailed] = useState<{ message: string; terminal: boolean } | null>(null)
-  // A second gesture before React re-renders (a double click, a held
-  // Cmd/Ctrl+Enter) must not send a second decision.
-  const inFlight = useRef(false)
-
-  // useCallback so react-hooks can see this is an event handler rather than
-  // effect-adjacent state writing.
-  const decide = useCallback(
-    async (decision: ConfirmationDecision): Promise<void> => {
-      if (inFlight.current) return
-      inFlight.current = true
-      setBusy(decision)
-      setFailed(null)
-      try {
-        await onDecide(decision)
-        // Success: the host removes this card. Nothing to render here, and a
-        // local "applied" state would claim an outcome we cannot see.
-      } catch (error) {
-        // A failed decision must never look like a successful one. Show the
-        // server's own reason — "expired", "already decided", "what this would
-        // do has changed" are all different, and a generic apology hides which.
-        //
-        // TWO kinds, and conflating them is its own bug: a TRANSPORT failure
-        // leaves the action genuinely parked and retryable, while a
-        // ConfirmationRefused means the server decided and refused. Those rows
-        // are TERMINAL — the confirmation can never be approved again — so
-        // saying "still waiting" and leaving Approve live only earns "This
-        // action was already …" on the next click.
-        setFailed({
-          message: error instanceof Error ? error.message : 'That didn’t go through.',
-          // Checked by NAME, not `instanceof`: this error crosses a module
-          // boundary, and a bundled or mocked second copy of the class would
-          // make an identity check silently false — the failure mode being
-          // fixed here, reintroduced one level down.
-          terminal: error instanceof Error && error.name === 'ConfirmationRefused'
-        })
-      } finally {
-        inFlight.current = false
-        setBusy(null)
-      }
-    },
-    [onDecide]
-  )
-
-  return { busy, failed, decide }
 }

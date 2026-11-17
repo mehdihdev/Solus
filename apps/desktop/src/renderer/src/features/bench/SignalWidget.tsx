@@ -104,6 +104,15 @@ function NameEditor({
   )
 }
 
+/** The channel's display range in the shown unit (SOLUSDEV-326); none when it cannot convert. */
+function displayRange(series: BenchSignalSeries, unit: string | null): number[] {
+  const source = series.points.at(-1)?.unit ?? null
+  const bounds = series.range
+    ? [series.range.min, series.range.max].map((value) => convertUnit(value, source, unit))
+    : []
+  return bounds.every((value) => value !== null) ? (bounds as number[]) : []
+}
+
 function segmentsFor(
   series: BenchSignalSeries,
   unit: string | null,
@@ -111,11 +120,13 @@ function segmentsFor(
 ): string[] {
   const comparable = displayPoints(series.points, unit)
   if (comparable.length < 2) return []
+  // The chart spans at least the display range; a reading outside it widens it, never hides.
+  const values = [...comparable.map((point) => point.value), ...displayRange(series, unit)]
   const domain = {
     tMin: windowEndMs === undefined ? Date.parse(comparable[0].timestamp) : windowEndMs - 8000,
     tMax: windowEndMs ?? Date.parse(comparable[comparable.length - 1].timestamp),
-    vMin: Math.min(...comparable.map((point) => point.value)),
-    vMax: Math.max(...comparable.map((point) => point.value))
+    vMin: Math.min(...values),
+    vMax: Math.max(...values)
   }
   return displayGroups(series.points, unit).flatMap((points) =>
     chartSegments(points, 240, 48, domain)

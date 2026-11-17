@@ -26,6 +26,41 @@ it.each([
   expect(() => prepareHardwareConfig(raw, 'owner', base)).toThrow()
 })
 
+// SOLUSDEV-326: a stored config lists its brains; the single-identity shape is gone.
+it.each([
+  JSON.stringify({ ...base, protocol: { driver_id: 'left', params: {} } }),
+  JSON.stringify({ ...base, identity: { kind: 'usb_serial', binding: 'AAA' } })
+])('refuses the single-identity shape a config no longer has', (raw) => {
+  expect(() => prepareHardwareConfig(raw, 'owner', base)).toThrow()
+})
+
+it('accepts several brains and attributes a changed brain field to the user', () => {
+  const brains: EntityHardwareConfig = {
+    ...base,
+    identity: [
+      {
+        kind: 'mcu',
+        binding: { kind: 'usb_serial', binding: 'AAA' },
+        protocol: { driver_id: 'left', params: {} }
+      },
+      {
+        kind: 'mcu',
+        binding: { kind: 'usb_serial', binding: 'BBB' },
+        via: 'usb:AAA',
+        protocol: { driver_id: 'right', params: {} }
+      }
+    ],
+    bus_map: [{ protocol: 'right', address: '1', brain: 'usb:BBB' }],
+    provenance: { ...base.provenance, identity: { by: 'detected' }, bus_map: { by: 'detected' } }
+  }
+  const draft = JSON.parse(configDraft(brains)) as EntityHardwareConfig
+  draft.identity![1].protocol!.driver_id = 'other'
+  const saved = prepareHardwareConfig(JSON.stringify(draft), 'owner', brains)
+  expect(saved.identity).toHaveLength(2)
+  expect(saved.provenance?.['identity.1.protocol.driver_id']).toEqual({ by: 'user' })
+  expect(saved.provenance?.['identity.0.binding.binding']).toBeUndefined()
+})
+
 it('preserves unchanged evidence and attributes changed values to the user', () => {
   const unchanged = prepareHardwareConfig(configDraft(base), 'owner', base)
   expect(unchanged.provenance).toEqual(base.provenance)

@@ -302,6 +302,15 @@ def test_only_the_gated_dispatcher_reaches_registry_invoke() -> None:
         if "registry.invoke(" in path.read_text(encoding="utf-8")
         and str(path.relative_to(root)) not in allowed
     ]
+    # SOLUSDEV-326: the replay of an approved call's STORED arguments has exactly one caller,
+    # the gate's decide path. `.invoke_stored(` anywhere else in the package would be an
+    # approval path of its own, so it is swept repo-wide, wrappers included.
+    offenders += [
+        f"{path.relative_to(root)}:{match}"
+        for path in root.rglob("*.py")
+        if str(path.relative_to(root)) != "agent/confirmations.py"
+        for match in re.findall(r"^.*\.invoke_stored\(.*$", path.read_text(encoding="utf-8"), re.M)
+    ]
 
     assert offenders == [], f"ungated dispatch path(s): {offenders}"
 

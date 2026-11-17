@@ -1,5 +1,6 @@
 """From a file (docs/api/hardware.md §4): connector-sourced parts not yet owned by a robot are
-listed, and a multi-select attaches them under a category — never twice, never across robots."""
+listed, and a multi-select attaches them to the robot — never twice, never across robots. A
+body names no category: a robot contains its parts directly (SOLUSDEV-326)."""
 
 import uuid
 from typing import Any
@@ -75,7 +76,7 @@ async def test_unassigned_lists_connector_parts_not_owned_by_a_robot(
     attach = await client.post(
         _attach_url(project_id, "robots", robot_id, "parts", "attach"),
         headers=alice_headers,
-        json={"entity_ids": [str(parts[0])], "category": "structure"},
+        json={"entity_ids": [str(parts[0])]},
     )
     assert attach.status_code == 200, attach.text
     resp = await client.get(_attach_url(project_id, "unassigned"), headers=alice_headers)
@@ -108,11 +109,14 @@ async def test_named_manual_part_is_unassigned_then_attachable(
     attached = await client.post(
         _attach_url(project_id, "robots", robot_id, "parts", "attach"),
         headers=alice_headers,
-        json={"entity_ids": [str(part.id)], "category": "end_effectors"},
+        json={"entity_ids": [str(part.id)]},
     )
     assert attached.status_code == 200, attached.text
     listed = await client.get(_attach_url(project_id, "unassigned"), headers=alice_headers)
     assert all(row["id"] != str(part.id) for row in listed.json()["data"])
+    await db.refresh(part)
+    assert part.attrs["robot_id"] == robot_id  # a manual part records its robot
+    assert "category" not in part.attrs
 
 
 async def test_unassigned_pages_and_bounds_the_limit(
@@ -137,7 +141,7 @@ async def test_unassigned_pages_and_bounds_the_limit(
     assert too_many.status_code == 422
 
 
-async def test_attach_creates_category_edges_and_config_slots(
+async def test_attach_creates_robot_edges_and_config_slots(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
     project_id, team_id = await _attach_project(client, alice_headers)
@@ -146,7 +150,7 @@ async def test_attach_creates_category_edges_and_config_slots(
     resp = await client.post(
         _attach_url(project_id, "robots", robot_id, "parts", "attach"),
         headers=alice_headers,
-        json={"entity_ids": [str(p) for p in parts], "category": "sensors"},
+        json={"entity_ids": [str(p) for p in parts]},
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()["data"]
@@ -161,11 +165,11 @@ async def test_attach_creates_category_edges_and_config_slots(
                 GraphEdge.deleted_at.is_(None),
             )
         )
-        assert edge is not None
-        category = await db.get(GraphEntity, edge.src_id)
-        assert category is not None and category.attrs["category"] == "sensors"
+        assert edge is not None and str(edge.src_id) == robot_id  # the robot itself
+        assert "category" not in edge.attrs
         part = await db.get(GraphEntity, part_id)
         assert part is not None and part.origin == "connector"  # identity untouched
+        assert part.attrs == {}  # provider facts: no robot_id, no category
         saved = await client.get(
             _attach_url(project_id, "entities", str(part_id), "config"), headers=alice_headers
         )
@@ -189,7 +193,7 @@ async def test_attach_skips_parts_already_here_and_refuses_parts_of_another_robo
     first = await _attach_robot(client, alice_headers, project_id)
     second = await _attach_robot(client, alice_headers, project_id)
     parts = await _connector_parts(db, project_id, team_id, ["shared"])
-    body: dict[str, Any] = {"entity_ids": [str(parts[0])], "category": "structure"}
+    body: dict[str, Any] = {"entity_ids": [str(parts[0])]}
     initial = await client.post(
         _attach_url(project_id, "robots", first, "parts", "attach"),
         headers=alice_headers,
@@ -213,10 +217,11 @@ async def test_attach_skips_parts_already_here_and_refuses_parts_of_another_robo
 @pytest.mark.parametrize(
     "body",
     [
-        {"entity_ids": [], "category": "structure"},
-        {"entity_ids": [str(uuid.uuid4())], "category": "structure"},
-        {"entity_ids": ["x"], "category": "structure"},
-        {"entity_ids": [str(uuid.uuid4()) for _ in range(65)], "category": "structure"},
+        {"entity_ids": []},
+        {"entity_ids": [str(uuid.uuid4())]},
+        {"entity_ids": ["x"]},
+        {"entity_ids": [str(uuid.uuid4()) for _ in range(65)]},
+        {"entity_ids": [str(uuid.uuid4())], "category": "structure"},  # retired (P2)
     ],
 )
 async def test_attach_rejects_bad_bodies(
@@ -245,13 +250,13 @@ async def test_attach_refuses_a_robot_root_or_a_foreign_part(
     resp = await client.post(
         _attach_url(project_id, "robots", robot_id, "parts", "attach"),
         headers=alice_headers,
-        json={"entity_ids": [str(foreign[0])], "category": "structure"},
+        json={"entity_ids": [str(foreign[0])]},
     )
     assert resp.status_code == 404, resp.text
     resp = await client.post(
         _attach_url(project_id, "robots", robot_id, "parts", "attach"),
         headers=alice_headers,
-        json={"entity_ids": [robot_id], "category": "structure"},
+        json={"entity_ids": [robot_id]},
     )
     assert resp.status_code == 404, resp.text
     await me(client, bob_headers)

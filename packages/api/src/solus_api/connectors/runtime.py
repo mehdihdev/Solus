@@ -39,6 +39,7 @@ from solus_api.connectors.sync_events import emit_sync_outcome
 from solus_api.graph import kinds
 from solus_api.graph.inference import infer_after_sync
 from solus_api.graph.live import graph_changed_frame
+from solus_api.graph.read_scope import IN_GRAPH, ONBOARDED_BY
 from solus_api.models import (
     Domain,
     GraphEdge,
@@ -87,14 +88,23 @@ MISSING_CREDENTIALS_MESSAGE = (
 #: `expected` (`simulation/sim_facts.py` records a sim result's values), `motifs`
 #: (`checkers/netlist_motifs.py`, recomputed by the triggered matrix run), `motif_labels`
 #: (`agent/tools/label_motifs.py`) and `sim_asked` (`agent/tools/simulate.py`). A key the connector
-#: itself emits still wins.
-SOLUS_OWNED_ATTR_KEYS: Final = ("expected", "motifs", "motif_labels", "sim_asked")
+#: itself emits still wins — except who sees hardware (`in_graph`, `onboarded_by`; SOLUSDEV-326),
+#: which untrusted connector content can neither set nor clear.
+VISIBILITY_ATTR_KEYS: Final = (IN_GRAPH, ONBOARDED_BY)
+SOLUS_OWNED_ATTR_KEYS: Final = (
+    "expected",
+    "motifs",
+    "motif_labels",
+    "sim_asked",
+    *VISIBILITY_ATTR_KEYS,
+)
 
 
 def _with_solus_owned(row: GraphEntity | None, props: dict[str, Any]) -> dict[str, Any]:
     """`props` over the Solus-owned attrs `row` holds (none for a new row)."""
     held = row.attrs if row is not None else {}
-    return {**{k: held[k] for k in SOLUS_OWNED_ATTR_KEYS if k in held}, **props}
+    emitted = {k: v for k, v in props.items() if k not in VISIBILITY_ATTR_KEYS}
+    return {**{k: held[k] for k in SOLUS_OWNED_ATTR_KEYS if k in held}, **emitted}
 
 
 def connector_error_payload(exc: Exception) -> dict[str, str]:

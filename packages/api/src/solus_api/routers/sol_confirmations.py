@@ -10,6 +10,7 @@ turn the next model reads, the command facts (§5.6, basename-only) and the audi
 event.
 """
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
@@ -19,8 +20,14 @@ from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.agent.command_gate import completion_events
-from solus_api.agent.confirmations import command_outcome_text, decide_confirmation
+from solus_api.agent.confirmations import (
+    ASK_USER_TOOL,
+    command_outcome_text,
+    decide_confirmation,
+)
 from solus_api.agent.conversation import ConversationService
+from solus_api.agent.dynamic_gate import registered_tool
+from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolResult
 from solus_api.agent.tools.untrusted import call_display_paths, redact_value
 from solus_api.core.errors import APIError
@@ -34,6 +41,8 @@ from solus_api.deps import (
     SolRegistryDep,
     require_role,
 )
+from solus_api.hardware.device_memory import dismiss
+from solus_api.hardware.host_topology import LocalHostProvider
 from solus_api.models import ConfirmationStatus, Role, Source, ToolConfirmation, TurnRole
 from solus_api.orchestration.config import load_orchestration_config
 from solus_api.orchestration.gates import FrequencyCapExceededError, check_frequency_cap
@@ -48,6 +57,7 @@ from solus_api.services.outcomes import (
 )
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/sol")
+logger = logging.getLogger(__name__)
 
 SERVICE = ConversationService()
 _ORCHESTRATION_LIMITS = load_orchestration_config().limits
@@ -165,6 +175,9 @@ async def _decided_row(
                 ToolConfirmation.id == confirmation_id,
                 ToolConfirmation.project_id == ctx.project.id,
                 ToolConfirmation.user_id == ctx.user.id,
+                # SOLUSDEV-326: like `decide_confirmation`, never a question — so a decide POST
+                # for one records no decision turn and no outcome.
+                ToolConfirmation.tool != ASK_USER_TOOL,
             )
         )
     ).first()
@@ -282,6 +295,47 @@ async def _status_before(
     return status
 
 
+async def _dismiss_declined_device(
+    request: Request,
+    session: AsyncSession,
+    ctx: ProjectCtx,
+    registry: ToolRegistry,
+    confirmation_id: uuid.UUID,
+    decided: Row[Any] | None,
+) -> None:
+    """SOLUSDEV-326 P3: "Not now" on a device offer is the caller's "Not now" to that device
+    (docs/api/hardware.md §4). The tool says which device its STORED call was about
+    (`declined_device`, duck-typed); it joins the caller's own list on this API's machine through
+    the service `POST /devices/dismissals` uses. Best effort, in a savepoint: no machine, an
+    unknown one or any failure records nothing more and never changes the decision."""
+    if decided is None or decided.status is not ConfirmationStatus.REJECTED:
+        return
+    try:
+        hook = getattr(registered_tool(registry, decided.tool), "declined_device", None)
+        device_ref = hook(decided.args) if hook is not None else None
+        if device_ref is None:
+            return
+        require_role(ctx, Role.MEMBER)
+        host = await LocalHostProvider(request.app.state.bench_local).identity()
+        async with session.begin_nested():
+            await dismiss(session, ctx.project.id, host, ctx.user.id, device_ref)
+            emit_event(
+                session,
+                user=ctx.user,
+                event_type="hardware.device_dismissed",
+                team_id=ctx.team.id,
+                project_id=ctx.project.id,
+                payload={"device_ref": device_ref},
+            )
+    except Exception as exc:  # noqa: BLE001 — the decision stands whatever this does
+        logger.info(
+            "declined offer not dismissed confirmation=%s project=%s reason=%s",
+            confirmation_id,
+            ctx.project.id,
+            type(exc).__name__,
+        )
+
+
 @router.post("/confirmations/{confirmation_id}")
 async def decide_tool_confirmation(
     request: Request,
@@ -311,6 +365,8 @@ async def decide_tool_confirmation(
         user_id=ctx.user.id,
     )
     decided = await _decided_row(session, ctx, confirmation_id)
+    if before is ConfirmationStatus.PENDING and body.decision == "reject":
+        await _dismiss_declined_device(request, session, ctx, registry, confirmation_id, decided)
     if body.decision == "approve" and result.ok and decided is not None:
         enqueue = sync_enqueuer(request, background_tasks, settings, ctx)
         result = await _with_graph_sync(request, enqueue, ctx, decided, result)

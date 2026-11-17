@@ -4,7 +4,7 @@
 // endpoint the envelope client cannot carry (SSE arrives on a POST), so it
 // uses fetch + ReadableStream here — in this module, never raw fetch in
 // components — and feeds the pure solStream parser.
-import type { EngineeringPreferences } from '@solus/shared-types'
+import type { DeviceNotice, EngineeringPreferences, QuestionAnswer } from '@solus/shared-types'
 import { api, joinUrl, type ApiClient } from '../../lib/api/client'
 import { resolveApiBaseUrl } from '../../lib/cspConnect'
 import { ApiError } from '../../lib/api/envelope.types'
@@ -168,6 +168,13 @@ export interface StreamSolMessageInput {
    */
   processPrompt?: { readonly processId: string; readonly promptSeq: number }
   /**
+   * SOLUSDEV-326 (action-gate contract §Cards 4, 5): a turn whose words Solus writes — a device
+   * that was plugged in, or the answer to an open question card. Exclusive with content,
+   * screenshot, resume and wake: the body carries only it and the turn settings.
+   */
+  notice?: DeviceNotice
+  answer?: QuestionAnswer
+  /**
    * Graph entity ids the user pointed at with `@`. Sent alongside the text
    * rather than encoded in it, so the composer's `trim()` and any later edit to
    * the prose cannot invalidate an offset.
@@ -250,6 +257,8 @@ function turnBody(
   frontApp: SolFrontApp | null
 ): Record<string, unknown> {
   if (input.processPrompt) return wakeBody(input, input.processPrompt)
+  if (input.notice) return { notice: input.notice, ...settingFields(input) }
+  if (input.answer) return { answer: input.answer, ...settingFields(input) }
   const resume = input.resumeConfirmationId
   const sendFront = !resume && input.actionMode === 'do' && frontApp !== null
   return {
@@ -262,6 +271,15 @@ function turnBody(
   }
 }
 
+/** The settings of a turn whose words Solus writes (a wake, a notice, an answer). */
+function settingFields(input: StreamSolMessageInput): Record<string, unknown> {
+  return {
+    action_mode: input.actionMode,
+    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
+    ...(input.preferences ? { preferences: input.preferences } : {})
+  }
+}
+
 /** A wake turn's body (§11.2): the prompt reference plus the turn settings. */
 function wakeBody(
   input: StreamSolMessageInput,
@@ -269,9 +287,7 @@ function wakeBody(
 ): Record<string, unknown> {
   return {
     process_prompt: { process_id: prompt.processId, prompt_seq: prompt.promptSeq },
-    action_mode: input.actionMode,
-    ...(input.forceConfirmation === true ? { force_confirmation: true } : {}),
-    ...(input.preferences ? { preferences: input.preferences } : {})
+    ...settingFields(input)
   }
 }
 

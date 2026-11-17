@@ -21,12 +21,14 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolDescriptor, ToolErrorCode
 from solus_api.agent.tools.tool import InProcessTool, ToolException
 from solus_api.core.errors import APIError
+from solus_api.graph.read_scope import IN_GRAPH
 from solus_api.hardware.config import EntityHardwareConfig, FieldProvenance
 from solus_api.hardware.ownership import current_parent
 from solus_api.hardware.store import (
@@ -227,6 +229,7 @@ class _SolusWriter:
                 raise APIError(404, "not_found", "Hardware config not found")
         except APIError as exc:
             raise _api_error_to_tool(exc) from None
+        await _refuse_hidden_part(session, self._project_id, path, args["value"])
         return _FieldDocument(
             subject, config.model_dump(mode="json"), path, entry.config_version, entry.id
         )
@@ -295,6 +298,29 @@ class _SolusWriter:
             "value": args["value"],
             "provenance": FieldProvenance.SOL.value,
         }
+
+
+async def _refuse_hidden_part(
+    session: AsyncSession, project_id: uuid.UUID, path: str, value: object
+) -> None:
+    """SOLUSDEV-326 (§7): naming a part out of the graph in a config adds it to the graph
+    (`admit_wired`), which this field's card does not say; SOL never does it this way."""
+    if not path.endswith(".part_entity_id") or not isinstance(value, str):
+        return
+    try:
+        part_id = uuid.UUID(value)
+    except ValueError:
+        return
+    attrs = await session.scalar(
+        select(GraphEntity.attrs).where(
+            GraphEntity.id == part_id, GraphEntity.project_id == project_id
+        )
+    )
+    if attrs is not None and attrs.get(IN_GRAPH) is False:
+        raise ToolException(
+            "That part isn't in the workspace graph yet. Add it to the graph first, then wire it.",
+            code=ToolErrorCode.INVALID_ARGS,
+        )
 
 
 class _EnvironmentLinker:

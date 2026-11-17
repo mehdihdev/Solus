@@ -171,6 +171,8 @@ async def search_solus(
     where: list[Any] = [
         SolusEntry.project_id == project_id,
         SolusEntry.deleted_at.is_(None),
+        # SOLUSDEV-326: a CONFIG entry of hardware out of the graph is its onboarder's alone.
+        current_scope(project_id).entry_predicate(),
         or_(name_match, SolusEntry.search_tsv.op("@@")(query)),
     ]
     if sections:

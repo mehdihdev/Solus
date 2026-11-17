@@ -9,15 +9,15 @@ import { Mono } from '../../components/ui/Mono'
 import type { CandidateApi, ExcludedCandidateApi } from '../../lib/api/resources.sourcing'
 import {
   compareColumns,
-  defaultCategory,
+  defaultRobot,
   groundingLabel,
   linkHost,
   safeHttps,
   tradeOffLine,
-  type CategoryOption
+  type RobotOption
 } from './sourcingLogic'
 
-export type { CategoryOption }
+export type { RobotOption }
 
 const CELL: React.CSSProperties = {
   padding: '7px 10px',
@@ -54,36 +54,34 @@ function GroundingBadge({ candidate }: { candidate: CandidateApi }): React.JSX.E
 
 function SelectRow({
   candidate,
-  categories,
+  robots,
   busy,
   onSelect
 }: {
   candidate: CandidateApi
-  categories: readonly CategoryOption[]
+  robots: readonly RobotOption[]
   busy: boolean
-  onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
+  onSelect: (candidateId: string, robotId: string | undefined, quantity: number) => void
 }): React.JSX.Element {
-  // Categories load after the table mounts: an explicit pick wins, otherwise the default.
+  // Robots load after the table mounts: an explicit pick wins, otherwise the default.
   const [picked, setPicked] = useState<string | null>(null)
-  const category =
-    picked !== null && categories.some((c) => c.id === picked)
-      ? picked
-      : defaultCategory(categories)
+  const robot =
+    picked !== null && robots.some((r) => r.id === picked) ? picked : defaultRobot(robots)
   const [quantity, setQuantity] = useState('1')
   const qty = Number(quantity)
   const valid = Number.isInteger(qty) && qty >= 1
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {categories.length > 0 && (
+      {robots.length > 0 && (
         <select
-          aria-label={`Category for ${candidate.name}`}
-          value={category}
+          aria-label={`Robot for ${candidate.name}`}
+          value={robot}
           onChange={(e) => setPicked(e.target.value)}
           style={INPUT}
         >
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.label}
+          {robots.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.label}
             </option>
           ))}
         </select>
@@ -99,7 +97,7 @@ function SelectRow({
         kind="primary"
         size="sm"
         disabled={busy || !valid}
-        onClick={() => onSelect(candidate.id, category || undefined, qty)}
+        onClick={() => onSelect(candidate.id, robot || undefined, qty)}
       >
         Select {candidate.name}
       </Button>
@@ -111,7 +109,7 @@ export function CandidateCompare({
   candidates,
   excluded,
   currency,
-  categories,
+  robots,
   busy,
   onSelect
 }: CandidateCompareProps): React.JSX.Element {
@@ -151,12 +149,7 @@ export function CandidateCompare({
                 <th scope="row" style={{ ...CELL, borderBottom: 'none' }} />
                 {candidates.map((c) => (
                   <td key={`select-${c.id}`} style={{ ...CELL, borderBottom: 'none' }}>
-                    <SelectRow
-                      candidate={c}
-                      categories={categories}
-                      busy={busy}
-                      onSelect={onSelect}
-                    />
+                    <SelectRow candidate={c} robots={robots} busy={busy} onSelect={onSelect} />
                   </td>
                 ))}
               </tr>
@@ -242,7 +235,7 @@ interface CandidateCompareProps {
   candidates: readonly CandidateApi[]
   excluded: readonly ExcludedCandidateApi[]
   currency: string
-  categories: readonly CategoryOption[]
+  robots: readonly RobotOption[]
   busy: boolean
-  onSelect: (candidateId: string, categoryId: string | undefined, quantity: number) => void
+  onSelect: (candidateId: string, robotId: string | undefined, quantity: number) => void
 }

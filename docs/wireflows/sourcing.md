@@ -1,8 +1,12 @@
-# Sourcing — one panel, two doors (SOLUSDEV-246, STORE ST5)
+# Sourcing — one panel (SOLUSDEV-246, STORE ST5)
 
-The same panel (`features/sourcing/SourcingModal.tsx`, 860px `ModalShell`, dialog "Find a part")
-opens from **Workspace › Add › Hardware › Find a sourced part** (`door: workspace`) and from
-**BOM › Find compatible parts** (`door: bom`). Routes: `docs/api/sourcing.md`.
+The panel (`features/sourcing/SourcingModal.tsx`, 860px `ModalShell`, dialog "Find a part")
+opens from **BOM › Find compatible parts** (`door: bom`). Routes: `docs/api/sourcing.md`.
+
+The renderer's second door, **Workspace › Add › Hardware › Find a sourced part**
+(`door: workspace`), is gone with the Add › Hardware panel (SOLUSDEV-326). The backend still
+accepts `door: workspace` and the panel still has that mode (the From CAD tab and the robot
+select below describe it); nothing in the renderer opens it.
 
 ```
 ┌ ADD A SOURCED PART                                                    ✕ ┐
@@ -53,8 +57,8 @@ A comparison table, one column per included candidate:
 - rows: Torque · Price · Weight · Protocol · Voltage · Availability · Supplier · Certifications ·
   Vendor CAD (`<host> ↗`, https only — every model-chosen link shows its destination host) —
   unknown is a dash;
-- last row: `Category` (Workspace door only: the robot's categories) · `Quantity` · **Select
-  <name>**.
+- last row: `Quantity` · **Select <name>** (the Workspace door's robot contains the part; no
+  category, SOLUSDEV-326).
 
 Below: **EXCLUDED BY THIS PROJECT'S RULES** — each excluded candidate with the rule text as the
 reason. No candidates at all → "No candidate passed this project's rules. Loosen a rule below or
@@ -62,7 +66,7 @@ describe the requirement differently." `← Change the requirement` returns to t
 
 ## Selected
 
-"<name> is planned" — it entered the graph as a planned part (under the chosen category for the
+"<name> is planned" — it entered the graph as a planned part (contained by the chosen robot for the
 Workspace door); the BOM lists it as PLANNED. **Get vendor CAD model from <host> ↗** opens the cited https URL
 in the system browser (no download, no execution); without one: "No vendor CAD model was cited
 for this part." **Source another** resets; **Done** closes and the door refreshes (the robot
@@ -70,5 +74,5 @@ session reloads; the BOM re-reads its rows).
 
 ## Links to other wireflows
 
-- `workspace.md` › Physical Robot: the Hardware panel gains the sourced-part door.
+- `workspace.md` › Add: the Add modal no longer carries a sourced-part door (SOLUSDEV-326).
 - `bom.md` › Header: `Find compatible parts` (ghost) sits between `Export CSV` and `+ Add row`.

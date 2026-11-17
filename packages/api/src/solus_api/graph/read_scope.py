@@ -1,12 +1,18 @@
-"""Immutable personal graph scope, frozen once for a request or SOL turn."""
+"""Immutable personal graph scope, frozen once for a request or SOL turn.
 
-from collections.abc import AsyncIterator, Iterator
+SOLUSDEV-326: a scope may carry its viewer. Hardware not in the graph (`attrs.in_graph` false;
+absent is in it) is visible only to its onboarder (`attrs.onboarded_by`), so a viewer's
+`entity_predicate` admits it for that one person; the system view (no viewer) filters nothing.
+"""
+
+from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from typing import Any, Final
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, not_, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -14,11 +20,49 @@ from solus_api.graph.edges import projected_copy
 from solus_api.models import (
     GraphEdge,
     GraphEntity,
+    SolusEntry,
+    SolusEntryKind,
     Source,
     SourceRevision,
     SourceStatus,
     SourceViewSelection,
 )
+
+IN_GRAPH: Final = "in_graph"
+ONBOARDED_BY: Final = "onboarded_by"
+#: A machine's attrs only its owner reads (M38, SOLUSDEV-326): its command history, the devices
+#: it has seen and what each member dismissed. Every model-facing read drops them for everyone.
+OWNER_ONLY_MACHINE_ATTRS: Final = frozenset({"recent_commands", "devices", "dismissed"})
+
+
+def visible_to(viewer_id: UUID | None) -> ColumnElement[bool]:
+    """What `viewer_id` may see of hardware: everything in the graph and what they onboarded and
+    have not added yet. None is nobody's own view — what is in the graph only."""
+    in_graph = not_(GraphEntity.attrs.contains({IN_GRAPH: False}))
+    if viewer_id is None:
+        return in_graph
+    return or_(in_graph, GraphEntity.attrs[ONBOARDED_BY].astext == str(viewer_id))
+
+
+def visibility_attrs(*, in_graph: bool, onboarded_by: UUID | None) -> dict[str, Any]:
+    """The attrs a hardware writer stamps; in the graph with no onboarder is none at all."""
+    if not in_graph and onboarded_by is None:
+        raise ValueError("hardware kept out of the graph needs its onboarder")
+    stamp: dict[str, Any] = {} if in_graph else {IN_GRAPH: False}
+    return stamp | ({ONBOARDED_BY: str(onboarded_by)} if onboarded_by is not None else {})
+
+
+def flags_of(attrs: Mapping[str, Any]) -> dict[str, Any]:
+    """The visibility attrs a robot's own hardware copies from it."""
+    return {key: attrs[key] for key in (IN_GRAPH, ONBOARDED_BY) if key in attrs}
+
+
+def owns_machine(attrs: Mapping[str, Any], user_id: UUID | None) -> bool:
+    """Whether `user_id` is the member who registered the machine these `attrs` belong to
+    (`attrs.owner_user_id`): the one definition of the owner rule (CLAUDE.md §7) that the
+    serializer, `owned_commands`, the card's own-machine guard and the `get_machine` tool share.
+    An asker with no id owns nothing — `str(None)` must never equal a stored owner."""
+    return user_id is not None and attrs.get("owner_user_id") == str(user_id)
 
 
 @dataclass(frozen=True)
@@ -27,11 +71,15 @@ class GraphReadScope:
     replacements: tuple[tuple[UUID, UUID], ...] = ()
     root_replacements: tuple[tuple[UUID, UUID], ...] = ()
     source_branches: tuple[tuple[UUID, str], ...] = ()
+    #: The person reading; None is the system view (ingest, background work), which sees all.
+    viewer_id: UUID | None = None
 
     def branch_for_source(self, source_id: UUID) -> str | None:
         return dict(self.source_branches).get(source_id)
 
-    def entity_predicate(self) -> ColumnElement[bool]:
+    def entity_predicate(self, *, include_hidden: bool = False) -> ColumnElement[bool]:
+        """The project's entities in this view. `include_hidden` opts out of the viewer clause,
+        for reads that must never be one person's (telemetry resolution)."""
         ordinary = select(Source.id).where(
             Source.project_id == self.project_id, Source.revision_base_source_id.is_(None)
         )
@@ -43,6 +91,53 @@ class GraphReadScope:
                 GraphEntity.source_id.is_(None),
                 and_(GraphEntity.source_id.in_(ordinary), GraphEntity.source_id.not_in(bases)),
                 GraphEntity.source_id.in_(snapshots),
+            ),
+            visible_to(self.viewer_id)
+            if self.viewer_id is not None and not include_hidden
+            else true(),
+        )
+
+    def hides(self, attrs: Mapping[str, Any]) -> bool:
+        """The viewer clause for a row already read: True when this viewer may not see it."""
+        return (
+            self.viewer_id is not None
+            and attrs.get(IN_GRAPH) is False
+            and attrs.get(ONBOARDED_BY) != str(self.viewer_id)
+        )
+
+    async def hidden_ids(self, session: AsyncSession) -> frozenset[UUID]:
+        """The viewer clause for reads that hold entity ids, not rows (buffered telemetry, bench
+        sessions): what this viewer may not see. The system view hides nothing."""
+        if self.viewer_id is None:
+            return frozenset()
+        hidden = await session.scalars(
+            select(GraphEntity.id).where(
+                GraphEntity.project_id == self.project_id, not_(visible_to(self.viewer_id))
+            )
+        )
+        return frozenset(hidden)
+
+    def entry_predicate(self, *, everyone: bool = False) -> ColumnElement[bool]:
+        """`.solus` entries in this view: a CONFIG entry whose configured entity the viewer may
+        not see is left out, and so is a filed document the viewer may not see (a hidden robot's
+        bench run). `everyone` is what every member may see (a cache shared by all of them); the
+        system view sees every entry."""
+        if self.viewer_id is None and not everyone:
+            return true()
+        hidden = select(GraphEntity.id).where(
+            GraphEntity.project_id == self.project_id,
+            not_(visible_to(None if everyone else self.viewer_id)),
+        )
+        return and_(
+            or_(
+                SolusEntry.kind != SolusEntryKind.CONFIG,
+                SolusEntry.configured_entity_id.is_(None),
+                SolusEntry.configured_entity_id.not_in(hidden),
+            ),
+            or_(
+                SolusEntry.kind != SolusEntryKind.ARTIFACT,
+                SolusEntry.entity_id.is_(None),
+                SolusEntry.entity_id.not_in(hidden),
             ),
         )
 
@@ -100,6 +195,19 @@ def bind_scope(scope: GraphReadScope) -> Iterator[None]:
         _CURRENT.reset(token)
 
 
+@contextmanager
+def system_view() -> Iterator[None]:
+    """Work that outlives the request — a bench session's pump, tap and evaluator — reads as the
+    system: a task copies the request's ContextVars, and no one person's view may filter what
+    is ingested or judged. The bound source view (replacements, branches) is kept."""
+    scope = _CURRENT.get()
+    if scope is None:
+        yield
+        return
+    with bind_scope(replace(scope, viewer_id=None)):
+        yield
+
+
 async def resolve_scopes(
     session: AsyncSession, project_ids: list[UUID], user_id: UUID
 ) -> dict[UUID, GraphReadScope]:
@@ -151,6 +259,7 @@ async def resolve_scopes(
                 if base in roots and snapshot in roots
             ),
             tuple(branches[pid]),
+            viewer_id=user_id,
         )
         for pid, values in replacements.items()
     }

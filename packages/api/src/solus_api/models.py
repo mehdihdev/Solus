@@ -1088,6 +1088,11 @@ class ToolConfirmation(UuidPkMixin, TimestampMixin, Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    #: SOLUSDEV-326: the Solus-authored card the Hardware page shows for this call
+    #: (`contracts.action_gate.Card`), computed once when it parked. Presentation only: never
+    #: part of the consent or the stale check. SQL NULL (never JSON null) when it has none, so
+    #: `card IS NOT NULL` is what the open-card slot asks.
+    card: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), default=None)
 
 
 class ProposalOutcome(UuidPkMixin, Base):

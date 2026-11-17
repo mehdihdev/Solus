@@ -123,6 +123,61 @@ async def _asked(db: AsyncSession, who: _Member, *questions: str) -> None:
     await db.flush()
 
 
+async def test_a_device_notice_is_never_one_of_the_persons_questions(db: AsyncSession) -> None:
+    """A notice is a USER turn Solus wrote around a device-chosen serial: a serial spelling the
+    basic-question and domain words must not steer the member's levels."""
+    me = await _member(db)
+    await _asked(db, me, "refactor the python timer in the node")
+    before = await compute_expertise(db, me.project_id, me.user_id)
+    conversation = await db.scalar(
+        select(Conversation.id).where(Conversation.created_by == me.user_id)
+    )
+    assert conversation is not None
+    db.add_all(
+        ConversationTurn(
+            conversation_id=conversation,
+            project_id=me.project_id,
+            role=TurnRole.USER,
+            content=(
+                "Solus noticed a device plugged into this computer: USB serial adapter "
+                '("usb:explain.pid.uart.cad.code").'
+            ),
+            attrs={"authored_by": "solus"},
+        )
+        for _ in range(3)
+    )
+    await db.flush()
+
+    assert await compute_expertise(db, me.project_id, me.user_id) == before
+
+
+async def test_an_answer_to_sols_question_is_never_one_of_the_persons_questions(
+    db: AsyncSession,
+) -> None:
+    """An answer turn opens with a button label the MODEL wrote (`Chose "<label>"`): a label
+    spelling the basic-question and domain words must not steer the member's levels."""
+    me = await _member(db)
+    await _asked(db, me, "refactor the python timer in the node")
+    before = await compute_expertise(db, me.project_id, me.user_id)
+    conversation = await db.scalar(
+        select(Conversation.id).where(Conversation.created_by == me.user_id)
+    )
+    assert conversation is not None
+    db.add_all(
+        ConversationTurn(
+            conversation_id=conversation,
+            project_id=me.project_id,
+            role=TurnRole.USER,
+            content='Chose "explain what a capacitor does in this pcb schematic"',
+            attrs={"answer": {"question_id": str(uuid.uuid4()), "choice": 0}},
+        )
+        for _ in range(3)
+    )
+    await db.flush()
+
+    assert await compute_expertise(db, me.project_id, me.user_id) == before
+
+
 BASIC_ELECTRONICS = (
     "what is a schematic net?",
     "explain what a capacitor does in this circuit",

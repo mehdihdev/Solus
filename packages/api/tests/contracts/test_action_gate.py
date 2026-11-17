@@ -19,17 +19,23 @@ import pytest
 from pydantic import ValidationError
 from solus_api.agent.tools.shapes import ToolErrorCode
 from solus_api.contracts.action_gate import (
+    CARD_KINDS,
     CONFIRMATION_TTL_MINUTES,
+    OPEN_CARDS_ROUTE,
+    Card,
     ConfirmationDecisionRequest,
     ConfirmationOutcomeEnvelope,
     ConfirmationStatus,
+    DeviceNotice,
+    OpenCards,
+    QuestionAnswer,
     ToolConfirmationEvent,
     confirmation_decision_path,
 )
 
 FIXTURES = Path(__file__).resolve().parents[3] / "shared-types" / "fixtures" / "action-gate"
 
-PENDING = ["pending-with-diff", "pending-args-only"]
+PENDING = ["pending-with-diff", "pending-args-only", "pending-with-card"]
 OUTCOMES = [
     "outcome-approved",
     "outcome-rejected",
@@ -162,3 +168,53 @@ def test_an_unknown_field_on_a_pending_event_is_rejected() -> None:
     # a field added in TypeScript and not here fails HERE.
     with pytest.raises(ValidationError):
         ToolConfirmationEvent.model_validate({**load("pending-with-diff"), "surprise": 1})
+
+
+# ── SOLUSDEV-326: cards ─────────────────────────────────────────────────────
+
+
+def test_a_card_is_presentation_and_never_widens_the_decision() -> None:
+    """A parked call may carry a Solus-authored card; the decision body is unchanged."""
+    event = ToolConfirmationEvent.model_validate(load("pending-with-card"))
+    assert event.card is not None and event.card.kind in CARD_KINDS
+    assert event.card.title.startswith("Approve:")  # an approval says so
+    assert ToolConfirmationEvent.model_validate(load("pending-with-diff")).card is None
+    with pytest.raises(ValidationError):
+        ConfirmationDecisionRequest.model_validate({"decision": "approve", "card": {}})
+
+
+def test_a_card_is_bounded_and_strict() -> None:
+    card = load("pending-with-card")["card"]
+    for bad in (
+        {**card, "kind": "warning"},
+        {**card, "primary": "x" * 25},
+        {**card, "title": ""},
+        {**card, "extra": 1},
+        {**card, "field": {"label": "Name", "value": "x", "editable": True}},
+    ):
+        with pytest.raises(ValidationError):
+            Card.model_validate(bad)
+
+
+def test_the_open_card_fixture_validates() -> None:
+    opened = OpenCards.model_validate(load("open-card"))
+    assert opened.card is not None and opened.card.card.resumes
+    assert OpenCards.model_validate({"card": None, "queued": 0}).card is None
+    assert OPEN_CARDS_ROUTE == "/api/v1/projects/{project_id}/sol/cards/open"
+
+
+def test_a_notice_and_an_answer_are_strict() -> None:
+    assert DeviceNotice.model_validate({"kind": "device", "device_ref": "usb:port-5-1.2.3"})
+    answer = QuestionAnswer.model_validate(
+        {"question_id": "q", "choice": 1, "text": "Call it Rover"}
+    )
+    assert answer.choice == 1
+    for bad in (
+        {"question_id": "q", "choice": 2},
+        {"question_id": "q", "choice": 0, "text": "x" * 501},
+        {"question_id": "q", "choice": 0, "args": {}},
+    ):
+        with pytest.raises(ValidationError):
+            QuestionAnswer.model_validate(bad)
+    with pytest.raises(ValidationError):
+        DeviceNotice.model_validate({"kind": "device", "device_ref": "usb:x", "text": "plugged"})

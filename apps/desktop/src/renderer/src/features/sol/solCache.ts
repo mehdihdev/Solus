@@ -28,14 +28,19 @@ const MAX_CACHED_ITEM_CHARS = 200_000 // mirrors solChatStore.MAX_TURN_CHARS
 interface CachedItem {
   role: ChatItem['role']
   content: string
+  /** A Solus-written turn stays one when painted from the cache, never the person's bubble. */
+  kind?: NonNullable<ChatItem['kind']>
 }
+
+const kindOf = (kind: unknown): Pick<CachedItem, 'kind'> =>
+  kind === 'notice' || kind === 'answer' ? { kind } : {}
 
 function toCachedItem(value: unknown): CachedItem | null {
   if (typeof value !== 'object' || value === null) return null
   const item = value as Record<string, unknown>
   if (typeof item.content !== 'string' || item.content.length > MAX_CACHED_ITEM_CHARS) return null
   if (typeof item.role !== 'string' || !ROLES.has(item.role)) return null
-  return { role: item.role as ChatItem['role'], content: item.content }
+  return { role: item.role as ChatItem['role'], content: item.content, ...kindOf(item.kind) }
 }
 
 /** Cached turns for a chat, or null (no bridge / no file / malformed). */
@@ -85,7 +90,11 @@ export function writeCachedChat(
   const settled = items
     .filter((item) => !item.pending && item.error === null)
     .slice(-MAX_CACHED_ITEMS)
-    .map((item) => ({ role: item.role, content: item.content.slice(0, MAX_CACHED_ITEM_CHARS) }))
+    .map((item) => ({
+      role: item.role,
+      content: item.content.slice(0, MAX_CACHED_ITEM_CHARS),
+      ...kindOf(item.kind)
+    }))
   void cache
     .write(
       projectId,

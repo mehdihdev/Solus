@@ -15,6 +15,7 @@ import sys
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,6 @@ import asyncpg
 import pytest
 from alembic import command
 from alembic.config import Config
-from solus_api.hardware.config import EntityHardwareConfig
 from solus_api.models import (
     Domain,
     GraphEdge,
@@ -40,6 +40,18 @@ FIXTURE = Path(__file__).parent / "fixtures/hardware_migration/nested.json"
 PREVIOUS = "a25100000001"
 BACKFILL = "a26000000002"
 HEAD = "a26000000003"
+
+
+def _frozen_v2() -> Any:
+    """The v2 schema the backfill shipped with (SOLUSDEV-326: the live one keeps an identity
+    list), loaded by path under the name the revision itself uses."""
+    name = "solus_hardware_config_v2_260"
+    if name not in sys.modules:
+        spec = spec_from_file_location(name, API_DIR / "migrations" / "hardware_config_v2.py")
+        assert spec is not None and spec.loader is not None
+        sys.modules[name] = module_from_spec(spec)
+        spec.loader.exec_module(sys.modules[name])
+    return sys.modules[name]
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -317,7 +329,8 @@ def test_nested_extraction_preserves_ids_values_sources_and_timestamps(
     assert {key: owner[key] for key in before} == before
     assert owner["configured_entity_id"] == ids["owner"] and owner["config_version"] == 1
     assert owner["payload"]["component"]["firmware"] == {"version": "1"}
-    children = [EntityHardwareConfig.model_validate(row["payload"]) for row in rows if row != owner]
+    model = _frozen_v2().EntityHardwareConfig
+    children = [model.model_validate(row["payload"]) for row in rows if row != owner]
     assert all(child.component is not None for child in children)
     sources = {
         child.provenance_of("component.calibration.values.offset").source for child in children
@@ -479,10 +492,9 @@ def test_part_source_canonical_and_detached_identity_survive(
 def test_preexisting_part_config_is_reused(
     migration_db: MigrationDatabase, historical_empty: bool
 ) -> None:
-    from solus_api.hardware.migration import split_legacy_document
-
+    frozen = _frozen_v2()
     ids = migration_db.seed()
-    payload = split_legacy_document(
+    payload = frozen.split_legacy_document(
         json.loads(FIXTURE.read_text()), source_namespace=ids["project"]
     )[ids["part"]].model_dump(mode="json")
     entry_id, node_id = uuid.uuid4(), uuid.uuid4()
@@ -544,9 +556,9 @@ def test_preexisting_part_config_is_reused(
     assert len(rows) == 3
     existing = next(row for row in rows if row["id"] == entry_id)
     assert existing["entity_id"] == node_id and existing["config_version"] == 4
-    assert EntityHardwareConfig.model_validate(
+    assert frozen.EntityHardwareConfig.model_validate(
         existing["payload"]
-    ) == EntityHardwareConfig.model_validate(payload)
+    ) == frozen.EntityHardwareConfig.model_validate(payload)
     if historical_empty:
         assert existing["deleted_at"] is not None
 

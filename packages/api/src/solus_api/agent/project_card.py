@@ -11,6 +11,7 @@ the machine is the caller's LIVE bridge session's, only when they own its row. N
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -26,6 +27,8 @@ from solus_api.agent.tools.untrusted import redact_text
 from solus_api.connectors.httpcache import within_bound
 from solus_api.graph import kinds
 from solus_api.graph.findings import count_findings_by_severity
+from solus_api.graph.read_scope import IN_GRAPH, ONBOARDED_BY
+from solus_api.graph.read_scope import owns_machine as owns_machine  # its readers import it here
 from solus_api.models import GraphEntity, Project, Source
 from solus_api.orchestration.gateway import default_orchestration_config
 from solus_api.orchestration.type_estimator import chars_for_tokens, estimate_tokens
@@ -52,6 +55,12 @@ _BUDGETS_CAP: Final = 120
 _COMMAND_FIELD_CAP: Final = 200
 _MAX_TOOL_VERSIONS: Final = 8
 _MAX_COMMANDS: Final = 5
+#: Waiting devices a card names, and how much of each.
+_MAX_WAITING: Final = 5
+_DEVICE_CAP: Final = 280  # a full headline and its quoted ref
+#: A waiting device's headline and ref, as a notice caps them (`routers/sol_notice.py`).
+_LABEL_CAP: Final = 128
+_REF_CAP: Final = 140
 #: Robots and sources read per card — far more than the ceiling can show; a full read is `50+`.
 _MAX_ROWS: Final = 50
 _WORST_FIRST: Final[Mapping[str, int]] = {"exceeded": 0, "unknown": 1, "ok": 2}
@@ -59,12 +68,20 @@ _ESTIMATOR = default_orchestration_config().type_estimator
 
 
 class CardRobot(BaseModel):
+    """No defaults (SOLUSDEV-326): a card cached before robots carried their visibility fails
+    validation and is rebuilt, never shown to a member who may not see one of its robots."""
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     entity_id: UUID
     name: str
     external_ref: str | None
     host_machine_id: str | None
+    in_graph: bool
+    onboarded_by: UUID | None
+
+    def seen_by(self, viewer: UUID | None) -> bool:
+        return self.in_graph or (viewer is not None and self.onboarded_by == viewer)
 
 
 class CardSource(BaseModel):
@@ -166,16 +183,27 @@ class CardInputs:
     machine: MachineBlock | None
     active_device_ids: frozenset[str]
     budgets: str
+    #: The caller: a robot out of the graph renders on its onboarder's card alone.
+    viewer_id: UUID | None = None
+    #: SOLUSDEV-326 — the caller's own, never in the shared cache: devices plugged into their
+    #: machine now that nothing they may see binds and they have not dismissed, and the oldest
+    #: card waiting for them here.
+    devices: tuple[str, ...] = ()
+    open_card: str | None = None
 
 
 async def build_project_card(
     session: AsyncSession, project_id: UUID, *, catalog: Sequence[Mapping[str, Any]]
 ) -> ProjectCard:
-    """Every read scoped to `project_id`; a source can do what its type's catalog row declares."""
+    """Every read scoped to `project_id`; a source can do what its type's catalog row declares.
+    The card is every member's (one cache per project): it lists every robot with its visibility
+    for `render_card` to filter, and counts only the `.solus` entries every member may see."""
     capabilities = {str(row["type"]): tuple(row["capabilities"]) for row in catalog}
     host = GraphEntity.attrs["host_machine_id"].astext
+    hidden = GraphEntity.attrs.contains({IN_GRAPH: False})
+    onboarder = GraphEntity.attrs[ONBOARDED_BY].astext
     robots = await session.execute(
-        select(GraphEntity.id, GraphEntity.name, GraphEntity.external_ref, host)
+        select(GraphEntity.id, GraphEntity.name, GraphEntity.external_ref, host, hidden, onboarder)
         .where(
             GraphEntity.project_id == project_id,
             GraphEntity.kind == kinds.PHYSICAL_ROBOT,
@@ -190,13 +218,20 @@ async def build_project_card(
         .order_by(Source.created_at, Source.id)
         .limit(_MAX_ROWS)
     )
-    solus, subsections = _solus_counts(await load_sections(session, project_id))
+    solus, subsections = _solus_counts(await load_sections(session, project_id, everyone=True))
     name = await session.scalar(select(Project.name).where(Project.id == project_id))
     return ProjectCard(
         name=name or "",
         robots=tuple(
-            CardRobot(entity_id=entity_id, name=label, external_ref=ref, host_machine_id=machine)
-            for entity_id, label, ref, machine in robots.tuples()
+            CardRobot(
+                entity_id=entity_id,
+                name=label,
+                external_ref=ref,
+                host_machine_id=machine,
+                in_graph=not out,
+                onboarded_by=UUID(by) if by else None,
+            )
+            for entity_id, label, ref, machine, out, by in robots.tuples()
         ),
         sources=tuple(
             CardSource(type=kind.value, name=label, capabilities=capabilities.get(kind.value, ()))
@@ -236,14 +271,6 @@ def _budget_line(line: BudgetLine) -> str:
         "?" if value is None else f"{value:g}" for value in (line.current, line.limit)
     )
     return " ".join(part for part in (line.name, amount, line.unit, f"({line.status})") if part)
-
-
-def owns_machine(attrs: Mapping[str, Any], user_id: UUID | None) -> bool:
-    """Whether `user_id` is the member who registered the machine these `attrs` belong to
-    (`attrs.owner_user_id`): the one definition of the owner rule (CLAUDE.md §7) that
-    `owned_commands`, the card's own-machine guard and the `get_machine` tool share. An asker
-    with no id owns nothing — `str(None)` must never equal a stored owner."""
-    return user_id is not None and attrs.get("owner_user_id") == str(user_id)
 
 
 def owned_commands(
@@ -325,6 +352,9 @@ async def card_inputs(
             machine=await machine_block(session, project_id=project_id, user_id=user_id, live=live),
             active_device_ids=frozenset(device for bench in active for device in bench.device_ids),
             budgets=await _budget_text(session, project_id),
+            viewer_id=user_id,
+            devices=await _waiting_devices(session, project_id, user_id),
+            open_card=await _open_card_text(session, project_id, user_id),
         )
     except Exception:  # noqa: BLE001 — a card read must never fail the message
         logger.exception("project card inputs failed project=%s", project_id)
@@ -354,6 +384,9 @@ async def project_card_section(
             machine=inputs.machine,
             active_device_ids=inputs.active_device_ids,
             budgets=inputs.budgets,
+            viewer=inputs.viewer_id,
+            devices=inputs.devices,
+            open_card=inputs.open_card,
         )
     except Exception:  # noqa: BLE001 — a missing card must never fail the turn
         logger.exception("project card failed project=%s", project_id)
@@ -369,12 +402,17 @@ def render_card(
     machine: MachineBlock | None,
     active_device_ids: frozenset[str],
     budgets: str,
+    viewer: UUID | None = None,
+    devices: Sequence[str] = (),
+    open_card: str | None = None,
 ) -> str:
     """Lines of DATA, at most CARD_MAX_TOKENS, every string redacted and capped. Over it, `.solus`
     subsection detail goes first, then source capabilities, then every robot and every source but
     the first (an active robot sorts first); what still overflows is clipped, oldest command
-    last."""
-    ordered = sorted(card.robots, key=lambda robot: robot.external_ref not in active_device_ids)
+    last. A robot out of the graph is listed for its onboarder (`viewer`) alone; `devices` and
+    `open_card` are that viewer's own (`CardInputs`)."""
+    visible = [robot for robot in card.robots if robot.seen_by(viewer)]
+    ordered = sorted(visible, key=lambda robot: robot.external_ref not in active_device_ids)
     robots = [_robot_text(robot, active_device_ids) for robot in ordered]
     text = ""
     for dropped in range(4):
@@ -388,6 +426,7 @@ def render_card(
                 _listing("robots", robots, shown),
                 _listing("sources", sources, shown),
                 _solus_line(card, subsections=dropped < 1),
+                *_waiting_lines(devices, open_card),
                 *_machine_lines(machine),
             )
         )
@@ -445,6 +484,67 @@ def _solus_line(card: ProjectCard, *, subsections: bool) -> str:
         label = f"{_capped(section, _NAME_CAP)} {count}"
         parts.append(f"{label} ({inner})" if inner else label)
     return ".solus: " + "; ".join(parts)
+
+
+def _waiting_lines(devices: Sequence[str], open_card: str | None) -> list[str]:
+    lines = []
+    if devices:
+        shown = "; ".join(_capped(device, _DEVICE_CAP) for device in devices)
+        lines.append(f"plugged into this person's machine, not added or dismissed: {shown}")
+    if open_card is not None:
+        lines.append(f"card waiting for this person: {_capped(open_card, _COMMAND_FIELD_CAP)}")
+    return lines
+
+
+async def _waiting_devices(
+    session: AsyncSession, project_id: UUID, user_id: UUID
+) -> tuple[str, ...]:
+    """`headline ("device ref")` for each device a machine `user_id` owns here remembers as
+    plugged in now, that nothing they may see binds and they did not dismiss — the device
+    memory, the machine owner's alone (`hardware/device_memory.py`)."""
+    from solus_api.agent.cards import single_line
+    from solus_api.hardware import device_memory
+    from solus_api.hardware.device_memory import annotate
+
+    machines = await session.scalars(
+        select(GraphEntity).where(
+            GraphEntity.project_id == project_id,
+            GraphEntity.kind == kinds.MACHINE,
+            GraphEntity.deleted_at.is_(None),
+        )
+    )
+    waiting: list[str] = []
+    for machine in machines:
+        if not owns_machine(machine.attrs, user_id):
+            continue  # a teammate's machine is never read for this person
+        present = [
+            row
+            for row in machine.attrs.get("devices") or []
+            if isinstance(row, Mapping) and row.get("present") is True and row.get("device_ref")
+        ]
+        context = await device_memory.device_context(session, project_id, present, machine)
+        # A serial-basis ref is the device's own USB serial: one printable line, JSON-quoted as
+        # data, exactly as a notice says it (`routers/sol_notice.py`).
+        waiting += [
+            f"{single_line(row.get('headline') or '', _LABEL_CAP) or 'a device'} "
+            f"({json.dumps(single_line(row['device_ref'], _REF_CAP))})"
+            for row in annotate(present, context, user_id)
+            if row["bound_to"] is None and not row["dismissed"]
+        ]
+    return tuple(waiting[:_MAX_WAITING])
+
+
+async def _open_card_text(session: AsyncSession, project_id: UUID, user_id: UUID) -> str | None:
+    """The oldest card waiting for `user_id` here — the one the slot shows
+    (`cards.oldest_showable_card`) — and the count."""
+    from solus_api.agent.cards import oldest_showable_card
+
+    found = await oldest_showable_card(session, project_id, user_id)
+    if found is None:
+        return None
+    row, card, total = found
+    more = f"; {total - 1} more waiting" if total > 1 else ""
+    return f"{card.title} ({row.tool}, {card.kind}){more}"
 
 
 def _machine_lines(machine: MachineBlock | None) -> list[str]:

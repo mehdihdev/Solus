@@ -16,11 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from solus_api.core.errors import APIError
 from solus_api.deps import get_project_context, require_role
 from solus_api.graph.live import LiveHub, graph_changed_frame
-from solus_api.hardware.config import HardwareConfig
-from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
-from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.local_runtime import SessionPlan, plan_session, prepare_session
 from solus_api.hardware.runtime_owner import RuntimeOwner, RuntimeOwnershipError
-from solus_api.hardware.store import configuration_entries, read_entity_config
+from solus_api.hardware.store import configuration_entries
 from solus_api.livebench.sessions import SessionManager, SessionNotFoundError, drain_task
 from solus_api.models import GraphEntity, Role, User, utcnow
 from solus_api.services.physical_robots import GraphChangeCounts
@@ -39,6 +37,7 @@ def _portable_error(error: Exception) -> str:
         "device_busy": "The device is already in use.",
         "device_ambiguous": "The device identity is ambiguous; select the physical device.",
         "device_permission_denied": "Device access was denied; check operating-system permissions.",
+        "host_mismatch": "This robot runs on another machine; connect it there.",
     }
     return messages.get(
         error.code if isinstance(error, APIError) else "",
@@ -53,7 +52,9 @@ def connection_state(
     session_id: uuid.UUID | None = None,
     error: str | None = None,
     runtime_id: str | None = None,
+    brains: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """A robot's local connection; `brains` (SOLUSDEV-326) only for a robot of several."""
     return {
         "managed_by": "local_runtime",
         "attempt_id": str(attempt_id),
@@ -61,6 +62,7 @@ def connection_state(
         "session_id": str(session_id) if session_id else None,
         "error": error,
         **({"runtime_id": runtime_id} if runtime_id else {}),
+        **({"brains": brains} if brains else {}),
     }
 
 
@@ -257,12 +259,11 @@ class HardwareConnections:
         return robot
 
     async def _config(
-        self, session: AsyncSession, attempt: _Attempt
-    ) -> tuple[HardwareConfig, str, Any, Any]:
-        config = await resolve_runtime_config(session, attempt.project, attempt.robot)
-        entry, owner = await read_entity_config(session, attempt.project, attempt.robot)
-        if entry is None or owner is None or config.identity is None or config.protocol is None:
-            raise APIError(422, "validation_error", "Transport identity and protocol are required")
+        self, session: AsyncSession, attempt: _Attempt, robot: GraphEntity
+    ) -> tuple[SessionPlan, str]:
+        """The shared opener's plan (SOLUSDEV-326: host check, brains) and its version stamp."""
+        plan = await plan_session(self.local, session, attempt.project, robot)
+        config, owner = plan.config, plan.owner
         entries = await configuration_entries(
             session, attempt.project, [attempt.robot, *(uuid.UUID(part) for part in config.parts)]
         )
@@ -276,7 +277,7 @@ class HardwareConnections:
                 sort_keys=True,
             ).encode()
         ).hexdigest()
-        return config, stamp, entry.id, owner
+        return plan, stamp
 
     async def _run(self, attempt: _Attempt, previous: asyncio.Task[None] | None) -> None:
         session_id: uuid.UUID | None = None
@@ -288,41 +289,34 @@ class HardwareConnections:
                 await self._stop(attempt.project, active[1])
             async with self.sessions() as session:
                 robot = await self._robot(session, attempt)
-                config, stamp, entry_id, owner = await self._config(session, attempt)
-                label = robot.name
-            document = await asyncio.to_thread(
-                prepare_local_hardware,
-                self.local,
-                config,
-                attempt.project,
-                attempt.account,
-                entry_id,
-                owner_config=owner,
-            )
+                plan, stamp = await self._config(session, attempt, robot)
+            opener = await prepare_session(self.local, plan, attempt.account)
             async with self.sessions() as session:
-                await self._robot(session, attempt)
-                if (await self._config(session, attempt))[1] != stamp or self._closing:
+                robot = await self._robot(session, attempt)
+                if (await self._config(session, attempt, robot))[1] != stamp or self._closing:
                     raise APIError(
                         409, "config_conflict", "Configuration changed before connection"
                     )
-
-            async def open_robot() -> Any:
-                return await open_local_hardware(self.local, document, attempt.project)
-
             record = await self.manager.start(
                 attempt.project,
                 mode="real",
                 provider="robot",
-                label=f"Robot {label}",
-                open_conn=open_robot,
+                label=opener.label,
+                open_conn=opener.open,
                 window_seconds=attempt.window,
-                device={"device_ref": config.identity.device_ref if config.identity else None},
+                device=opener.device,
                 # SOLUSDEV-321 P2-T3: the robot's session runs its window evaluator as this member
                 robot_entity_id=attempt.robot,
                 owner_user_id=attempt.account,
             )
             session_id = record.id
-            if await self._finish(attempt, "connected", session_id=session_id, stamp=stamp):
+            if await self._finish(
+                attempt,
+                "connected",
+                session_id=session_id,
+                stamp=stamp,
+                brains=opener.brain_states(),
+            ):
                 self._active[(attempt.project, attempt.robot)] = (attempt, session_id)
                 # Stop may have completed while the graph commit was in flight,
                 # before this session became visible to the ended listener.
@@ -364,12 +358,13 @@ class HardwareConnections:
         session_id: uuid.UUID | None = None,
         stamp: str | None = None,
         error: str | None = None,
+        brains: list[dict[str, Any]] | None = None,
     ) -> bool:
         try:
             async with self.sessions() as session:
                 robot = await self._robot(session, attempt, authorize=stamp is not None)
                 if stamp is not None and (
-                    (await self._config(session, attempt))[1] != stamp or self._closing
+                    (await self._config(session, attempt, robot))[1] != stamp or self._closing
                 ):
                     status, session_id, error = (
                         "failed",
@@ -384,6 +379,7 @@ class HardwareConnections:
                         session_id=session_id,
                         error=error,
                         runtime_id=self.owner.identity,
+                        brains=brains if status == "connected" else None,
                     ),
                 }
                 await session.commit()

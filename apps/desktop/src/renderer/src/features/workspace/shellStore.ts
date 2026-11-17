@@ -21,7 +21,15 @@ export interface ShellToast {
 
 export type BillingFocus = 'credits'
 
-export type MainScreen = 'home' | 'workspace' | 'bench' | 'sol' | 'store' | 'billing' | 'settings'
+export type MainScreen =
+  | 'home'
+  | 'workspace'
+  | 'hardware'
+  | 'bench'
+  | 'sol'
+  | 'store'
+  | 'billing'
+  | 'settings'
 
 /** Where the shell is: a main screen (a rail item), an alert detail, or an
  *  installed extension's page view (SOLUSDEV-235 / EXT-14). Detail routes are

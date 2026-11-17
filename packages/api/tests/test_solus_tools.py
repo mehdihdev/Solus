@@ -95,7 +95,7 @@ async def _part(client: AsyncClient, headers: dict[str, str], project_id: str, r
     resp = await client.post(
         f"/api/v1/projects/{project_id}/hardware/robots/{robot}/parts",
         headers=headers,
-        json={"name": "elbow", "category": "actuators", "specs": {}, "lifecycle": "planned"},
+        json={"name": "elbow", "specs": {}, "lifecycle": "planned"},
     )
     assert resp.status_code == 201, resp.text
     return str(resp.json()["data"]["entity"]["id"])
@@ -586,7 +586,7 @@ async def test_confirmed_field_edit_is_direct_v2_and_refuses_changed_versions(
     assert await read(robot) == before and await read(part) == child_before
     if stale:
         document = before["config"]
-        document["protocol"]["params"]["baud"] = 9600
+        document["identity"][0]["protocol"]["params"]["baud"] = 9600
         response = await client.put(
             f"/api/v1/projects/{project}/hardware/entities/{robot}/config",
             headers={**alice_headers, "If-Match": str(before["version"])},
@@ -664,7 +664,7 @@ async def test_field_write_refuses_a_version_changed_before_its_project_lock(
 
     async def concurrent_edit(*args: Any, **kwargs: Any) -> Any:
         document = saved["config"]
-        document["protocol"]["params"]["baud"] = 9600
+        document["identity"][0]["protocol"]["params"]["baud"] = 9600
         changed = await client.put(
             endpoint,
             headers={**alice_headers, "If-Match": str(saved["version"])},
@@ -686,7 +686,7 @@ async def test_field_write_refuses_a_version_changed_before_its_project_lock(
     assert not result.ok and result.error is not None
     actual = (await client.get(endpoint, headers=alice_headers)).json()["data"]
     assert actual["config"]["component"]["firmware"]["version"] == "v1"
-    assert actual["config"]["protocol"]["params"]["baud"] == 9600
+    assert actual["config"]["identity"][0]["protocol"]["params"]["baud"] == 9600
     assert actual["version"] == saved["version"] + 1
 
 
@@ -699,7 +699,7 @@ async def test_field_refuses_change_after_final_approval_preview(
     await _tool(registry, "set_hardware_config_field").preview(args)
     endpoint = f"/api/v1/projects/{project}/hardware/entities/{robot}/config"
     saved = (await client.get(endpoint, headers=alice_headers)).json()["data"]
-    saved["config"]["protocol"]["params"]["baud"] = 9600
+    saved["config"]["identity"][0]["protocol"]["params"]["baud"] = 9600
     changed = await client.put(
         endpoint,
         headers={**alice_headers, "If-Match": str(saved["version"])},

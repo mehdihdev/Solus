@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { awaitMark, resetMarks, startConfirmation } from '../../../lib/perf/marks'
 import type { Entity } from '../../../lib/api/resources'
 import { GraphCard } from './GraphCard'
 
@@ -17,7 +16,6 @@ const entity: Entity = {
 }
 
 afterEach(() => {
-  resetMarks()
   performance.clearMarks()
   performance.clearMeasures()
 })
@@ -90,15 +88,6 @@ describe('GraphCard', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Move firmware' }), { key: 'ArrowRight' })
     expect(onMove).toHaveBeenCalledExactlyOnceWith(entity.id, { x: 40, y: 0 })
     expect(performance.getEntriesByName('ws:select_clicked')).toHaveLength(1)
-  })
-
-  it('closes hw:confirm_to_node on mount only for the id the confirm awaited', () => {
-    mount()
-    expect(performance.getEntriesByName('hw:node_visible')).toHaveLength(0)
-    awaitMark(entity.id, startConfirmation())
-    mount()
-    expect(performance.getEntriesByName(`hw:node_visible:${entity.id}`)).toHaveLength(1)
-    expect(performance.getEntriesByName(`hw:confirm_to_node:${entity.id}`)).toHaveLength(1)
   })
 
   // Design template: header mark, mono meta line, footer count; Escape belongs to the navigator.

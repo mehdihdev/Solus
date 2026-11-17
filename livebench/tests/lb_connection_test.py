@@ -16,6 +16,7 @@ from livebench.hardware.connection import (
     part_routes,
 )
 from livebench.hardware.driver import DriverRegistry
+from livebench.hardware.serial_owner import Claimant, current_claimant
 from pydantic import BaseModel, ConfigDict
 from solus_api.connectors.live import LiveStatus
 from solus_api.graph.packet import TelemetryPacket
@@ -128,6 +129,31 @@ def test_open_probes_the_transport_eagerly_and_exposes_device_facts() -> None:
     assert connection.status() is LiveStatus.DISCONNECTED
     assert len(opened) == 1 and opened[0].closed  # the eager probe is closed again
     assert connection.device_facts == {"device_ref": "usb:5B42134331", "driver_id": "demo-bus"}
+
+
+def test_every_open_claims_the_device_as_its_members_session() -> None:
+    """SOLUSDEV-326: the serial owner learns who holds the port — the member, in the project —
+    so that member's inspection listens on it and anyone else, a teammate too, is told only that
+    it is busy."""
+    seen: list[tuple[Claimant, Mapping[str, Any]]] = []
+    transports = TransportRegistry()
+
+    def opener(binding: TransportBinding, params: Mapping[str, Any]) -> Channel:
+        seen.append((current_claimant(), params))
+        return _Chan(binding)
+
+    transports.register(TransportKind.USB_SERIAL, opener)
+    drivers = DriverRegistry()
+    drivers.register(_Driver)
+    project_id, user_id = uuid.uuid4(), uuid.uuid4()
+    open_robot_connection(
+        _config(), project_id=project_id, user_id=user_id, transports=transports, drivers=drivers
+    )
+    build_source_factory(_config(), transports=transports, drivers=drivers)()
+    mine = Claimant("session", str(project_id), str(user_id))
+    assert [claimant for claimant, _ in seen] == [mine, Claimant()]
+    assert [params for _, params in seen] == [{"baud": 1_000_000}] * 2  # params carry no claim
+    assert current_claimant() == Claimant()  # the claim never outlives the open
 
 
 def test_open_fails_fast_when_the_transport_cannot_open() -> None:
@@ -306,3 +332,41 @@ async def test_an_opened_connection_routes_to_parts_when_the_config_binds_them()
     await connection.unsubscribe(handle)
     await connection.aclose()
     assert seen and seen[0].device_id == part_ref("usb:5B42134331", "1")
+
+
+def test_device_facts_carry_the_configs_channel_display() -> None:
+    """SOLUSDEV-326: a channel's display and display range ride the device facts under the
+    same part key as its packets (and its roles); a default channel adds nothing."""
+    transports, drivers, _ = _registries()
+    document = {
+        "identity": {"kind": "usb_serial", "binding": "5B42134331"},
+        "protocol": {"driver_id": "demo-bus", "params": {"baud": 1_000_000}},
+        "bus_map": [{"protocol": "demo-bus", "address": "1", "part_entity_id": _PART_1}],
+        "parts": {
+            _PART_1: {
+                "telemetry": [
+                    {"name": "j.position", "display": "angle", "range": {"min": -90, "max": 90}},
+                    {"name": "j.load"},
+                ],
+                "lifecycle": "live",
+            },
+            _PART_6: {
+                "telemetry": [{"name": "cam.frame", "display": "video"}],
+                "lifecycle": "live",
+            },
+        },
+    }
+    config = merge_layers(uuid.uuid4(), [ConfigLayer(by=FieldProvenance.USER, document=document)])
+    connection = open_robot_connection(
+        config, project_id=None, transports=transports, drivers=drivers
+    )
+    assert connection.device_facts["channel_display"] == {
+        "usb:5B42134331/1": {
+            "j.position": {"display": "angle", "range": {"min": -90.0, "max": 90.0}}
+        },
+        "usb:5B42134331": {"cam.frame": {"display": "video"}},
+    }
+    plain = open_robot_connection(
+        _config(), project_id=None, transports=transports, drivers=drivers
+    )
+    assert "channel_display" not in plain.device_facts

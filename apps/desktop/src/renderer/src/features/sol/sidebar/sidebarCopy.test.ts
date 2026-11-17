@@ -19,6 +19,14 @@ describe('sidebarCopy', () => {
     expect(sidebarCopy('bench', null).placeholder).toBe('Ask about the bench')
   })
 
+  it('gives the Hardware screen its own copy', () => {
+    const copy = sidebarCopy('hardware', 'imu')
+    expect(copy.tag).toBe('HARDWARE')
+    expect(copy.greeting).toMatch(/^SOL sees what is plugged into this computer\./)
+    expect(copy.suggestions).toContain('What is plugged in?')
+    expect(copy.placeholder).toBe('Ask SOL, or tell it what you have')
+  })
+
   it('caps a long focused name', () => {
     const tag = sidebarCopy('workspace', 'x'.repeat(80)).tag
     expect(tag).toBe(`WORKSPACE · ${'x'.repeat(MAX_TAG_NAME - 1)}…`)

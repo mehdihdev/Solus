@@ -1,11 +1,12 @@
 import type { EntityHardwareConfig } from '../../../lib/api/hardware'
 
+// A stored config lists its brains (SOLUSDEV-326): `identity` is a list and each brain carries
+// its own `protocol`, so the single-identity shape is not a draft any more.
 const FIELDS = new Set([
   'schema_version',
   'entity_id',
   'component',
   'identity',
-  'protocol',
   'bus_map',
   'disambiguated_by',
   'provenance'
@@ -91,9 +92,10 @@ function validateIdentity(value: Json, entityId: string): asserts value is { [ke
     typeof value !== 'object' ||
     value.schema_version !== 2 ||
     value.entity_id !== entityId ||
-    Object.keys(value).some((key) => !FIELDS.has(key))
+    Object.keys(value).some((key) => !FIELDS.has(key)) ||
+    (value.identity !== undefined && !Array.isArray(value.identity))
   )
-    throw new Error('Keep schema version 2 and this configuration’s entity identity.')
+    throw new Error('Keep schema version 2, this configuration’s entity and its list of brains.')
 }
 
 function defaultLifecycle(

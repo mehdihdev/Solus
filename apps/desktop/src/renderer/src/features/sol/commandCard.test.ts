@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { PendingConfirmation } from '../../lib/api/solStream'
+// The server's own list, written by pytest (packages/api tests/contracts/test_field_manifest.py).
+import resumeToolsText from '../../../../../../../packages/shared-types/fixtures/action-gate/_resume_tools.json?raw'
 import {
+  COMMAND_TOOLS,
+  RESUME_TOOLS,
   commandExitStatus,
   commandHeader,
   commandLine,
   hasCommandOutput,
-  isCommandTool
+  isCommandTool,
+  resumesAfterApproval
 } from './commandCard'
 
 const row = (label: string, after: string | null): PendingConfirmation['preview'][number] => ({
@@ -17,6 +22,20 @@ const row = (label: string, after: string | null): PendingConfirmation['preview'
 function card(tool: string, rows: PendingConfirmation['preview']): PendingConfirmation {
   return { confirmationId: 'c1', tool, summary: 's', preview: rows }
 }
+
+describe('the tools SOL resumes after', () => {
+  it('are exactly the server’s list (drift guard — regenerate the fixture with pytest)', () => {
+    expect([...RESUME_TOOLS].sort()).toEqual(JSON.parse(resumeToolsText))
+  })
+
+  it('leave out process input, which is still drawn as a command card', () => {
+    expect(resumesAfterApproval('code.process_input')).toBe(false)
+    expect(isCommandTool('code.process_input')).toBe(true)
+    expect([...COMMAND_TOOLS].filter((tool) => !RESUME_TOOLS.has(tool))).toEqual([
+      'code.process_input'
+    ])
+  })
+})
 
 describe('isCommandTool', () => {
   it.each([

@@ -16,7 +16,8 @@ and this file pins both:
 
 from typing import Any
 
-from solus_api.agent.confirmations import _build_preview, _diverged, _single_line
+from solus_api.agent.cards import single_line as _single_line
+from solus_api.agent.confirmations import _build_preview, _diverged
 from solus_api.agent.tools.hosted_tools import (
     content_argument,
     featurescript_rows,

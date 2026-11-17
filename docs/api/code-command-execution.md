@@ -178,7 +178,7 @@ A profile is the environment produced by sourcing a setup file (ROS `setup.bash`
   (case-insensitive `TOKEN|SECRET|PASSW|KEY|CREDENTIAL|AUTH|COOKIE|SESSION|PRIVATE`, prefixes
   `AWS_ GITHUB_ GH_ GITLAB_ NPM_ HF_ OPENAI_ ANTHROPIC_`, and `SSH_AUTH_SOCK`), or loader
   injection names (`LD_PRELOAD LD_AUDIT DYLD_INSERT_LIBRARIES BASH_ENV ENV
-  PROMPT_COMMAND PYTHONSTARTUP`). `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` are kept (ROS needs them). At most 256 variables, each value ≤ 8192 chars.
+PROMPT_COMMAND PYTHONSTARTUP`). `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` are kept (ROS needs them). At most 256 variables, each value ≤ 8192 chars.
 - Stored at `~/.solus/code-profiles/<workspace key>/<name>.json`, written atomically
   (temp + rename, file 0600, directories 0700),
   `{schema_version: 1, name, setup_file, extends, captured_at, vars: {…}}`. The workspace key
@@ -203,7 +203,7 @@ Writable set (everything else is read-only; reads, exec and network are not rest
 
 - the workspace (realpath), which contains any selected venv;
 - the process temporary directory (`TMPDIR` realpath, `/private/tmp`, and on macOS this user's own Darwin cache dir — the `C`
-sibling of `TMPDIR`, never all of `/private/var/folders`; `/tmp` and `/var/tmp` on Linux);
+  sibling of `TMPDIR`, never all of `/private/var/folders`; `/tmp` and `/var/tmp` on Linux);
 - device nodes `/dev/null`, `/dev/zero`, `/dev/tty`, `/dev/fd/*`, and serial devices
   (`/dev/cu.*`, `/dev/tty.*` on macOS; `/dev/ttyUSB*`, `/dev/ttyACM*` on Linux);
 - declared tool caches under `HOME`: `.cache`, `Library/Caches`, `.ros`, `.npm`, `.pnpm-store`,
@@ -258,11 +258,11 @@ of `argv[0]`, with a trailing version suffix stripped for interpreters (`python3
 **Denied** (also refused by the server planner; both tables are cross-checked by a test):
 
 - Shells: `sh bash zsh fish dash ksh csh tcsh pwsh busybox rbash ash mksh yash elvish nu xonsh
-  oksh posh`.
+oksh posh`.
 - Command wrappers: `env xargs nohup setsid nice timeout time watch script expect
-  sandbox-exec launchctl open osascript busybox stdbuf chroot unshare nsenter flock ionice
-  taskset caffeinate arch chrt systemd-run setpriv prlimit unbuffer fakeroot proot firejail
-  cpulimit faketime`.
+sandbox-exec launchctl open osascript busybox stdbuf chroot unshare nsenter flock ionice
+taskset caffeinate arch chrt systemd-run setpriv prlimit unbuffer fakeroot proot firejail
+cpulimit faketime`.
 - Privilege elevation: `sudo su doas pkexec runuser`.
 - Inline code: `python -c`/`-<flags>c`, `node -e/--eval/-p/--print`, `ruby -e`, `perl -e/-E`,
   `php -r`, `lua -e`, `deno eval`, `bun -e/--eval`, `Rscript -e`.
@@ -349,6 +349,19 @@ resume_limit`); SOL then waits for the person;
 
 The desktop sends it automatically after an approved command card finishes (§7).
 
+**Cards (SOLUSDEV-326, action-gate contract §Cards 7).** A decided row whose STORED card says
+`resumes: true` continues the turn too — after an approval, a rejection or "Not now", and a
+refusal (stale, expired) — besides the command tools above. The flag is set by the server when the
+call parks (`agent/cards.py`) and is never client-supplied. Card resumes are admitted while the
+continuation chain since the person's last message is below **40** (every card is a click); a
+command keeps its cap of 6 over the same chain. The Solus-authored prompt says the person
+approved, declined (or, past its expiry, answered) the card, names it only by tool and
+confirmation id, and asks SOL to continue; the card's title is built from model-proposed args, so
+it stays in the fenced tool history and never enters that line. A message the person sends — typed, or an
+answer to a question card — still resets the chain. A device notice does not: Solus writes it
+(`attrs.authored_by = "solus"`) and the desktop sends it on its own when a board is plugged in, so
+a board that keeps reconnecting cannot clear the 6-in-a-row cap that bounds wakes (§11.2).
+
 ### 5.6 Events (`emit_event`, consent-gated)
 
 | event                   | when                                                 | payload                                                                             |
@@ -422,7 +435,7 @@ These supersede earlier sections where they conflict.
    the sandbox. Program resolution refuses any executable whose realpath is inside the
    writable set but outside the workspace.
 6. **Capture card.** `code.profile_capture` rows add `profile` (`<name>`, plus `replaces
-   existing` when one exists) and `risk` (`project_scripts` for a workspace setup file). The
+existing` when one exists) and `risk` (`project_scripts` for a workspace setup file). The
    fingerprint covers the profile name.
 7. **Outcome on success.** For `code.exec`, `code.run` and `code.test` the output tail (≤ 3000)
    is included on exit 0 too.
@@ -432,9 +445,9 @@ These supersede earlier sections where they conflict.
 9. Event `program` values must match `^[A-Za-z0-9._+-]{1,64}$`, otherwise `"other"`. The resume
    chain check locks the conversation row. Linux process start tokens include the boot id.
 10. Residual, documented: the server re-plans at execute time and does not receive the approved
-   fingerprint (a sub-second window between the cloud's re-plan and the server's). On macOS a
-   copied `launchctl`/`osascript` binary escapes the `process-exec` literal denials (the
-   AppleEvents/LaunchServices mach denials still apply).
+    fingerprint (a sub-second window between the cloud's re-plan and the server's). On macOS a
+    copied `launchctl`/`osascript` binary escapes the `process-exec` literal denials (the
+    AppleEvents/LaunchServices mach denials still apply).
 11. **Name matching.** For programs that are not workspace-relative (bare names resolved from the
     environment, profile or pinned roots, and absolute paths), matching against every denied set
     (shells, interpreters, wrappers, elevation, git) fails closed by prefix. A known name followed
@@ -564,7 +577,8 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
 ### 11.2 Cloud
 
 - **Card.** `code.process_input` is gated by the allowlist. Its preview reads `code.process_status
-  {process_id}` and shows these rows:
+{process_id}` and shows these rows:
+
   - `process` (name or program basename)
   - `prompt` (the redacted `prompt_tail`)
   - `input` (the exact text, or `⏎ Enter` when `text` is empty)
@@ -572,8 +586,9 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
 
   The call is refused, not parked, when redaction would change the `input` row, or when the
   process is not awaiting input.
+
 - **Enter-only exception** (code-owned, Build mode, not force_confirmation). `{text: "",
-  enter: true}` runs without a card when the process is interactive and `awaiting_input` is true.
+enter: true}` runs without a card when the process is interactive and `awaiting_input` is true.
   It follows the same two-preview, single-use routine path as auto-run. Guide mode refuses.
 - **User input route.** `POST /api/v1/projects/{project_id}/code/processes/{process_id}/input?machine_id=…`
   with body `{text, enter}` (same bounds) dispatches `code.process_input` over the caller's own
@@ -582,6 +597,7 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
 - **Wake turn.** `MessageCreate` gains `process_prompt: {process_id, prompt_seq}`. It is mutually
   exclusive with `content`, `screenshot` and `resume_confirmation_id` (422 otherwise). It is
   accepted only when all of these hold:
+
   - a TOOL turn in this conversation recorded a successful `code.process_start` with that
     `process_id`;
   - a live `code.process_status` over the caller's own bridge shows `awaiting_input` with the
@@ -591,12 +607,14 @@ Live output (§5.4): the server packs complete lines into each progress frame, u
   It counts toward the 6-in-a-row continuation cap (`409 resume_limit`) and passes the same
   budget and frequency gates. Before the turn runs, the server persists a TOOL turn
   `code.process_status → waiting for input` whose result value carries `{process_id,
-  prompt_seq, prompt_tail}`, so the tail reaches the model only as fenced history data. The
+prompt_seq, prompt_tail}`, so the tail reaches the model only as fenced history data. The
   Solus-authored instruction names the process and program, and tells SOL three things:
+
   - say what the program is asking;
   - when it only needs Enter and nothing physical from the person, it may send Enter with
     `code.process_input`;
   - otherwise ask the person, and wait.
+
 - **Events.** `code.process.input {via: "ui"|"sol", auto: bool, chars: int}`, and
   `sol.turn_woken {process_prompt: true, chain}`. No input text and no output appear in events.
 - **Prompt guidance.** Use `process_start` with `interactive: true` for programs that ask

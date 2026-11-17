@@ -5,6 +5,7 @@ import type { SolTurn } from './solApi'
 import type { ChatItem } from './solChatStore'
 import {
   MAX_TURN_CHARS,
+  answerReceipt,
   appendContent,
   applyEvent,
   applyReasoningFrame,
@@ -44,6 +45,35 @@ describe('solChatItems', () => {
     expect(turnFailureText(new ApiError(402, 'x', 'raw'))).toMatch(/credits/)
     expect(turnFailureText(new ApiError(429, 'x', 'raw'))).toMatch(/Too many/)
     expect(turnFailureText(new Error('secret detail'))).toBe('SOL is unreachable right now.')
+  })
+
+  it('marks a stored user turn Solus wrote from its attrs, never from its words', () => {
+    const stored = (role: SolTurn['role'], content: string, attrs: object): SolTurn => ({
+      id: 't',
+      conversation_id: 'c',
+      role,
+      content,
+      attrs: attrs as Record<string, unknown>,
+      created_at: '2026-11-16T00:00:00Z'
+    })
+    const kind = (turn: SolTurn): ChatItem['kind'] => turnToReasonedItem(turn).kind
+    expect(kind(stored('user', 'Solus noticed a device.', { authored_by: 'solus' }))).toBe('notice')
+    expect(kind(stored('user', 'Chose "Yes"', { answer: { question_id: 'q', choice: 0 } }))).toBe(
+      'answer'
+    )
+    // The person can type either sentence; only the server's attrs make a turn Solus's.
+    expect(kind(stored('user', 'Chose "Yes"', {}))).toBeUndefined()
+    expect(kind(stored('user', 'Solus noticed a device.', { authored_by: 'me' }))).toBeUndefined()
+    expect(kind(stored('assistant', 'x', { authored_by: 'solus' }))).toBeUndefined()
+  })
+
+  it('reads an answer turn as a receipt naming the button', () => {
+    expect(answerReceipt('Chose "Yes"')).toBe('Answered: Yes')
+    expect(answerReceipt('Chose "Use \\"this\\"" — Scout')).toBe('Answered: Use "this" — Scout')
+    expect(answerReceipt('Chose "a — b"')).toBe('Answered: a — b')
+    // Words that are not the server's shape are shown as they are, never guessed at.
+    expect(answerReceipt('Answered')).toBe('Answered')
+    expect(answerReceipt('Chose "bad \\x escape"')).toBe('Chose "bad \\x escape"')
   })
 
   it('appends an auto-run row once per call, immutably', () => {

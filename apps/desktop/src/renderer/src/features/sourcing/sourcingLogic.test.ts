@@ -122,17 +122,16 @@ describe('massesFrom / excludedFrom / rulesSummary', () => {
   })
 })
 
-describe('defaultCategory', () => {
-  it('prefers the Actuators category, then the first, then nothing', async () => {
-    const { defaultCategory } = await import('./sourcingLogic')
+describe('defaultRobot', () => {
+  it('picks the first robot, then nothing', async () => {
+    const { defaultRobot } = await import('./sourcingLogic')
     expect(
-      defaultCategory([
-        { id: 'w', label: 'Wiring' },
-        { id: 'a', label: 'Actuators / motors' }
+      defaultRobot([
+        { id: 'arm', label: 'Arm' },
+        { id: 'rover', label: 'Rover' }
       ])
-    ).toBe('a')
-    expect(defaultCategory([{ id: 'w', label: 'Wiring' }])).toBe('w')
-    expect(defaultCategory([])).toBe('')
+    ).toBe('arm')
+    expect(defaultRobot([])).toBe('')
   })
 })
 

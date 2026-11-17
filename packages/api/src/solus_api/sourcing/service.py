@@ -6,8 +6,8 @@ each part's placement from the edge and its mass from the part's attributes —
 never inventing either. Rules layer defaults ← the repo `[ext.sourcing]`
 table (a CONNECTOR-landed `solus_project_toml` row only) ← the project's rules
 document (a `sourcing_rules` node this module owns). Selecting a candidate
-creates ONE manual `part` node, lifecycle `planned`, under the chosen robot
-category, so the Workspace navigator and the BOM see it through the graph.
+creates ONE manual `part` node, lifecycle `planned`, contained by the chosen
+robot, so the Workspace navigator and the BOM see it through the graph.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
 from solus_api.graph.edges import write_edge
+from solus_api.graph.read_scope import flags_of
+from solus_api.hardware.store import robot_root
 from solus_api.models import (
     Domain,
     GraphEdge,
@@ -32,6 +34,7 @@ from solus_api.models import (
     SourcingRequest,
     utcnow,
 )
+from solus_api.services.solus_graph import lock_project
 from solus_api.services.solus_payloads import ConstraintMeta
 from solus_api.sourcing.candidates import Candidate
 from solus_api.sourcing.rules import (
@@ -51,8 +54,6 @@ RULES_KIND = "sourcing_rules"
 COMPLIANCE_SUBSECTION = "compliance"
 PART_KIND = "part"
 ORIGIN = "manual"
-#: Robot categories whose parts are electrical by nature; the rest are mechanical.
-ELECTRICAL_CATEGORIES = frozenset({"sensors", "controllers", "power", "wiring"})
 MAX_ASSEMBLY_PARTS = 500
 MASS_KEYS = ("mass_kg", "mass")
 
@@ -340,27 +341,16 @@ def candidate_of(request: SourcingRequest, candidate_id: str) -> Candidate | Non
     return None
 
 
-async def _category(
-    session: AsyncSession, project_id: uuid.UUID, category_id: uuid.UUID
-) -> GraphEntity:
-    row = await session.scalar(
-        select(GraphEntity).where(
-            GraphEntity.id == category_id,
-            GraphEntity.project_id == project_id,
-            GraphEntity.kind == "robot_category",
-            GraphEntity.origin == ORIGIN,
-            GraphEntity.deleted_at.is_(None),
-        )
-    )
-    if row is None:
-        raise APIError(404, "not_found", "Robot category not found")
-    return row
-
-
 def _planned_attrs(
-    request: SourcingRequest, candidate: Candidate, *, quantity: int, user_id: uuid.UUID | None
+    request: SourcingRequest,
+    candidate: Candidate,
+    *,
+    quantity: int,
+    user_id: uuid.UUID | None,
+    robot_id: uuid.UUID | None,
 ) -> dict[str, Any]:
     return {
+        **({"robot_id": str(robot_id)} if robot_id else {}),
         "lifecycle": "planned",
         "quantity": quantity,
         "part_number": candidate.part_number,
@@ -392,35 +382,37 @@ async def select_candidate(
     request: SourcingRequest,
     candidate: Candidate,
     user_id: uuid.UUID | None,
-    category_id: uuid.UUID | None,
+    robot_id: uuid.UUID | None,
     quantity: int,
 ) -> GraphEntity:
-    """The selected candidate enters the graph as ONE planned manual part
-    (R5 `planned`), contained by the chosen robot category when given. Does
-    NOT commit. Selecting twice re-points the request at the new node; the
-    earlier node stays (it is the user's data)."""
-    category = await _category(session, request.project_id, category_id) if category_id else None
-    domain = (
-        Domain.ELECTRICAL
-        if category is not None and category.attrs.get("category") in ELECTRICAL_CATEGORIES
-        else Domain.MECHANICAL
+    """The selected candidate enters the graph as ONE planned manual (mechanical) part
+    (R5 `planned`), contained by the chosen robot when given (a 404 for anything
+    but a live manual robot root of this project the caller may see), with the
+    robot's visibility (SOLUSDEV-326). Does NOT commit. Selecting twice re-points
+    the request at the new node; the earlier node stays (it is the user's data)."""
+    robot = None
+    if robot_id:  # its keys as they are under the lock every visibility writer takes first
+        await lock_project(session, request.project_id)
+        robot = await robot_root(session, request.project_id, robot_id)
+    planned = _planned_attrs(
+        request, candidate, quantity=quantity, user_id=user_id, robot_id=robot_id
     )
     part = GraphEntity(
         project_id=request.project_id,
         kind=PART_KIND,
-        domain=domain,
+        domain=Domain.MECHANICAL,
         name=candidate.name[:512],
         origin=ORIGIN,
-        attrs=_planned_attrs(request, candidate, quantity=quantity, user_id=user_id),
+        attrs={**planned, **(flags_of(robot.attrs) if robot is not None else {})},
         modality_hints={"part_number": candidate.part_number} if candidate.part_number else {},
     )
     session.add(part)
     await session.flush()
-    if category is not None:
+    if robot is not None:
         await write_edge(
             session,
             project_id=request.project_id,
-            src_id=category.id,
+            src_id=robot.id,
             dst_id=part.id,
             relation_type="contains",
             origin=ORIGIN,

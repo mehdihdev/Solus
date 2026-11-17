@@ -10,17 +10,19 @@
 // - model text renders as markdown through SolMarkdown, which emits React
 //   elements only (no HTML injection path — raw HTML is skipped, links are
 //   inert, images dropped; pinned by Markdown.test.tsx).
-import { Fragment, memo, useCallback, useRef } from 'react'
+import { Fragment, memo, useCallback, useMemo, useRef } from 'react'
 import { Mono } from '../../components/ui/Mono'
 import { SolusLogo } from '../../components/ui/SolusLogo'
 import { DomainDot } from './domainDot'
 import { citationDomain, citationTarget, type CitationTarget } from './domainIds'
 import { ReasoningBlock } from './ReasoningBlock'
 import { ThinkingBlock } from './ThinkingBlock'
+import { UserRow } from './UserRow'
 import { replyGrowth } from './thinking'
 import { useFollowStream } from './useFollowStream'
 import { pageAnchors } from './pageAnchors'
 import { ArtifactCard } from './ArtifactCard'
+import { ChatCard } from './ChatCard'
 import { ConfirmationCard, type ConfirmationDecision } from './ConfirmationCard'
 import { commandHeader } from './commandCard'
 import { PlanCard } from './PlanCard'
@@ -168,57 +170,44 @@ function CitationsView({
   )
 }
 
-/** A message the person sent. */
-function UserRow({
-  item,
-  rowClass,
-  page
-}: {
-  item: ChatItem
-  rowClass: string
-  page: boolean
-}): React.JSX.Element {
-  return (
-    <div className={rowClass} style={{ alignSelf: 'flex-end', maxWidth: page ? '78%' : '85%' }}>
-      <div
-        style={{
-          background: 'var(--sur2)',
-          border: '1px solid var(--bd)',
-          borderRadius: 6,
-          padding: page ? '10px 13px' : '8px 10px',
-          fontSize: 12.5,
-          lineHeight: 1.5,
-          whiteSpace: 'pre-wrap'
-        }}
-      >
-        {item.content}
-      </div>
-      {/* SOLUSDEV-252 S3: a flag, never the pixels (sol-window.md §8). */}
-      {item.hasScreenshot && (
-        <div style={{ ...MUTED, fontSize: 10, textAlign: 'right', marginTop: 3 }}>
-          screen attached
-        </div>
-      )}
-    </div>
-  )
-}
-
 /** One parked action's card, with a decide callback that is stable for as long
  *  as the card and the surface's decide are, so the card's keyboard approver is
  *  not re-registered on every transcript render (SOLUSDEV-317). */
 function ParkedConfirmation({
   pending,
-  onDecide
+  onDecide,
+  onAnswer
 }: {
   pending: PendingConfirmation
   onDecide: SolChat['decide']
+  onAnswer: SolChat['answer']
 }): React.JSX.Element {
-  const { confirmationId } = pending
+  const { confirmationId, card } = pending
   const decide = useCallback(
     (decision: ConfirmationDecision) => onDecide(confirmationId, decision),
     [onDecide, confirmationId]
   )
+  // SOLUSDEV-326: a row with a Solus-authored card shows the card's own copy and buttons.
+  if (card) {
+    return (
+      <ChatCard
+        pending={{ ...pending, card }}
+        onDecide={decide}
+        onAnswer={(choice, text) => onAnswer(confirmationId, choice, text)}
+      />
+    )
+  }
   return <ConfirmationCard pending={pending} onDecide={decide} />
+}
+
+/** How a surface shows a message's parked rows. */
+interface CardRules {
+  onDecide: SolChat['decide']
+  onAnswer: SolChat['answer']
+  /** SOLUSDEV-319 (pill): given, non-command approvals render as one PlanCard. */
+  onShowMe?: () => void
+  /** SOLUSDEV-326: the page has a card slot, so rows that carry a card stay out of the thread. */
+  cardsInSlot?: boolean
 }
 
 /** One card per parked action. A turn can park several since SOLUSDEV-168,
@@ -230,18 +219,21 @@ function ParkedConfirmation({
 function Confirmations({
   confirmations,
   reasoning,
-  onDecide,
-  onShowMe
+  rules
 }: {
   confirmations: readonly PendingConfirmation[]
   /** SOLUSDEV-321 P7: each proposal's reasoning, hung on its own card. */
   reasoning: ChatItem['reasoning']
-  onDecide: SolChat['decide']
-  onShowMe?: () => void
+  rules: CardRules
 }): React.JSX.Element {
+  const { onDecide, onAnswer, onShowMe } = rules
   const pill = onShowMe !== undefined
-  const planned = pill ? confirmations.filter((c) => commandHeader(c) === null) : []
-  const cards = pill ? [] : confirmations
+  // SOLUSDEV-326: a row with a card is never batched into the plan — it keeps its own card —
+  // and on a page with a card slot it is the slot's. A row with no card can never reach a slot
+  // (the open-card route skips it), so it always stays here, where it can be decided.
+  const planned = pill ? confirmations.filter((c) => commandHeader(c) === null && !c.card) : []
+  const shown = pill ? confirmations.filter((c) => c.card) : confirmations
+  const cards = rules.cardsInSlot ? shown.filter((c) => !c.card) : shown
   return (
     <>
       {planned.map((step) => (
@@ -257,7 +249,7 @@ function Confirmations({
       {cards.map((confirmation) => (
         <Fragment key={confirmation.confirmationId}>
           <ReasoningBlock reasoning={reasoning} confirmationId={confirmation.confirmationId} />
-          <ParkedConfirmation pending={confirmation} onDecide={onDecide} />
+          <ParkedConfirmation pending={confirmation} onDecide={onDecide} onAnswer={onAnswer} />
         </Fragment>
       ))}
     </>
@@ -273,22 +265,20 @@ function Confirmations({
 const MessageRow = memo(function MessageRow({
   item,
   projectId,
-  onDecide,
+  rules,
   onFile,
   settled,
   page,
-  onFocusEntity,
-  onShowMe
+  onFocusEntity
 }: {
   item: ChatItem
   projectId: string
-  onDecide: SolChat['decide']
+  /** Stable for as long as the surface's callbacks are (useCardRules), so rows stay memoised. */
+  rules: CardRules
   onFile: SolChat['fileArtifact']
   settled: boolean
   page: boolean
   onFocusEntity?: (target: CitationTarget) => void
-  /** SOLUSDEV-319 (pill): given, non-command approvals render as one PlanCard. */
-  onShowMe?: () => void
 }): React.JSX.Element {
   const rowClass = settled ? 'sol-msg-in sol-msg-settled' : 'sol-msg-in'
   if (item.role === 'user') return <UserRow item={item} rowClass={rowClass} page={page} />
@@ -317,12 +307,7 @@ const MessageRow = memo(function MessageRow({
       <ResearchPills research={item.researchSources} projectId={projectId} />
       {/* CTR-03: a destructive action is parked, not executed, until this user
           approves the concrete diff shown here (CLAUDE.md §7). */}
-      <Confirmations
-        confirmations={confirmations}
-        reasoning={item.reasoning}
-        onDecide={onDecide}
-        onShowMe={onShowMe}
-      />
+      <Confirmations confirmations={confirmations} reasoning={item.reasoning} rules={rules} />
       {/* SOLUSDEV-317: an approved command's output, live while it runs and
           kept with its exit status after the card is gone. */}
       {/* SOLUSDEV-319: a drive.step shows the A3 strip instead, while it runs. */}
@@ -380,31 +365,49 @@ function AssistantFrame({
   )
 }
 
+/** The thread's box: the page's wide column, or the window's. */
+function listStyle(page: boolean): React.CSSProperties {
+  const base: React.CSSProperties = {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    display: 'flex',
+    flexDirection: 'column'
+  }
+  return page
+    ? { ...base, gap: 20, padding: '24px 24px', width: '100%', boxSizing: 'border-box' }
+    : { ...base, gap: 10, padding: 12 }
+}
+
 function MessageList({
   chat,
   projectId,
   page,
-  onDecide,
+  rules,
   onFocusEntity,
-  onShowMe,
   emptyState
 }: {
   chat: SolChat
   projectId: string
   page: boolean
-  onDecide: SolChat['decide']
+  rules: CardRules
   onFocusEntity?: (target: CitationTarget) => void
-  onShowMe?: () => void
   emptyState?: React.ReactNode
 }): React.JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
   const count = chat.items.length
+  // A notice line is Solus's, not the person's: it never pulls a reader back down.
+  const notices = useMemo(() => chat.items.filter((m) => m.kind === 'notice').length, [chat.items])
   // Streamed tokens grow an item's CONTENT without changing the item count, so
   // the follow signal must track how much the reply grew, not just rows — the old
   // count-only dep is why replies ran off-screen mid-stream. Only the LAST
   // row ever grows (the streaming reply); its text, thought and steps (SOLUSDEV-326)
   // are the whole signal.
-  const follow = useFollowStream(listRef, count, count ? replyGrowth(chat.items[count - 1]) : 0)
+  const follow = useFollowStream(
+    listRef,
+    count - notices,
+    count ? replyGrowth(chat.items[count - 1]) : 0
+  )
   return (
     <div
       ref={listRef}
@@ -415,16 +418,7 @@ function MessageList({
         if (event.target === event.currentTarget) follow.onPointerDown()
       }}
       className="sol-thread"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        overflowY: 'auto',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: page ? 20 : 10,
-        padding: page ? '24px 24px' : 12,
-        ...(page ? { width: '100%', boxSizing: 'border-box' } : {})
-      }}
+      style={listStyle(page)}
     >
       {chat.status === 'offline' && <Mono size={9.5}>SOL HISTORY UNAVAILABLE — OFFLINE</Mono>}
       {chat.status === 'ready' &&
@@ -439,12 +433,11 @@ function MessageList({
           key={item.id}
           item={item}
           projectId={projectId}
-          onDecide={onDecide}
+          rules={rules}
           onFile={chat.fileArtifact}
           settled={i < count - 1 && !item.pending}
           page={page}
           onFocusEntity={onFocusEntity}
-          onShowMe={onShowMe}
         />
       ))}
     </div>
@@ -472,6 +465,8 @@ export interface SolChatProps {
   onAddNodeFromGraph?: () => void
   /** Page: a verified citation chip opens the surface it names (`citationTarget`, P7). */
   onFocusEntity?: (target: CitationTarget) => void
+  /** SOLUSDEV-326: the host page has a card slot — rows that carry a card stay out of the thread. */
+  cardsInSlot?: boolean
   /** Sidebar: what an empty conversation shows (the screen's greeting and chips). */
   emptyState?: React.ReactNode
   /** Sidebar: the composer's per-screen placeholder. */
@@ -580,6 +575,24 @@ function Surface(p: SurfaceParts): React.JSX.Element {
   )
 }
 
+/** SOLUSDEV-326: a decision resumes, and an answer goes, as every send does (SOL_SEND_MODE). */
+function useCardRules(
+  chat: SolChat,
+  decideInMode: SolChat['decide'],
+  onShowMe: (() => void) | undefined,
+  cardsInSlot: boolean | undefined
+): CardRules {
+  const { answer } = chat
+  const answerInMode = useCallback<SolChat['answer']>(
+    (questionId, choice, text) => answer(questionId, choice, text, undefined, SOL_SEND_MODE),
+    [answer]
+  )
+  return useMemo(
+    () => ({ onDecide: decideInMode, onAnswer: answerInMode, onShowMe, cardsInSlot }),
+    [decideInMode, answerInMode, onShowMe, cardsInSlot]
+  )
+}
+
 /** The page and the sidebar send the workspace focus and pins; the window and the pill (their own
  *  renderer) send neither — null. */
 function anchorIdsFor(
@@ -599,6 +612,7 @@ export function SolChat({
   onUpload,
   onAddNodeFromGraph,
   onFocusEntity,
+  cardsInSlot,
   emptyState,
   placeholder
 }: SolChatProps): React.JSX.Element {
@@ -618,6 +632,8 @@ export function SolChat({
     anchorIdsFor(layout, pinnedMentionIds)
   )
   const showMeHow = useShowMeHow(chat)
+  const onShowMe = layout === 'pill' ? showMeHow : undefined
+  const rules = useCardRules(chat, decideInMode, onShowMe, cardsInSlot)
   if (!projectId) {
     return (
       <div style={{ ...MUTED, padding: 16, textAlign: 'center' }}>
@@ -636,9 +652,8 @@ export function SolChat({
             chat={chat}
             projectId={projectId}
             page={layout === 'page'}
-            onDecide={decideInMode}
+            rules={rules}
             onFocusEntity={onFocusEntity}
-            onShowMe={layout === 'pill' ? showMeHow : undefined}
             emptyState={emptyState}
           />
         }
@@ -648,11 +663,15 @@ export function SolChat({
           )
         }
         strip={
-          <ProcessStrip
-            projectId={projectId}
-            refreshSignal={chat.items.length}
-            actionMode={SOL_SEND_MODE}
-          />
+          // A page with a card slot forces confirmation on its turns, and a process wake goes
+          // straight to the store (wakeTurn), past that: no process strip beside a slot.
+          !cardsInSlot && (
+            <ProcessStrip
+              projectId={projectId}
+              refreshSignal={chat.items.length}
+              actionMode={SOL_SEND_MODE}
+            />
+          )
         }
         takeover={layout === 'pill' ? newestPendingCommand(chat.items) : null}
         onDecide={decideInMode}

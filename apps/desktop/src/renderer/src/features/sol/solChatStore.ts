@@ -12,8 +12,6 @@
 // chat switches. Runtime-only — never persisted.
 import { create } from 'zustand'
 import { useAuthStore } from '../../store/authStore'
-import { useShellStore } from '../workspace/shellStore'
-import { useWorkspaceStore } from '../../store/workspaceStore'
 import { ApiError } from '../../lib/api/envelope.types'
 import { addSolusEntry, decideSolConfirmation, type SolusSection } from '../../lib/api/resources'
 import {
@@ -26,9 +24,9 @@ import {
   type StreamSolMessageInput
 } from './solApi'
 import { preferencesForTurn } from '../preferences/preferencesStore'
-import type { ContextUsedInfo, ReasonedItem, SolStreamEvent } from './solStream'
-import type { AnswerSourceInfo, BudgetReachedInfo, ToolArgs } from './solStream'
-import type { AutoRun, PendingConfirmation, SolArtifact } from '../../lib/api/solStream'
+import type { ContextUsedInfo, SolStreamEvent } from './solStream'
+import type { PendingConfirmation } from '../../lib/api/solStream'
+import type { ChatItem } from './solChat.types'
 import {
   purgeAllCachedChats,
   readCachedChat,
@@ -37,79 +35,31 @@ import {
 } from './solCache'
 import { selectConversationId, useSolSessionStore } from './solSessionStore'
 import { createTokenBatcher, type TokenBatcher } from './tokenBatcher'
-import { commandExitStatus, hasCommandOutput, isCommandTool } from './commandCard'
-import { finalOutputOf, type CommandRun } from './commandRuns'
+import { commandExitStatus, hasCommandOutput, resumesAfterApproval } from './commandCard'
+import { finalOutputOf } from './commandRuns'
 import { createRunTracker, refusalStatus } from './commandRunTracker'
 import { processIdOf, rememberProcessOwner, resetProcessOwners } from './processOwners'
 import type { WakeStart } from './processWake'
-import { attachResearchSources, type ResearchSources } from './researchSources'
-import { addThought, type ThinkingInfo } from './thinking'
+import { attachResearchSources } from './researchSources'
+import { addThought } from './thinking'
 import { foldToolTurns } from './historyFold'
 import { applyContextUsed } from './contextUsed'
+import { notifyAway } from './solAway'
 import {
   MAX_TURN_CHARS,
   appendContent,
   applyEvent,
   applyReasoningFrame,
   blankItem,
+  decidedContent,
+  decidedTrace,
+  markParked,
   turnFailureText,
+  withRestored,
   type Patch
 } from './solChatItems'
 
-export interface TraceEntry {
-  callId: string
-  tool: string
-  /** Null while the call is in flight. */
-  ok: boolean | null
-  errorCode: string | null
-  /** The call's args: redacted by the server, bounded for display (SOLUSDEV-321 P1-T6). */
-  args?: ToolArgs
-}
-
-/** SOLUSDEV-252 S5: an artifact in the transcript plus where the user filed it.
- *  `filedTo` lives in the store, not the card, so a remount cannot file twice. */
-export interface ChatArtifact extends SolArtifact {
-  filedTo: SolusSection | null
-}
-
-export interface ChatItem extends ReasonedItem {
-  id: string
-  role: 'user' | 'assistant' | 'tool'
-  content: string
-  /** SOL-02: structured provenance from the message event — never parsed from prose. */
-  citations: readonly string[]
-  trace: readonly TraceEntry[]
-  pending: boolean
-  /** Author-safe failure text (backend error frame or a local transport note). */
-  error: string | null
-  /** CTR-03: every action this turn parked, in the order they were proposed.
-   *  A LIST since SOLUSDEV-168: the turn no longer ends at the first parked
-   *  call, so one message can park several. Overwriting a single slot would
-   *  silently drop every card but the last — and a dropped card is a
-   *  destructive action the user can neither approve nor reject. */
-  confirmations: readonly PendingConfirmation[]
-  /** SOLUSDEV-252 S5: every artifact a tool produced this turn, in order.
-   *  Optional (like hasScreenshot) so reloaded/cached items and fixtures built
-   *  before S5 stay valid — absent reads as none. */
-  artifacts?: readonly ChatArtifact[]
-  /** SOLUSDEV-321 P1-T5: the web sources the turn's research found; absent reads as none. */
-  researchSources?: ResearchSources
-  /** SOLUSDEV-321 P1-T6: who answered (the graph, no model) and a ceiling the turn hit. */
-  answerSource?: AnswerSourceInfo
-  budgetReached?: BudgetReachedInfo
-  /** SOLUSDEV-326: SOL's thought summary for this reply; absent reads as none. */
-  thinking?: ThinkingInfo
-  /** SOLUSDEV-252 S3: this user turn carried a screen capture. A flag only —
-   *  pixels live in memory for one send and never enter an item. */
-  hasScreenshot?: boolean
-  /** SOLUSDEV-317: approved commands' output, kept (bounded, plain text) with
-   *  the exit status under this message until the conversation is closed.
-   *  Runtime only — never cached (solCache keeps role + content). */
-  commandRuns?: readonly CommandRun[]
-  /** SOLUSDEV-317 §10.1: Build-mode commands that ran without a card, as
-   *  compact rows. Runtime only, like commandRuns. */
-  autoRuns?: readonly AutoRun[]
-}
+export type { ChatArtifact, ChatItem, TraceEntry } from './solChat.types'
 
 export type ChatStatus = 'loading' | 'ready' | 'offline'
 
@@ -162,7 +112,7 @@ let identityGeneration = 0
 const decidedApprovals = new Set<string>()
 const nextItemId = (): string => `local-${++itemSeq}`
 
-function patchSession(projectId: string, fn: (session: SolSession) => SolSession): void {
+export function patchSession(projectId: string, fn: (session: SolSession) => SolSession): void {
   useSolChatStore.setState((state) => ({
     sessions: {
       ...state.sessions,
@@ -193,7 +143,7 @@ export function flushPendingTokens(projectId: string): void {
   batchers.get(projectId)?.flushNow()
 }
 
-function cancelLiveTurn(projectId: string): void {
+export function cancelLiveTurn(projectId: string): void {
   turnTokens.delete(projectId)
   controllers.get(projectId)?.abort()
   controllers.delete(projectId)
@@ -216,30 +166,6 @@ export function resetSolChatSessions(): void {
   turnTokens.clear()
   useSolChatStore.setState({ sessions: {} })
   refreshStreaming()
-}
-
-/** True when the user is looking at THIS project's SOL page right now. */
-function userIsWatching(projectId: string): boolean {
-  const onSolScreen = useShellStore.getState().lastMain === 'sol'
-  const currentProject = useWorkspaceStore.getState().project?.id ?? null
-  return onSolScreen && currentProject === projectId
-}
-
-/** A backgrounded reply finished (or failed): raise the shell toast. The View
- *  action is offered only when the workspace is still on the turn's project. */
-function notifyAway(projectId: string, prompt: string, failed: boolean): void {
-  if (userIsWatching(projectId)) return
-  const sameProject = useWorkspaceStore.getState().project?.id === projectId
-  useShellStore.getState().setToast({
-    kind: failed ? 'warn' : 'ok',
-    title: failed ? 'SOL turn failed' : 'SOL replied',
-    // Another project's prompt is that project's business (SOLUSDEV-242): the
-    // toast names the fact, not the text, when the user has moved on.
-    body: sameProject
-      ? `“${prompt.slice(0, 60)}${prompt.length > 60 ? '…' : ''}” — open SOL to read it.`
-      : 'A turn finished in another project — switch back to read it.',
-    ...(sameProject ? { action: 'View', screen: 'sol' as const } : {})
-  })
 }
 
 /** Load history so the session matches the project's ACTIVE conversation.
@@ -286,34 +212,9 @@ export async function syncSession(projectId: string): Promise<void> {
       ...s,
       // Merge, don't replace: a send may have appended local items while
       // history was in flight — loading must never wipe a live turn.
-      items: (() => {
-        const local = s.items.filter((m) => m.id.startsWith('local-'))
-        const liveIds = new Set(local.flatMap((m) => m.confirmations.map((c) => c.confirmationId)))
-        const restored = approvals.filter(
-          (c) =>
-            !liveIds.has(c.confirmationId) &&
-            !decidedApprovals.has(`${projectId}:${c.confirmationId}`)
-        )
-        return [
-          ...loaded,
-          ...(restored.length
-            ? [
-                {
-                  id: `approvals-${active}`,
-                  role: 'assistant' as const,
-                  content: 'Awaiting your approval',
-                  citations: [],
-                  trace: [],
-                  pending: false,
-                  error: null,
-                  confirmations: restored,
-                  artifacts: []
-                }
-              ]
-            : []),
-          ...local
-        ]
-      })(),
+      items: withRestored(loaded, s.items, active, approvals, (id) =>
+        decidedApprovals.has(`${projectId}:${id}`)
+      ),
       status: 'ready'
     }))
     writeCachedChat(projectId, active, loaded)
@@ -404,25 +305,88 @@ export async function sendMessage(
   })
 }
 
+const isStreaming = (projectId: string): boolean =>
+  selectSession(useSolChatStore.getState(), projectId).streaming
+
+/** Resolves once no turn is live in the project.
+ *  ponytail: no timeout — a live turn always settles (its stream ends or it is cancelled). */
+function turnSettled(projectId: string): Promise<void> {
+  if (!isStreaming(projectId)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const stop = useSolChatStore.subscribe(() => {
+      if (isStreaming(projectId)) return
+      stop()
+      resolve()
+    })
+  })
+}
+
+/** Make `conversationId` the project's open conversation (no-op when it already is). Only ever
+ *  called with no turn live (`afterLiveTurn`), so there is nothing to cancel. */
+async function enterConversation(
+  projectId: string,
+  conversationId: string | undefined
+): Promise<void> {
+  const sessions = useSolSessionStore.getState()
+  if (!conversationId || selectConversationId(sessions, projectId) === conversationId) return
+  sessions.setConversation(projectId, conversationId)
+  await syncSession(projectId)
+}
+
+/** Start a turn once no other is live, in `conversationId` when given. A card is pressed, and a
+ *  device announced, while SOL may still be replying: the live turn is left to finish (never
+ *  cancelled) and the new one waits. Every waiter wakes on the same settle, so each checks again
+ *  after every await; `start` must claim the turn before its own first await (`runTurn` does),
+ *  which sends the others back to waiting. A sign-out or account switch settles every turn too:
+ *  what was queued for the old identity never starts, and resolves `dropped`. */
+export async function afterLiveTurn<T>(
+  projectId: string,
+  conversationId: string | undefined,
+  start: () => Promise<T>,
+  dropped: T
+): Promise<T> {
+  const generation = identityGeneration
+  for (;;) {
+    await turnSettled(projectId)
+    if (generation !== identityGeneration) return dropped
+    await enterConversation(projectId, conversationId)
+    if (generation !== identityGeneration) return dropped
+    if (!isStreaming(projectId)) return start()
+  }
+}
+
 /** SOLUSDEV-317 (§5.5): after an approved command card, continue SOL's turn so
  *  it reads the result. No user bubble; same streaming path and admission. */
 const RESUME_PAUSED = 'SOL paused — reply to continue'
 const RESUME_PROMPT = 'your approved command'
 
-async function resumeTurn(
+/** Waits its turn behind a live one (`afterLiveTurn`): a card decided while SOL is replying still
+ *  resumes, once, after that reply. With `conversationId` (a card decided outside the thread) it
+ *  opens that conversation first; without, it goes only in the conversation it was decided in —
+ *  the person opening another chat meanwhile drops it. `forceConfirmation` given (the Hardware
+ *  surface, SOLUSDEV-326) overrides the session's choice. */
+export function resumeTurn(
   projectId: string,
   confirmationId: string,
-  actionMode: SolActionMode
+  actionMode: SolActionMode,
+  forceConfirmation?: boolean,
+  conversationId?: string
 ): Promise<void> {
-  const session = selectSession(useSolChatStore.getState(), projectId)
-  if (session.conversationId === null || !admitTurn(projectId)) return
-  await runTurn(projectId, RESUME_PROMPT, null, {
-    projectId,
-    content: '',
-    actionMode,
-    resumeConfirmationId: confirmationId,
-    ...confirmationOptions({ forceConfirmation: session.forceConfirmation })
-  })
+  const decidedIn = selectSession(useSolChatStore.getState(), projectId).conversationId
+  const start = async (): Promise<void> => {
+    const session = selectSession(useSolChatStore.getState(), projectId)
+    if (session.conversationId === null) return
+    if (!conversationId && session.conversationId !== decidedIn) return
+    if (!admitTurn(projectId)) return
+    await runTurn(projectId, RESUME_PROMPT, null, {
+      projectId,
+      content: '',
+      actionMode,
+      resumeConfirmationId: confirmationId,
+      ...confirmationOptions({ forceConfirmation: forceConfirmation ?? session.forceConfirmation })
+    })
+  }
+  return afterLiveTurn(projectId, conversationId, start, undefined)
 }
 
 /** SOLUSDEV-317 §11.3: an interactive process SOL started is asking for input.
@@ -458,7 +422,7 @@ type TurnInput = Omit<
 
 /** One streamed turn: optional user bubble, a pending assistant item, the
  *  stream, and end-of-turn bookkeeping. Shared by sends and resumes. */
-async function runTurn(
+export async function runTurn(
   projectId: string,
   prompt: string,
   userItem: ChatItem | null,
@@ -502,7 +466,7 @@ async function runTurn(
       }
     })
   } catch (error: unknown) {
-    failed = !resumeRefusal(projectId, assistantId, patch, error)
+    failed = !resumeRefusal(projectId, assistantId, patch, error, input.notice !== undefined)
     if (failed) failTurn(projectId, patch, batcher, error)
   } finally {
     // Text still buffered when the stream ends lands before the turn settles
@@ -516,29 +480,40 @@ async function runTurn(
   return !failed
 }
 
-/** A resume or wake the server declined on purpose (§5.5, §11.2):
- *  `resume_limit` pauses SOL until the person replies; `already_resumed` /
- *  `already_woken` is someone else's continuation and vanishes silently. */
+/** Someone else's continuation, or (SOLUSDEV-326) a device announced twice inside two seconds. */
+const SILENT_REFUSALS: ReadonlySet<string> = new Set([
+  'already_resumed',
+  'already_woken',
+  'notice_debounced'
+])
+
+/** A resume, wake or notice the server declined on purpose (§5.5, §11.2): `resume_limit` pauses
+ *  SOL until the person replies; the silent ones and a notice's 422 (its device is gone) vanish. */
 function resumeRefusal(
   projectId: string,
   assistantId: string,
   patch: Patch,
-  error: unknown
+  error: unknown,
+  notice = false
 ): boolean {
-  if (!(error instanceof ApiError) || error.status !== 409) return false
+  if (!(error instanceof ApiError)) return false
+  const gone = notice && error.status === 422
+  if (!gone && error.status !== 409) return false
   if (error.code === 'resume_limit') {
     patch((m) => ({ ...m, pending: false, content: RESUME_PAUSED }))
     return true
   }
-  if (error.code !== 'already_resumed' && error.code !== 'already_woken') return false
+  if (!gone && !SILENT_REFUSALS.has(error.code)) return false
   patchSession(projectId, (s) => ({ ...s, items: s.items.filter((m) => m.id !== assistantId) }))
   return true
 }
 
 /** One live turn per project, MAX_CONCURRENT_TURNS overall; the refusal is
  *  painted into the transcript, never thrown. */
-function admitTurn(projectId: string): boolean {
-  if (controllers.has(projectId)) return false
+export function admitTurn(projectId: string): boolean {
+  // The token is claimed before a turn's first await, the controller only after its conversation
+  // is known: both, so a second turn in that gap is refused too (SOLUSDEV-326).
+  if (controllers.has(projectId) || turnTokens.has(projectId)) return false
   if (controllers.size < MAX_CONCURRENT_TURNS) return true
   patchSession(projectId, (s) => ({
     ...s,
@@ -592,42 +567,33 @@ function settleTurn(projectId: string, prompt: string, failed: boolean): void {
   notifyAway(projectId, prompt, failed)
 }
 
-/** The message text after a decision: a restored approvals item says what
- *  happened; a chat message gains an "Approval update" line. */
-function decidedContent(
-  m: ChatItem,
-  confirmationId: string,
-  decision: 'approve' | 'reject'
-): string {
-  const approved = decision === 'approve'
-  if (!m.id.startsWith('approvals-')) {
-    const tool = m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'
-    return `${m.content}\n\nApproval update: ${tool} ${approved ? 'approval recorded' : 'was rejected'}.`
-  }
-  if (m.confirmations.length !== 1) return m.content
-  return approved ? 'Approval recorded.' : 'Action rejected.'
-}
-
-/** Drop the decided card from whichever message carries it. */
+/** Drop the decided card from whichever message carries it. `null` is a refusal: the card goes
+ *  with no word of a decision, and a restored approvals item it was the last row of goes too. */
 function markDecided(
   projectId: string,
   confirmationId: string,
-  decision: 'approve' | 'reject'
+  decision: 'approve' | 'reject' | null
 ): void {
   decidedApprovals.add(`${projectId}:${confirmationId}`)
   patchSession(projectId, (s) => ({
     ...s,
-    items: s.items.map((m) =>
-      m.confirmations.some((c) => c.confirmationId === confirmationId)
-        ? {
-            ...m,
-            content: decidedContent(m, confirmationId, decision),
-            confirmations: m.confirmations.filter((c) => c.confirmationId !== confirmationId)
-          }
-        : m
-    )
+    items: s.items.flatMap((m) => {
+      if (!m.confirmations.some((c) => c.confirmationId === confirmationId)) return [m]
+      const confirmations = m.confirmations.filter((c) => c.confirmationId !== confirmationId)
+      if (decision) {
+        const trace = decidedTrace(m.trace, confirmationId, decision)
+        return [
+          { ...m, content: decidedContent(m, confirmationId, decision), trace, confirmations }
+        ]
+      }
+      return m.id.startsWith('approvals-') && !confirmations.length ? [] : [{ ...m, confirmations }]
+    })
   }))
 }
+
+/** SOLUSDEV-326: a card decided outside the thread (the Hardware page's slot posts the decision
+ *  itself): its row leaves the thread as one decided here does, and no history load restores it. */
+export const cardDecided: typeof markDecided = (...decided) => markDecided(...decided)
 
 /** POST the decision, closing the tracked command run with its exit status or
  *  its refusal. Rethrows so ConfirmationCard owns the failure state. */
@@ -653,35 +619,52 @@ async function postDecision(
   }
 }
 
+/** `postDecision` for a row that may carry a card. Refused (stale, expired, already decided) is
+ *  the server's final word on a `resumes` card too, so SOL continues. By name, as
+ *  ConfirmationCard reads it: the class crosses a module boundary. */
+async function postCardDecision(
+  pending: PendingConfirmation | null,
+  resume: () => void,
+  ...args: Parameters<typeof postDecision>
+): ReturnType<typeof postDecision> {
+  return postDecision(...args).catch((error: unknown) => {
+    const refused = error instanceof Error && error.name === 'ConfirmationRefused'
+    if (pending?.card?.resumes && refused) resume()
+    throw error
+  })
+}
+
+/** SOLUSDEV-317 §5.5 / SOLUSDEV-326: after ANY outcome of a card the server marked `resumes`, and
+ *  after an approved command; never after a rejected one, nor a row that is neither. */
+function shouldResume(pending: PendingConfirmation | null, approving: boolean): boolean {
+  if (pending?.card?.resumes) return true
+  return approving && pending !== null && resumesAfterApproval(pending.tool)
+}
+
 export async function decideConfirmation(
   projectId: string,
   confirmationId: string,
   decision: 'approve' | 'reject',
-  options?: { actionMode?: SolActionMode }
+  options?: { actionMode?: SolActionMode; forceConfirmation?: boolean }
 ): Promise<void> {
   // Clear ONLY on success — ConfirmationCard owns the failure state (CTR-03).
   const generation = identityGeneration
-  const tool = findConfirmation(projectId, confirmationId)?.tool ?? null
+  const pending = findConfirmation(projectId, confirmationId)
+  const tool = pending?.tool ?? null
   const approving = decision === 'approve' && tool !== null
   const tracked = approving && hasCommandOutput(tool)
+  const resume = (): void => {
+    if (options?.actionMode) {
+      void resumeTurn(projectId, confirmationId, options.actionMode, options.forceConfirmation)
+    }
+  }
   if (tracked) runs.begin(projectId, confirmationId, tool)
-  const outcome = await postDecision(projectId, confirmationId, decision, tracked, generation)
+  const args = [projectId, confirmationId, decision, tracked, generation] as const
+  const outcome = await postCardDecision(pending, resume, ...args)
   if (outcome === null) return
   markDecided(projectId, confirmationId, decision)
-  if (!approving) return
-  if (tool === 'code.process_start') recordProcessOwner(projectId, outcome.value)
-  resumeAfterCommand(projectId, confirmationId, tool, options?.actionMode)
-}
-
-/** SOLUSDEV-317 §5.5: SOL continues after an approved command. Never after a
- *  rejection (the caller only calls on approve), and never for a non-command card. */
-function resumeAfterCommand(
-  projectId: string,
-  confirmationId: string,
-  tool: string,
-  actionMode: SolActionMode | undefined
-): void {
-  if (isCommandTool(tool) && actionMode) void resumeTurn(projectId, confirmationId, actionMode)
+  if (approving && tool === 'code.process_start') recordProcessOwner(projectId, outcome.value)
+  if (shouldResume(pending, approving)) resume()
 }
 
 /** §11.3: remember which conversation started this process, for its wakes. */
@@ -771,6 +754,7 @@ function handleTurnEvent(
   batcher: ReturnType<typeof createTokenBatcher>,
   event: SolStreamEvent
 ): boolean {
+  markParked(patch, event)
   if (
     event.type === 'tool_confirmation' &&
     (decidedApprovals.has(`${projectId}:${event.pending.confirmationId}`) ||

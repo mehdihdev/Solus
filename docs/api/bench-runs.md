@@ -22,6 +22,14 @@ member role and verified identity. Unknown/foreign run/artifact/robot/session is
   gateway (TRIVIAL/GENERAL); no finding creation or altered numeric evidence; deterministic
   fallback when unavailable. Existingbudget/rate/auth checks apply.
 
+**Per viewer (SOLUSDEV-326).** A run is seen by whoever sees its robot
+([hardware §1a](hardware.md)). A run of a robot another member keeps out of the graph is left out
+of `GET /runs`, and every route that names it (detail, stop, compare, findings, narrate,
+baseline, pin, a list cursor) and SOL's `get_run` are 404, like an unknown run. Every save stamps
+the record, and the `.solus` document a finished run is filed as, with its robot's
+`in_graph`/`onboarded_by`; adding the robot to the graph or removing it moves its runs with it.
+A capture's checkpoints save in the system view, whoever started the capture.
+
 Run summaries include id, robot/session IDs, name, origin(live|recorded|synthetic|sim), status
 (running|completed|truncated|interrupted), start/end timestamps, packetcount/dropcount, artifact
 reference when filed, `baseline` (see Baseline) and `pinned` (see Pin). `origin: sim` is a run a
@@ -85,7 +93,7 @@ findings read it as any other run:
   the joint (`<world>/<model>/<joint>`; a graph-bound joint's entity id), values
   `<joint>.position` (rad) and `<joint>.velocity` (rad/s), on the simulator's clock made relative
   to the run's start; one `PartEvidence` per resolved joint (`position_signal`, `position_unit:
-  rad`); no sensors, no findings; and `manifest.sim`:
+rad`); no sensors, no findings; and `manifest.sim`:
 
   ```text
   sim: {provider, family | null, version | null, model_sha256 | null, scene_ref | null, routine}

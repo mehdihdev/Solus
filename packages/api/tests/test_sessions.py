@@ -18,6 +18,7 @@ from solus_api.agent.interfaces import TelemetryWindow, TelemetryWindowSummary
 from solus_api.connectors.live import BatchCallback, LiveStatus
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
 from solus_api.graph.packet import TelemetryPacket
+from solus_api.graph.read_scope import GraphReadScope, bind_scope, current_scope
 from solus_api.graph.resolver import DictEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.livebench.sessions import (
@@ -502,6 +503,46 @@ async def test_conflicting_session_channel_roles_remain_unknown() -> None:
     await manager.aclose_all()
 
 
+async def test_channel_display_needs_an_observed_device_and_agreeing_sessions() -> None:
+    """SOLUSDEV-326: the config's per-channel display/range rides the role path — read only for
+    a device this project's session observed, malformed declarations dropped, and two sessions
+    that disagree leave the channel undeclared."""
+    project = uuid.uuid4()
+    manager, _ = _manager(project)
+    angle = {"display": "angle", "range": {"min": -90, "max": 90}}
+    conn = FakeConn()
+    conn.device_facts = {
+        "channel_display": {
+            "device": {
+                "j.position": angle,
+                "j.state": {"display": "state"},
+                "bad": {"display": "sparkline"},
+                "null": {"display": None},
+                "worse": {"range": {"min": 2, "max": 1}},
+                "odd": {"display": "plot", "colour": "red"},
+            }
+        }
+    }
+    await _start(manager, project, conn)
+    assert manager.channel_display(project, "device") == {}
+    await conn.drive(_packet("device", 0, health=1))
+    assert manager.channel_display(project, "device") == {
+        "j.position": angle,
+        "j.state": {"display": "state"},
+    }
+    assert manager.channel_display(uuid.uuid4(), "device") == {}
+    other = FakeConn()
+    other.device_facts = {
+        "channel_display": {
+            "device": {"j.position": {"display": "plot"}, "j.state": {"display": "state"}}
+        }
+    }
+    await _start(manager, project, other)
+    await other.drive(_packet("device", 0, health=1))
+    assert manager.channel_display(project, "device") == {"j.state": {"display": "state"}}
+    await manager.aclose_all()
+
+
 # ── SOLUSDEV-321 P2-T3: a robot session runs its window evaluator ──────────────
 
 
@@ -557,6 +598,20 @@ async def test_a_robot_session_starts_its_evaluator_and_stop_cancels_it() -> Non
     stopped = await manager.stop(project, record.id)
     assert task.cancelled()  # cancelled, and awaited before the stop returned
     assert stopped.robot_entity_id == robot
+
+
+async def test_a_part_bound_on_its_own_keeps_its_subject_and_runs_no_robot_evaluator() -> None:
+    """SOLUSDEV-326: a lone part's session names its part (who may see the session follows it)
+    but is no robot's to judge."""
+    project, part = uuid.uuid4(), uuid.uuid4()
+    evaluator = _Evaluator()
+    manager, _ = _manager(project, evaluator_factory=lambda view: evaluator)
+    record = await _robot_session(
+        manager, project, FakeConn(), robot_entity_id=part, owner_user_id=None, evaluate=False
+    )
+    assert evaluator.views == []
+    assert record.robot_entity_id == part
+    await manager.aclose_all()
 
 
 async def test_a_session_without_a_robot_runs_no_evaluator() -> None:
@@ -743,4 +798,69 @@ async def test_a_real_session_never_looks_a_robot_up() -> None:
     record = await _start(manager, project, conn, mode="real", provider="robot")
     await conn.drive(_packet("arm/1", 1.0, a=1.0))
     assert robots.calls == [] and manager.get(project, record.id).robot_entity_id is None
+    await manager.aclose_all()
+
+
+# ── SOLUSDEV-326: a session's pump, tap and evaluator read as the system ──────────
+
+
+class _PumpingConn(FakeConn):
+    """Spawns its pump on subscribe, as the livebench connections do, so the pump copies the
+    ContextVars of whoever started the session; it records the read scope it saw."""
+
+    def __init__(self, project: uuid.UUID) -> None:
+        super().__init__()
+        self.scope_project = project
+        self.pump_viewers: list[uuid.UUID | None] = []
+        self.pump: asyncio.Task[None] | None = None
+
+    async def subscribe(self, window: TelemetryWindow) -> str:
+        handle = await super().subscribe(window)
+        self.pump = asyncio.create_task(self._pump())
+        return handle
+
+    async def _pump(self) -> None:
+        self.pump_viewers.append(current_scope(self.scope_project).viewer_id)
+        await self.drive(_packet("arm/1", 1.0, a=1.0))
+
+
+class _ScopeEvaluator(_Evaluator):
+    def __init__(self, project: uuid.UUID) -> None:
+        super().__init__()
+        self.scope_project = project
+        self.viewers: list[uuid.UUID | None] = []
+
+    async def _ticks(self) -> None:
+        self.viewers.append(current_scope(self.scope_project).viewer_id)
+        await super()._ticks()
+
+
+async def test_a_session_started_in_a_request_reads_in_the_system_view() -> None:
+    """The request's viewer must not follow the session into its pump, tap or evaluator: a
+    teammate-started stream of hardware they cannot see still resolves, and is still judged."""
+    project, part, robot, viewer = (uuid.uuid4() for _ in range(4))
+    seen: list[uuid.UUID | None] = []
+
+    class _Resolver:
+        async def resolve(
+            self, project_id: uuid.UUID, device_id: str, *, source: str | None = None
+        ) -> uuid.UUID | None:
+            seen.append(current_scope(project_id).viewer_id)
+            return part
+
+    evaluator = _ScopeEvaluator(project)
+    manager = SessionManager(
+        TelemetryPlumbing(InMemoryTelemetryBuffer(), _Resolver()),
+        evaluator_factory=lambda view: evaluator,
+    )
+    conn = _PumpingConn(project)
+    scope = GraphReadScope(project, viewer_id=viewer)
+    with bind_scope(scope):
+        await _start(manager, project, conn, mode="real", provider="robot", robot_entity_id=robot)
+        assert current_scope(project) == scope  # the request keeps its own view
+    assert conn.pump is not None
+    await conn.pump
+    await asyncio.sleep(0)
+
+    assert conn.pump_viewers == [None] and seen == [None] and evaluator.viewers == [None]
     await manager.aclose_all()

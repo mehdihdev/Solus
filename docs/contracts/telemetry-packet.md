@@ -71,7 +71,17 @@ the hardware config's `parts[].telemetry` is where the convention is authoritati
 Live Bench reads names and units from.
 On the wire from a configured robot, `device_id` is the **part's** key `<device ref>/<address>`
 (the part's `external_ref`): the robot connection splits a driver's sweep by `<part>` prefix
-before the packet reaches the resolver (`docs/api/hardware.md` §6).
+before the packet reaches the resolver (`docs/api/hardware.md` §6). A part on two brains
+(SOLUSDEV-326) arrives under each brain's key. Both resolve to the part, through its
+`attrs.ref_aliases`.
+
+**Channel display and range (SOLUSDEV-326).** How a channel is drawn is also the hardware config's
+call, never the packet's. `parts[].telemetry[]` may set `display`
+(`plot|angle|orientation|video|scan|points|state|text`; absent means plot) and `range` `{min, max}`
+(finite, `min < max`, in the channel's unit). The robot connection publishes the non-default ones
+as the `channel_display` device fact, keyed like the driver's channel roles. The bench's series
+carry them beside `display_role`. A range is a display range only, never a motion bound. The
+packet carries neither field, and no packet field is added.
 
 ## 3. Two clocks, and why
 
@@ -84,6 +94,19 @@ samples and lands them in the wrong window. `seq` is the ordering that survives 
 **Consumers detect drops and reordering from `seq`, never from `timestamp` deltas.** `seq` is
 optional because not every source sequences its stream, and `None` states that honestly instead of
 faking a `0` that would read as a real first packet.
+
+**Per-brain clock offset (SOLUSDEV-326).** A brain's measured clock against the host is recorded
+on the brain's topology node as `attrs.clock` `{offset_ms, jitter_ms, measured_at, method}` and
+read back as `TopologyNode.clock`. Every topology resync keeps it. The brain whose clock stamps a
+part's data is derived from the topology by `hardware.topology.clock_source`:
+
+- A device-timestamped driver stamps on the endpoint brain, the brain whose bus carries the part.
+- A host-stamped driver stamps on the host brain above that endpoint.
+- A part behind two brains needs the endpoint its data came through.
+- Anything ambiguous or unrecorded is unknown, never guessed.
+
+Recording the offset is the only part done here. Applying it to `timestamp` at ingest belongs to
+the Live Bench branch. `timestamp` keeps its meaning and no packet field changes.
 
 ## 4. Versioning — the load-bearing property
 

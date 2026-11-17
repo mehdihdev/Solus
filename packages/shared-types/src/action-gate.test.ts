@@ -14,15 +14,20 @@ import rejected from "../fixtures/action-gate/outcome-rejected.json";
 import stale from "../fixtures/action-gate/outcome-stale.json";
 import toolGone from "../fixtures/action-gate/outcome-tool-gone.json";
 import argsOnly from "../fixtures/action-gate/pending-args-only.json";
+import withCard from "../fixtures/action-gate/pending-with-card.json";
 import withDiff from "../fixtures/action-gate/pending-with-diff.json";
+import openCard from "../fixtures/action-gate/open-card.json";
 import type { JsonShapeOf } from "./json";
 import {
+  CARD_KINDS,
   CONFIRMATION_DECISIONS,
   CONFIRMATION_STATUSES,
   CONFIRMATION_TTL_MINUTES,
   confirmationDecisionPath,
   isConfirmationRefused,
+  openCardsPath,
   type ConfirmationOutcomeEnvelope,
+  type OpenCards,
   type ToolConfirmationEvent,
 } from "./action-gate";
 
@@ -33,7 +38,9 @@ import {
 const PENDING = [
   withDiff,
   argsOnly,
+  withCard,
 ] satisfies JsonShapeOf<ToolConfirmationEvent>[];
+const OPEN = openCard satisfies JsonShapeOf<OpenCards>;
 const OUTCOMES = [
   approved,
   rejected,
@@ -159,5 +166,22 @@ describe("reading an outcome", () => {
     // what single-use exists to prevent.
     for (const outcome of OUTCOMES)
       expect(outcome.data.error?.retryable ?? false).toBe(false);
+  });
+});
+
+describe("SOLUSDEV-326 cards", () => {
+  test("a card's kind is one of the four the slot draws", () => {
+    expect(CARD_KINDS).toEqual(["offer", "approval", "step", "problem"]);
+    expect(CARD_KINDS).toContain(withCard.card.kind);
+    expect(CARD_KINDS).toContain(OPEN.card?.card.kind);
+  });
+
+  test("an approval's title says so and its buttons fit", () => {
+    expect(withCard.card.title.startsWith("Approve:")).toBe(true);
+    expect(withCard.card.primary.length).toBeLessThanOrEqual(24);
+  });
+
+  test("the open-card route is the shipped one", () => {
+    expect(openCardsPath("p 1")).toBe("/api/v1/projects/p%201/sol/cards/open");
   });
 });

@@ -149,6 +149,42 @@ async def test_spec_ignores_candidates_and_dead_edges(
     assert "numpy" not in {p.name for p in spec.packages}
 
 
+async def test_spec_leaves_out_what_hardware_out_of_the_graph_requires(
+    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
+) -> None:
+    """SOLUSDEV-326 (docs/api/hardware.md §1a): the spec is every member's, so a requirement only
+    a config out of the graph has, and that config's id, are in no package."""
+    project_id = await _spec_project(client, alice_headers)
+    alice = (await me(client, alice_headers))["id"]
+    hidden = GraphEntity(
+        project_id=project_id,
+        kind=kinds.HARDWARE_CONFIG,
+        domain=Domain.PROJECT,
+        origin="manual",
+        name="private config",
+        attrs={"in_graph": False, "onboarded_by": alice},
+    )
+    secret = _requirement(
+        project_id, kinds.PYTHON_REQUIREMENT, name="secretpkg", ecosystem="python"
+    )
+    db.add_all([hidden, secret])
+    await db.flush()
+    await write_edge(
+        db,
+        project_id=project_id,
+        src_id=hidden.id,
+        dst_id=secret.id,
+        relation_type="requires",
+        origin="manual",
+        confidence=1.0,
+        evidence=[],
+        created_by=None,
+    )
+    spec = await build_environment_spec(db, project_id)
+    assert "secretpkg" not in {p.name for p in spec.packages}
+    assert all(hidden.id not in p.required_by for p in spec.packages)
+
+
 async def test_spec_is_one_config_on_the_solus_root_recomputed_in_place(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:

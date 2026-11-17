@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
-import { getHardwareConfig } from '../../../lib/api/hardware'
+import {
+  getHardwareConfig,
+  type BusMapEntry,
+  type TransportBinding
+} from '../../../lib/api/hardware'
 import { readHardwareTopology } from '../../../lib/api/hardwareTopology'
 import {
   useWorkspaceSessionGeneration,
@@ -12,7 +16,9 @@ interface PartChoice {
   name: string
   device: string
 }
-const PREFIX: Record<string, string> = {
+// The API's transport prefixes (`TRANSPORT_PREFIX`), keyed by its generated transport kinds so
+// a new kind fails the type check here instead of minting a wrong device key.
+const PREFIX: Record<TransportBinding['kind'], string> = {
   usb_serial: 'usb',
   usb_can: 'can',
   ble: 'ble',
@@ -20,6 +26,12 @@ const PREFIX: Record<string, string> = {
   wifi: 'ip',
   ethernet: 'ip',
   ros2: 'ros2'
+}
+
+/** The device a bus row sits behind: the brain it names, else the robot's only identity. */
+function rowDevice(row: BusMapEntry, identity: TransportBinding | null | undefined): string | null {
+  if (row.brain) return row.brain
+  return identity ? `${PREFIX[identity.kind]}:${identity.binding}` : null
 }
 export function MappingReview({
   projectId,
@@ -46,21 +58,14 @@ export function MappingReview({
     ]).then(
       ([result, topology]) => {
         if (!live || generation !== workspaceSessionGeneration()) return
-        const identity = result.config.identity
-        const prefix = identity ? PREFIX[identity.kind] : undefined
-        const accepted = (result.config.bus_map ?? []).filter(
-          (row) => row.part_entity_id !== null && row.part_entity_id !== undefined
-        )
         setParts(
-          identity && prefix
-            ? accepted.map((row) => ({
-                id: row.part_entity_id!,
-                name:
-                  topology.nodes.find((node) => node.id === row.part_entity_id)?.name ??
-                  row.part_entity_id!,
-                device: `${prefix}:${identity.binding}/${row.address}`
-              }))
-            : []
+          (result.config.bus_map ?? []).flatMap((row) => {
+            const device = rowDevice(row, result.config.identity)
+            const id = row.part_entity_id
+            if (!id || !device) return []
+            const name = topology.nodes.find((node) => node.id === id)?.name ?? id
+            return [{ id, name, device: `${device}/${row.address}` }]
+          })
         )
       },
       () => {

@@ -22,6 +22,7 @@ and unknown hardware produce valid results, never exceptions.
 import json
 import logging
 import math
+import re
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -75,17 +76,23 @@ class PortIdentity:
 
 PORT_BINDING_PREFIX: Final = "port-"
 BindingBasis = Literal["serial", "port_position", "none"]
+#: What a binding can hold (`TransportBinding.binding`): one token of at most 128 characters.
+_BINDING: Final = re.compile(r"[^/\s]{1,128}")
 
 
 def binding_of(identity: PortIdentity) -> tuple[str | None, BindingBasis]:
     """The transport binding this device can honestly carry, and which branch produced it:
     its USB serial, else its USB port position as `port-<location>` (identity from the port —
     a move is a new device), else nothing. A device-supplied serial is untrusted (§7): one
-    that claims the `port-` prefix can never mint a port key and is treated as absent."""
-    if identity.serial and not identity.serial.startswith(PORT_BINDING_PREFIX):
-        return identity.serial, "serial"
-    if identity.location:
-        return f"{PORT_BINDING_PREFIX}{identity.location}", "port_position"
+    that claims the `port-` prefix can never mint a port key, and one no binding can hold
+    (SOLUSDEV-326: whitespace, a slash, over 128 characters) never fails the enumeration
+    every other device is in — both are treated as absent."""
+    serial = identity.serial
+    if serial and not serial.startswith(PORT_BINDING_PREFIX) and _BINDING.fullmatch(serial):
+        return serial, "serial"
+    port = f"{PORT_BINDING_PREFIX}{identity.location}" if identity.location else None
+    if port and _BINDING.fullmatch(port):
+        return port, "port_position"
     return None, "none"
 
 

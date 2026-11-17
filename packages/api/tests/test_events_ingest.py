@@ -297,6 +297,18 @@ async def test_client_error_is_a_typed_client_event(client: AsyncClient, db: Asy
     }
 
 
+async def test_client_error_names_the_hardware_page(client: AsyncClient, db: AsyncSession) -> None:
+    """SOLUSDEV-326 P3: the Hardware page is a surface an error can be reported from."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    event = _client_error()
+    event["payload"]["surface"] = "hardware"
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "client.error")
+    assert [row.payload["surface"] for row in (await db.scalars(stmt)).all()] == ["hardware"]
+
+
 async def test_client_error_without_consent_nothing_is_stored(
     client: AsyncClient, db: AsyncSession
 ) -> None:
@@ -515,6 +527,20 @@ async def test_sol_sidebar_toggled_is_a_typed_client_event(
     rows = list((await db.scalars(stmt)).all())
     assert len(rows) == 1 and str(rows[0].user_id) == alice_id
     assert rows[0].payload == payload
+
+
+async def test_sol_sidebar_toggled_accepts_the_hardware_screen(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """SOLUSDEV-326: the SOL sidebar is the Hardware screen's SOL too."""
+    await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    payload = {"action": "open", "screen": "hardware", "via": "button"}
+    event = {"event_type": "sol.sidebar_toggled", "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "sol.sidebar_toggled")
+    assert [row.payload for row in (await db.scalars(stmt)).all()] == [payload]
 
 
 async def test_sol_sidebar_toggled_drops_a_foreign_project_id(

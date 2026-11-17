@@ -26,9 +26,9 @@ story holds through this path too.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
-import re
 import uuid
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -39,6 +39,8 @@ from jsonschema import Draft202012Validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from solus_api.agent.cards import authored_card
+from solus_api.agent.cards import single_line as _single_line
 from solus_api.agent.command_gate import (
     ARGV_TOOLS,
     PLAN_PREVIEW_TOOLS,
@@ -64,13 +66,23 @@ from solus_api.agent.tools.shapes import (
 )
 from solus_api.agent.tools.tool import ToolException
 from solus_api.agent.tools.untrusted import call_display_paths, redact_text, redact_value
-from solus_api.models import ConfirmationStatus, Conversation, ToolConfirmation, User, utcnow
+from solus_api.models import (
+    ConfirmationStatus,
+    Conversation,
+    SolMode,
+    ToolConfirmation,
+    User,
+    utcnow,
+)
 
 logger = logging.getLogger("solus.agent.confirmations")
 
 #: How long a parked action stays approvable. Short on purpose: an approval is
 #: consent to a specific edit against a specific model state, and CAD moves.
 CONFIRMATION_TTL: Final = timedelta(minutes=30)
+#: SOLUSDEV-326: the question tool. Its open row (same table, same TTL) is answered as the
+#: person's turn (`MessageCreate.answer`), so the decide path never takes one.
+ASK_USER_TOOL: Final = "ask_user"
 
 #: Cap on the rendered action description.
 _SUMMARY_CAP: Final = 2048
@@ -97,6 +109,8 @@ class ParkedCall:
     #: The diff being approved: `[{"label", "before", "after"}, ...]`.
     preview: list[dict[str, Any]]
     result: ToolResult
+    #: SOLUSDEV-326: the Solus-authored card stored with the row (`agent/cards.py`), or None.
+    card: dict[str, Any] | None = None
 
 
 def _summarize(descriptor: ToolDescriptor, args: dict[str, Any]) -> str:
@@ -127,35 +141,6 @@ def _summarize(descriptor: ToolDescriptor, args: dict[str, Any]) -> str:
     if rendered:
         text = f"{text} with {rendered}"
     return text[:_SUMMARY_CAP]
-
-
-#: Whitespace that would break the row in two (or pad text off-screen).
-_CONTROL_WHITESPACE = re.compile(r"\s")
-_RUNS = re.compile(r" {2,}")
-
-
-def _single_line(value: object, cap: int) -> str:
-    """A consent-card field, stripped to printable characters and capped.
-
-    THE ONE PLACE THE `_sanitize` IDIOM APPLIES. SOL's prose is free-form English
-    and cannot be charset-restricted, but a preview LABEL or VALUE is not prose —
-    so the fingerprint escalator's "reject anything not shaped like the thing"
-    gate works here, and it closes consent forgery.
-
-    Without it, anyone who can name a CAD feature can write multi-line text onto
-    the approval card ("Approve this, it is safe\n\nAll changes reverted") or
-    reverse its rendering with U+202E. Capping length stops neither: `str.isprintable`
-    is False for control characters, bidi overrides and zero-width joiners, and
-    True for the ASCII space, which is exactly the distinction wanted.
-
-    Line breaks collapse to ONE SPACE rather than vanishing. Deleting them fused
-    the lines of a file the person was approving into words nobody wrote — a
-    Dockerfile preview read `FROM python:3.12-slimWORKDIR /app` (SOLUSDEV-252,
-    live) — which is a misrepresentation of the change, not a defence against
-    one. The row still cannot become two rows, so the forgery is still closed.
-    """
-    spaced = _CONTROL_WHITESPACE.sub(" ", str(value))
-    return _RUNS.sub(" ", "".join(ch for ch in spaced if ch.isprintable()))[:cap].strip()
 
 
 class QuotaPreviewUnavailable(PreviewRefusal):
@@ -449,6 +434,7 @@ async def _pending_duplicate(
         existing.summary,
         existing.preview,
         _refusal(call.call_id, message, ToolErrorCode.UNAUTHORIZED),
+        card=existing.card,
     )
 
 
@@ -476,14 +462,16 @@ async def _card_preview(
     return [], _refusal(call.call_id, message, ToolErrorCode.UNAVAILABLE)
 
 
-def _with_stored_args(registry: ToolRegistry, call: ToolCall) -> ToolCall | ParkedCall:
+async def _with_stored_args(registry: ToolRegistry, call: ToolCall) -> ToolCall | ParkedCall:
     """The call as it will be parked: a tool may add Solus-derived fields (the
     drive.step front-app `window`, SOLUSDEV-319) through `stored_args(args)`.
 
     Runs only AFTER the model's arguments passed the model schema, so a
     stored-only field can never come from the model. A `ToolException` is the
     tool's own refusal — nothing is parked. The result is what the duplicate
-    check, the card and the stored row all read, and what executes.
+    check, the card and the stored row all read, and what executes. A stamp that
+    reads Solus's own state (SOLUSDEV-326: what a hardware card shows) is awaited,
+    bounded like a preview; one that outlasts the bound parks nothing.
     """
     tool = next((t for t in registry.tools() if t.descriptor.name == call.tool), None)
     stamp = getattr(tool, "stored_args", None)
@@ -491,6 +479,9 @@ def _with_stored_args(registry: ToolRegistry, call: ToolCall) -> ToolCall | Park
         return call
     try:
         stored = stamp(dict(call.args))
+        if inspect.isawaitable(stored):
+            async with asyncio.timeout(_PREVIEW_TIMEOUT_SECONDS):
+                stored = await stored
     except ToolException as exc:
         return _unparked(call, _refusal(call.call_id, exc.message, exc.code))
     except Exception:
@@ -525,11 +516,13 @@ async def request_confirmation(
     team_id: uuid.UUID,
     user_id: uuid.UUID,
     conversation_id: uuid.UUID | None = None,
+    sol_mode: SolMode = SolMode.GUIDE,
 ) -> ParkedCall | None:
     """Park `call` if its tool requires confirmation; otherwise return None.
 
     Returning None means "not gated, dispatch normally" — so a runner's whole
-    integration is: park, or invoke. The caller commits.
+    integration is: park, or invoke. The caller commits. `sol_mode` is the
+    person's (ADR-016): the card's `more` is kept only in Guide mode.
     """
     # The tool OBJECT: the static flag is on its descriptor, the per-call hook
     # (SOLUSDEV-322 P2-T2) on the object itself. `needs_card` fails closed.
@@ -544,7 +537,7 @@ async def request_confirmation(
     # The summary words the MODEL's arguments; Solus-derived fields reach the
     # person on the card's rows, built from the stored arguments below.
     summary = _summarize(descriptor, call.args)
-    stamped = _with_stored_args(registry, call)
+    stamped = await _with_stored_args(registry, call)
     if isinstance(stamped, ParkedCall):
         return stamped
     call = stamped
@@ -554,6 +547,13 @@ async def request_confirmation(
     preview, refused = await _card_preview(registry, call)
     if refused is not None:
         return _unparked(call, refused)
+    # SOLUSDEV-326: authored ONCE, here, from the stored arguments; never re-read at decide.
+    card = authored_card(
+        tool,
+        call.args,
+        guide=sol_mode is SolMode.GUIDE,
+        parked_for={"project_id": project_id, "conversation_id": conversation_id},
+    )
     row = ToolConfirmation(
         project_id=project_id,
         team_id=team_id,
@@ -564,6 +564,7 @@ async def request_confirmation(
         summary=summary,
         preview=preview,
         expires_at=utcnow() + CONFIRMATION_TTL,
+        card=card,
     )
     session.add(row)
     await session.flush()
@@ -586,6 +587,7 @@ async def request_confirmation(
         summary,
         preview,
         _refusal(call.call_id, _parked_message(call, summary), ToolErrorCode.UNAUTHORIZED),
+        card=card,
     )
 
 
@@ -614,6 +616,9 @@ async def decide_confirmation(
             # Only the user whose turn proposed the action may decide it — a
             # teammate never saw what it was.
             ToolConfirmation.user_id == user_id,
+            # SOLUSDEV-326: a question is answered as the person's turn
+            # (`MessageCreate.answer`), never decided — nothing would run.
+            ToolConfirmation.tool != ASK_USER_TOOL,
         )
         # LOCK the row: the status check below is a check-then-act, and without
         # this two concurrent approvals both read PENDING and both execute. The
@@ -807,10 +812,14 @@ def _diverged(shown: list[Any], current: list[dict[str, Any]]) -> bool:
     """
 
     def key(rows: Any) -> list[tuple[Any, Any, Any]]:
+        # Ordered by `repr`: rows of one label, one with a `before` and one without, still compare.
         return sorted(
-            (row.get("label"), row.get("before"), row.get("after"))
-            for row in (rows if isinstance(rows, list) else [])
-            if isinstance(row, dict) and row.get("label") not in INFORMATIONAL_LABELS
+            (
+                (row.get("label"), row.get("before"), row.get("after"))
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, dict) and row.get("label") not in INFORMATIONAL_LABELS
+            ),
+            key=repr,
         )
 
     return key(shown) != key(current)

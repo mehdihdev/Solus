@@ -36,14 +36,15 @@ from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role
 from solus_api.graph.codec import PacketDecodeError, from_wire
+from solus_api.graph.read_scope import current_scope
 from solus_api.graph.telemetry import TelemetryPlumbing
-from solus_api.hardware.config import TransportKind
-from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
-from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.local_runtime import plan_session, prepare_session
 from solus_api.hardware.store import hardware_entity, robot_root
 from solus_api.livebench.replay_provider import confined_file, replay_session
 from solus_api.livebench.sessions import (
     AmbiguousDeviceError,
+    BenchSessionOut,
+    DeviceBusyError,
     DeviceNotFoundError,
     SessionManager,
     SessionNotFoundError,
@@ -123,12 +124,17 @@ class BenchEventRing:
     live ephemeral values only — durable history is out of scope by decision."""
 
     def __init__(self, capacity: int = MAX_EVENTS_KEPT) -> None:
-        self._events: dict[uuid.UUID, deque[dict[str, Any]]] = defaultdict(
+        self._events: dict[uuid.UUID, deque[tuple[uuid.UUID | None, dict[str, Any]]]] = defaultdict(
             lambda: deque(maxlen=capacity)
         )
 
     def append(
-        self, project_id: uuid.UUID, event: ObserverEventIn, *, finding_id: uuid.UUID | None = None
+        self,
+        project_id: uuid.UUID,
+        event: ObserverEventIn,
+        *,
+        finding_id: uuid.UUID | None = None,
+        owner: uuid.UUID | None = None,
     ) -> None:
         """`finding_id` (SOLUSDEV-321 P2-T3) is attached here, to the ring's own record, by the
         server that raised the finding: `ObserverEventIn` has no such field, so an ingested event
@@ -136,13 +142,22 @@ class BenchEventRing:
         record = event.model_dump(mode="json")
         if finding_id is not None:
             record["finding_id"] = str(finding_id)
-        self._events[project_id].append(record)
+        # SOLUSDEV-326: `owner` is the entity its writer resolved the event's device to, kept
+        # from when it was recorded (a session's sim alias included); never in the payload.
+        self._events[project_id].append((owner, record))
+
+    def record(self, project_id: uuid.UUID, event: dict[str, Any], owner: uuid.UUID | None) -> None:
+        """A bench session's event sink: the event as its session resolved its device."""
+        self.append(project_id, ObserverEventIn.model_validate(event), owner=owner)
+
+    def owned(
+        self, project_id: uuid.UUID, limit: int
+    ) -> list[tuple[uuid.UUID | None, dict[str, Any]]]:
+        """The newest `limit` records, each with the entity it was attributed to."""
+        return list(self._events.get(project_id, ()))[-limit:]
 
     def recent(self, project_id: uuid.UUID, limit: int) -> list[dict[str, Any]]:
-        ring = self._events.get(project_id)
-        if not ring:
-            return []
-        return list(ring)[-limit:]
+        return [record for _, record in self.owned(project_id, limit)]
 
 
 def get_plumbing(request: Request) -> TelemetryPlumbing:
@@ -188,14 +203,23 @@ async def ingest_telemetry(
             unresolved += 1
         else:
             accepted += 1
+    owners = {  # attributed as this route's packets resolve: by device alone
+        device: await plumbing.resolve(ctx.project.id, device)
+        for device in {event.device_id for event in body.events}
+    }
     for event in body.events:
-        ring.append(ctx.project.id, event)
+        ring.append(ctx.project.id, event, owner=owners[event.device_id])
     return envelope({"accepted": accepted, "unresolved": unresolved, "rejected": rejected})
 
 
 @router.get("/telemetry-devices")
-async def observed_telemetry_devices(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
-    return envelope({"device_ids": get_plumbing(request).observed_device_ids(ctx.project.id)})
+async def observed_telemetry_devices(
+    ctx: ProjectCtx, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    # SOLUSDEV-326: a device on hardware another member keeps out of the graph is left out.
+    hidden = await current_scope(ctx.project.id).hidden_ids(session)
+    devices = get_plumbing(request).observed_device_ids(ctx.project.id, exclude=hidden)
+    return envelope({"device_ids": devices})
 
 
 @router.get("/recent/{entity_id}")
@@ -208,7 +232,12 @@ async def recent_values(
     limit: Annotated[int | None, Query(ge=1, le=512)] = None,
 ) -> dict[str, Any]:
     entity = await session.get(GraphEntity, entity_id)
-    if entity is None or entity.project_id != ctx.project.id or entity.deleted_at is not None:
+    if (
+        entity is None
+        or entity.project_id != ctx.project.id
+        or entity.deleted_at is not None
+        or current_scope(ctx.project.id).hides(entity.attrs)  # SOLUSDEV-326: not theirs to see
+    ):
         raise APIError(404, "not_found", "Entity not found")
     view = await get_plumbing(request).get_recent_values(
         ctx.project.id, entity_id, signals=signals, limit=limit
@@ -219,22 +248,39 @@ async def recent_values(
 @router.get("/summary")
 async def telemetry_summary(
     ctx: ProjectCtx,
+    session: SessionDep,
     request: Request,
     duration_seconds: Annotated[float, Query(gt=0, le=MAX_SUMMARY_SECONDS)],
     signals: Annotated[list[str] | None, Query(max_length=64)] = None,
 ) -> dict[str, Any]:
     window = TelemetryWindow(duration_seconds=duration_seconds, signals=signals)
-    view = await get_plumbing(request).get_telemetry(ctx.project.id, window)
+    hidden = await current_scope(ctx.project.id).hidden_ids(session)  # SOLUSDEV-326
+    view = await get_plumbing(request).get_telemetry(ctx.project.id, window, exclude=hidden)
     return envelope(view.model_dump(mode="json"))
 
 
 @router.get("/events")
 async def recent_events(
     ctx: ProjectCtx,
+    session: SessionDep,
     request: Request,
     limit: Annotated[int, Query(ge=1, le=MAX_EVENTS_KEPT)] = 100,
 ) -> dict[str, Any]:
-    return envelope(get_event_ring(request).recent(ctx.project.id, limit))
+    events = get_event_ring(request).owned(ctx.project.id, limit)
+    hidden = await current_scope(ctx.project.id).hidden_ids(session)
+    if hidden:  # SOLUSDEV-326: an event on hardware another member keeps out of the graph,
+        # attributed when it was recorded (a sim alias included) or by its device now.
+        plumbing = get_plumbing(request)
+        now = {
+            device: await plumbing.resolve(ctx.project.id, device)
+            for device in {event["device_id"] for _, event in events}
+        }
+        events = [
+            (owner, event)
+            for owner, event in events
+            if owner not in hidden and now[event["device_id"]] not in hidden
+        ]
+    return envelope([event for _, event in events])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -477,9 +523,10 @@ def _validated_mcap_path(settings: Any, raw: str) -> Path:
 
 
 def _session_opener(
-    local: Any, settings: Any, project_id: uuid.UUID, body: BenchSessionIn
+    local: Any, settings: Any, project_id: uuid.UUID, body: BenchSessionIn, user_id: uuid.UUID
 ) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any] | None]:
-    """(open_conn, label, device) for the validated session config."""
+    """(open_conn, label, device) for the validated session config; a serial device is claimed
+    for `user_id`, the requesting member (SOLUSDEV-326)."""
     cfg = body.config
     if isinstance(cfg, MujocoSimConfig):
 
@@ -522,14 +569,18 @@ def _session_opener(
     serial_cfg = cfg
 
     async def open_serial() -> Any:
-        return await local.open_serial(
-            serial_cfg.serial_number,
-            project_id=project_id,
-            baud=serial_cfg.baud,
-            confirmed_device_path=serial_cfg.confirmed_device_path,
-            driver_id=serial_cfg.driver_id,
-            driver_params=serial_cfg.driver_params,
-        )
+        try:
+            return await local.open_serial(
+                serial_cfg.serial_number,
+                project_id=project_id,
+                user_id=user_id,
+                baud=serial_cfg.baud,
+                confirmed_device_path=serial_cfg.confirmed_device_path,
+                driver_id=serial_cfg.driver_id,
+                driver_params=serial_cfg.driver_params,
+            )
+        except DeviceBusyError as exc:  # SOLUSDEV-326: busy is never "could not be started"
+            raise APIError(409, "device_busy", str(exc), details=exc.details()) from exc
 
     # Wire contract with the desktop's session-to-device matching: an explicit
     # pick rides `device_path`; serial-bound sessions leave it None.
@@ -552,62 +603,18 @@ async def _robot_opener(
     project_id: uuid.UUID,
     cfg: RobotRealConfig | HardwareRealConfig,
     account_id: uuid.UUID,
-) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any], uuid.UUID]:
-    """(open_conn, label, device, robot id) for a robot session: the config document is the
-    truth, and the session's window evaluator judges the robot resolved here (P2-T3)."""
-    robot = (
+) -> tuple[Callable[[], Awaitable[Any]], str, dict[str, Any], uuid.UUID, bool]:
+    """(open_conn, label, device, subject id, evaluate) for a robot or hardware session: the
+    config document is the truth, opened through the one shared opener (SOLUSDEV-326) — the
+    host check, each brain this host reaches, the others reported on the session's device."""
+    subject = (
         await robot_root(session, project_id, cfg.robot_entity_id)
         if isinstance(cfg, RobotRealConfig)
         else await hardware_entity(session, project_id, cfg.entity_id)
     )
-    # SOLUSDEV-320 P5-T4: a robot whose host was confirmed opens only on that host.
-    bound = robot.attrs.get("host_machine_id")
-    if bound is not None:
-        from solus_api.hardware.host_topology import LocalHostProvider
-
-        host = await LocalHostProvider(local).identity()
-        if host is not None and host != bound:
-            raise APIError(
-                409,
-                "host_mismatch",
-                "This robot is bound to another host machine; start the session there",
-                details=[{"host_machine_id": bound, "local_host_id": host}],
-            )
-    config = await resolve_runtime_config(session, project_id, robot.id)
-    if config.identity is None or config.protocol is None:
-        raise APIError(
-            422,
-            "validation_error",
-            "the robot's config has no transport identity or protocol yet — detect it or "
-            "configure it before starting a session",
-        )
-    from solus_api.hardware.store import read_entity_config
-
-    entry, owner_config = await read_entity_config(session, project_id, robot.id)
-    if entry is None:
-        raise APIError(422, "validation_error", "Configure this hardware before connecting.")
-    document = await asyncio.to_thread(
-        prepare_local_hardware,
-        local,
-        config,
-        project_id,
-        account_id,
-        entry.id,
-        owner_config=owner_config,
-    )
-    identity, protocol = config.identity, config.protocol
-
-    async def open_robot() -> Any:
-        return await open_local_hardware(local, document, project_id)
-
-    device = {
-        "device_ref": identity.device_ref,
-        "driver_id": protocol.driver_id,
-        "serial_number": identity.binding if identity.kind is TransportKind.USB_SERIAL else None,
-        "device_path": getattr(identity, "last_seen_path", None),
-        "baud": protocol.params.get("baud"),
-    }
-    return open_robot, f"Robot {robot.name} ({identity.device_ref})", device, robot.id
+    plan = await plan_session(local, session, project_id, subject)
+    opener = await prepare_session(local, plan, account_id)
+    return opener.open, opener.label, opener.device, subject.id, opener.evaluate
 
 
 @router.post("/sessions", status_code=201)
@@ -621,16 +628,19 @@ async def start_session(
     settings = request.app.state.settings
     device: dict[str, Any] | None
     robot_entity_id: uuid.UUID | None = None
+    evaluate = True
     if isinstance(body.config, ReplayRealConfig):
         open_conn, label, device, robot_entity_id = await replay_session(
             local, session, ctx.project.id, body.config, settings
         )
     elif isinstance(body.config, (RobotRealConfig, HardwareRealConfig)):
-        open_conn, label, device, robot_entity_id = await _robot_opener(
+        open_conn, label, device, robot_entity_id, evaluate = await _robot_opener(
             local, session, ctx.project.id, body.config, ctx.user.id
         )
     else:
-        open_conn, label, device = _session_opener(local, settings, ctx.project.id, body)
+        open_conn, label, device = _session_opener(
+            local, settings, ctx.project.id, body, ctx.user.id
+        )
     manager = get_session_manager(request)
     try:
         record = await manager.start(
@@ -643,6 +653,7 @@ async def start_session(
             device=device,
             robot_entity_id=robot_entity_id,
             owner_user_id=ctx.user.id,
+            evaluate=evaluate,
         )
     except TooManySessionsError as exc:
         raise APIError(409, "too_many_sessions", str(exc)) from exc
@@ -681,22 +692,35 @@ async def start_session(
 @router.get("/sessions")
 async def list_sessions(
     ctx: ProjectCtx,
+    session: SessionDep,
     request: Request,
     status: Annotated[Literal["active", "ended"] | None, Query()] = None,
     mode: Annotated[Literal["sim", "real"] | None, Query()] = None,
 ) -> dict[str, Any]:
     records = get_session_manager(request).list(ctx.project.id, status=status, mode=mode)
-    return envelope([r.model_dump(mode="json") for r in records])
+    # SOLUSDEV-326: a session of hardware another member keeps out of the graph is left out.
+    hidden = await current_scope(ctx.project.id).hidden_ids(session)
+    return envelope([r.model_dump(mode="json") for r in records if r.robot_entity_id not in hidden])
+
+
+async def _visible_session(
+    session: AsyncSession, request: Request, project_id: uuid.UUID, session_id: uuid.UUID
+) -> BenchSessionOut:
+    """404 for an unknown session, and (SOLUSDEV-326) for one of hardware the caller cannot see."""
+    try:
+        record = get_session_manager(request).get(project_id, session_id)
+    except SessionNotFoundError as exc:
+        raise APIError(404, "not_found", "Session not found") from exc
+    if record.robot_entity_id in await current_scope(project_id).hidden_ids(session):
+        raise APIError(404, "not_found", "Session not found")
+    return record
 
 
 @router.get("/sessions/{session_id}")
 async def session_detail(
-    ctx: ProjectCtx, request: Request, session_id: uuid.UUID
+    ctx: ProjectCtx, session: SessionDep, request: Request, session_id: uuid.UUID
 ) -> dict[str, Any]:
-    try:
-        record = get_session_manager(request).get(ctx.project.id, session_id)
-    except SessionNotFoundError as exc:
-        raise APIError(404, "not_found", "Session not found") from exc
+    record = await _visible_session(session, request, ctx.project.id, session_id)
     return envelope(record.model_dump(mode="json"))
 
 
@@ -705,6 +729,7 @@ async def stop_session(
     ctx: ProjectCtx, session: SessionDep, request: Request, session_id: uuid.UUID
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
+    await _visible_session(session, request, ctx.project.id, session_id)
     manager = get_session_manager(request)
     try:
         record = await manager.stop(ctx.project.id, session_id)
@@ -743,6 +768,11 @@ async def device_recent(
         if focus_entity_id is not None
         else None
     )
+    # SOLUSDEV-326: unfocused, a device on hardware another member keeps out of the graph is left
+    # out; a focus already reaches only what the caller sees.
+    hidden = (
+        await current_scope(ctx.project.id).hidden_ids(session) if allowed is None else frozenset()
+    )
     plumbing = get_plumbing(request)
     for one in device_id:
         if not 1 <= len(one) <= 512:
@@ -753,12 +783,16 @@ async def device_recent(
     manager = get_session_manager(request)
     devices = []
     for view in views:
-        if allowed is not None and view.resolved_entity_id not in allowed:
+        if (
+            allowed is not None and view.resolved_entity_id not in allowed
+        ) or view.resolved_entity_id in hidden:
             continue
         device = view.model_dump(mode="json")
         roles = manager.channel_roles(ctx.project.id, view.device_id)
+        display = manager.channel_display(ctx.project.id, view.device_id)
         for series in device["signals"]:
             if series["signal"] in roles:
                 series["display_role"] = roles[series["signal"]]
+            series.update(display.get(series["signal"], {}))
         devices.append(device)
     return envelope({"devices": devices})

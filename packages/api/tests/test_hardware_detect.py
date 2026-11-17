@@ -12,6 +12,7 @@ import pytest
 from conftest import BOB, add_member, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
+from solus_api.livebench.sessions import DeviceBusyError
 from solus_api.models import DataEvent, GraphEdge, GraphEntity, User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -149,8 +150,10 @@ class _DetectLocal(FakeLocal):
             return None
         return dict(self.proposal)
 
-    async def open_robot(self, config: dict[str, Any], *, project_id: uuid.UUID) -> TapConn:
-        return await self._open("robot", config=config, project_id=project_id)
+    async def open_robot(
+        self, config: dict[str, Any], *, project_id: uuid.UUID, user_id: uuid.UUID | None = None
+    ) -> TapConn:
+        return await self._open("robot", config=config, project_id=project_id, user_id=user_id)
 
 
 @pytest.fixture
@@ -177,8 +180,8 @@ def _confirm_body(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "target": {"kind": "new", "name": "Follower"},
         "accepted": [
-            {"row_id": f"{DEVICE_REF}/1", "function_name": "shoulder_pan", "category": "actuators"},
-            {"row_id": f"{DEVICE_REF}/2", "function_name": "gripper", "category": "end_effectors"},
+            {"row_id": f"{DEVICE_REF}/1", "function_name": "shoulder_pan"},
+            {"row_id": f"{DEVICE_REF}/2", "function_name": "gripper"},
         ],
         "start_session": False,
     }
@@ -287,6 +290,30 @@ async def test_propose_for_an_unknown_device_is_404(
     assert resp.json()["error"]["code"] == "device_not_found"
 
 
+async def test_propose_for_a_busy_device_is_409_device_busy_never_a_silent_proposal(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-326: a busy port used to read as "no protocol recognised"."""
+    project_id, _ = await _detect_project(client, alice_headers)
+
+    def held(device_ref: str, **_: Any) -> dict[str, Any] | None:
+        raise DeviceBusyError(device_ref, "session")
+
+    monkeypatch.setattr(detect_local, "propose_device", held)
+    url = _detect_url(project_id, "detected", DEVICE_REF, "propose")
+    resp = await client.post(url, headers=alice_headers, json={})
+    assert resp.status_code == 409, resp.text
+    error = resp.json()["error"]
+    assert error["code"] == "device_busy"
+    assert error["details"] == [{"device_ref": DEVICE_REF, "holder": "session"}]
+    await me(client, bob_headers)  # another team never reaches the device, busy or not
+    assert (await client.post(url, headers=bob_headers, json={})).status_code == 404
+
+
 # --------------------------------------------------------------------- confirm
 
 
@@ -322,10 +349,10 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
     by_ref = {p.external_ref: p for p in parts}
     assert set(by_ref) == {f"{DEVICE_REF}/1", f"{DEVICE_REF}/2"}
     assert by_ref[f"{DEVICE_REF}/1"].name == "shoulder_pan"
-    assert by_ref[f"{DEVICE_REF}/1"].attrs["category"] == "actuators"
-    assert by_ref[f"{DEVICE_REF}/2"].attrs["category"] == "end_effectors"
     assert all(p.origin == "manual" and p.source_id is None for p in parts)
     for part in parts:
+        assert "category" not in part.attrs  # robots contain their parts (SOLUSDEV-326)
+        assert part.attrs["robot_id"] == robot["id"]
         edge = await db.scalar(
             select(GraphEdge).where(
                 GraphEdge.dst_id == part.id,
@@ -333,10 +360,7 @@ async def test_confirm_creates_the_robot_parts_config_and_optionally_the_session
                 GraphEdge.deleted_at.is_(None),
             )
         )
-        assert edge is not None
-        category = await db.get(GraphEntity, edge.src_id)
-        assert category is not None and category.kind == "robot_category"
-        assert category.attrs["category"] == part.attrs["category"]
+        assert edge is not None and str(edge.src_id) == robot["id"]  # the robot holds it
 
     config_resp = await client.get(
         _detect_url(project_id, "robots", robot["id"], "config"), headers=alice_headers
@@ -442,7 +466,7 @@ async def test_confirm_adds_to_an_existing_robot(
     [
         _confirm_body(accepted=[]),
         _confirm_body(accepted=[{"row_id": f"{DEVICE_REF}/9", "function_name": "x"}]),
-        _confirm_body(accepted=[{"row_id": f"{DEVICE_REF}/1", "category": "not_a_category"}]),
+        _confirm_body(accepted=[{"row_id": f"{DEVICE_REF}/1", "category": "actuators"}]),  # retired
         _confirm_body(target={"kind": "existing"}),
         {**_confirm_body(), "unexpected": True},
     ],
@@ -771,6 +795,32 @@ async def test_propose_carries_headline_tone_stream_and_identity_basis(
     assert data["stream"]["channel_names"] == ["motor_l", "motor_r", "dist", "batt"]
     assert data["stream"]["update_hz"] == pytest.approx(49.6)
     assert data["stream"]["declared_hz"] == pytest.approx(50.0)
+
+
+async def test_unnamed_rows_are_named_from_the_proposal_not_the_body(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    detect_local: _DetectLocal,
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-326 P2: no accepted row carries a category any more. An unnamed row is a motor at
+    its bus address, or — on a line stream — the reading at that column."""
+    accepted = [{"row_id": f"{DEVICE_REF}/1"}, {"row_id": f"{DEVICE_REF}/2"}]
+    for wire, names in (
+        (_wire_stream_proposal(), ["address 1", "address 2"]),
+        (_wire_proposal(), ["Follower-Motor-1", "Follower-Motor-2"]),
+    ):
+        project_id, _ = await _detect_project(client, alice_headers)
+        detect_local.proposal = wire
+        resp = await client.post(
+            _detect_url(project_id, "detected", DEVICE_REF, "confirm"),
+            headers=alice_headers,
+            json=_confirm_body(accepted=accepted),
+        )
+        assert resp.status_code == 201, resp.text
+        ids = [uuid.UUID(part) for part in resp.json()["data"]["part_ids"]]
+        named = await db.scalars(select(GraphEntity.name).where(GraphEntity.id.in_(ids)))
+        assert sorted(named) == names
 
 
 async def test_a_pre_phase_2_wire_still_validates_with_defaults(

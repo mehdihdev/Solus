@@ -347,7 +347,7 @@ async def test_fingerprint_scan_and_bom_inputs_never_cross_the_project_boundary(
     async with maker() as session:
         summary = await scan_project(session, world.b_project)
         await session.commit()
-        inputs = await load_inputs(session, world.b_project)
+        inputs = await load_inputs(session, world.b_project, viewer_id=None)
         canonicals = await session.scalar(
             select(func.count())
             .select_from(GraphEntity)
@@ -360,7 +360,7 @@ async def test_fingerprint_scan_and_bom_inputs_never_cross_the_project_boundary(
     assert inputs.observations == [] and inputs.canonicals == [] and inputs.items == []
     assert canonicals == 0
     async with maker() as session:
-        mine = await load_inputs(session, world.a_project)
+        mine = await load_inputs(session, world.a_project, viewer_id=None)
     assert mine.observations  # team A's own BOM inputs are populated
 
 

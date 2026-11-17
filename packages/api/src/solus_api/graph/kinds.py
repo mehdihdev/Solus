@@ -27,6 +27,8 @@ CANONICAL_PART: Final[str] = "canonical_part"
 
 # hardware
 PHYSICAL_ROBOT: Final[str] = "physical_robot"
+#: Legacy, never written (SOLUSDEV-326): a robot contains its parts directly. Migration
+#: a32600000001 retired every node; readers still tolerate one.
 ROBOT_CATEGORY: Final[str] = "robot_category"
 HARDWARE_CONFIG: Final[str] = "hardware_config"
 HARDWARE_BRAIN: Final[str] = "hardware_brain"

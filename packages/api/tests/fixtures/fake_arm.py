@@ -17,6 +17,7 @@ from typing import Final
 from solus_api.graph import kinds
 from solus_api.graph.edges import write_edge
 from solus_api.hardware.config import (
+    BrainIdentity,
     BusMapEntry,
     EntityHardwareConfig,
     FieldProvenance,
@@ -30,7 +31,8 @@ from solus_api.hardware.config import (
     part_ref,
 )
 from solus_api.hardware.store import put_entity_config
-from solus_api.models import Domain, GraphEntity
+from solus_api.hardware.topology import RELATION, endpoint_id
+from solus_api.models import Domain, GraphEdge, GraphEntity
 from solus_contracts.relations import EdgeEvidence, EdgeOrigin, EvidenceKind, RelationType
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,14 +94,12 @@ async def seed_fake_arm(
     if existing is not None:
         return await _seeded(session, project_id, existing)
     robot = _node(project_id, kinds.PHYSICAL_ROBOT, Domain.PROJECT, ROBOT_NAME, ref=DEVICE_REF)
-    brain = _node(project_id, kinds.HARDWARE_BRAIN, Domain.ELECTRICAL, BRAIN_NAME)
-    bus = _node(project_id, kinds.HARDWARE_BUS, Domain.ELECTRICAL, BUS_NAME)
     code = _node(project_id, kinds.CODE_FILE, Domain.CODE, CODE_PATH, path=CODE_PATH)
     parts = [
         _node(project_id, kinds.PART, Domain.ELECTRICAL, name, ref=part_ref(DEVICE_REF, str(n)))
         for n, name in enumerate(PART_NAMES, start=1)
     ]
-    session.add_all([robot, brain, bus, code, *parts])
+    session.add_all([robot, code, *parts])
     await session.flush()
     await put_entity_config(
         session,
@@ -107,17 +107,24 @@ async def seed_fake_arm(
         robot,
         EntityHardwareConfig(
             entity_id=robot.id,
-            identity=PortableTransportBinding(kind=TransportKind.USB_SERIAL, binding=USB_SERIAL),
-            protocol=ProtocolBinding(driver_id=DRIVER_ID),
+            identity=[
+                BrainIdentity(
+                    binding=PortableTransportBinding(
+                        kind=TransportKind.USB_SERIAL, binding=USB_SERIAL
+                    ),
+                    protocol=ProtocolBinding(driver_id=DRIVER_ID),
+                )
+            ],
             bus_map=[
                 BusMapEntry(protocol=DRIVER_ID, address=str(n), part_entity_id=part.id)
                 for n, part in enumerate(parts, start=1)
             ],
-            provenance={"identity": _SEEDED, "protocol": _SEEDED, "bus_map": _SEEDED},
+            provenance={"identity": _SEEDED, "bus_map": _SEEDED},
         ),
         expected_version=0,
         created_by=user_id,
     )
+    brain, bus = await _derived_brain_and_bus(session, project_id)
     for n, part in enumerate(parts, start=1):
         await put_entity_config(
             session,
@@ -138,7 +145,6 @@ async def seed_fake_arm(
             created_by=user_id,
         )
     edges = [
-        (brain.id, bus.id, RelationType.HARDWARE_CONNECTED_TO, []),
         *((robot.id, part.id, RelationType.CONTAINS, []) for part in parts),
         *((bus.id, part.id, RelationType.DRIVES, []) for part in parts),
         *(
@@ -174,6 +180,31 @@ async def seed_fake_arm(
         parts=tuple(part.id for part in parts),
         code_file=code.id,
     )
+
+
+async def _derived_brain_and_bus(
+    session: AsyncSession, project_id: uuid.UUID
+) -> tuple[GraphEntity, GraphEntity]:
+    """The brain and bus the robot's config write derived (SOLUSDEV-326: every robot config
+    write syncs its topology), named as the fake arm's — never a second, parallel pair."""
+    brain = await session.get(GraphEntity, endpoint_id(project_id, DEVICE_REF))
+    bus = await session.get(
+        GraphEntity,
+        await session.scalar(
+            select(GraphEdge.dst_id).where(
+                GraphEdge.project_id == project_id,
+                GraphEdge.src_id == endpoint_id(project_id, DEVICE_REF),
+                GraphEdge.relation_type == RELATION,
+                GraphEdge.deleted_at.is_(None),
+            )
+        ),
+    )
+    if brain is None or bus is None:
+        raise RuntimeError("the fake arm's config derived no brain and bus")
+    for node, name in ((brain, BRAIN_NAME), (bus, BUS_NAME)):
+        node.name, node.attrs = name, {**node.attrs, "fake": True}
+    await session.flush()
+    return brain, bus
 
 
 def _node(

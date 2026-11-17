@@ -55,15 +55,18 @@ class ActionMode(enum.StrEnum):
 
 def mode_refusal(call: ToolCall) -> ToolResult:
     """The Guide-mode refusal for a mutating tool. Same envelope as the
-    confirmation gate's refusal so runners and the UI branch on one shape."""
+    confirmation gate's refusal so runners and the UI branch on one shape.
+
+    It names no switch: since SOLUSDEV-327 the person has none. A Guide turn comes only from
+    "Show me how instead" and the bench's explain-finding, both read-only by design."""
     return ToolResult.failure(
         call.call_id,
         ToolError(
             code=ToolErrorCode.UNAUTHORIZED,
             message=(
                 f"{call.tool} changes the connected tool. Guide mode can explain "
-                "the change; switch to Build mode to carry it out. "
-                "Actions needing approval will still ask."
+                "the change: this turn only explains, so describe the change and its "
+                "steps instead of running it. Actions needing approval still ask."
             ),
             retryable=False,
         ),

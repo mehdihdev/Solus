@@ -64,6 +64,7 @@ export interface EdgeSelection {
   to?: Entity
 }
 
+// `robot_category` is a legacy row only (retired by migration a32600000001, SOLUSDEV-326).
 const ROBOT_TYPES = new Set(['physical_robot', 'robot_category'])
 const SOLUS_TYPES = new Set(['solus_config', 'solus_section', 'solus_subsection'])
 const NO_FINDINGS: FindingsBySubject = new Map()

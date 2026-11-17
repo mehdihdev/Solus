@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from conftest import create_project, create_team, me
+from conftest import BOB, add_member, create_project, create_team, me
 from httpx import AsyncClient
 from solus_api.models import (
     Domain,
@@ -344,6 +344,32 @@ async def test_search_runs_under_the_graph_read_scope(
     await db.commit()
     _, data = await _search(client, alice_headers, project_id, q="motor_driver", scope="entities")
     assert [h["id"] for h in data["entities"]] == [str(on_snapshot.id)]
+
+
+async def test_hardware_out_of_the_graph_is_found_by_its_onboarder_alone(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-326: neither the robot nor its CONFIG entry's text reaches a teammate."""
+    alice = await me(client, alice_headers)
+    await me(client, bob_headers)
+    team = await create_team(client, alice_headers)
+    project_id = uuid.UUID((await create_project(client, alice_headers, team["id"]))["id"])
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"])
+    rows = await _seed_search_rows(db, project_id)
+    rows["robot"].attrs = {"in_graph": False, "onboarded_by": alice["id"]}
+    await db.commit()
+
+    for headers, found in ((alice_headers, True), (bob_headers, False)):
+        _, data = await _search(client, headers, project_id, q="ODRV-3F2A-CAN0", scope="solus")
+        assert bool(data["solus"]) is found
+        _, data = await _search(client, headers, project_id, q="base", scope="entities")
+        assert (str(rows["robot"].id) in {h["id"] for h in data["entities"]}) is found
+        # An entry that is not the hidden robot's config stays everyone's.
+        _, data = await _search(client, headers, project_id, q="motor", scope="solus")
+        assert [h["section"] for h in data["solus"]] == ["goals"]
 
 
 async def test_non_member_404_and_validation_422(

@@ -21,6 +21,7 @@ from solus_api.agent.tools.registry import ToolRegistry
 from solus_api.agent.tools.shapes import ToolCall
 from solus_api.graph.live import LiveHub
 from solus_api.hardware.presence import PreparePresence, PresenceRefusalError
+from solus_api.livebench.sessions import DeviceBusyError
 from solus_api.models import Project
 from solus_api.simulation.sim_capability import SimResult
 from solus_api.simulation.sim_facts import record_sim_result
@@ -171,6 +172,32 @@ async def test_plan_refusals_and_unknown_are_honest(
     )
     if failure in ("digest", "identity"):
         service.provider.upload.assert_not_awaited()
+
+
+async def test_a_busy_device_refuses_the_upload_before_writing(
+    client: Any, alice_headers: Any, db: Any, tmp_path: Any
+) -> None:
+    """SOLUSDEV-326: the serial owner refuses the upload before anything is written, so the
+    answer is 409 device_busy and the plan is ready to try again — never "state unknown"."""
+    from solus_api.core.errors import APIError
+
+    service, robot, brain = await fixture_service(client, alice_headers, db, tmp_path)
+    prepared = await service.prepare(
+        robot, brain, PreparePresence(profile_id="uno_avr", kind="heartbeat", channel="uno.alive")
+    )
+    await db.commit()
+    plan = uuid.UUID(prepared["plan_id"])
+    service.provider.upload.side_effect = DeviceBusyError("usb:port-3-1", "session")
+    with pytest.raises(APIError) as refused:
+        await service.execute(plan)
+    assert (refused.value.status_code, refused.value.code) == (409, "device_busy")
+    assert refused.value.details == [{"device_ref": "usb:port-3-1", "holder": "session"}]
+    assert (await service.plan(plan)).attrs["status"] == "prepared"
+    # The upload claims the device for the plan's project and its member: a holder is named only
+    # to the member it works for, never to a teammate (whose hardware may be hidden, §1a).
+    uploaded = service.provider.upload.await_args
+    assert uploaded is not None
+    assert uploaded.kwargs == {"project_id": service.project_id, "user_id": service.user_id}
 
 
 async def test_changed_config_and_actuator_bus_cannot_prepare(

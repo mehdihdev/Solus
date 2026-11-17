@@ -596,3 +596,158 @@ async def test_open_replay_paces_by_recorded_time_only_when_asked(
     await (await open_replay(unasked, project_id=uuid4())).aclose()
 
     assert asked == [True, False, True]  # the default is the pane's: paced
+
+
+# ── SOLUSDEV-326: the serial owner's keys and scope ────────────────────────────
+
+
+async def test_a_legacy_serial_session_claims_the_device_under_its_device_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy line reader holds the device under the key every other open of it uses, for
+    the requesting member of the project."""
+    from livebench.telemetry import robot
+
+    from livebench import local
+
+    opened: list[dict[str, Any]] = []
+
+    def fake_open(device: str, baud: int, **kwargs: Any) -> None:
+        opened.append({"device": device, "baud": baud, **kwargs})
+
+    monkeypatch.setattr(robot.SerialRobotConnection, "open", fake_open)
+    monkeypatch.setattr(local, "resolve_serial_device", lambda serial, **_: "/dev/serial/by-id/x")
+    project, member = uuid4(), uuid4()
+    await local.open_serial("5B42135040", project_id=project, user_id=member, baud=9600)
+    assert opened == [
+        {
+            "device": "/dev/serial/by-id/x",
+            "baud": 9600,
+            "project_id": project,
+            "user_id": member,
+            "device_ref": "usb:5B42135040",
+        }
+    ]
+    await local.open_serial(None, project_id=project, confirmed_device_path="/dev/ttyUSB0")
+    assert opened[-1]["device_ref"] is None  # a pick with no binding is keyed by its path
+
+
+async def test_driver_and_robot_opens_claim_for_the_requesting_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The serial owner keys a claim by project AND member — a teammate's session may be on
+    hardware hidden from the other (docs/api/hardware.md §1a) — so the requesting user's id
+    reaches a driver session's `open_robot` and, from there, `open_robot_connection`."""
+    from livebench.hardware import connection as connection_module
+
+    from livebench import local
+
+    project, member = uuid4(), uuid4()
+    robots: list[dict[str, Any]] = []
+
+    async def fake_open_robot(config: dict[str, Any], **kwargs: Any) -> None:
+        robots.append(kwargs)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(local, "open_robot", fake_open_robot)
+        await local.open_serial("5B42135040", project_id=project, user_id=member, driver_id="x")
+    assert robots == [{"project_id": project, "user_id": member}]
+
+    seen: dict[str, Any] = {}
+
+    def spy(document: HardwareConfig, **kwargs: Any) -> None:
+        seen.update(kwargs)
+
+    monkeypatch.setattr(connection_module, "open_robot_connection", spy)
+    await local.open_robot(_robot_document(), project_id=project, user_id=member)
+    assert (seen["project_id"], seen["user_id"]) == (project, member)
+
+
+def test_propose_device_interrogates_within_the_callers_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from livebench.hardware import detection
+
+    from livebench import local
+
+    device = local.LocalDevice(CH343, "/dev/serial/by-id/x", False)
+    monkeypatch.setattr(local, "list_devices", lambda: [device])
+    claims: list[tuple[str | None, str | None]] = []
+
+    def interrogate(
+        identity: TransportBinding,
+        *,
+        registries: Any,
+        budget_s: float,
+        scope: str | None = None,
+        member: str | None = None,
+    ) -> list[Any]:
+        claims.append((scope, member))
+        return []
+
+    monkeypatch.setattr(detection, "interrogate_device", interrogate)
+    proposal = local.propose_device("usb:5B42135040", scope="project-a", member="alice")
+    assert proposal is not None and proposal["device_ref"] == "usb:5B42135040"
+    assert claims == [("project-a", "alice")]
+
+
+def test_a_members_inspection_leaves_out_a_source_the_parsers_reject_before_listening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-326 P2-T4 review: the sources are parsed before the port opens. SOL's inspection
+    (a member's) brings every source the member authorized, so one the parsers reject is left out
+    and the listen goes on; a person's own selection (no member) is refused whole, with nothing
+    listened to."""
+    from livebench.hardware import detection
+    from livebench.hardware.interrogator import Interrogation
+
+    from livebench import local
+
+    device = local.LocalDevice(CH343, "/dev/serial/by-id/x", False)
+    monkeypatch.setattr(local, "list_devices", lambda: [device])
+    listens: list[str | None] = []
+
+    def interrogate(identity: TransportBinding, **_: Any) -> list[Interrogation]:
+        listens.append(identity.device_ref)
+        bus = [BusMapEntry(protocol="demo-bus", address=a, model=None) for a in ("1", "2")]
+        return [Interrogation("demo-bus", None, {}, bus, [], 0.9, "two parts on a bus")]
+
+    monkeypatch.setattr(detection, "interrogate_device", interrogate)
+    over = {"motors": {"joint": {"id": 1, "note": "x" * 600}}}
+    good = {"motors": {"joint": {"id": 1}, "gripper": {"id": 2}}}
+    sources = [
+        {"source_ref": f"source:{uuid4()}", "suffix": ".json", "content": json.dumps(doc).encode()}
+        for doc in (over, good)
+    ]
+
+    with pytest.raises(ValueError, match="extraction budget"):
+        local.propose_device("usb:5B42135040", repo_sources=sources)
+    assert listens == []
+    proposal = local.propose_device("usb:5B42135040", repo_sources=sources, member="alice")
+    assert proposal is not None
+    assert [match["source"] for match in proposal["repo_matches"]] == [sources[1]["source_ref"]]
+    assert listens == ["usb:5B42135040"]
+
+
+def test_listen_restarts_asks_the_serial_owner_about_the_devices_current_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-326 P2-T4: whether listening to a device would restart its running board, read
+    from its node with no port opened; a device not plugged in opens nothing."""
+    from livebench.hardware import serial_owner
+
+    from livebench import local
+
+    device = local.LocalDevice(CH343, "/dev/serial/by-id/x", False)
+    monkeypatch.setattr(local, "list_devices", lambda: [device])
+    asked: list[tuple[str, str]] = []
+
+    def opening_restarts(device_ref: str, path: str) -> bool:
+        asked.append((device_ref, path))
+        return True
+
+    monkeypatch.setattr(serial_owner.SERIAL_OWNER, "opening_restarts", opening_restarts)
+    assert local.listen_restarts("usb:5B42135040") is True
+    assert asked == [("usb:5B42135040", "/dev/serial/by-id/x")]
+    assert local.listen_restarts("usb:NOT-HERE") is False
+    assert asked == [("usb:5B42135040", "/dev/serial/by-id/x")]

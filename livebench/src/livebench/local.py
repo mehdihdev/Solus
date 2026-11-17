@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from solus_api.hardware.config import (
+    TRANSPORT_PREFIX,
     FieldProvenance,
     HardwareConfig,
     ProtocolBinding,
@@ -54,6 +55,7 @@ from livebench.telemetry.stream_live import PacketStreamLiveConnection
 if TYPE_CHECKING:
     from livebench.hardware.connection import RobotConnection
     from livebench.hardware.replay import Recording
+    from livebench.hardware.repo_config import RepoConfigMatch, RepoParserRegistry
 
 __all__ = [
     "AmbiguousDeviceError",
@@ -352,14 +354,16 @@ async def open_serial(
     serial_number: str | None,
     *,
     project_id: UUID,
+    user_id: UUID | None = None,
     baud: int = _DEFAULT_BAUD,
     confirmed_device_path: str | None = None,
     driver_id: str | None = None,
     driver_params: Mapping[str, Any] | None = None,
 ) -> PacketStreamLiveConnection:
-    """A serial robot connection bound by USB serial (see `resolve_serial_device`).
-    The blocking pyserial open runs off-loop. With a `driver_id` the link opens through the
-    protocol-driver registry (SOLUSDEV-248) instead of the passive LB-06 line reader."""
+    """A serial robot connection bound by USB serial (see `resolve_serial_device`), claimed as
+    `user_id`'s session in `project_id` (SOLUSDEV-326). The blocking pyserial open runs off-loop.
+    With a `driver_id` the link opens through the protocol-driver registry (SOLUSDEV-248) instead
+    of the passive LB-06 line reader."""
     from livebench.telemetry.robot import SerialRobotConnection
 
     if driver_id is not None:
@@ -376,12 +380,20 @@ async def open_serial(
                 "protocol": ProvenanceRecord(by=FieldProvenance.USER),
             },
         )
-        return await open_robot(document.model_dump(mode="json"), project_id=project_id)
+        return await open_robot(
+            document.model_dump(mode="json"), project_id=project_id, user_id=user_id
+        )
+
+    # The serial owner's key (SOLUSDEV-326): the device ref every other open of this device uses.
+    usb = TRANSPORT_PREFIX[TransportKind.USB_SERIAL]
+    device_ref = f"{usb}:{serial_number}" if serial_number else None
 
     def _open() -> PacketStreamLiveConnection:
         # Enumeration + the pyserial open both block — resolve AND open off-loop.
         device = resolve_serial_device(serial_number, confirmed_device_path=confirmed_device_path)
-        return SerialRobotConnection.open(device, baud, project_id=project_id)
+        return SerialRobotConnection.open(
+            device, baud, project_id=project_id, user_id=user_id, device_ref=device_ref
+        )
 
     return await asyncio.to_thread(_open)
 
@@ -543,18 +555,39 @@ def detect_devices() -> list[dict[str, Any]]:
     return [_detected_wire(d) for d in enumerate_devices(list_devices=list_devices)]
 
 
+def listen_restarts(device_ref: str) -> bool:
+    """Whether listening to `device_ref` now would open its port and so restart its running
+    board (SOLUSDEV-326 P2-T4): read from the device's node, with no port opened. A device not
+    plugged in opens nothing."""
+    from livebench.hardware.detection import enumerate_devices
+    from livebench.hardware.serial_owner import SERIAL_OWNER
+
+    device = next(
+        (d for d in enumerate_devices(list_devices=list_devices) if d.device_ref == device_ref),
+        None,
+    )
+    if device is None or device.last_seen_path is None:
+        return False
+    return SERIAL_OWNER.opening_restarts(device_ref, device.last_seen_path)
+
+
 def propose_device(
     device_ref: str,
     *,
     repo_root: str | None = None,
     budget_s: float = 0.5,
     repo_sources: list[dict[str, Any]] | None = None,
+    scope: str | None = None,
+    member: str | None = None,
 ) -> dict[str, Any] | None:
     """Interrogate one detected device safely and build its proposal; None when the device is
-    not here. BLOCKING (ports are opened): callers run it off-loop."""
+    not here, `DeviceBusyError` when something holds it — except a session of `member` (the
+    caller) in `scope` (its project), which is listened to (SOLUSDEV-326). The repo evidence is
+    read before any port opens (`_repo_configs`). BLOCKING (ports are opened): callers run it
+    off-loop."""
     from livebench.hardware import registries as hardware_registries
     from livebench.hardware.detection import enumerate_devices, interrogate_device, propose
-    from livebench.hardware.repo_config import match_configs, parse_repo_sources, scan_repo
+    from livebench.hardware.repo_config import match_configs
 
     device = next(
         (d for d in enumerate_devices(list_devices=list_devices) if d.device_ref == device_ref),
@@ -563,24 +596,52 @@ def propose_device(
     if device is None or device.identity is None:
         return None
     registries = hardware_registries.default_registries()
-    interrogations = interrogate_device(device.identity, registries=registries, budget_s=budget_s)
+    configs = _repo_configs(repo_root, repo_sources, registries.repo_parsers, member=member)
+    interrogations = interrogate_device(
+        device.identity, registries=registries, budget_s=budget_s, scope=scope, member=member
+    )
     matches: list[Any] = []
-    if (repo_root or repo_sources) and interrogations:
+    if configs and interrogations:
         best = max(interrogations, key=lambda i: i.confidence)
-        configs = (
-            parse_repo_sources(repo_sources, registries.repo_parsers)
-            if repo_sources
-            else scan_repo(Path(repo_root or ""), registries.repo_parsers)
-        )
         matches = match_configs(best.bus_map, configs)
     return _proposal_wire(propose(device, interrogations, repo_matches=matches))
 
 
-async def open_robot(config: Mapping[str, Any], *, project_id: UUID) -> "RobotConnection":
+def _repo_configs(
+    repo_root: str | None,
+    repo_sources: list[dict[str, Any]] | None,
+    parsers: "RepoParserRegistry",
+    *,
+    member: str | None,
+) -> list["RepoConfigMatch"]:
+    """The repo configs a proposal is matched against, read before any port opens. A person's
+    selection (no `member`) is parsed whole: a source the parsers reject is a ValueError. A
+    member's inspection (SOLUSDEV-326: SOL brings every source the member authorized) parses
+    each alone and leaves out one they reject, as a moved or changed source is left out — one
+    unreadable file never stops a listen."""
+    from livebench.hardware.repo_config import parse_repo_sources, scan_repo
+
+    if not repo_sources:
+        return scan_repo(Path(repo_root), parsers) if repo_root else []
+    if member is None:
+        return parse_repo_sources(repo_sources, parsers)
+    configs: list[RepoConfigMatch] = []
+    for source in repo_sources:
+        try:
+            configs += parse_repo_sources([source], parsers)
+        except ValueError as exc:
+            logger.info("inspection left out source %.80s: %s", source.get("source_ref"), exc)
+    return sorted(configs, key=lambda config: (config.source, config.config_id))
+
+
+async def open_robot(
+    config: Mapping[str, Any], *, project_id: UUID, user_id: UUID | None = None
+) -> "RobotConnection":
     """A configured robot's connection (SOLUSDEV-248): transport identity, driver id and
     parameters all come from the HardwareConfig document; the plugin registries do the rest.
-    An invalid document is a ValueError; an absent device surfaces as the identity error the
-    routes already map (404/409), anything else as unavailable."""
+    The device is claimed as `user_id`'s session in `project_id` (SOLUSDEV-326). An invalid
+    document is a ValueError; an absent device surfaces as the identity error the routes already
+    map (404/409), anything else as unavailable."""
     from livebench.hardware import registries as hardware_registries
     from livebench.hardware.channel import TransportUnavailableError
     from livebench.hardware.connection import open_robot_connection
@@ -592,6 +653,7 @@ async def open_robot(config: Mapping[str, Any], *, project_id: UUID) -> "RobotCo
             open_robot_connection,
             document,
             project_id=project_id,
+            user_id=user_id,
             transports=registries.transports,
             drivers=registries.drivers,
         )

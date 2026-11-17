@@ -93,7 +93,6 @@ async def test_delete_releases_owner_and_retained_part_endpoints(
             kind="part",
             name="Retained fixture",
             parent_id=robot["id"],
-            category="sensors",
         )
     )["entity"]
     await _save(client, alice_headers, project, _connection(robot["id"], part["id"]))
@@ -211,7 +210,6 @@ async def test_delete_preserves_retained_parts_independent_connection(
             kind="part",
             name="Independent controller",
             parent_id=robot["id"],
-            category="sensors",
         )
     )["entity"]
     sensor = (
@@ -222,7 +220,6 @@ async def test_delete_preserves_retained_parts_independent_connection(
             kind="part",
             name="Controller sensor",
             parent_id=robot["id"],
-            category="sensors",
         )
     )["entity"]
     await _save(client, alice_headers, project, _connection(part["id"], sensor["id"]))

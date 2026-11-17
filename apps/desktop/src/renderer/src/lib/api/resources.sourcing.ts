@@ -120,7 +120,8 @@ export interface SourcingRequestInput extends TorqueInput {
 
 export interface SelectInput {
   candidate_id: string
-  category_entity_id?: string
+  /** The Physical Robot that contains the planned part (SOLUSDEV-326). */
+  robot_entity_id?: string
   quantity?: number
 }
 

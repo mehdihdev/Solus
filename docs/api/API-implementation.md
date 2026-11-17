@@ -1091,14 +1091,16 @@ require the `member` role; reads need only a resolvable project.
 | PATCH  | `/sol/conversations/{id}`               | Rename an owned conversation (`{title}`, non-blank, trimmed — SOLUSDEV-233)             | `200`   |
 | POST   | `/sol/conversations/{id}/messages`      | Append a user message and **stream** SOL's reply (SSE)                                  | `200`   |
 | POST   | `/sol/confirmations/{id}`               | Decide a parked destructive action (`{decision: approve\|reject}` — no `amend`, CTR-03) | `200`   |
+| GET    | `/sol/cards/open`                       | The caller's oldest open card in this project and how many more wait (SOLUSDEV-326)     | `200`   |
 
 SOLX-04: `GET /sol/tools` additionally lists `solus.list_integrations`, `solus.connect_integration` (destructive — parks through the CTR-03 gate), and `solus.verify_integration` when the connector registry is wired. Connecting from chat is discovery → confirm → verify; OAuth providers are pointed at the in-app flow (credentials never pass through tool arguments).
 
 **Approval restoration (SOLUSDEV-261).** The confirmations GET requires the same
 owner-private conversation access as history, with explicit project, team, user,
 and conversation scoping. It returns an envelope containing an ordered array of
-`{confirmation_id, tool, summary, preview, expires_at}` for pending rows whose
-30-minute expiry is still in the future. Arguments are never returned. Decided
+`{confirmation_id, tool, summary, preview, expires_at, card}` for pending rows whose
+30-minute expiry is still in the future (`card`: SOLUSDEV-326, below; null when the
+tool authors none). Arguments are never returned. Decided
 and expired actions are not actionable cards; their existing history remains.
 Reading never extends expiry, rebuilds a preview, approves, or executes anything.
 Repeated proposals with identical tool and canonical JSON arguments reuse the
@@ -1106,7 +1108,96 @@ same active row and stored preview within the same owner's conversation. A
 conversation row lock serializes concurrent park checks and inserts. This does
 not reuse decided/expired rows or treat chat text as approval.
 
-**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?, front_app?}` where `action_mode` is
+**Cards, questions and device notices (SOLUSDEV-326, `docs/contracts/action-gate.md` §Cards).**
+
+- _The card._ A tool may author the card a parked call shows through a duck-typed
+  `card(stored_args)` and declare `card_resumes`. A tool's `stored_args(args)` may be awaited
+  (bounded like a preview, 10 s; past it nothing parks): SOL's hardware card tools stamp there
+  what their card shows, read from Solus's own state, and their preview refuses once it no
+  longer holds (docs/api/hardware.md, SOL's hardware card tools). The gate computes the card once,
+  when the call parks, from the STORED arguments (`agent/cards.py`,
+  `confirmations.request_confirmation`):
+  validated as the contract's `Card`, every text one printable masked line, `resumes` set from
+  the tool (never the model), `more` kept only when the person's SOL mode is Guide. A tool's
+  text past its bound is cut to it, ending "…" and never through a code chip (`cards.fitted`), as
+  drafted and again after masking. A value the
+  tool puts in a text (a device's serial, a name) is one code chip with its own backticks removed
+  (`cards.chip`), and a text whose masking would eat a chip's backtick (a secret-shaped `token=`
+  running into its edge) is masked whole, so no value's words land outside their chip. It is stored
+  in the nullable `tool_confirmations.card` column (revision `a32600000002`; SQL NULL when the
+  tool authors none), restored with an identical pending duplicate, streamed on the
+  `tool_confirmation` frame and listed by the restore route above. It never enters the consent
+  or the stale check and is never a preview row; a card that still cannot be shown safely is left
+  off (logged with the project and conversation ids) and the call still parks.
+- _`GET /sol/cards/open`_ → `{data: {card: OpenCard | null, queued}}`, `OpenCard =
+{confirmation_id, conversation_id, tool, card, expires_at}`: the caller's oldest (by
+  `created_at`) PENDING, unexpired row with a non-null `card` in this project, across their
+  live (not deleted) conversations; `queued` counts the rest. Member role (viewer `403`,
+  non-member or unknown project `404`, no token `401`); another member's rows never appear.
+  A stored card that no longer validates as the contract's `Card` (stored under older bounds) is
+  skipped and logged by id; the slot shows the next one.
+- _`ask_user`_ — an ungated tool of every person-bound registry. Its arguments
+  `{kind: offer|problem, title ≤ 80, body ≤ 400, primary ≤ 24, secondary? ≤ 24}` (no other key)
+  become a card with `resumes: true`; a call writes exactly one PENDING `tool_confirmations` row
+  (`tool: "ask_user"`, the 30-minute TTL) into the conversation the route bound for the turn —
+  the caller's own live one, re-checked — and nothing else, and returns `{question_id}`. A
+  question cannot pass for the gate or for Solus: a title that begins with "Approve" (any case;
+  "Approve:" is an approval card's) and a title or button that begins with "[Solus]" are
+  `invalid_args`, nothing written. The row's `args` are the card's masked texts, never the
+  model's raw ones. The
+  decide route never takes a question (`200`, `ok: false`, `not_found`; nothing is recorded).
+- _`MessageCreate.answer`_ `{question_id, choice: 0|1, text? ≤ 500}` answers an open question
+  of the caller's, in the conversation it was asked in (else `404 not_found`: unknown, malformed,
+  expired, answered, not a question, another member's, another project's, another conversation's). The question closes in the same
+  transaction as the turn, after the budget and frequency gates (`0` → approved, `1` →
+  rejected); a turn refused for credits leaves it open. The turn's words are written by the
+  server: `Chose "<label>"` — the chosen button's stored, masked label (`Not now` for a second
+  choice on a one-button question), JSON-quoted as data because a model wrote it, so it never
+  opens the turn the way Solus's own `[Solus] …` prompts do — then `—` and the person's trimmed
+  text; the user turn carries `attrs.answer {question_id,
+choice}`. Events: `sol.message`, and `sol.tool_confirmation_decided {decision, ok: true,
+confirmation_id, tool: "ask_user"}`.
+- _An edit_ (`MessageCreate.answer`, 2026-11-17): `question_id` may also name an open card of
+  the caller's, in this project and the conversation it is posted to, whose STORED `card.field`
+  is not null (a card with neither a question nor a field is the same `404 not_found`). `text`
+  is the new value: required, not blank once trimmed, with `choice: 0` — else `422
+validation_error`. In the same transaction as the turn, after the budget and frequency gates
+  (a turn refused for credits leaves the card open), the row's `expires_at` is set to now under
+  its lock (a second edit, or one that lost the race, is 404). The card is expired, not decided:
+  status stays `pending`, `decided_at` stays null, the tool's decline hook does not run, no
+  device is dismissed, and neither `sol.tool_confirmation_decided` nor
+  `hardware.device_dismissed` is emitted — only the turn's `sol.message`. The stored arguments
+  never change. The server writes the turn `<field.label>: "<text>"` — the stored card's
+  Solus-authored label, then the trimmed text JSON-quoted as data — and the user turn carries
+  `attrs.answer {question_id, choice: 0, edit: true, label}` (`label` is the field's label).
+- _`MessageCreate.notice`_ `{kind: "device", device_ref ≤ 512}`: the device must be present now
+  (`present: true`) in the device memory of a machine the caller owns in this project
+  (`docs/api/hardware.md` §4) — anything else is `422 validation_error`, worded the same and
+  naming no device. The server writes the turn's words itself — `Solus noticed a device plugged
+into this computer: <headline> ("<device_ref>").` — the ref cleaned to one printable line and
+  JSON-quoted as data, since a serial-basis ref is the device's own USB serial (§7) — and stores
+  the user turn with `attrs.authored_by = "solus"` and `attrs.notice` (the ref as sent, the
+  identifier); no event is emitted. Errors: `422 validation_error` (above), `409
+notice_debounced` — a second notice of the same device by the same person within 2 s of one
+  that was admitted; it writes nothing (one window per API process: only the local API that sees
+  the device admits its notice) — and the turn's own `402 insufficient_credits` and `429
+frequency_cap`. The window starts when a notice is admitted (its turn stored), so one refused
+  with 402 or 429 does not spend it. Solus-written turns are not the person's questions: the
+  expertise estimate (`agent/expertise.py`) leaves them out.
+- _Exclusivity_ (`422`): a notice carries no `content`, `screenshot`, `resume_confirmation_id`,
+  `process_prompt` or `answer`; an answer no `content`, `notice`, `resume_confirmation_id` or
+  `process_prompt`. Neither needs `content`; neither turn may search the web. A typed message
+  and an answer reset the continuation chain like any message the person sends. A notice does
+  not: Solus wrote it (`attrs.authored_by = "solus"`) and the desktop sends it on its own at
+  plug-in, so a board that keeps reconnecting cannot clear the resume or wake caps.
+- _Always asks_: a notice turn, and a resume after a card (a decided row whose stored
+  `card.resumes` is true), run as if `force_confirmation` were true whatever the body says. The
+  server decides it, never the client: a plug-in starts a notice and its text carries a
+  device-chosen serial, so in `action_mode: "do"` an owned routine (a machine write, a commit, an
+  allowlisted Onshape or KiCad write, a routine `code.exec`) parks its card instead of running.
+  A typed message, an answer, a command resume and a wake keep the body's flag.
+
+**Streaming turn (`POST …/messages`).** Body: `{content, action_mode?, force_confirmation?, mentions?, pins?, focus?, finding_id?, robot_id?, preferences?, front_app?, notice?, answer?}` (`notice` and `answer`: SOLUSDEV-326, above; with either, `content` is omitted) where `action_mode` is
 `"guide"` (default — SOL explains and points, never mutates) or `"do"` (SOL may operate tools;
 destructive calls still park through the CTR-03 gate). SOLX-01: the mode is explicit per request,
 logged per action (`agent.tool_invoked`), and enforced structurally in the dispatch closure.
@@ -1180,8 +1271,17 @@ copied from this field by Solus code, never from model arguments. Emits `sol.fro
   token weights only; `layers` lists all eleven context layers in prompt order, each empty one
   with its reason (`docs/architecture/sol-context-layers.md`). Drives the client's "context in
   use" panel.
-- `tool_call` — `{"call_id","tool","args"}` a proposed W0-04 tool invocation
+- `tool_call` — `{"call_id","tool","args","working"?}` a proposed W0-04 tool invocation;
+  `working` (SOLUSDEV-326) is the tool's own Solus-authored line for what the call is doing
+  (`working(args)`, e.g. "Reading the USB adapter on /dev/ttyUSB0"), one printable line masked
+  like the arguments and only then cut to 160 characters, so a secret crossing the cut is masked
+  whole, on the frame and in the stored tool turn — absent when the tool has none or the call's
+  arguments fail its schema (`working` never reads a value its schema would not admit). A model
+  value in the line is one code chip (`agent/cards.chip`); a line whose masking or cut moves a
+  chip's edge is masked whole, as a card's texts are, so the value's words never read as Solus's
 - `tool_result` — the W0-04 `ToolResult` envelope (`{"call_id","ok","value"|"error"}`)
+- `tool_confirmation` — `{"confirmation_id","tool","args","summary","preview","card"}` a call the
+  gate parked (CTR-03, `docs/contracts/action-gate.md`); `card` is SOLUSDEV-326's, below
 - `message` — `{"role":"assistant","content":"…","citations":["…"]}` the finished reply;
   `citations` is the SOL-02 structured provenance surface (verified by Solus code — renderers
   show it in a dedicated region, never linkified, display-capped, never parsed from prose)
@@ -1342,6 +1442,17 @@ in that session, on each channel its part streamed. The ingest model (`ObserverE
 `extra="forbid"`) has no such field, so a posted event that names one is refused with `422`, and
 only server-attached ids ever reach the ring.
 
+**Per viewer (SOLUSDEV-326).** The reads here and in §15b apply the reader's view of hardware
+another member keeps out of the graph (`hardware.md` §1a). `/summary`, `/events`,
+`/telemetry-devices` and an unfocused `/device-recent` leave out what lands on such an entity, and
+`/recent/{entity_id}` of one is `404`. An `/events` record keeps the entity its writer resolved its
+device to when it was recorded (a session as it resolved that packet, a sim alias included; the
+telemetry route by device alone), and is left out when that entity or its device's current one
+is hidden; an event on a device bound to nothing is every member's, like the
+device list. `/sessions` leaves out a session whose robot is hidden, and
+its detail and stop are `404`, like an unknown session. Recorded runs follow their robot the same
+way (`bench-runs.md`, "Per viewer"). Ingest and device resolution never filter by viewer.
+
 ### Observed telemetry devices (SOLUSDEV-262 additive amendment)
 
 `GET /api/v1/projects/{project_id}/bench/telemetry-devices` returns the standard
@@ -1386,7 +1497,10 @@ event loop), `gazebo` (bounded topic list, flag-shaped topics refused; pinned `g
 `serial` (**bound by USB serial number**, resolved to `/dev/serial/by-id`; ambiguous or absent
 serials refuse with candidates — `409 device_ambiguous` — unless an explicit still-enumerated
 `confirmed_device_path` pick is supplied). Errors: `409 too_many_sessions` (per-project cap 4),
-`404 device_not_found`, `503 source_unavailable`, `422` for config/path violations.
+`404 device_not_found`, `503 source_unavailable`, `422` for config/path violations, and
+`409 device_busy` when something else holds the device (SOLUSDEV-326 serial owner;
+`details: [{device_ref, holder}]`, docs/api/hardware.md §7). A `serial` session's port is held
+exclusively through the owner, like a `robot` or `hardware` session's.
 
 Session state is in-memory and project-keyed (BenchEventRing posture — lifecycle, not history;
 no migration). Lifespan shutdown closes every pump/subprocess/port. Data events:
@@ -1491,6 +1605,8 @@ open ports, create graph facts, alter focus, or change telemetry ownership.
 When true, the per-turn Build policy cannot automatically authorize owned routines; mutating
 calls follow the existing confirmation-card/decision path. Explicit host-mirror offers send true.
 The flag does not grant tool, workspace or project authority and does not make Guide executable.
+A device notice and a resume after a card are forced on the server whatever the body sends
+(SOLUSDEV-326, "Always asks" above).
 
 ---
 

@@ -1,173 +1,315 @@
-# Wireflow — Hardware onboarding (SOLUSDEV-250/260 integration)
+# Wireflow — the Hardware page (SOLUSDEV-326)
 
-Authority: the September 15 UI brief supersedes earlier presentation in the SOLUSDEV-248 and SOLUSDEV-250 ticket briefs; `docs/architecture/hardware-onboarding.md`;
-`docs/api/hardware.md` (routes). This file governs the flow; visual polish within it is
-implementer judgment (CLAUDE.md §3). Every claim a card makes comes from a live backend response —
-offline / runner-absent degrades to honest copy with disabled controls, never fabricated
-availability. Nothing on this surface auto-accepts: a proposal becomes a graph fact only when the
-user adds it (ADR-012). A name can save hardware context; driver/configuration and actual
-packets are separate requirements for connection and streaming. This document reconciles the
-current inline 250 flow with 251/260 storage and privacy rules. The later 253/256 two-screen
-review and standalone-part UI remain targets, not descriptions of shipped controls.
+**Last updated:** 2026-11-17 (SOLUSDEV-326: SOL is the shell's sidebar, after the merge of
+SOLUSDEV-327; the page's own docked panel is removed).
 
-## Where it lives
+Hardware onboarding happens with SOL, one card at a time, on one page: `features/hardware`
+(`HardwareScreen`). SOL's tools propose and the person answers on a card
+(`docs/contracts/action-gate.md` §Cards, open cards, notices and answers); nothing joins the graph
+unasked (ADR-012). The earlier renderer flow (the Add › Hardware panel with Devices found, Search,
+Describe something new and Unassigned parts, the detected-device cards on the canvas edge, the
+robot-brain cards and the robot sidebar's Unassigned parts list) is removed; its routes remain on
+the API (`docs/api/hardware.md`) for SOL's tools. Authority: `docs/architecture/hardware-onboarding.md`,
+`docs/api/hardware.md`, the action-gate contract. Visual polish within this flow is implementer
+judgment (CLAUDE.md §3).
 
-Two places, one model:
+## Ground rules
 
-1. The **Hardware** tab of the workspace **Add** panel (`features/graph/WorkspaceAdd.tsx`, the
-   `hardware` prop → `HardwareAddPanel`). Inline sections lead to a collapsed unassigned
-   disclosure. Private local configuration/calibration sources appear directly below detected
-   devices, with Choose local file, Verify and Relink controls. They are not hidden inside
-   Unassigned parts; that disclosure retains the connector-parts flow.
+1. The page does not rearrange. Regions keep their place and size; content fills in.
+2. One card at a time, one or two buttons. No steppers, checklists or option rows.
+3. Approvals look different from offers and say what physically happens.
+4. SOL narrates in the SOL sidebar; the card is where the person answers.
+5. True states only. No bare spinners.
+6. Card text is model- or tool-authored, and every name is someone's own text: all of it prints as
+   text, never as HTML.
+
+## Layout
 
 ```
-| Add › Hardware                                                            |
-| <intro line — SOL mode>                                                   |
-| Devices found            <live list of pending device cards>              |
-| Local configuration and calibration   [Choose local file] [Refresh]       |
-| Search                   [ Search parts and platforms — e.g. … ]          |
-|                          rows: name · part|platform · summary · action    |
-|                          supplier results inline after explicit search    |
-| Describe something new   [ What is it? ] [Add]                             |
-|                          optional ownership/category details inline       |
-| ▸ Unassigned parts                                                        |
+| rail | Hardware                                   [+ Add hardware] | SOL  HARDWARE     ⤢  ×      |
+|      | Robot parts Solus knows about, and whether …               |                             |
+|      | ┌ card slot · 132 px · aria-live ────────────────────────┐ | SOL's messages              |
+|      | │ one open card, or the working / start / idle line      │ | the person's messages       |
+|      | └────────────────────────────────────────────────────────┘ |                             |
+|      | Done so far: 3 servos added · Nano added        (30 px)    |                             |
+|      | Robot parts · 4                                            | [Ask SOL, or tell it what   |
+|      | PART   WHAT IT IS   ROBOT   IN WORKSPACE GRAPH   STATUS    |  you have]          [Send]  |
+|      | Rover arm · 4 parts          not yet [Add robot]           |                             |
+|      |   shoulder_pan  STS3215  Rover arm  not yet  ● Connected   |  (the SOL sidebar, when     |
+|      | ▸ Described in your workspace, not seen yet · 4            |   open: ⌘J / Ctrl J)        |
 ```
 
-2. **Pending device cards at the canvas edge** — the same cards, docked along the workspace edge
-   while a detected device is unbound, so a device plugged in mid-session is visible without
-   opening Add. A card is one entity in both places (`useDetectedDevices()` seeded on ready and kept
-   current by `hardware.devices_changed`); adding or dismissing it in either place clears both.
+The main column is at most 980 px wide with 24 px 28 px padding and scrolls on its own. The page
+has no SOL panel of its own: SOL is the shell's sidebar (`docs/wireflows/sol-sidebar.md`), opened
+and closed with its menu-bar toggle or ⌘J / Ctrl J like on every screen (one open state for the
+whole shell, closed on first run). The page works with it closed: the card slot always shows the
+open card and the working line. Top to bottom, fixed:
 
-Escape or an outside click closes Add before affecting graph navigation (`workspace.md` §Add).
+1. **Header.** "Hardware" (20 px/600), the line "Robot parts Solus knows about, and whether each
+   one is connected.", and the page's one permanent button, a ghost "+ Add hardware". The page
+   draws its own header; there is no second top bar.
+2. **The card slot**, 20 px below.
+3. **Done so far**, a fixed 30 px row.
+4. **"Robot parts · N"** and the parts list.
 
-## Flow 1 — Devices found (the one-question card)
+The page shows nothing else: no topology, links, channels or bench controls. Without an open
+project it draws the header alone, the button disabled.
 
-One card per device the machine can see that is not yet bound in the graph and not dismissed.
-A card is **a sentence, one question, Add**:
+One chat drives the page: the project's current SOL chat on the Hardware surface
+(`useSolChat(projectId, 'hardware')`). The page uses it for the slot and the plug-in notice, and
+on this screen the sidebar uses the same surface on the same session. Every turn it starts
+(typed in the sidebar, a sidebar chip, the start card, an edit, an answer, a notice, a decision
+made in the sidebar's thread, the resume after a card) goes as `action_mode: "do"` with
+`force_confirmation: true`, so a gated call always parks a card (the server forces the same for
+notices and card resumes). A slot press starts its turn and does not wait for it: SOL answers in
+the sidebar, and a turn that fails says so there.
 
-1. **Sentence** — the wire's `headline`, said by tone (`looks_like` · `probably` · `something`),
-   then the `summary` verbatim: "Probably · Arduino-class board on USB · 4 channels at 50 Hz · your
-   sketch names them motor_l, motor_r, dist, batt". Identity is shown as far as it is known: the
-   USB serial, or “no serial number — identity is tied to this USB port; keep it plugged in
-   here” for a port-bound serial-less device. The same explanation appears in the sidebar. A device with no binding at all cannot be proposed
-   and says so.
-2. **One question** — the card asks only what the wire could not settle:
-   - Nothing unsettled → **the name**, initially empty and required; the headline is only a
-     placeholder/suggestion. Existing robot names are preserved.
-   - Two repo configs match (leader and follower are wire-identical) → the wire's
-     `disambiguation.question` with its options as a radio ("Which arm is this?"); the answer is
-     recorded as `disambiguated_by: user` and the second device is offered the remaining option.
-   - A library robot already in the graph matches (a pending link suggestion names it) → **"It's
-     <robot>"** is the first choice, binding the device to that robot on Add; "a new robot" and the
-     project's other robots follow. Accepting resolves the suggestion; rejecting records it.
-   - Existing robots and no suggestion → **Part of ▾** (new robot first, then the robots).
-3. **Add** explicitly accepts the shown proposed rows and chosen target, using the current
-   propose/confirm routes or the existing suggestion acceptance flow. Proposals may use safe
-   ping/listen interrogation; passive enumeration itself opens no device. No motion is implied.
-   The renderer sends no raw `repo_root`: a non-null request path is refused. The transaction
-   saves the robot and independent per-entity v2 component/connection configs, preserving prior
-   fields and provenance. The navigator shows the saved node immediately as **Connecting…**
-   when session start was requested; confirmation does not wait for driver opening.
-   Existing project graph events refresh terminal connection state. A connection failure leaves
-   the saved node with a portable error and retry using its ID. Live Bench shows **Receiving
-   data** only after actual packets, with channels/units derived from verified capabilities.
-4. **Dismiss** hides the card for this session; the device stays in the store and returns on the
-   next removal/reappearance cycle; repeated unchanged full frames do not undo dismissal.
-5. Proposal rows and their evidence (the `ModalityMatch` list: what was pinged, what answered,
-   which repo config matched) stay one disclosure away on the card — shown, never hidden, never
-   pre-decided beyond the accept-all that Add means. A row below threshold is marked as such.
-6. A missing or changed calibration source requests explicit native relinking/review.
-   No port-path repair or repo write occurs automatically. An authorized future write-back must
-   show its concrete change through the existing confirmation gate.
+**The SOL sidebar on this screen** (`SolSidebarHost`, `screen === 'hardware'`):
 
-## Flow 2 — Unassigned parts (collapsed disclosure)
+- Tag `HARDWARE`; greeting, chips and placeholder as in `sol-sidebar.md` §6.
+- **Cards stay in the slot** (`cardsInSlot`): a parked row that carries a card is not drawn in
+  the sidebar's thread. A row with no card (a command, a CAD edit) can never reach the slot, so
+  it stays in the thread, where it is decided — also as `"do"` with `force_confirmation`.
+- **No running-processes strip.**
+- **It always docks**, whatever the window width: an overlay would cover the card's buttons at
+  the page's right edge. The page gets the room that is left (§Narrow widths).
+- A SOL reply that finishes while the sidebar is closed raises the shell's "SOL replied" toast
+  (`sol-page.md` §Session lifetime); with it open, none.
 
-1. Collapsed by default; **nothing is read until it opens** — never on mount, never on a graph
-   revision. Open → one paged list using the unified `GET /hardware/unassigned` query,
-   covering manual, retained and connector-sourced parts without a live manual owner. Do not
-   also fetch the orphan endpoint or show the same UUID twice. **Load more** extends this
-   source. Rows show names and types, never identifiers.
-2. Each row: **Part of ▾** (the project's robots, the first preselected) + **Category ▾**
-   (defaults to Structure) + **Add** → `POST /hardware/robots/{robot_id}/parts/attach
-{entity_ids: [id], category}`; the row leaves the list. Source identity, independent component config/provenance and cross-domain edges
-   are untouched. A stale owner/config returns 409; a deleted part returns 404. Preserve the
-   choice and show an honest recovery message rather than a successful attachment.
-3. No robot yet → the rows list with "No robot to add these to yet." and no target. The unified list
-   settled and empty → "Nothing unassigned."; a failed read shows the backend's error verbatim and
-   never claims emptiness over it.
+## Three states
 
-## Flow 3 — Search
+| State     | Card slot                                                                | Done so far                            | List                                                                    |
+| --------- | ------------------------------------------------------------------------ | -------------------------------------- | ----------------------------------------------------------------------- |
+| A1 Start  | the start card "Plug in your hardware" / [Connect a robot computer]      | empty                                  | "No robot parts yet"; the described group when the workspace has any    |
+| A2 Midway | SOL's open card (an offer, an approval, a step or a problem), or working | this visit's receipts, joined by " · " | the robot's group and its parts, each with its status                   |
+| A3 Done   | SOL's closing offer (for example "Add to workspace graph"), then idle    | every receipt of the visit             | every part Connected under its robot; lone parts under "Not on a robot" |
 
-1. One box (`GET /hardware/library?q=`, 250 ms debounce; empty input keeps the panel compact).
-   Placeholder names no product. Results are one flat list: **name · kind (part | platform) ·
-   summary**. No match → "Nothing in the library matches."; a failed search shows the error verbatim.
-2. A **platform** row → **Add as new robot** reveals an inline name field (empty, placeholder =
-   the platform's name) + **Add** → `POST /hardware/library/platforms/{id}/import {name}` →
-   robot + parts + config with provenance `library`; the robot view reloads. When the import raised
-   link suggestions against detected devices the row says "A link suggestion is pending — the
-   device card offers it." (no ids).
-3. A **part** row provides an inline required name and optional robot placement, followed by
-   **Add** → `POST /hardware/library/parts/{id}/import {name, robot_id?}`. Without a robot,
-   this creates one standalone part and its independent library-provenance config. It requires
-   `Idempotency-Key`; retries of an uncertain operation retain that key, while a completed
-   operation clears it. Existing robot imports preserve the definition's default category.
-4. Every row has a **Details** disclosure that lazily reads `GET /hardware/library/{kind}/{id}`
-   and lists the definition's facts as-is: maker, driver, notes, key specs (resolution,
-   calibration, telemetry channels) for a part; the slots (role · part @ address) for a platform.
-   No preview pane — nothing is hidden, and specs belong to the sidebar later.
+The cards' words in A2 and A3 are SOL's, written at run time; only the start card, the expired
+card, the working line and the idle line are the renderer's own.
 
-## Flow 4 — Supplier results in Search
+**The start card** shows while the list is empty and nothing else fills the slot, and again after
+"+ Add hardware" whatever the list holds. Pressing its button sends its sentence to SOL and turns
+it off for the rest of the visit (until "+ Add hardware"). A device that was already plugged in
+when Solus started needs no press: the first time the page opens in an app session SOL is told
+about it (§"The plug-in notice and the toast"), and its card takes the slot before the start card.
 
-Supplier search uses the same query as the library search and the existing sourcing engine.
-An explicit credit-labelled action starts metered work; typing and opening Hardware do not.
-Results, progress, errors and specs stay inline. Selecting an actual supplier candidate uses
-the existing planned-part selection endpoint and refreshes the graph. No Hardware sourcing modal
-or separate Sourced section remains. The independent BOM sourcing flow is retained.
+**"+ Add hardware"** clears the caller's "Not now" list (`DELETE /hardware/devices/dismissals`
+through the typed client), so devices waved off are offered again, and shows the start card. A
+clear that fails (a hosted API has no machine to clear) is not shown; the start card still comes.
+It also announces to SOL, again, every device that is plugged in and still unclaimed (§"The
+plug-in notice and the toast").
 
-## Flow 5 — Describe something new
+## The card and its slot
 
-1. One field, **What is it?** Optional inline details expose **Category ▾**, following a deterministic keyword
-   guess over the name (`categoryFromName`: motor / servo / pump / valve → Actuators; camera /
-   encoder / pressure → Sensors; battery / regulator → Power; controller / board → Controllers;
-   gripper / suction → End effectors; cable / connector → Wiring; else Structure) and is marked
-   **suggested** until the user picks one; this local fallback is not represented as a SOL model call. The pick sticks. **Part of ▾** lists the robots, the
-   first preselected.
-2. **Add** with a robot → `POST /hardware/robots/{robot_id}/parts {name, category, specs: {},
-lifecycle: planned}` → the part appears under the category with `origin=manual`; the field
-   clears. **Add with no robot** → `POST /hardware/entities {kind: part, name}` creates an
-   unassigned part without a container robot. Description and Add alone suffice; specs are optional.
-3. No spec fields here. Guide mode says why: "Specs come later — from SOL, from a datasheet, or
-   never." Later promotion goes through `POST …/parts/{part_id}/lifecycle` and changes neither
-   the part's id nor its edges. `HARDWARE_SPEC_FIELDS` (generic per category, never per product
-   family) is kept for the sidebar.
+Built in `features/hardware` (`HwCard`, `CardSlot`, `DoneSoFar`).
 
-## Empty / error / offline states (all honest)
+- **The slot** is a fixed 132 px `aria-live="polite"` region and is never blank. It shows, in
+  order: the caller's open card (`GET …/sol/cards/open`); the working line (pulsing dot, what SOL is
+  doing from the `tool_call` frame's `working`, else "Identifying <device>" while a plug-in
+  inspection of a device the reader has not dismissed runs, and the seconds elapsed); the local
+  start card when the page asks for it; the idle line "Nothing needs you right now. Anything you
+  plug in shows up here." in a dashed outline. It reads the open card on mount, on window focus,
+  after every decision or answer, when the page asks, and every 5 s while the document is visible.
+  The page asks on each SOL stream frame that can open a card (a tool call, a parked card) and
+  when a turn starts or ends; text frames are left to the 5 s read (narrower than "every frame":
+  one read per token batch would be hundreds of requests a turn). A failed read keeps what is shown.
+- **The card** is a grid `3px | 1fr | auto`, radius 6, at least 132 px. Offer: `--sur`, `--acc`
+  edge, no kicker. Approval: 10% `--warn` over the page ground (opaque), a `--warn` border all
+  round, kicker "APPROVAL · THIS CHANGES THE HARDWARE". Step: `--sw` edge, "YOUR STEP". Problem:
+  `--err` edge, "PROBLEM". The title is one line (ellipsis). The body clamps at two lines with a
+  "more" toggle that shows all of it and the card's `more`; a `backtick` span is a code chip. A
+  card opened with "more" grows over the rows below the slot and never moves them. A `field` is a
+  mono label and a 220 px input; the primary is disabled while the field is empty. Buttons sit on
+  the right: the primary, and the secondary as a ghost when there is one. A status line and a
+  progress bar are drawn only when the page passes them (the Card contract carries none).
+- **The start card** is local, never a parked call: "Plug in your hardware", one button, "Connect
+  a robot computer", which sends that sentence to SOL. Pressed while SOL is still replying, the
+  sentence waits for that turn and goes after it (as does "Ask again" on an expired card). The start card leaves on the press, so it cannot be pressed
+  twice while that turn runs, and comes back only when the sentence never reached SOL (the turn
+  failed, or the send itself threw).
+- **A press.** On a gated card the primary approves and the secondary rejects through the decide
+  route (a decision and nothing else). On a question card (`ask_user`) they answer 0 or 1 through
+  `MessageCreate.answer`, with the field's text when the person changed it; the decide route is
+  never called. The slot hands the page the whole open card with an answer, so it is posted to the
+  conversation the question was asked in (the only one the server takes it in). The answer turn
+  may wait behind a live one, and until it lands the server still lists the question as open: the
+  answered question is kept out of the slot meanwhile, so it cannot be answered twice, and comes
+  back only when the answer never reached SOL. Its `receipt` joins "Done so far" once the answer
+  turn was admitted, not on the press. **An edit answers its
+  card** (contract §Cards 5): the primary of a gated card whose field was edited never calls the
+  decide route. It posts one `MessageCreate.answer {question_id: <the card's confirmation id>,
+choice: 0, text: <the new value>}` in that card's conversation; the server expires the card
+  without deciding it (so an edited device offer is never the "Not now" that dismisses the
+  device) and writes the turn itself, `<field label>: "<new value>"` with the value JSON-quoted
+  as data: the field was prefilled by SOL, so what the person did not retype never reads as
+  their own words. The card is treated as an answered question: kept out of the slot until its
+  turn has gone, back when the turn failed. Nothing was approved, so the button keeps its own
+  label (never a success word), nothing joins "Done so far" and nothing is resumed: SOL
+  continues from the answer turn. In the SOL thread the turn is the receipt line
+  `Edited: <field label> — <new value>`, live and reloaded. "Not now" on an edited card is still
+  only a rejection, and an untouched field an approval. The field's whole value is its tooltip,
+  and past 24 characters its length is written beside it ("74 characters"). After a
+  decision on a
+  card with `resumes`, SOL is continued in that card's conversation, including after a refusal
+  (expired, stale, already decided). An approval that ran adds the card's `receipt` to "Done so
+  far". A decision the server refuses (expired, stale, already decided, or the tool failed) never
+  reads a success word and files no receipt: the button keeps its own label, the server's own
+  words show on the card's error line for 2.4 s, and then the card leaves. A decision that never
+  reached the server keeps the card and says "That did not go through. Try again." Every decision
+  made here is told to the chat (`cardDecided`), so the card's row leaves the thread too — on the
+  SOL page it is no longer a live card, and a restored "Awaiting your approval" line is not left
+  with no card under it.
+- **Expiry.** A card that passes `expires_at` while it is on show becomes the Problem "This card
+  expired" / "SOL asked something you did not answer in time." with "Ask again", which sends the
+  fixed sentence "Please ask me again about the card that expired." (never the card's own title)
+  to the conversation the expired card was asked in. It does not use up the start card: on an
+  empty list the start card is offered again afterwards. It stays until it is answered or another
+  card is open.
+- **Motion.** On the press the other button is disabled and the pressed one keeps its own label
+  until the press went through (the decision came back, the turn was handed over); only then does
+  it read its result word for 600 ms ("Approved" on an approval, "Added" when the label starts
+  with "Add", else "Done"; a secondary keeps its label). A success word is never shown for a
+  decision the server may still refuse. The card leaves in 160 ms (fades, rises 6 px); the next arrives in 200 ms
+  (fades in, drops 4 px). Focus moves only to the card that follows the person's own press, once,
+  and only while their focus is on the page itself or still in the slot: a question card's primary
+  takes it, and a gated card is focused itself (one Tab from its buttons), never the button that
+  decides it. A card that arrives on its own, and the start card, never take the focus, so a stray
+  Space or Enter cannot approve anything (CLAUDE.md §7; narrower than the design's motion step 4).
+  With reduced motion both are a 120 ms fade.
+- **Arrival guard.** A card read from the server takes no press for its first 450 ms on show,
+  whatever it replaced (the start card, the expired card, another card, the card just answered): a
+  click aimed at the button that was there a moment ago never decides or answers a card the person
+  has not read (CLAUDE.md §7). The arrival is stamped before the card is painted (a layout
+  effect), so there is no moment in which it can be pressed unguarded. The local start and
+  expired cards are not guarded.
+- **Done so far** is a fixed 30 px mono row: "Done so far: " and this visit's receipts joined by
+  " · ", or empty (the row stays, so nothing below moves).
 
-- Offline (signed out or no project): one line — "Connect this project to add hardware." — and
-  every control disabled; no device list is rendered and nothing is read.
-- Runner absent (livebench not loaded by the local API): Devices found says so with the reason
-  verbatim; Search, Describe, Sourced and Unassigned parts stay usable — they are API-only.
-- No devices: "Nothing found yet" with the enumerate hint (USB, CAN adapter, network) — never a
-  count that was not observed; the store's never-seeded state reads as "looking", not as empty.
-- Propose / confirm failure: show the portable typed backend message for absent/ambiguous
-  devices, unavailable runner or conflicting configuration. Never show private paths or another
-  project's identifiers. Cached proposal + unplug still refuses confirmation without new nodes.
-- Missing/changed calibration file: preserve saved values and request relink/review. File
-  appearance never silently imports or replaces calibration.
-- Confirmed but no bench session cap slot: the robot and config are still created; the session
-  error is shown on the robot with a Retry, never a silent success card.
-- Search / import / attach / describe failures: preserve the draft. Explain 404 as a deleted
-  or unavailable part and 409 as a version/ownership conflict requiring refresh and review.
+### The parts list (`features/hardware/PartsList.tsx`)
 
-## Copy (ADR-016 — SOL mode)
+"Robot parts · N" (13 px/600; N counts parts), then the column headers (mono 10 px uppercase:
+Part, What it is, Robot, In workspace graph, Status) over one grid (1.25fr 1.2fr .9fr 1.05fr
+.9fr, gap 12) in a bordered `--sur` container. The component reads through the typed client, on
+mount, after its own Add, and when its `refreshKey` changes (the page changes it after a decided
+card and when a SOL turn starts or ends): the manual robots
+(`GET /entities?type=physical_robot`), every part-like entity with its robot
+(`GET /hardware/parts?ownership=all`, all pages up to 1000 rows), the machine nodes
+(`GET /entities?type=machine`; the device memory reaches a machine's owner alone) and
+`GET /hardware/expected`. The plugged-in device rows come from the shell's one device store, so
+a status follows a plug or an unplug with no read: the store also keeps each remembered row
+(one carrying `last_seen`, so the machine's owner alone) that left while it watched, stamped
+with the moment it left, and that is newer than the memory as last read — a part unplugged
+with the app open reads "Last seen just now", never the older snapshot and never "Not
+connected". A project switch or a sign-out drops them; the next read has the machine's own. Everything on show is what the reader may see
+(`docs/api/hardware.md` §1a); every name is someone's own text and prints as text.
 
-Section copy (`HARDWARE_COPY`: intro · devices · search · describe · unassigned) consumes the
-user's mode. **Guide** explains the surface and what Add will save; **Expert** is terse.
-Distinguish passive enumeration from the safe ping/listen work a proposal may perform. Neither
-permits motion. Headlines, summaries, confidence language and device identity reflect actual
-evidence. Error copy explains the portable typed failure without exposing raw backend internals.
+- **Groups.** One `--sur2` row per robot, "<robot> · N parts", oldest robot first, its parts
+  under it oldest first; then "Not on a robot · N" for manual parts no robot holds. A
+  connector's part no robot holds is workspace design and is not listed. A robot with no parts
+  (a plain connection) says its own status on its group row. A row that a later read brings
+  fades in with `local-row-in` (180 ms, off under reduced motion) at the end of its group; the
+  first read animates nothing and no row that was on show moves.
+- **In workspace graph.** "in graph", or "not yet" with a button: an outlined "Add robot" on a
+  robot's row, a text "Add" on a part no robot holds. Both are the person's own action:
+  `PUT /hardware/entities/{id}/graph {in_graph: true}`, no card, then the list reads again. A
+  robot's part has no button of its own (the route refuses it: it moves with its robot; narrower
+  than the design, which draws "Add" on every part). A refusal prints under the table (never in
+  it: a rowgroup holds rows only) in the server's own words (`hardwareErrorText`), so it names
+  only hardware the reader may see; it goes when its row does.
+- **Status** is a dot and a word, derived on every render and never stored (`partStatus.ts`):
+  Identifying (pulsing `--acc`: its device row is `inspecting` and the reader has not said "Not
+  now"); Connected (filled `--ok`: the robot's connection is `connected`, or its device is
+  plugged in); Unknown, streaming (filled `--ok`: the same, for a robot with no parts); Last seen
+  <n> minutes/hours/days ago, or "just now" (filled `--mut`: the device is not plugged in and
+  the machine remembers it, or the store saw it leave); Not connected (hollow `--err` ring: neither); Not seen yet (hollow `--mut` ring:
+  described rows only). A part's device is the one its `device_ref` names, else one bound to it,
+  else (with no `device_ref`) one bound to its robot. While any row reads "Last seen", the
+  list draws again each minute so the words advance on a page nobody touches; the clock rests
+  while the window is hidden and the words are brought up to date the moment it shows again.
+- **Empty.** The headers and a 44 px dashed box, "No robot parts yet".
+- **Described in your workspace, not seen yet · N.** A collapsed full-width button under the
+  list (`aria-expanded`, a chevron, and on the right the mono "from <sources>"), hidden when N is
+  0; N is the rows plus `more`. It expands into rows of the same grid: name, what it is, the
+  robot's name or "none yet", "described only", "Not seen yet", then "and N more" when rows were
+  left out.
+- **Narrow widths** (CSS only: container queries on the page root, `.hw-page`, so they measure
+  the room beside the sidebar, not the window). Page under 1100 px: the Robot column goes and
+  the robot is a second line of the Part cell; under 900 px the headers go and a row is two
+  lines (name + what it is / graph + status).
 
-## Configuration, local source references and deletion
+## Entry points
+
+- **The rail**: the Hardware item (`Icons.hardware`, tooltip and accessible name "Hardware")
+  between Workspace and Live Bench, icon-only like the others.
+- **Workspace › Add › Hardware**: a row that closes the Add modal and opens this page
+  (`docs/wireflows/workspace.md` §Add).
+- **Live Bench**: "Add hardware" in its add menu and the device banner both open this page.
+- **The plug-in toast** (below), the menu bar and the command palette.
+
+## The plug-in notice and the toast
+
+The shell subscribes once to the project's device rows (`useDeviceStream`: one `GET /detected`
+seed, then the `hardware.devices_changed` frames) and keeps them in `deviceStore`; the page reads
+from there. A device **arrives** when its row becomes an offer: it has a device ref, nothing the
+reader may see binds it (`bound_to` null), the reader has not said "Not now" (`dismissed`), and
+its plug-in inspection has settled (`state` is `inspected`, `busy` or `unknown`; `inspecting`
+waits). What was plugged in before Solus first read the rows raises no toast, but it is an offer
+like any other.
+
+**Each offer is announced to SOL once per app session**, however the page comes to it: it was
+plugged in before Solus started, the toast stood in for it while the page was closed, or it
+arrived with the page open. The renderer keeps the set of announced offers for its lifetime
+(`announced` in `deviceStore`); a sign-out or a project switch empties it, and a device leaves it
+when it stops being an offer, so one that is unplugged and plugged in again is a new arrival. A
+device the person waved off with "Not now" is not an offer and is never announced.
+
+- **While the page is open** (`usePlugInNotice`) an offer not yet announced this session is
+  announced to SOL with `MessageCreate.notice {kind: "device", device_ref}`, 2 s after the page
+  first sees it (a port that flaps inside the 2 s is one arrival; a device that leaves, is bound
+  or is waved off inside them is not announced). A notice waits behind a live SOL turn and is sent when it ends, never
+  cutting it off. The server writes the turn's words and SOL answers with a card in the slot.
+  In the SOL thread the notice is a quiet Solus system line, never the person's bubble
+  (`docs/wireflows/sol-page.md` "Cards in the thread"); an answered question card is a receipt
+  line there, "Answered: <label>". A
+  409 `notice_debounced` and a 422 (the device has gone) leave nothing in the thread; any other
+  failure is not retried. A device that leaves and is plugged in again is a new arrival.
+- **While the page is closed** the shell raises one toast instead: "Something was plugged in" /
+  "Open Hardware to see it." with the action "Open Hardware". No notice is sent then, but the
+  shell remembers which devices the toast was about (`deviceStore.unannounced`; a device leaves
+  that list when it stops being an offer).
+- **Opening the page** for the first time in a session announces every current offer, through
+  the same 2 s wait and the same queue: a device plugged in before Solus started gets its card
+  without a replug, and the toast leads to a card. A later open announces only what is new or
+  remembered from a toast: a device already announced does not start a SOL turn each time the
+  page opens. A notice still inside its 2 s when the page closes (or when React StrictMode
+  remounts it) is remembered as owed, and the next open sends it, once.
+- **"+ Add hardware"** clears the "Not now" list, shows the start card and announces every device
+  that is an offer at that moment again, although it was announced before, after the same 2 s.
+  The server's own 2 s debounce bounds repeated presses.
+
+## Narrow widths
+
+The page's breakpoints measure the page (`.hw-page`), which is the window less the rail and,
+when it is open, the sidebar (360 px by default, 320 to 480 by drag). The sidebar never overlays
+this page.
+
+- Page 1100 px and wider: as drawn.
+- 900 to 1099: the list drops the Robot column into the Part cell as a second line.
+- Under 900: the list's headers go and a row is two lines (name + what it is / graph + status).
+
+## What else still renders hardware
+
+- **The robot sidebar** (`docs/wireflows/workspace.md` §Physical Robot): the parts the robot
+  contains, its connection line, pending link suggestions with Accept and Reject, Rename and the
+  two-step Delete robot (its parts are retained, and appear on this page under "Not on a robot").
+  It lists no unassigned parts and has no Attach: lone parts live on this page, and attaching one
+  to a robot is SOL's (`hardware.add_parts`).
+- **The Hardware CONFIG editor and its private sources panel**, below.
+- **The robot topology graph** (robot → brain → bus → device → part) in the Workspace; a board
+  that is both an upstream device and a downstream brain appears once, and missing facts say
+  unknown.
+
+### Configuration and local source references
 
 Selecting a Hardware CONFIG opens the v2 editor for its configured subject, not a note editor.
 GET is pure; absence remains absent until explicit first save. Save sends the expected version,
@@ -185,51 +327,9 @@ account/project/entity changes, including A→B→A.
 
 Robot deletion uses the sidebar's concrete two-step confirmation, retains parts and independent
 configs, disables obsolete bindings, cancels pending connection work and releases the device.
-The same unified unassigned list exposes retained parts after reload. CONFIG deletion names its
-binding effects and cannot trigger recreation through a later GET.
+CONFIG deletion names its binding effects and cannot trigger recreation through a later GET.
 
-## Acceptance and later review design
-
-The approved later 253/256 two-screen journey unifies detected/library/authored/imported inputs,
-requires review and names for every newly materialized child, supports standalone part creation
-and separates Add from Add and connect. Its observation-generation/revision APIs are not implied
-by the current compatibility cards. Preserve these goals without describing absent controls as
-working features.
-
-Exercise the 250 33-step QA against the merged Electron build, including delete/reclaim,
-serial-less copy, two simultaneous confirms, replug and late-response rejection. Measure
-confirmation response-to-node separately from browser receipt-to-card and physical detection.
-Native picker, calibration relink and actual arm streaming remain unverified until exercised;
-fixture or API success alone does not establish those gates. No motion or flashing is part of QA.
-
-## SOLUSDEV-262 — brain-first presentation (implementation in progress)
-
-The new user brief replaces category zoom with robot → brain → bus → device → part. Category
-chips filter parts while preserving their ancestor context. Host, MCU and onboard cards show
-known software/firmware, channel and downstream wiring; missing facts say unknown. A board
-that is both an upstream device and downstream brain appears once. Existing names and part
-identity persist; new name fields remain empty and no proposal is auto-accepted.
-
-Cards remain canvas-edge/Add-panel controls. Bare-MCU onboarding asks one question at a time:
-what is wired → typed/schematic/probe evidence → review topology → generated-sketch diff →
-approve flash → observe actual telemetry. Probe cards explicitly disclose firmware erasure;
-floating analog values do not assert connected parts. A missing USB serial is visibly explained.
-
-### Reviewed host and local control software
-
-An endpoint brain card offers “Connect this computer” within the existing canvas card. It uses
-the current project's local folder source and the desktop companion identity. If no folder is
-linked, reuse the existing project-folder selector in the card. Only local code/folder entities
-from that source are available as control-software choices; linked remote repositories remain
-references. Show the selected folder/software name before requesting a topology proposal.
-The review shows host → USB → endpoint, the existing downstream wiring, and provenance. A
-separate confirmation applies the graph change; cancel does not apply it. Selection changes,
-project/account changes, or stale evidence invalidate the pending review. Unavailable desktop
-identity/bridge and unsynchronized local sources explain why connection is unavailable.
-The resulting card describes software as a user declaration, not proof of a running process
-or installed telemetry shim. Unknown endpoint type remains unknown unless explicitly declared.
-
-### SOLUSDEV-262 W5 — registered widget roots
+### Registered widget roots (SOLUSDEV-262 W5)
 
 Project overview lifts persisted Live Bench and installed widget registrations into top-level
 nodes, preserving graph UUIDs and underlying contains relations. No installed registration means
@@ -239,62 +339,3 @@ existing tab. Installation/removal refreshes this projection from current projec
 For older projects whose persisted registration layer is absent, Workspace initializes it through
 the existing member-authorized reconcile action, then rereads the graph. Failed initialization
 shows a bounded retry control; a viewer is told that a project member must initialize widgets.
-
-### Local evidence review
-
-Within the existing brain card, select a local evidence file using the native hardware-source
-picker, choose firmware or configuration, then request extraction. Cancellation leaves no review.
-Show candidates with their original pin/address provenance and unknown/conflicting facts. Explain
-that this is source evidence, not verified wiring or running code. No accept/connect/flash action
-is implied by this review. Changing file, kind, brain, robot, project or account invalidates it,
-including A→B→A transitions. Browser preview explains unavailable native selection.
-
-Extraction review shows selectable bounded rows, explicit editable names, and a Confirm evidence
-button. Nothing is preselected or autoaccepted. Empty success says no evidence was found. Confirm
-revalidates the exact source and graph proposal; stale source resets review. Success identifies
-retained/created nodes and refreshes the brain tree. This evidence-only operation does not connect
-hardware, change calibration or deploy code.
-
-### Presence firmware card
-
-An MCU brain offers explicit board profile and heartbeat/probe selection. Preparing displays the
-complete generated source, exact observed target and binary digest; probe explains erasure and
-raw analog/I2C limits. It never claims CH340 identifies an Uno or empty firmware. Request flash
-review sends only the retained plan ID through the existing SOL Build chat and registered
-hardware.flash_presence tool, then shows the existing complete-source confirmation card.
-Preparation and requesting review do not approve a flash. Profiles unavailable or configured
-actuator boards remain blocked. Account/project/brain/profile changes discard stale responses.
-
-A transport-only USB device with no recognized protocol offers Add MCU connection after the user
-enters a name. This records only the observed connection, then reveals its brain/presence card;
-it starts no telemetry and claims neither empty firmware nor a specific board. Named channel
-acceptance sends only explicit user/proposal names; unnamed actuator rows use the server's stable
-RobotName-Motor-N default, not an invented client channel name.
-
-### Host mirror offer
-
-After explicitly accepting a host and local control source, offer a Python loop-file selection
-within that source. The user supplies the control-object name, insertion anchor, method, dictionary
-signal mapping, argument selector when needed, units and loopback receiver port. Show the exact
-`solus_telemetry` mirror snippet before requesting a change. SOL reads the chosen file through
-existing authorized machine tools and offers a fingerprinted before/after diff at the central
-confirmation gate. Missing write authority or an ambiguous anchor prevents the edit. The offer
-never asserts that the shim is installed or that a control process is running. Selection and
-account/project changes invalidate the offer; no remote repository is substituted for a local file.
-
-An unassigned source part offers “Find robot links” as an explicit action in the existing robot
-sidebar. Display a supported candidate by robot name with confidence and evidence, plus separate
-Accept and Decline controls. No match is an honest result. Decline is remembered for the same
-evidence; Accept revalidates before attaching the existing part. Account/project/part changes
-invalidate outstanding results. No source part is autoattached from its name or a GET request.
-# SOLUSDEV-262 wiring completion amendment
-
-Inside the existing MCU presence card, offer three explicit choices: type wiring, use a
-schematic, or inspect a recorded probe. Typed wiring collects channel, pin and input kind.
-Schematic and probe choices select scoped existing evidence and show observations/confidence
-and unresolved devices. A probe first uses the existing erase/code/target confirmation and
-must be recorded before its observations can be selected. Never display floating pins as parts.
-Review, then Accept wiring, then Prepare firmware are separate actions. Changing the profile,
-source, target or declarations invalidates the prepared review. Empty accepted wiring produces
-heartbeat only; named supported inputs produce readings. Existing firmware may be in a linked
-repository; the full erase warning and complete generated source remain visible before flash.

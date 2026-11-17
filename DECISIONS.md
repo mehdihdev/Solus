@@ -1333,3 +1333,17 @@ Amends ADR-023 (adds a fourth plan) and narrows ADR-017's rejected free-forever 
 
 **Rejected:** requiring the account email to be `.edu` (forces users to change their sign-in email); unlimited free credits (unbounded cost); manual document review (support load).
 **Revisit when:** abuse data or the cost per academic user is known.
+
+## ADR-043: SOL changes real hardware only through carded, bounded, local tools
+
+**Status:** Proposed 2026-11-16 (SOLUSDEV-326, P7/P8).
+**Decision:** SOL may write to a servo bus, run a guided calibration step, save calibration to the motors, and run a bounded motion routine on real hardware only through `hardware.bus_write`, `hardware.run_guided`, `hardware.save_calibration` and `hardware.run_routine`. Each:
+
+1. always parks a card (never auto-run, never an owned routine, refused in Guide); the card names the complete concrete action (device, bus, ids, registers + values, or joints with ranges, speed, duration); approval runs the stored args only;
+2. runs only in the local API on the person's own machine, on hardware they onboarded, while the serial owner hands it the port;
+3. is bounded by Solus code, never the model: clamp to driver caps ∩ config limits ∩ calibrated range; torque/current limit set before motion; per-bus lock, acked writes, allowlisted registers only; ID changes with one responder on the bus;
+4. stops on Stop (never gated), a warning finding, a telemetry gap, session end or app exit; holds pose; torque-off is a separate explicit action;
+5. is recorded: each motion a Run (routine, approver, stored args); each write a data event.
+
+SOL never closes a control loop or streams setpoints. Flashing stays on the `code.arduino_upload` token path; `from_sim_run` per the approved ADR-014 amendment.
+**Rejected:** arbitrary register writes; model-driven control loops; motion from a hosted API or on another member's hardware.

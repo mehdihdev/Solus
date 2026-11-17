@@ -14,11 +14,11 @@ from test_sol_reasoner import _ctx, _run
     "mode,expected",
     [
         # model_rounds, tool_calls, timeout_seconds, max_input_tokens (the standard tier's
-        # 24,000-token context budget + 15,000 fixed prompt + 1,000 per allowed tool call),
+        # 24,000-token context budget + 19,000 fixed prompt + 1,000 per allowed tool call),
         # max_model_calls, web_searches, web_fetches (SOLUSDEV-321 P1-T3; P5 fix 1, M3;
-        # SOLUSDEV-322 P8-T4 and the P10 merge of main).
-        (ActionMode.GUIDE, (5, 8, 120, 47_000, 6, 1, 2)),
-        (ActionMode.DO, (16, 24, 300, 63_000, 18, 1, 2)),
+        # SOLUSDEV-322 P8-T4 and the P10 merge of main; SOLUSDEV-326 P2-T5's card tools).
+        (ActionMode.GUIDE, (5, 8, 120, 51_000, 6, 1, 2)),
+        (ActionMode.DO, (16, 24, 300, 67_000, 18, 1, 2)),
     ],
 )
 def test_server_owned_limits(mode: ActionMode, expected: tuple[int, ...]) -> None:
@@ -39,7 +39,7 @@ def test_a_measured_fixed_part_replaces_the_default() -> None:
     from solus_api.orchestration.enums import Complexity
 
     default = turn_limits(ActionMode.GUIDE, Complexity.STANDARD)
-    assert default.max_input_tokens == 24_000 + 15_000 + 8 * 1_000
+    assert default.max_input_tokens == 24_000 + 19_000 + 8 * 1_000
     big = turn_limits(ActionMode.GUIDE, Complexity.STANDARD, fixed_tokens=20_000)
     assert big.max_input_tokens == 24_000 + 20_000 + 8 * 1_000
     assert big == replace(default, max_input_tokens=big.max_input_tokens)
@@ -62,6 +62,7 @@ def test_the_default_fixed_part_tracks_what_the_runner_measures(tmp_path: Path) 
     from solus_api.agent.turn_limits import FIXED_PROMPT_TOKENS
     from solus_api.connectors.registry import ConnectorRegistry
     from solus_api.connectors.secrets import InMemorySecretStore
+    from solus_api.graph.live import LiveHub
     from solus_api.models import SolMode
     from solus_api.orchestration import gateway
     from solus_api.orchestration.type_estimator import estimate_tokens
@@ -84,10 +85,20 @@ def test_the_default_fixed_part_tracks_what_the_runner_measures(tmp_path: Path) 
         presence_service=object(),
         companion_deployment_service=object(),
         scene_enqueue=enqueue,
+        # SOLUSDEV-326 P2-T4: a local API's hardware reads, and the note that names them; P2-T5:
+        # with the app's hub, its card tools too.
+        hardware_local=object(),
+        graph_hub=LiveHub(),
     )
     nonce = prompt.new_nonce()
     system = prompt.system_prompt(
-        SolMode.GUIDE, None, None, with_screenshot=True, action_mode=ActionMode.DO, nonce=nonce
+        SolMode.GUIDE,
+        None,
+        None,
+        with_screenshot=True,
+        action_mode=ActionMode.DO,
+        nonce=nonce,
+        hardware=True,
     )
     tools = prompt.tool_specs(model_visible(registry.list()), nonce=nonce)
     estimator = gateway.default_orchestration_config().type_estimator

@@ -9,7 +9,11 @@ import { describe, expect, it } from 'vitest'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const renderer = path.resolve(here, '../../..')
-const SHARED_DIRS = [here, path.join(renderer, 'widgets/livebench/recognition')]
+const SHARED_DIRS = [
+  here,
+  path.join(renderer, 'features/hardware'),
+  path.join(renderer, 'widgets/livebench/recognition')
+]
 const VENDOR_WORDS =
   /\b(feetech|dynamixel|lerobot|sts3215|sts3250|scs0009|so-?10[01]|px4|pixhawk|odrive|myactuator|mavlink|unitree|ur5e?|arduino|teensy|esp32|ch343|cp210x|ft232|pl2303|xl330|xm430|robotis|ttyUSB|ttyACM)\b|\.ino\b/i
 

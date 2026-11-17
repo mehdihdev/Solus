@@ -45,6 +45,29 @@ async def test_snapshot_preserves_six_channels_and_never_resolves_on_read(
     resolve.assert_not_called()
 
 
+async def test_snapshot_labels_the_configs_channel_display() -> None:
+    """SOLUSDEV-326: display and display range ride the frame beside `display_role`."""
+    project = uuid.uuid4()
+    plumbing = TelemetryPlumbing(InMemoryTelemetryBuffer(), DictEntityResolver({}))
+    await plumbing.ingest(
+        project,
+        TelemetryPacket(
+            device_id="arm", timestamp=datetime.now(UTC), values={"j": 1.0, "k": 2.0}, units={}
+        ),
+    )
+    manager = MagicMock()
+    manager.get.return_value = SimpleNamespace(device_ids=["arm"], status="active")
+    manager.channel_roles.return_value = {"j": "primary"}
+    angle = {"display": "angle", "range": {"min": -90.0, "max": 90.0}}
+    manager.channel_display.return_value = {"j": angle}
+    frame = await snapshot(plumbing, manager, project, uuid.uuid4(), set())
+    series = {row["signal"]: row for row in frame["devices"][0]["signals"]}
+    assert series["j"]["display_role"] == "primary"
+    assert {key: series["j"][key] for key in angle} == angle
+    assert not {"display", "range", "display_role"} & set(series["k"])
+    manager.channel_display.assert_called_with(project, "arm")
+
+
 def test_socket_auth_and_full_snapshot(bridge_app: FastAPI) -> None:
     client = TestClient(bridge_app)
     headers = bearer(**ALICE)

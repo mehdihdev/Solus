@@ -99,6 +99,7 @@ describe('surfaces', () => {
   it.each([
     [{ name: 'home' }, 'home'],
     [{ name: 'bench' }, 'bench'],
+    [{ name: 'hardware' }, 'hardware'],
     [{ name: 'settings' }, 'settings'],
     [{ name: 'alert', alertId: 'a' }, 'alert'],
     [{ name: 'ext-page', slug: 'bom' }, 'extension']
@@ -118,6 +119,7 @@ describe('surfaces', () => {
 
   it('has a human label for every surface', () => {
     expect(SURFACE_LABELS.bench).toBe('Live Bench')
+    expect(SURFACE_LABELS.hardware).toBe('Hardware')
     expect(SURFACE_LABELS.extension).toBe('this extension')
   })
 })

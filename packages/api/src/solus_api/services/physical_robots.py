@@ -1,7 +1,8 @@
 """Manual robot instances and durable ownership evidence (Workspace Phase 4).
 
-The transaction-scoped creation method is also the future R2 detection hook.
-It always creates a new instance; callers authorize, commit and publish hints.
+A robot contains its parts directly (SOLUSDEV-326): `ownership_edge` is the one ownership
+rule every reader uses. The transaction-scoped creation method is also the future R2
+detection hook. It always creates a new instance; callers authorize, commit and publish hints.
 """
 
 import uuid
@@ -10,26 +11,16 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, TypeAdapter, model_validator
 from pydantic.json_schema import JsonSchemaValue, SkipJsonSchema
-from sqlalchemy import String, cast, select, union
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
-from sqlalchemy.sql.selectable import CompoundSelect, Select
+from sqlalchemy.sql.selectable import Select
 from uuid6 import uuid7
 
 from solus_api.core.errors import APIError
-from solus_api.graph.edges import write_edge
+from solus_api.graph.read_scope import visibility_attrs
 from solus_api.models import Domain, GraphEdge, GraphEntity, Project, utcnow
 
-ROBOT_CATEGORIES = {
-    "sensors": "Sensors",
-    "actuators": "Actuators / motors",
-    "controllers": "Controllers",
-    "end_effectors": "End effectors",
-    "power": "Power",
-    "structure": "Structure",
-    "wiring": "Wiring",
-}
 RobotName = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512, strict=True)
 ]
@@ -86,58 +77,42 @@ class RobotRemoval:
     counts: GraphChangeCounts
 
 
-def _container_ids(project_id: uuid.UUID, *, deleted: bool) -> CompoundSelect[tuple[uuid.UUID]]:
-    """Only explicitly owned, correctly typed manual containers can own parts.
+def _container_ids(project_id: uuid.UUID, *, deleted: bool) -> Select[tuple[uuid.UUID]]:
+    """Manual, source-less Physical Robot roots: the only owners of parts.
 
     The same definition is used for live ownership and deleted evidence. There
     is no recursive walk through the CAD/code/fingerprint graph.
     """
-    robot = aliased(GraphEntity)
-    category = aliased(GraphEntity)
-    ownership = aliased(GraphEdge)
-    roots = select(robot.id).where(
-        robot.project_id == project_id,
-        robot.kind == "physical_robot",
-        robot.origin == "manual",
-        robot.source_id.is_(None),
-        robot.deleted_at.is_not(None) if deleted else robot.deleted_at.is_(None),
+    return select(GraphEntity.id).where(
+        GraphEntity.project_id == project_id,
+        GraphEntity.kind == "physical_robot",
+        GraphEntity.origin == "manual",
+        GraphEntity.source_id.is_(None),
+        GraphEntity.deleted_at.is_not(None) if deleted else GraphEntity.deleted_at.is_(None),
     )
-    categories = (
-        select(category.id)
-        .join(ownership, ownership.dst_id == category.id)
-        .join(robot, robot.id == ownership.src_id)
-        .where(
-            robot.id.in_(roots),
-            category.project_id == project_id,
-            category.kind == "robot_category",
-            category.origin == "manual",
-            category.source_id.is_(None),
-            category.attrs["robot_id"].astext == cast(robot.id, String),
-            category.attrs["category"].astext.in_(ROBOT_CATEGORIES),
-            category.deleted_at.is_not(None) if deleted else category.deleted_at.is_(None),
-            ownership.project_id == project_id,
-            ownership.origin == "manual",
-            ownership.source_id.is_(None),
-            ownership.relation_type == "contains",
-            ownership.deleted_at.is_not(None) if deleted else ownership.deleted_at.is_(None),
-        )
+
+
+def ownership_edge(project_id: uuid.UUID, *, deleted: bool = False) -> ColumnElement[bool]:
+    """THE ownership rule (SOLUSDEV-326): a `graph_edge` row is a robot owning a part when it
+    is a live manual (source-less) `contains` edge from a live manual Physical Robot root.
+    `deleted` reads the durable evidence of removed ownership: deleted edges, deleted roots."""
+    return and_(
+        GraphEdge.project_id == project_id,
+        GraphEdge.relation_type == "contains",
+        GraphEdge.origin == "manual",
+        GraphEdge.source_id.is_(None),
+        GraphEdge.deleted_at.is_not(None) if deleted else GraphEdge.deleted_at.is_(None),
+        GraphEdge.src_id.in_(_container_ids(project_id, deleted=deleted)),
     )
-    return union(roots, categories)
 
 
 def orphaned_robot_part_filter(project_id: uuid.UUID) -> ColumnElement[bool]:
     """Filter live entity reads by durable removed ownership, excluding live owners."""
 
     def targets(*, deleted: bool) -> Select[tuple[uuid.UUID]]:
-        return select(GraphEdge.dst_id).where(
-            GraphEdge.project_id == project_id,
-            GraphEdge.origin == "manual",
-            GraphEdge.source_id.is_(None),
-            GraphEdge.relation_type == "contains",
-            GraphEdge.deleted_at.is_not(None) if deleted else GraphEdge.deleted_at.is_(None),
-            GraphEdge.src_id.in_(_container_ids(project_id, deleted=deleted)),
-        )
+        return select(GraphEdge.dst_id).where(ownership_edge(project_id, deleted=deleted))
 
+    # `robot_category` is a retired legacy kind (a32600000001); excluding it stays harmless.
     return (
         GraphEntity.id.in_(targets(deleted=True))
         & GraphEntity.id.not_in(targets(deleted=False))
@@ -160,8 +135,17 @@ class PhysicalRobotService:
             raise APIError(404, "not_found", "Project not found")
         return project
 
-    async def create(self, project_id: uuid.UUID, name: str | None = None) -> GraphEntity:
-        """Create one complete instance, without committing or calling a provider."""
+    async def create(
+        self,
+        project_id: uuid.UUID,
+        name: str | None = None,
+        *,
+        in_graph: bool = True,
+        onboarded_by: uuid.UUID | None = None,
+    ) -> GraphEntity:
+        """Create one robot root, without committing or calling a provider. Its parts join
+        later through `contains` edges from this root. Out of the graph (SOLUSDEV-326) only its
+        onboarder sees it, and the parts, brains and config nodes it gets follow it."""
         project = await self._lock_project(project_id)
         root = GraphEntity(
             id=uuid7(),
@@ -170,35 +154,14 @@ class PhysicalRobotService:
             domain=Domain.PROJECT,
             origin="manual",
             name=TypeAdapter(RobotName).validate_python(project.name if name is None else name),
-            attrs={"hardware_config_ref": None, "transport_refs": None},
+            attrs={
+                "hardware_config_ref": None,
+                "transport_refs": None,
+                **visibility_attrs(in_graph=in_graph, onboarded_by=onboarded_by),
+            },
         )
-        categories = [
-            GraphEntity(
-                id=uuid7(),
-                project_id=project_id,
-                kind="robot_category",
-                domain=Domain.PROJECT,
-                origin="manual",
-                name=label,
-                attrs={"robot_id": str(root.id), "category": key},
-            )
-            for key, label in ROBOT_CATEGORIES.items()
-        ]
-        self.session.add_all([root, *categories])
-        # No ORM relationships define ordering: persist endpoints before edges.
+        self.session.add(root)
         await self.session.flush()
-        for category in categories:
-            await write_edge(
-                self.session,
-                project_id=project_id,
-                src_id=root.id,
-                dst_id=category.id,
-                relation_type="contains",
-                origin="manual",
-                confidence=1.0,
-                evidence=[],
-                created_by=None,
-            )
         return root
 
     async def _editable_root(
@@ -240,28 +203,9 @@ class PhysicalRobotService:
         self, project_id: uuid.UUID, entity_id: uuid.UUID, version: int
     ) -> RobotRemoval:
         root = await self._editable_root(project_id, entity_id, version)
-        # Restrict the shared live-container definition to this root's declared
-        # children. A same-name or foreign robot's category is never ours.
-        categories = list(
-            await self.session.scalars(
-                select(GraphEntity).where(
-                    GraphEntity.id.in_(_container_ids(project_id, deleted=False)),
-                    GraphEntity.kind == "robot_category",
-                    GraphEntity.attrs["robot_id"].astext == str(root.id),
-                )
-            )
-        )
-        container_ids = {root.id, *(category.id for category in categories)}
         edges = list(
             await self.session.scalars(
-                select(GraphEdge).where(
-                    GraphEdge.project_id == project_id,
-                    GraphEdge.src_id.in_(container_ids),
-                    GraphEdge.relation_type == "contains",
-                    GraphEdge.origin == "manual",
-                    GraphEdge.source_id.is_(None),
-                    GraphEdge.deleted_at.is_(None),
-                )
+                select(GraphEdge).where(ownership_edge(project_id), GraphEdge.src_id == root.id)
             )
         )
         retained = list(
@@ -269,7 +213,7 @@ class PhysicalRobotService:
                 select(GraphEntity.id)
                 .where(
                     GraphEntity.project_id == project_id,
-                    GraphEntity.id.in_({edge.dst_id for edge in edges} - container_ids),
+                    GraphEntity.id.in_({edge.dst_id for edge in edges}),
                     GraphEntity.deleted_at.is_(None),
                     GraphEntity.kind.not_in(("physical_robot", "robot_category")),
                 )
@@ -280,16 +224,13 @@ class PhysicalRobotService:
 
         await disable_part_bindings(self.session, project_id, [], retired_owner_ids=[root.id])
         now = utcnow()
-        for container in (root, *categories):
-            container.deleted_at = now
-            container.version += 1
+        root.deleted_at = now
+        root.version += 1
         for edge in edges:
             edge.deleted_at = now
         await self.session.flush()
         return RobotRemoval(
             root=root,
             retained_part_ids=retained,
-            counts=GraphChangeCounts(
-                entities_deleted=len(container_ids), relations_deleted=len(edges)
-            ),
+            counts=GraphChangeCounts(entities_deleted=1, relations_deleted=len(edges)),
         )

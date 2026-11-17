@@ -9,10 +9,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from solus_api.core.errors import APIError
+from solus_api.graph.read_scope import current_scope, flags_of
 from solus_api.livebench.runs.models import RunManifest, RunSummary, encode_manifest, parse_manifest
-from solus_api.models import Artifact, Domain, GraphEntity, SolusSection, utcnow
-from solus_api.services.artifacts import create_artifact, fetch_artifact_bytes
+from solus_api.models import (
+    Artifact,
+    Domain,
+    GraphEntity,
+    SolusEntry,
+    SolusEntryKind,
+    SolusSection,
+    utcnow,
+)
+from solus_api.services.artifacts import CAPTURE_TOOL, create_artifact, fetch_artifact_bytes
 from solus_api.services.solus_config import add_artifact_entry
+from solus_api.services.solus_graph import lock_project
 from solus_api.storage import ArtifactStore
 
 RUN_KIND = "bench_run"
@@ -32,7 +42,8 @@ async def record(
     if lock:
         query = query.with_for_update().execution_options(populate_existing=True)
     entity = await session.scalar(query)
-    if entity is None:
+    # SOLUSDEV-326: a run of hardware another member keeps out of the graph is unknown here.
+    if entity is None or current_scope(project_id).hides(entity.attrs):
         raise APIError(404, "not_found", "Run not found")
     return entity
 
@@ -117,13 +128,26 @@ async def save(
         created_by=user_id,
         data=data,
         media_type="application/vnd.solus.bench-run+json",
-        source_tool="bench.capture",
+        source_tool=CAPTURE_TOOL,
         tool_call_id=None,
     )
     # Interrupted runs must survive the transient-artifact TTL as well.
     artifact.retained = True
     old_id = entity.attrs.get("checkpoint_id")
     info.packet_count = len(manifest.packets)
+    # SOLUSDEV-326 (docs/api/hardware.md §1a): a run and its filing are seen by whoever sees its
+    # robot. Its keys are read under the locks Add/Remove from graph flips a robot's runs under:
+    # the project's for a final save, the record's own for a checkpoint.
+    if final:
+        await lock_project(session, entity.project_id)
+    flags = flags_of(
+        await session.scalar(
+            select(GraphEntity.attrs).where(
+                GraphEntity.id == info.robot_id, GraphEntity.project_id == entity.project_id
+            )
+        )
+        or {}
+    )
     if final:
         await add_artifact_entry(
             session,
@@ -133,9 +157,11 @@ async def save(
             artifact_id=artifact.id,
             name=f"{info.name}.bench-run.json",
             created_by=user_id,
+            attrs=flags,
         )
         info.artifact_id = artifact.id
     entity.attrs = {
+        **flags,
         "summary": info.model_dump(mode="json", exclude=FLAGS),
         "checkpoint_id": str(artifact.id),
         "created_by": str(user_id),
@@ -197,6 +223,41 @@ async def load(
         max_bytes=8 * 1024 * 1024,
     )
     return await asyncio.to_thread(parse_manifest, data)
+
+
+async def robot_runs(session: AsyncSession, project_id: UUID, robot_id: UUID) -> list[GraphEntity]:
+    """The robot's run records and the `.solus` documents its finished runs were filed as: what
+    Add/Remove from graph moves with the robot (SOLUSDEV-326). A record is read under its row
+    lock, since a checkpoint rewrites it whole."""
+    runs = list(
+        await session.scalars(
+            select(GraphEntity)
+            .where(
+                GraphEntity.project_id == project_id,
+                GraphEntity.kind == RUN_KIND,
+                GraphEntity.origin == "system",
+                GraphEntity.deleted_at.is_(None),
+                GraphEntity.attrs["summary"]["robot_id"].astext == str(robot_id),
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    filed = [run.attrs["summary"].get("artifact_id") for run in runs]
+    documents = await session.scalars(
+        select(GraphEntity)
+        .join(SolusEntry, SolusEntry.entity_id == GraphEntity.id)
+        .where(
+            SolusEntry.project_id == project_id,
+            SolusEntry.kind == SolusEntryKind.ARTIFACT,
+            SolusEntry.artifact_id.in_([UUID(artifact) for artifact in filed if artifact]),
+            SolusEntry.deleted_at.is_(None),
+            GraphEntity.project_id == project_id,
+            GraphEntity.deleted_at.is_(None),
+        )
+        .execution_options(populate_existing=True)
+    )
+    return [*runs, *documents]
 
 
 def new_record(project_id: UUID, info: RunSummary, user_id: UUID) -> GraphEntity:

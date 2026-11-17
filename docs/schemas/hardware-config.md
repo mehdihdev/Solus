@@ -1,7 +1,8 @@
 # Hardware configuration storage and migration
 
-**Last updated:** 2026-09-07. **Status:** approved design for SOLUSDEV-251; implementation and
-migration results must be recorded separately in the completion report.
+**Last updated:** 2026-11-15 (SOLUSDEV-326: a stored config lists its brains). **Status:**
+approved design for SOLUSDEV-251; implementation and migration results must be recorded
+separately in the completion report.
 **Authority:** ADR-034 amendment 2026-09-07; [hardware routes](../api/hardware.md),
 [hardware architecture](../architecture/hardware-onboarding.md),
 [private local-state contract](../contracts/local-state.md).
@@ -35,20 +36,20 @@ The stored v2 type is `EntityHardwareConfig`; `ConfigDraft` omits entity_id for 
 `HardwareConfig` v1 remains the explicit runtime/plugin compatibility type. No protected
 connector, focus, driver or telemetry interface changes.
 
-| Field              | Shape / bound                                                                                                                                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_version`   | Required literal integer 2.                                                                                                                                                                                      |
-| `entity_id`        | Required real subject UUID; agrees with route and configured_entity_id.                                                                                                                                          |
-| `component`        | Optional/null; existing PartConfig fields for this subject: calibration, limits, telemetry, firmware, lifecycle.                                                                                                 |
-| `identity`         | Optional portable `{kind,binding,vid?,pid?}`; kinds usb_serial, usb_can, ble, bt_classic, wifi, ethernet, ros2; binding 1–128 non-whitespace characters without slash; VID/PID 0–65535. No local last_seen_path. |
-| `protocol`         | Optional driver slug (1–64 characters) and at most 32 scalar parameters, validated against the installed driver schema before connection.                                                                        |
-| `bus_map`          | At most 256 `{protocol,address,part_entity_id?,model?}` entries; protocol/address 1–64 characters, address without whitespace, model at most 128. Targets must be eligible live parts in this project.           |
-| `disambiguated_by` | Optional literal user; records reviewed choice, never permanent ambiguous-port consent.                                                                                                                          |
-| `provenance`       | Dotted field path → `{by,source?}`; existing library/repo/user/sol/detected values. Prefixes cover descendants, longest prefix wins. Source is a portable label/opaque reference, at most 512 characters.        |
+| Field              | Shape / bound                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schema_version`   | Required literal integer 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `entity_id`        | Required real subject UUID; agrees with route and configured_entity_id.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `component`        | Optional/null; existing PartConfig fields for this subject: calibration, limits, telemetry, firmware, lifecycle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `identity`         | List (at most 16, default empty) of brains `{kind,binding?,via?,protocol?}` (SOLUSDEV-326). `kind` host\|mcu\|onboard (default host). `binding` portable `{kind,binding,vid?,pid?}`; kinds usb_serial, usb_can, ble, bt_classic, wifi, ethernet, ros2; binding 1–128 non-whitespace characters without slash; VID/PID 0–65535; no local last_seen_path; absent until a device is bound. Bound brains have unique device refs. `via` names another brain's device ref in this config; no brain is reached through itself. `protocol` is that brain's driver slug (1–64 characters) and at most 32 scalar parameters, validated against the installed driver schema before connection. |
+| `bus_map`          | At most 256 `{protocol,address,part_entity_id?,model?,brain?}` entries; protocol/address 1–64 characters, address without whitespace, model at most 128. Targets must be eligible live parts in this project. `brain` is the device ref of the brain the row sits behind; null means the config's only brain and is refused when there are several. Uniqueness is per (brain, protocol, address): the same address on two brains is two endpoints.                                                                                                                                                                                                                                   |
+| `disambiguated_by` | Optional literal user; records reviewed choice, never permanent ambiguous-port consent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `provenance`       | Dotted field path → `{by,source?}`; existing library/repo/user/sol/detected values. Prefixes cover descendants, longest prefix wins. Source is a portable label/opaque reference, at most 512 characters.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 Component bounds preserve the existing model: calibration mode is optional
 `degrees|range_0_100|range_m100_100|linear|raw`, calibration and limit values each have at most
-64 numeric entries; telemetry has at most 64 `{name,unit?}` channels (name 1–128, unit ≤32);
+64 numeric entries; telemetry has at most 64 `{name,unit?,range?,display?}` channels (name 1–128,
+unit ≤32; see Channels below);
 firmware uses the existing scalar dictionary; lifecycle is
 `planned|ordered|received|installed|live`. Calibration retains `owner:repo|solus` and portable
 optional source. Numbers must be finite. Unknown fields are rejected throughout. The full
@@ -69,10 +70,69 @@ Verified calibration values remain shared. The opaque reference resolves to the 
 account's private picker-authorized source only on the local machine; changed digest requires
 review. Shared history, events and model context must not expose old or new private paths.
 
+### Brains (SOLUSDEV-326)
+
+The pre-326 shape (one `identity`, a top-level `protocol`) is still read: a before-validator on
+`ConfigDraft` (so on every validated read, `config_of`, the per-entity routes and the creation
+body) upgrades it to `identity: [{kind: host, binding, via: null, protocol}]`, or `[]` when it
+named neither. A body whose `provenance` is not an object of paths is left as sent, so field
+validation refuses it (422). An identity-less driver (a library platform) stays as one unbound brain rather
+than being dropped. Records move with the leaves: `identity` → `identity.0`,
+`identity.<f>` → `identity.0.binding.<f>`, `protocol[.<f>]` → `identity.0.protocol[.<f>]`, and
+the new `identity.0.kind` leaf takes the record that covered the old identity (else the
+driver's), so every longest-prefix lookup finds the record it found before; stale records of an
+absent identity are dropped. `.solus` reads (`serialize_entry`) return the upgraded document.
+`schema_version` stays 2 and stored rows are not rewritten; the next write stores the list.
+
+The driver input stays the v1 `HardwareConfig` with exactly one identity. `resolve_runtime_config`
+returns the v1 aggregate its readers know (identity/protocol of the FIRST brain, every active
+bus row with its `brain`, every part) and `per_brain()`: one v1 document per brain, its rows
+only (no `brain` key) and, when there are several brains, only the parts those rows map. A
+one-brain robot's single document equals its aggregate byte for byte, so digests and driver
+documents are unchanged. Sessions open the first brain; brains 2..N get no port hint.
+
+The v1 adapter (`put_config`) treats a v1 document as speaking for ONE brain and merges it into
+the stored list by device ref: the brain with that device is updated, else the first unbound
+brain is bound, else the device joins as a new brain; a document without an identity speaks for
+the first brain. It never drops another brain, and rows the document leaves implicit name its
+brain once there are several. A change v1 cannot express (orphaning a brain's rows) is 409
+`config_upgrade_required`; removing or reordering brains is a per-entity PUT. An unchanged round
+trip (same values and the same record on every leaf, however keyed) writes no version. A config
+names only parts everyone who can see it can see (api/hardware.md §1a).
+`hand_over_brain` moves one brain and its rows from one subject's config to another in the
+caller's transaction (a lone part's board joining a robot) while one config per device holds.
+A result the target cannot hold (a 17th brain, a `via` naming a brain that stays behind) is 422
+`validation_error` with the reason. A target whose only brain is unbound and owns implicit rows
+is 409 `config_conflict`.
+
+Revision a26000000002 reads payloads with a frozen copy of the pre-326 v2 schema and splitter
+(`migrations/hardware_config_v2.py`), never the live model.
+
+### Channels (SOLUSDEV-326)
+
+A telemetry channel may say how the Live Bench draws it. Both fields are optional and additive:
+
+- `range` `{min, max}`: a DISPLAY range in the channel's unit. Both numbers are finite and
+  `min < max`; anything else is refused (422 on the routes). The chart spans at least this range,
+  and a reading outside it widens the chart, never hides it. It is never a motion bound:
+  envelopes, limits and calibration keep their own precedence.
+- `display`: `plot|angle|orientation|video|scan|points|state|text`, default `plot`. It is never
+  null; `null` is refused like any unknown value.
+
+An absent range and a `plot` display, whether defaulted or written out, are left out of every
+dump. A plain channel therefore reads, digests, and asks for provenance exactly as before. A set
+range or a non-`plot` display is a valued leaf and needs its record, as any other leaf does
+(`component.telemetry.<i>.display`, `component.telemetry.<i>.range.min|max`, or a covering
+prefix). The v1 driver document carries a part's channels whole. The robot connection
+publishes each channel's non-default display and range as the `channel_display` device fact,
+keyed like the driver's channel roles, and the bench series carries them
+(`docs/contracts/telemetry-packet.md` §2a).
+
 ### Derived binding relations
 
 A manual `binds` relation runs from the CONFIG graph node to each endpoint part with attributes
-`{device_ref,address,protocol,config_version,enabled,disabled_reason?}`. It is a derived,
+`{device_ref,address,protocol,config_version,enabled,disabled_reason?}`: one bare endpoint per
+bound brain and one per mapped row, on the brain the row sits behind. It is a derived,
 validated connection index; `configures` remains subject authority. Validate project scope,
 current CONFIG version, source config ownership and eligible target before using an enabled
 binding. Runtime assembly and the resolver use only current enabled unambiguous bindings.

@@ -22,7 +22,7 @@ Two doors need the same thing: a requirement in (typed, or derived from a CAD as
 with trade-offs out, filtered by the project's compliance/style rules with the reasons visible, and
 a selection that enters the graph as a PLANNED part whose vendor CAD model can be fetched. Built
 once as a core service + ARQ job; the doors differ only in where the part lands (`door`:
-`workspace` lets the caller pick a robot category; `bom` does not).
+`workspace` lets the caller pick the robot that contains it; `bom` does not).
 
 Honesty rules the whole surface:
 
@@ -43,15 +43,15 @@ Honesty rules the whole surface:
 All routes: `ProjectCtx` (member of the project's team). Writes require `member`
 (`require_role(ctx, Role.MEMBER)`; viewers get 403). Every list and read is project-scoped.
 
-| Method | Path                                  | Description                                                                                                                                               | Metering                        |
-| ------ | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
-| GET    | `/rules`                              | The effective rules: defaults ← repo `.solus` `[ext.sourcing]` (the `solus_project_toml` connector row) ← the project's manual `sourcing_rules` entity     | none                            |
-| PUT    | `/rules`                              | Save the project-level layer (the manual `sourcing_rules` entity); returns the effective set. Member floor.                                               | none                            |
-| POST   | `/torque`                             | Derive torque from an assembly (`assembly_entity_id`, optional `pivot_mm`, `masses`) or a spec (`load_kg` + `arm_m`); `safety_factor` 1.0–10 (default 1.5). Shares the 10/min/user budget | none                            |
-| POST   | `/requests`                           | `202` — create a sourcing request + `SOURCING` Job; ARQ `sourcing_request` (inline when no redis). 10/min/user (`429` + `Retry-After`). Member floor.     | one `COMPATIBILITY_RESEARCH` completion, to the caller |
-| GET    | `/requests`                           | The project's requests, newest first (`limit` ≤ 100)                                                                                                      | none                            |
-| GET    | `/requests/{request_id}`              | One request (poll target). `404` across projects.                                                                                                        | none                            |
-| POST   | `/requests/{request_id}/select`       | `201` — the chosen candidate becomes a manual `part` (lifecycle `planned`) under `category_entity_id` (workspace door) or the project; `404` unknown candidate. Member floor. | none                            |
+| Method | Path                            | Description                                                                                                                                                                                | Metering                                               |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| GET    | `/rules`                        | The effective rules: defaults ← repo `.solus` `[ext.sourcing]` (the `solus_project_toml` connector row) ← the project's manual `sourcing_rules` entity                                     | none                                                   |
+| PUT    | `/rules`                        | Save the project-level layer (the manual `sourcing_rules` entity); returns the effective set. Member floor.                                                                                | none                                                   |
+| POST   | `/torque`                       | Derive torque from an assembly (`assembly_entity_id`, optional `pivot_mm`, `masses`) or a spec (`load_kg` + `arm_m`); `safety_factor` 1.0–10 (default 1.5). Shares the 10/min/user budget  | none                                                   |
+| POST   | `/requests`                     | `202` — create a sourcing request + `SOURCING` Job; ARQ `sourcing_request` (inline when no redis). 10/min/user (`429` + `Retry-After`). Member floor.                                      | one `COMPATIBILITY_RESEARCH` completion, to the caller |
+| GET    | `/requests`                     | The project's requests, newest first (`limit` ≤ 100)                                                                                                                                       | none                                                   |
+| GET    | `/requests/{request_id}`        | One request (poll target). `404` across projects.                                                                                                                                          | none                                                   |
+| POST   | `/requests/{request_id}/select` | `201` — the chosen candidate becomes a manual `part` (lifecycle `planned`) contained by `robot_entity_id` (workspace door) or the project; `404` unknown candidate or robot. Member floor. | none                                                   |
 
 ### 2.1 Bodies
 
@@ -66,8 +66,10 @@ default 1.5). `422 validation_error` when neither an assembly nor a load+arm is 
 never stored; never echoed back). `422 validation_error` when there is no ask at all: blank `text`,
 no load+arm, no assembly — a metered call needs a requirement (the desktop refuses the same).
 
-`SelectBody`: `candidate_id` (16 hex) · `category_entity_id?: uuid` (must be a `robot_category`
-of this project) · `quantity` (1–100 000, default 1).
+`SelectBody` (extra forbidden): `candidate_id` (16 hex) · `robot_entity_id?: uuid` (a live manual
+Physical Robot root of this project, else `404`; SOLUSDEV-326 replaced `category_entity_id`) ·
+`quantity` (1–100 000, default 1). SOLUSDEV-326 P2 removed the `category` that only picked the
+domain: a body naming one is `422`.
 
 `SourcingRules` (GET/PUT): `excluded_suppliers: [{name, reason}]` · `required_certifications:
 [str]` · `max_voltage_v: number | null` · `allowed_protocols: [str]` · `preferred_suppliers: [str]`.
@@ -91,11 +93,12 @@ optimizes_for, gives_up, notes, grounding: cited|unverified, flags: [str]}`. Non
 are dropped at parse. At most 8 candidates per request.
 
 `POST /requests` → `{request, job_id}`. `POST …/select` → `{entity, request}` where `entity` is
-the new part: `origin manual`, `type part`, domain `electrical` for sensors/controllers/power/wiring
-categories else `mechanical`, `properties.lifecycle = "planned"`, `properties.sourcing = {request_id,
-candidate_id, grounding, optimizes_for, gives_up, source_url}`, `properties.vendor_cad_url`,
-`properties.supplier/unit_cost/currency/part_number/quantity` when known; a `contains` edge from
-the category when one was given. The BOM's design-row reader shows the manual part's own
+the new part: `origin manual`, `type part`, domain `mechanical`, `properties.lifecycle = "planned"`,
+`properties.sourcing = {request_id, candidate_id, grounding, optimizes_for, gives_up, source_url}`,
+`properties.vendor_cad_url`, `properties.supplier/unit_cost/currency/part_number/quantity` when
+known; with a robot, `properties.robot_id`, the robot's visibility keys (`in_graph`/`onboarded_by`,
+[hardware §1a](hardware.md)) and a manual `contains` edge from the robot root. The
+BOM's design-row reader shows the manual part's own
 lifecycle/supplier/cost, so the part appears PLANNED in the BOM without an overlay.
 
 A child of the assembly that is itself an assembly counts like any part: it contributes when the

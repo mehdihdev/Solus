@@ -31,12 +31,14 @@ from types import ModuleType
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from solus_api.agent.interfaces import TelemetryWindow, TelemetryWindowSummary
 from solus_api.connectors.live import BatchCallback, LiveStatus
 from solus_api.graph.packet import TelemetryPacket
+from solus_api.graph.read_scope import system_view
 from solus_api.graph.telemetry import TelemetryPlumbing
+from solus_api.hardware.config import TelemetryChannel
 from solus_api.models import utcnow
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,17 @@ DEFAULT_WINDOW_SECONDS = 1.0
 #: reads), and how long a stop waits for the session's window evaluator once it is cancelled.
 DEFAULT_CHANNELS_KEPT = 32
 EVALUATOR_STOP_SECONDS = 5.0
+
+
+def _presentable(value: object) -> bool:
+    """A `channel_display` entry a configured channel could have declared."""
+    if not isinstance(value, dict) or not value or not set(value) <= {"display", "range"}:
+        return False
+    try:
+        TelemetryChannel.model_validate({"name": "channel", **value})
+    except ValidationError:
+        return False
+    return True
 
 
 class TooManySessionsError(Exception):
@@ -73,6 +86,29 @@ class AmbiguousDeviceError(Exception):
     def __init__(self, candidates: list[Any]) -> None:
         super().__init__(f"{len(candidates)} devices share this identity")
         self.candidates = candidates
+
+
+#: What holds a serial device in the local runner (SOLUSDEV-326, livebench's serial owner).
+SerialPurpose = Literal["session", "interrogation", "upload"]
+_HELD_BY: dict[str, str] = {
+    "session": "a Live Bench session has it open",
+    "interrogation": "Solus is listening to it",
+    "upload": "firmware is being uploaded to it",
+}
+
+
+class DeviceBusyError(Exception):
+    """Something else has the device open — busy is never silence (SOLUSDEV-326). `holder` names
+    what, for the caller's own holder (the same member, in the same project); None for anyone
+    else's — a teammate's, another project's, another program's — which is never named."""
+
+    def __init__(self, device_ref: str, holder: SerialPurpose | None) -> None:
+        held = _HELD_BY.get(holder or "", "something else has it open")
+        super().__init__(f"{device_ref} is busy: {held}.")
+        self.device_ref, self.holder = device_ref, holder
+
+    def details(self) -> list[dict[str, str | None]]:
+        return [{"device_ref": self.device_ref, "holder": self.holder}]
 
 
 def load_local() -> ModuleType | None:
@@ -188,6 +224,8 @@ class _Session:
     last_summary: TelemetryWindowSummary | None = None
     robot_entity_id: UUID | None = None
     owner_user_id: UUID | None = None
+    #: SOLUSDEV-326: False for a part bound on its own — its session names it, judges nothing
+    evaluate: bool = True
     evaluator_task: asyncio.Task[None] | None = None
     #: robot sessions only: resolved part → channel → the event time the session first saw it
     parts: dict[UUID, dict[str, datetime]] = field(default_factory=dict)
@@ -248,7 +286,7 @@ class SessionManager:
         ended_kept: int = DEFAULT_ENDED_KEPT,
         device_ids_kept: int = DEFAULT_DEVICE_IDS_KEPT,
         observer_factory: Callable[[], SessionObserver] | None = None,
-        event_sink: Callable[[UUID, dict[str, Any]], None] | None = None,
+        event_sink: Callable[[UUID, dict[str, Any], UUID | None], None] | None = None,
         evaluator_factory: Callable[[SessionView], SessionEvaluator] | None = None,
         robot_of_part: Callable[[UUID, UUID], Awaitable[UUID | None]] | None = None,
     ) -> None:
@@ -279,6 +317,7 @@ class SessionManager:
         device: dict[str, Any] | None = None,
         robot_entity_id: UUID | None = None,
         owner_user_id: UUID | None = None,
+        evaluate: bool = True,
     ) -> BenchSessionOut:
         if self._closing:
             raise RuntimeError("Session manager is shutting down")
@@ -300,6 +339,7 @@ class SessionManager:
             device=device,
             robot_entity_id=robot_entity_id,
             owner_user_id=owner_user_id,
+            evaluate=evaluate,
         )
         active[session.id] = session
         task = asyncio.current_task()
@@ -307,15 +347,18 @@ class SessionManager:
         self._starting.add(task)
         conn: TappableConnection | None = None
         try:
-            conn = await _acquire_connection(open_conn)
-            if self._closing or session.ended_at is not None or task.cancelling():
-                raise asyncio.CancelledError
-            conn.tap = self._tap_for(session)
-            handle = await conn.subscribe(TelemetryWindow(duration_seconds=window_seconds))
-            if self._closing or session.ended_at is not None or task.cancelling():
-                raise asyncio.CancelledError
-            conn.on_batch(handle, self._summary_sink(session))
-            session.evaluator_task = self._start_evaluator(session)
+            # SOLUSDEV-326: the pump, the tap and the evaluator outlive the request that starts
+            # them and copy its ContextVars; they ingest and judge in the system view.
+            with system_view():
+                conn = await _acquire_connection(open_conn)
+                if self._closing or session.ended_at is not None or task.cancelling():
+                    raise asyncio.CancelledError
+                conn.tap = self._tap_for(session)
+                handle = await conn.subscribe(TelemetryWindow(duration_seconds=window_seconds))
+                if self._closing or session.ended_at is not None or task.cancelling():
+                    raise asyncio.CancelledError
+                conn.on_batch(handle, self._summary_sink(session))
+                session.evaluator_task = self._start_evaluator(session)
         except BaseException:
             active.pop(session.id, None)  # a failed start never holds a slot
             if conn is not None:
@@ -337,18 +380,31 @@ class SessionManager:
 
     def channel_roles(self, project_id: UUID, device_id: str) -> dict[str, str]:
         """Read exact plugin evidence only for a device observed in this active project session."""
-        candidates: list[dict[str, str]] = []
+        return self._declared(
+            project_id, device_id, "channel_roles", lambda role: role in ("primary", "diagnostic")
+        )
+
+    def channel_display(self, project_id: UUID, device_id: str) -> dict[str, dict[str, Any]]:
+        """The config's per-channel display and display range (SOLUSDEV-326), read like roles."""
+        return self._declared(project_id, device_id, "channel_display", _presentable)
+
+    def _declared(
+        self, project_id: UUID, device_id: str, fact: str, valid: Callable[[Any], bool]
+    ) -> dict[str, Any]:
+        """One device-fact table's entries for a device observed in this project's active
+        sessions: malformed entries dropped, a name two sessions disagree on left out."""
+        candidates: list[dict[str, Any]] = []
         for session in self._active.get(project_id, {}).values():
             if session.conn is None or device_id not in session.device_ids:
                 continue
             facts = getattr(session.conn, "device_facts", None)
-            roles = facts.get("channel_roles") if isinstance(facts, dict) else None
-            declared = roles.get(device_id) if isinstance(roles, dict) else None
+            table = facts.get(fact) if isinstance(facts, dict) else None
+            declared = table.get(device_id) if isinstance(table, dict) else None
             candidates.append(
                 {
-                    name: role
-                    for name, role in declared.items()
-                    if isinstance(name, str) and role in ("primary", "diagnostic")
+                    name: value
+                    for name, value in declared.items()
+                    if isinstance(name, str) and valid(value)
                 }
                 if isinstance(declared, dict)
                 else {}
@@ -356,9 +412,9 @@ class SessionManager:
         if not candidates:
             return {}
         return {
-            name: role
-            for name, role in candidates[0].items()
-            if all(other.get(name) == role for other in candidates[1:])
+            name: value
+            for name, value in candidates[0].items()
+            if all(other.get(name) == value for other in candidates[1:])
         }
 
     def _tap_for(self, session: _Session) -> Callable[[TelemetryPacket], Awaitable[None]]:
@@ -379,7 +435,9 @@ class SessionManager:
             if observer is not None and self._event_sink is not None:
                 try:
                     for event in observer.add(packet)[:128]:
-                        self._event_sink(project_id, event)
+                        # SOLUSDEV-326: attributed as this session resolved its packet.
+                        mine = event.get("device_id") == packet.device_id
+                        self._event_sink(project_id, event, result.entity_id if mine else None)
                 except Exception:
                     observer = None
                     logger.warning("session observer unavailable: session=%s", session.id)
@@ -439,7 +497,11 @@ class SessionManager:
 
     def _start_evaluator(self, session: _Session) -> asyncio.Task[None] | None:
         """The window evaluator of a robot session (P2-T3); none without a robot or a factory."""
-        if self._evaluator_factory is None or session.robot_entity_id is None:
+        if (
+            self._evaluator_factory is None
+            or session.robot_entity_id is None
+            or not session.evaluate
+        ):
             return None
         view = SessionView(
             project_id=session.project_id,

@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import * as api from '../../../lib/api/physicalRobots'
 import * as hardwareApi from '../../../lib/api/hardware'
@@ -9,36 +9,16 @@ import { useAuthStore } from '../../../store/authStore'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
 import { useSettingsStore } from '../../../store/settingsStore'
 import { usePhysicalRobots } from './usePhysicalRobots'
-import { createUnassignedPart } from '../hardware/createUnassignedPart'
 
-vi.mock('../hardware/createUnassignedPart', () => ({ createUnassignedPart: vi.fn() }))
-
-vi.mock('../hardware/DevicesFound', () => ({
-  DevicesFound: (): React.JSX.Element => <div data-testid="devices-found" />
-}))
-vi.mock('../hardware/InlineSupplierResults', () => ({
-  InlineSupplierResults: ({
-    query,
-    disabled
-  }: {
-    query: string
-    disabled: boolean
-  }): React.JSX.Element => <button disabled={disabled}>Search suppliers for {query}</button>
-}))
 vi.mock('../../../lib/api/physicalRobots', () => ({
   createPhysicalRobot: vi.fn(),
   renamePhysicalRobot: vi.fn(),
-  deletePhysicalRobot: vi.fn(),
-  listRobotOrphans: vi.fn()
+  deletePhysicalRobot: vi.fn()
 }))
 vi.mock('../../../lib/api/hardware', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/hardware')>()),
-  createHardwarePart: vi.fn(),
-  searchLibrary: vi.fn(),
-  listUnassignedParts: vi.fn(),
   listHardwareSuggestions: vi.fn(),
-  getHardwareConfig: vi.fn(),
-  attachParts: vi.fn()
+  getHardwareConfig: vi.fn()
 }))
 vi.mock('../../../lib/api/resources', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../lib/api/resources')>()),
@@ -67,7 +47,6 @@ const part: Entity = {
 }
 const changed = vi.fn()
 const reveal = vi.fn()
-const optimistic = vi.fn()
 // Stable like the real snapshot: the sidebar keys its per-robot reads on this identity.
 const DEFAULT_ENTITIES = [robot, second]
 function Harness({
@@ -81,12 +60,11 @@ function Harness({
   selected?: string
 }): React.JSX.Element {
   const projectId = useWorkspaceStore((state) => state.project?.id ?? null)
-  const nodes = usePhysicalRobots(projectId, changed, reveal, entities, undefined, optimistic)
+  const nodes = usePhysicalRobots(projectId, changed, reveal, entities)
   probe(nodes.renderContent)
   const focused = entities.find((entity) => entity.id === selected)
   return (
     <>
-      {nodes.hardware}
       {entities.map((entity) => (
         <article key={entity.id} aria-label={entity.name}>
           {nodes.renderContent(entity)}
@@ -97,89 +75,35 @@ function Harness({
   )
 }
 const probe = vi.fn()
-/** Add › Hardware › Describe something new; returns Add. */
-async function describe(name = 'Wrist IMU'): Promise<HTMLElement> {
-  await userEvent.type(screen.getByRole('textbox', { name: 'What is it?' }), name)
-  return screen.getByRole('button', { name: 'Add' })
-}
-function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => {
-    resolve = done
-  })
-  return { promise, resolve }
-}
 beforeEach(() => {
   vi.resetAllMocks()
   useAuthStore.setState({ status: 'authenticated', user: { email: 'robot@example.invalid' } })
   useWorkspaceStore.setState({ linked: true, project: { id: 'p1', name: 'Rover' } })
   useSettingsStore.setState({ solMode: 'Guide' })
-  vi.mocked(hardwareApi.listUnassignedParts).mockResolvedValue({
-    data: [],
-    meta: { has_next: false }
-  })
-  vi.mocked(hardwareApi.searchLibrary).mockResolvedValue([])
-  vi.mocked(hardwareApi.listUnassignedParts).mockResolvedValue({ data: [], meta: {} })
   vi.mocked(hardwareApi.listHardwareSuggestions).mockResolvedValue([])
   vi.mocked(hardwareApi.getHardwareConfig).mockRejectedValue(new Error('none'))
   vi.mocked(resources.listBenchSessions).mockResolvedValue([])
   vi.mocked(api.createPhysicalRobot).mockResolvedValue(robot)
-  vi.mocked(createUnassignedPart).mockResolvedValue({ ...part, name: 'Wrist IMU' })
-  vi.mocked(hardwareApi.createHardwarePart).mockResolvedValue({
-    entity: { ...part, id: 'part-new', name: 'Wrist IMU', origin: 'manual', source_id: null },
-    config_entry_id: 'entry-1'
-  })
   vi.mocked(api.renamePhysicalRobot).mockResolvedValue({ ...robot, name: 'Scout', version: 2 })
   vi.mocked(api.deletePhysicalRobot).mockResolvedValue({
     deleted_entity_id: robot.id,
     retained_part_ids: [part.id]
   })
 })
-it('describes a part under the first robot, refreshes once, and never shows a part early', async () => {
-  render(<Harness />)
-  fireEvent.click(await describe())
-  await waitFor(() =>
-    expect(hardwareApi.createHardwarePart).toHaveBeenCalledExactlyOnceWith('p1', robot.id, {
-      name: 'Wrist IMU',
-      category: 'sensors',
-      specs: {},
-      lifecycle: 'planned'
-    })
-  )
-  await waitFor(() => expect(changed).toHaveBeenCalledOnce())
-  // A part has no containment edge until the snapshot lands: showing it at the
-  // root for that interval would be an invented placement. Only robots go early.
-  expect(optimistic).not.toHaveBeenCalled()
-  // P6: the card renderer keeps one identity across the publishes above.
-  expect(new Set(probe.mock.calls.map(([fn]) => fn)).size).toBe(1)
-  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
-  expect(screen.getByRole('textbox', { name: 'What is it?' })).toHaveValue('')
-})
-
-it('lists only editable robots as targets and posts the part to the chosen one', async () => {
-  render(<Harness entities={[robot, second, { ...robot, id: 'robot-3', origin: 'connector' }]} />)
-  const target = screen.getByRole('combobox', { name: 'Part of' })
-  expect(Array.from(target.querySelectorAll('option')).map((o) => o.textContent)).toEqual([
-    'Rover',
-    'Spare'
-  ])
-  await userEvent.selectOptions(target, 'robot-2')
-  await userEvent.click(await describe('Bus driver'))
-  await waitFor(() => expect(changed).toHaveBeenCalledOnce())
-  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
-  expect(hardwareApi.createHardwarePart).toHaveBeenCalledWith(
-    'p1',
-    'robot-2',
-    expect.objectContaining({ name: 'Bus driver' })
-  )
-})
 it.each(['project', 'account'])(
   'never publishes a write after an A → B → A %s switch',
   async (boundary) => {
-    const pending = deferred<Entity>()
-    vi.mocked(createUnassignedPart).mockReturnValue(pending.promise)
-    render(<Harness entities={[]} />)
-    await userEvent.click(await describe())
+    let resolve!: (value: Entity) => void
+    vi.mocked(api.renamePhysicalRobot).mockReturnValue(
+      new Promise<Entity>((done) => {
+        resolve = done
+      })
+    )
+    render(<Harness selected={robot.id} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Rename' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Robot name' }), ' 2')
+    await userEvent.click(screen.getByRole('button', { name: 'Save name' }))
+    expect(api.renamePhysicalRobot).toHaveBeenCalledOnce()
     act(() => {
       if (boundary === 'project') {
         useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } })
@@ -190,50 +114,21 @@ it.each(['project', 'account'])(
       }
     })
     await act(async () => {
-      pending.resolve(robot)
+      resolve({ ...robot, name: 'Rover 2', version: 2 })
     })
     expect(changed).not.toHaveBeenCalled()
     expect(reveal).not.toHaveBeenCalled()
-    expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
   }
 )
 it.each(['signed out', 'missing project'])('never writes when %s', async (state) => {
   if (state === 'signed out') useAuthStore.setState({ status: 'unauthenticated' })
   else useWorkspaceStore.setState({ project: null })
   render(<Harness selected={robot.id} />)
-  expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled()
-  await userEvent.click(screen.getByRole('button', { name: 'Unassigned parts' }))
   expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Delete robot…' })).not.toBeInTheDocument()
-  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
-  expect(hardwareApi.listUnassignedParts).not.toHaveBeenCalled()
-})
-
-it('allows authenticated hardware creation with a stale onboarding linked flag', async () => {
-  useWorkspaceStore.setState({ linked: false })
-  render(<Harness entities={[]} />)
-  expect(screen.getByRole('textbox', { name: 'What is it?' })).toBeEnabled()
-  await userEvent.click(await describe())
-  expect(createUnassignedPart).toHaveBeenCalledWith(
-    'p1',
-    'Wrist IMU',
-    'sensors',
-    expect.any(String)
-  )
-  expect(api.createPhysicalRobot).not.toHaveBeenCalled()
-  await waitFor(() => expect(changed).toHaveBeenCalledOnce())
-})
-
-it('never reads unassigned parts on mount or on a graph revision bump', async () => {
-  const view = render(<Harness />)
-  view.rerender(<Harness revision={1} />)
   await act(async () => {})
-  expect(hardwareApi.listUnassignedParts).not.toHaveBeenCalled()
-  expect(screen.getByRole('button', { name: 'Unassigned parts' })).toHaveAttribute(
-    'aria-expanded',
-    'false'
-  )
+  expect(api.renamePhysicalRobot).not.toHaveBeenCalled()
+  expect(api.deletePhysicalRobot).not.toHaveBeenCalled()
 })
 it.each([
   { origin: 'connector' },
@@ -247,48 +142,23 @@ it.each([
   expect(screen.getByRole('heading', { name: 'Rover' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Rename' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Delete robot…' })).not.toBeInTheDocument()
-  await waitFor(() => expect(screen.queryByText(/Loading unassigned/)).not.toBeInTheDocument())
 })
 
-it('keeps creation failures visible without publishing success', async () => {
-  vi.mocked(createUnassignedPart).mockRejectedValue(new Error('Cannot create part'))
-  render(<Harness entities={[]} />)
-  await userEvent.click(await describe())
-  expect(await screen.findByRole('alert')).toHaveTextContent('Cannot create part')
-  expect(changed).not.toHaveBeenCalled()
-  expect(reveal).not.toHaveBeenCalled()
-  expect(hardwareApi.createHardwarePart).not.toHaveBeenCalled()
-  expect(screen.getByRole('textbox', { name: 'What is it?' })).toHaveValue('Wrist IMU')
-})
-
-it('does not revive a pending write after unmounting', async () => {
-  const pending = deferred<Entity>()
-  vi.mocked(createUnassignedPart).mockReturnValue(pending.promise)
-  const view = render(<Harness entities={[]} />)
-  await userEvent.click(await describe())
-  view.unmount()
-  await act(async () => {
-    pending.resolve(robot)
-  })
-  expect(changed).not.toHaveBeenCalled()
-  expect(reveal).not.toHaveBeenCalled()
-})
-
-it('closes stale editors and never publishes a write from an expired workspace', async () => {
-  const pending = deferred<{ entity: Entity; config_entry_id: string }>()
-  vi.mocked(hardwareApi.createHardwarePart).mockReturnValue(pending.promise)
+it('closes a stale rename editor when the workspace changes', async () => {
   render(<Harness selected={robot.id} />)
   await userEvent.click(screen.getByRole('button', { name: 'Rename' }))
-  await userEvent.click(await describe())
+  expect(screen.getByRole('textbox', { name: 'Robot name' })).toBeInTheDocument()
   act(() => useWorkspaceStore.setState({ project: { id: 'p2', name: 'Other' } }))
   expect(screen.queryByRole('textbox', { name: 'Robot name' })).not.toBeInTheDocument()
-  await act(async () => {
-    pending.resolve({ entity: part, config_entry_id: 'entry' })
-  })
-  expect(changed).not.toHaveBeenCalled()
 })
 
-it('offers honest category guidance on the card and no actions on the robot card', () => {
+it("offers no Add › Hardware panel: onboarding is SOL's (SOLUSDEV-326)", () => {
+  render(<Harness entities={[]} />)
+  expect(screen.queryByRole('textbox', { name: 'What is it?' })).toBeNull()
+  expect(screen.queryByRole('searchbox', { name: 'Search parts and platforms' })).toBeNull()
+})
+
+it('keeps a legacy category row’s guidance and puts no actions on the robot card', () => {
   render(
     <Harness
       entities={[robot, { ...robot, id: 'category', name: 'Sensors', type: 'robot_category' }]}
@@ -306,22 +176,4 @@ it('mounts the robot sidebar for a selected robot and never a modal', () => {
   expect(screen.getByRole('heading', { name: 'Rover' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Delete robot…' })).toBeInTheDocument()
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-})
-
-it('forwards the shared search query to inline suppliers without a modal', async () => {
-  render(<Harness entities={[]} />)
-  await userEvent.type(
-    screen.getByRole('searchbox', { name: 'Search parts and platforms' }),
-    'sensor'
-  )
-  expect(screen.getByRole('button', { name: 'Search suppliers for sensor' })).toBeEnabled()
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-})
-
-it('cannot source a part while the project is offline', async () => {
-  useAuthStore.setState({ status: 'unauthenticated', user: null })
-  render(<Harness entities={[]} />)
-  expect(screen.getByRole('searchbox', { name: 'Search parts and platforms' })).toBeDisabled()
-  expect(screen.queryByRole('button', { name: /Search suppliers/ })).not.toBeInTheDocument()
-  expect(screen.queryByRole('dialog')).toBeNull()
 })

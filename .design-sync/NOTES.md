@@ -312,3 +312,6 @@ Read this first on the next sync; each item is something that will NOT announce 
   those modules (the dot fallback renders when no logo resolves). Card is 300×184 with a header
   strip; `SolusComposer`, `TwoStepDelete`, `DeviceCard` unchanged. Source drift for the next run.
 
+- **2026-11-16 (SOLUSDEV-326 P2-T7):** `DeviceCard` and `LabeledSelect` left the surface — their sources were
+  deleted with the old renderer onboarding (hardware onboarding is SOL's). Their `componentSrcMap` entries,
+  `entry.tsx` exports and previews are removed; earlier notes that mention them are history. Re-run the sync.

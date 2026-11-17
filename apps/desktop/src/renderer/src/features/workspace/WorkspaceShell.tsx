@@ -5,7 +5,7 @@
 // separator, pinned ones first — EXT-14 as amended by SOLUSDEV-246 STORE ST3).
 // SOLUSDEV-235 replaced the breadcrumb topbar with the title + menu rows. SOLUSDEV-152 removed the prototype demo data — the shell
 // shows live API data or honest empty states, never fabricated robot data.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Avatar } from '../../components/ui/Avatar'
 import { Icons } from '../../components/ui/icons.constants'
@@ -15,8 +15,10 @@ import { useWorkspaceStore, type WorkspaceProject } from '../../store/workspaceS
 import { WorkspaceScreen } from '../graph/WorkspaceScreen'
 import { AlertScreen } from '../graph/AlertScreen'
 import { BenchScreen } from '../bench/BenchScreen'
-import { useWorkspaceSessionGeneration } from '../graph/workspaceSession'
 import { SolScreen } from '../sol/SolScreen'
+import { HardwareScreen } from '../hardware/HardwareScreen'
+import { useDeviceStream } from '../hardware/useDeviceStream'
+import { useDeviceStore } from '../hardware/deviceStore'
 import { SolSidebarHost } from '../sol/sidebar/SolSidebarHost'
 import { BillingScreen } from '../billing/BillingScreen'
 import { SettingsScreen } from '../settings/SettingsScreen'
@@ -48,19 +50,14 @@ import { clearWorkspaceGraphCache } from '../graph/useWorkspaceGraph'
 import { useExtensionRail, type ExtensionRailData } from './useExtensionRail'
 import { useDevExtensionsStore } from '../devExtensions/devExtensionsStore'
 import type { RailExtensionEntry } from './extensionRail'
-
-/** Screen labels (the data-screen-label hook for tests; the topbar breadcrumb is gone — SOLUSDEV-235). */
-const SCREEN_TITLES: Readonly<Record<string, string>> = {
-  home: 'Home',
-  workspace: 'Workspace',
-  bench: 'Live Bench',
-  sol: 'SOL',
-  store: 'Store',
-  billing: 'Billing',
-  settings: 'Settings',
-  alert: 'Alert',
-  'ext-page': 'Extension'
-}
+import {
+  RAIL_BOTTOM,
+  RAIL_STORE,
+  RAIL_TOP,
+  SCREEN_TITLES,
+  isRailActive,
+  type RailItem
+} from './railItems'
 
 interface ShellNavigation {
   route: ShellRoute
@@ -144,6 +141,8 @@ function useShellNavigation(): ShellNavigation {
     useExtensionsStore.getState().reset()
     // Pins are this user's account state; the next user must not inherit them.
     usePinsStore.getState().reset()
+    // The plugged-in device rows are this user's own view of this machine (SOLUSDEV-326).
+    useDeviceStore.getState().reset()
     // SOLUSDEV-323: straight to the compact starter. Navigating to `/` raced
     // RootRoute's own redirect and could strand the window on a blank `/`.
     navigate('/welcome', { replace: true })
@@ -201,6 +200,9 @@ export function WorkspaceShell(): React.JSX.Element {
   // ...and follows a teammate's rename/archive live (ADR-037).
   useLiveProject()
   useHydrateDevExtensions()
+  // The one devices subscription (SOLUSDEV-326): rows for the Hardware page, and the plug-in
+  // toast everywhere else.
+  useDeviceStream(project?.id ?? null, name)
 
   return (
     <div style={SHELL_STYLE} onClick={() => notifOpen && setNotifOpen(false)}>
@@ -336,6 +338,7 @@ function VerifyEmailBanner(): React.JSX.Element | null {
 const SIMPLE_SCREENS: Readonly<
   Record<string, (navigate: (screen: MainScreen) => void) => React.JSX.Element>
 > = {
+  hardware: () => <HardwareScreen />,
   store: () => <StoreScreen />,
   sol: (navigate) => <SolScreen onNavigate={navigate} />,
   billing: (navigate) => <BillingScreen onNavigate={navigate} />,
@@ -392,36 +395,6 @@ function ExtensionPageRoute({
   )
 }
 
-/** The Bench "Add Hardware" hand-off to the Workspace screen, scoped to the session generation. */
-function useAddHardwareRequest(
-  project: WorkspaceProject | null,
-  navigate: (screen: MainScreen) => void
-): {
-  request: () => void
-  openAddRequest: { tab: 'hardware'; sequence: number } | undefined
-  onConsumed: (consumed: number) => void
-} {
-  const generation = useWorkspaceSessionGeneration()
-  const sequence = useRef(0)
-  const [pendingAdd, setPendingAdd] = useState<{ generation: number; sequence: number } | null>(
-    null
-  )
-  const request = (): void => {
-    if (!project) return
-    setPendingAdd({ generation, sequence: ++sequence.current })
-    navigate('workspace')
-  }
-  const openAddRequest =
-    pendingAdd?.generation === generation
-      ? { tab: 'hardware' as const, sequence: pendingAdd.sequence }
-      : undefined
-  const onConsumed = (consumed: number): void =>
-    setPendingAdd((current) =>
-      current?.generation === generation && current.sequence === consumed ? null : current
-    )
-  return { request, openAddRequest, onConsumed }
-}
-
 function ScreenView({
   route,
   project,
@@ -441,7 +414,6 @@ function ScreenView({
   openExtensionPage: (slug: string) => void
   goBack: () => void
 }): React.JSX.Element | null {
-  const addHardware = useAddHardwareRequest(project, navigate)
   const screen = ((): React.JSX.Element | null => {
     switch (route.name) {
       case 'home':
@@ -452,13 +424,12 @@ function ScreenView({
             onOpenBench={() => navigate('bench')}
             onOpenSol={() => navigate('sol')}
             onOpenWidget={openExtensionPage}
-            openAddRequest={addHardware.openAddRequest}
-            onAddRequestConsumed={addHardware.onConsumed}
+            onOpenHardware={() => navigate('hardware')}
           />
         )
       case 'bench':
-        // Add Hardware opens the existing Workspace onboarding flow.
-        return <BenchScreen onNavigate={navigate} onAddHardware={addHardware.request} />
+        // Add hardware (and the device banner) opens the Hardware page (SOLUSDEV-326).
+        return <BenchScreen onNavigate={navigate} onAddHardware={() => navigate('hardware')} />
       case 'alert':
         return <AlertScreen onBack={goBack} />
       case 'ext-page':
@@ -495,42 +466,6 @@ function ScreenView({
       </ErrorBoundary>
     </div>
   )
-}
-
-interface RailItem {
-  screen: MainScreen
-  icon: React.ReactNode
-  label: string
-  /** Drawn with an accent border + tint so it reads as the "add capability" action (SOLUSDEV-235). */
-  emphasis?: boolean
-}
-
-/** Top rail: Home + the project-scoped screens in flow order. */
-const RAIL_TOP: readonly RailItem[] = [
-  { screen: 'home', icon: <Icons.home size={17} />, label: 'Home' },
-  { screen: 'workspace', icon: <Icons.graph size={17} />, label: 'Workspace' },
-  { screen: 'bench', icon: <Icons.bench size={17} />, label: 'Live Bench' },
-  { screen: 'sol', icon: <Icons.sol size={17} />, label: 'SOL' }
-]
-
-/** SOLUSDEV-235: the Store — capabilities are installed, not built in. The
- *  installed extensions' tabs follow it behind a separator (STORE ST3). */
-const RAIL_STORE: RailItem = {
-  screen: 'store',
-  icon: <Icons.plus size={17} />,
-  label: 'Store',
-  emphasis: true
-}
-
-/** Bottom rail: account-level screens pinned below the spacer. */
-const RAIL_BOTTOM: readonly RailItem[] = [
-  { screen: 'billing', icon: <Icons.card size={17} />, label: 'Billing' },
-  { screen: 'settings', icon: <Icons.gear size={17} />, label: 'Settings' }
-]
-
-/** Whether a rail item is the active screen (Workspace also owns Alert). */
-function isRailActive(item: RailItem, name: string): boolean {
-  return name === item.screen || (item.screen === 'workspace' && name === 'alert')
 }
 
 /** The rail's `DEV` corner mark (wireflow extensions-runtime.md §2): mono,

@@ -188,30 +188,26 @@ it('requires explicit loading for an uncached listing and shows job failures wit
   expect(selected).not.toHaveBeenCalled()
 })
 
-it('opens on the requested tab when a sequence-keyed request arrives', async () => {
-  const view = render(<WorkspaceAdd projectId="p1" onSelected={selected} hardware={<p>HW</p>} />)
+it('the Hardware row closes the modal and opens the Hardware page; no onboarding lives here', async () => {
+  const openHardware = vi.fn()
+  render(<WorkspaceAdd projectId="p1" onSelected={selected} onOpenHardware={openHardware} />)
+  await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+  expect(screen.queryByRole('tab', { name: 'Hardware' })).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: 'Hardware' }))
+  expect(openHardware).toHaveBeenCalledOnce()
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  view.rerender(
-    <WorkspaceAdd
-      projectId="p1"
-      onSelected={selected}
-      hardware={<p>HW</p>}
-      openRequest={{ tab: 'hardware', sequence: 1 }}
-    />
-  )
-  expect(await screen.findByRole('tab', { name: 'Hardware', selected: true })).toBeInTheDocument()
-  expect(screen.getByText('HW')).toBeInTheDocument()
+  expect(screen.queryByText('Hardware onboarding happens with SOL.')).toBeNull()
+})
+
+it('does not reopen for the same sequence-keyed request', async () => {
+  const request = { tab: 'service' as const, sequence: 1 }
+  const view = render(<WorkspaceAdd projectId="p1" onSelected={selected} />)
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  view.rerender(<WorkspaceAdd projectId="p1" onSelected={selected} openRequest={request} />)
+  expect(await screen.findByRole('dialog')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'Close Add' }))
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   // The same request again is not a new request.
-  view.rerender(
-    <WorkspaceAdd
-      projectId="p1"
-      onSelected={selected}
-      hardware={<p>HW</p>}
-      openRequest={{ tab: 'hardware', sequence: 1 }}
-    />
-  )
+  view.rerender(<WorkspaceAdd projectId="p1" onSelected={selected} openRequest={{ ...request }} />)
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 })
 

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
-from sqlalchemy import event, or_, select
+from sqlalchemy import Select, event, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, aliased
 
@@ -37,6 +37,23 @@ def _rolled_back(session: Session) -> None:
     session.info.pop("hardware_binding_changes", None)
 
 
+def _desired_bindings(config: EntityHardwareConfig) -> list[tuple[uuid.UUID, str, str, str]]:
+    """(target, device ref, address, protocol): each bound brain's bare endpoint (a board may
+    emit at its own device key) and each mapped row on the brain it sits behind."""
+    desired = [
+        (config.entity_id, ref, "", brain.protocol.driver_id if brain.protocol else "")
+        for brain in config.identity
+        if (ref := brain.device_ref) is not None
+    ]
+    for row in config.bus_map:
+        brain_ref = config.brain_of(row)
+        if row.part_entity_id is not None and brain_ref is not None:
+            desired.append(
+                (row.part_entity_id, part_ref(brain_ref, row.address), row.address, row.protocol)
+            )
+    return desired
+
+
 async def synchronize_bindings(
     session: AsyncSession, project_id: uuid.UUID, entry: SolusEntry, config: EntityHardwareConfig
 ) -> None:
@@ -56,33 +73,18 @@ async def synchronize_bindings(
     for edge in old:
         edge.deleted_at = utcnow()
     owner = entry.entity_id
-    if config.identity is not None:
+    desired = _desired_bindings(config)
+    if desired:
         if owner is None:
             raise APIError(409, "binding_conflict", "Hardware config has no graph identity")
-        desired = [
-            (item.part_entity_id, item.address, item.protocol)
-            for item in config.bus_map
-            if item.part_entity_id is not None
-        ]
-        # A bare sensor/controller may emit at the device key itself.
-        desired.append((config.entity_id, "", config.protocol.driver_id if config.protocol else ""))
-        refs = {
-            part_ref(config.identity.device_ref, address) if address else config.identity.device_ref
-            for _, address, _ in desired
-        }
-        others = await _conflicting_bindings(session, project_id, entry, refs)
-        if others:
+        refs = {ref for _, ref, _, _ in desired}
+        if await bound_elsewhere(session, project_id, config.entity_id, refs):
             raise APIError(
                 409,
                 "binding_conflict",
                 "A device endpoint is already configured; review its existing binding",
             )
-        for target, address, protocol in desired:
-            ref = (
-                part_ref(config.identity.device_ref, address)
-                if address
-                else config.identity.device_ref
-            )
+        for target, ref, address, protocol in desired:
             # One identity per (config node, target, device ref, protocol): a re-sync
             # resurrects the same row instead of minting a new one per config version.
             await write_edge(
@@ -159,37 +161,55 @@ async def disable_part_bindings(
     invalidate_after_commit(session, project_id)
 
 
-async def _conflicting_bindings(
-    session: AsyncSession, project_id: uuid.UUID, entry: SolusEntry, refs: set[str]
-) -> list[GraphEdge]:
-    """Historical or stale derived rows cannot reserve a current endpoint."""
+def _current_bindings(
+    project_id: uuid.UUID, refs: Collection[str]
+) -> Select[tuple[GraphEdge, GraphEntity]]:
+    """Live configs' current bindings of `refs`, each with the subject whose config holds it.
+    Historical or stale derived rows cannot reserve a current endpoint."""
     subject, target, config_node = aliased(GraphEntity), aliased(GraphEntity), aliased(GraphEntity)
-    return list(
-        await session.scalars(
-            select(GraphEdge)
-            .join(SolusEntry, SolusEntry.entity_id == GraphEdge.src_id)
-            .join(subject, subject.id == SolusEntry.configured_entity_id)
-            .join(target, target.id == GraphEdge.dst_id)
-            .join(config_node, config_node.id == SolusEntry.entity_id)
-            .where(
-                GraphEdge.project_id == project_id,
-                GraphEdge.src_id != entry.entity_id,
-                GraphEdge.relation_type == BINDING_RELATION,
-                GraphEdge.origin == "manual",
-                GraphEdge.source_id.is_(None),
-                GraphEdge.deleted_at.is_(None),
-                GraphEdge.attrs["enabled"].as_boolean().is_(True),
-                GraphEdge.attrs["device_ref"].astext.in_(refs),
-                GraphEdge.attrs["config_version"].as_integer() == SolusEntry.config_version,
-                SolusEntry.project_id == project_id,
-                SolusEntry.kind == SolusEntryKind.CONFIG,
-                SolusEntry.deleted_at.is_(None),
-                subject.project_id == project_id,
-                subject.deleted_at.is_(None),
-                target.project_id == project_id,
-                target.deleted_at.is_(None),
-                config_node.project_id == project_id,
-                config_node.deleted_at.is_(None),
-            )
+    return (
+        select(GraphEdge, subject)
+        .join(SolusEntry, SolusEntry.entity_id == GraphEdge.src_id)
+        .join(subject, subject.id == SolusEntry.configured_entity_id)
+        .join(target, target.id == GraphEdge.dst_id)
+        .join(config_node, config_node.id == SolusEntry.entity_id)
+        .where(
+            GraphEdge.project_id == project_id,
+            GraphEdge.relation_type == BINDING_RELATION,
+            GraphEdge.origin == "manual",
+            GraphEdge.source_id.is_(None),
+            GraphEdge.deleted_at.is_(None),
+            GraphEdge.attrs["enabled"].as_boolean().is_(True),
+            GraphEdge.attrs["device_ref"].astext.in_(refs),
+            GraphEdge.attrs["config_version"].as_integer() == SolusEntry.config_version,
+            SolusEntry.project_id == project_id,
+            SolusEntry.kind == SolusEntryKind.CONFIG,
+            SolusEntry.deleted_at.is_(None),
+            subject.project_id == project_id,
+            subject.deleted_at.is_(None),
+            target.project_id == project_id,
+            target.deleted_at.is_(None),
+            config_node.project_id == project_id,
+            config_node.deleted_at.is_(None),
         )
     )
+
+
+async def bound_elsewhere(
+    session: AsyncSession, project_id: uuid.UUID, subject_id: uuid.UUID, refs: set[str]
+) -> list[GraphEdge]:
+    """Current bindings of `refs` held by another subject's live config: one config per device
+    project-wide."""
+    rows = await session.execute(
+        _current_bindings(project_id, refs).where(SolusEntry.configured_entity_id != subject_id)
+    )
+    return [edge for edge, _ in rows.tuples()]
+
+
+async def binding_subjects(
+    session: AsyncSession, project_id: uuid.UUID, refs: Collection[str]
+) -> dict[str, GraphEntity]:
+    """The robot or part whose live config binds each of `refs` (SOLUSDEV-326): a brain's
+    bare endpoint, so a board bound by its connection alone counts."""
+    rows = await session.execute(_current_bindings(project_id, refs))
+    return {str(edge.attrs["device_ref"]): subject for edge, subject in rows.tuples()}

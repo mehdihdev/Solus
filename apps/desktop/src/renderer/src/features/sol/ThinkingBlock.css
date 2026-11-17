@@ -106,6 +106,10 @@
 .sol-thinking-step[data-step='error'] .sol-thinking-mark {
   color: var(--err);
 }
+/* A call parked for the person's OK is neither done nor failed. */
+.sol-thinking-step[data-step='parked'] .sol-thinking-mark {
+  color: var(--mut);
+}
 .sol-thinking-step[data-step='running'] .sol-thinking-mark {
   animation: sol-thinking-pulse 1.1s ease-in-out infinite;
 }

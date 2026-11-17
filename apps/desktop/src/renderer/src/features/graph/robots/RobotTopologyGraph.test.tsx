@@ -69,18 +69,16 @@ beforeEach(() => {
     topology as Awaited<ReturnType<typeof readHardwareTopology>>
   )
 })
-it('mounts the real connection card on a USB endpoint and never on the host brain', async () => {
+it('shows a brain as wired and mounts no onboarding card on it (SOLUSDEV-326)', async () => {
   render(<RobotTopologyGraph {...props} />)
   await screen.findByRole('button', { name: 'Actuators / motors' })
   enter('robot')
-  expect(screen.queryByRole('button', { name: 'Connect this computer' })).toBeNull()
   enter('host')
   enter('bus')
-  expect(
-    within(screen.getByTestId('graph-node-controller')).getByRole('button', {
-      name: 'Connect this computer'
-    })
-  ).toBeTruthy()
+  const controller = within(screen.getByTestId('graph-node-controller'))
+  expect(controller.getByText('Channel: usb_serial')).toBeInTheDocument()
+  expect(controller.queryByRole('button', { name: 'Connect this computer' })).toBeNull()
+  expect(controller.queryByRole('region')).toBeNull()
 })
 it('renders real API topology through the existing navigator, preserving ancestors under category filtering', async () => {
   render(<RobotTopologyGraph {...props} />)
@@ -240,4 +238,35 @@ it('reveals a target in another robot while a shared-host scope is active', asyn
   expect(onSelect.mock.calls.at(-1)?.[1].map((step: { entity: Entity }) => step.entity.id)).toEqual(
     ['robot-two', 'host', 'bus']
   )
+})
+
+it('draws a part shared by two brains once, under its first parent, with a cross-link', async () => {
+  const dag = {
+    robot_id: 'robot',
+    roots: ['controller', 'downstream'],
+    nodes: [
+      ['controller', 'brain'],
+      ['bus', 'bus'],
+      ['downstream', 'brain'],
+      ['sensor', 'part']
+    ].map(([id, role]) => ({ id, name: id, role, brain_kind: role === 'brain' ? 'mcu' : null })),
+    edges: [
+      ['controller', 'bus'],
+      ['bus', 'sensor'],
+      ['downstream', 'sensor']
+    ].map(([source, target]) => ({ id: `${source}-${target}`, source, target }))
+  }
+  vi.mocked(readHardwareTopology).mockResolvedValue(
+    dag as Awaited<ReturnType<typeof readHardwareTopology>>
+  )
+  render(<RobotTopologyGraph {...props} />)
+  await screen.findByRole('button', { name: 'Zoom into robot' })
+  enter('robot')
+  expect(screen.getByTestId('graph-node-controller')).toBeInTheDocument()
+  expect(screen.getByTestId('graph-node-downstream')).toBeInTheDocument()
+  // The second parent is drawn as a cross-link between the two brains, not a second copy.
+  expect(document.querySelectorAll('.graph-cross-edge').length).toBeGreaterThan(0)
+  enter('controller')
+  enter('bus')
+  expect(screen.getAllByTestId('graph-node-sensor')).toHaveLength(1)
 })

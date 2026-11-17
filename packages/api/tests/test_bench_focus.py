@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from conftest import BOB, add_member, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.models import Domain, GraphEdge, GraphEntity, utcnow
@@ -83,7 +84,7 @@ async def test_focus_narrows_only_confirmed_projection(
     url = f"/api/v1/projects/{project}/bench/device-recent"
 
     async def devices(focus: str | None) -> list[str]:
-        params: dict[str, object] = {"device_id": list(targets)}
+        params: dict[str, str | list[str]] = {"device_id": list(targets)}
         if focus:
             params["focus_entity_id"] = focus
         result = await client.get(url, headers=alice_headers, params=params)
@@ -314,3 +315,232 @@ async def test_focus_rejects_untrusted_or_deleted_hardware_edges(
     )
     await db.flush()
     assert await focus_entity_ids(db, pid, nodes[0].id) == {nodes[0].id}
+
+
+@pytest.mark.asyncio
+async def test_focus_on_hardware_out_of_the_graph_is_its_onboarders_alone(
+    client: AsyncClient,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-326: a teammate's focus on a robot its onboarder has not added to the graph is the
+    same 404 as an unknown one; once it is added, the teammate focuses it too."""
+    project, team = await _hw_project(client, alice_headers)
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team)
+    robot = await _robot(client, alice_headers, project)
+    row = await db.get(GraphEntity, uuid.UUID(robot["id"]))
+    assert row is not None
+    row.attrs = {**row.attrs, "onboarded_by": (await me(client, alice_headers))["id"]}  # P2's tools
+    await db.commit()
+    graph = f"/api/v1/projects/{project}/hardware/entities/{robot['id']}/graph"
+
+    async def recent(_project: uuid.UUID, device: str, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            device_id=device,
+            resolved_entity_id=None,
+            model_dump=lambda **_: {"device_id": device, "resolved_entity_id": None, "signals": []},
+        )
+
+    monkeypatch.setattr(
+        app.state.telemetry_plumbing, "get_device_recent", AsyncMock(side_effect=recent)
+    )
+    url = f"/api/v1/projects/{project}/bench/device-recent"
+    params = {"device_id": "unknown", "focus_entity_id": robot["id"]}
+
+    async def focus(headers: dict[str, str]) -> int:
+        return (await client.get(url, headers=headers, params=params)).status_code
+
+    removed = await client.put(graph, headers=alice_headers, json={"in_graph": False})
+    assert removed.status_code == 200, removed.text
+    assert (await focus(alice_headers), await focus(bob_headers)) == (200, 404)
+    added = await client.put(graph, headers=alice_headers, json={"in_graph": True})
+    assert added.status_code == 200, added.text
+    assert (await focus(alice_headers), await focus(bob_headers)) == (200, 200)
+
+
+@pytest.mark.asyncio
+async def test_live_bench_reads_leave_out_a_teammates_hidden_hardware(
+    client: AsyncClient,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SOLUSDEV-326: the project-wide Live Bench reads are per viewer too. A running session of a
+    robot its onboarder keeps out of the graph, with its devices, values, summary and observer
+    events, reaches her alone; a teammate can neither read nor stop it (the 404 of an unknown
+    session) until she adds the robot to the graph."""
+    from datetime import UTC, datetime
+    from typing import Any
+
+    from solus_api.graph.packet import TelemetryPacket
+    from solus_api.livebench.bench_router import ObserverEventIn
+    from solus_api.livebench.sessions import SessionManager
+    from sqlalchemy import select
+    from test_bench_router import TapConn
+    from test_hardware_detect import DEVICE_REF
+    from test_in_graph import _onboard, _team
+
+    team = await _team(client, alice_headers, bob_headers)
+    result = await _onboard(db, team)
+    manager = SessionManager(app.state.telemetry_plumbing)  # no evaluator: the reads are tested
+    monkeypatch.setattr(app.state, "bench_sessions", manager)
+    conn = TapConn()
+
+    async def open_conn() -> TapConn:
+        return conn
+
+    record = await manager.start(
+        team.project_id,
+        mode="real",
+        provider="robot",
+        label="Robot Private arm",
+        open_conn=open_conn,
+        device={"device_ref": DEVICE_REF},
+        robot_entity_id=result.robot.id,
+        owner_user_id=team.alice_id,
+    )
+    device, signal, now = f"{DEVICE_REF}/1", "Private arm-Motor-1.position", datetime.now(UTC)
+    await conn.tap(TelemetryPacket(device_id=device, timestamp=now, values={signal: 1.0}))
+    app.state.bench_events.append(
+        team.project_id,
+        ObserverEventIn(kind="threshold_breach", device_id=device, signal=signal, at=now),
+    )
+    part = await db.scalar(
+        select(GraphEntity.id).where(
+            GraphEntity.project_id == team.project_id, GraphEntity.external_ref == device
+        )
+    )
+    bench = team.url("bench")
+
+    async def view(headers: dict[str, str]) -> dict[str, Any]:
+        async def data(path: str, **params: Any) -> Any:
+            response = await client.get(f"{bench}/{path}", headers=headers, params=params)
+            assert response.status_code == 200, (path, response.text)
+            return response.json()["data"]
+
+        async def status(path: str) -> int:
+            return (await client.get(f"{bench}/{path}", headers=headers)).status_code
+
+        windows = (await data("summary", duration_seconds=60))["windows"]
+        recent = (await data("device-recent", device_id=device))["devices"]
+        return {
+            "sessions": [row["id"] for row in await data("sessions")],
+            "summary": sorted({name for found in windows for name in found["signals"]}),
+            "devices": (await data("telemetry-devices"))["device_ids"],
+            "device_recent": [row["device_id"] for row in recent],
+            "events": [row["device_id"] for row in await data("events")],
+            "values": await status(f"recent/{part}"),
+            "detail": await status(f"sessions/{record.id}"),
+        }
+
+    seen = {
+        "sessions": [str(record.id)],
+        "summary": [signal],
+        "devices": [device],
+        "device_recent": [device],
+        "events": [device],
+        "values": 200,
+        "detail": 200,
+    }
+    assert await view(alice_headers) == seen
+    assert await view(bob_headers) == {
+        "sessions": [],
+        "summary": [],
+        "devices": [],
+        "device_recent": [],
+        "events": [],
+        "values": 404,
+        "detail": 404,
+    }
+    stop = f"{bench}/sessions/{record.id}/stop"
+    assert (await client.post(stop, headers=bob_headers)).status_code == 404
+    assert manager.get(team.project_id, record.id).status == "active"
+    assert (await client.get(f"{bench}/sessions/{record.id}")).status_code == 401
+
+    added = await client.put(
+        team.url("hardware", "entities", str(result.robot.id), "graph"),
+        headers=alice_headers,
+        json={"in_graph": True},
+    )
+    assert added.status_code == 200, added.text
+    assert await view(bob_headers) == seen
+    assert (await client.post(stop, headers=bob_headers)).status_code == 200
+
+
+async def test_an_event_keeps_the_hardware_its_session_resolved_it_to(
+    client: AsyncClient,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """SOLUSDEV-326: an observer event is attributed by the session that emits it, the way that
+    session resolved its packet. A sim session names a device by a sim alias only its provider
+    resolves; on a robot out of the graph its events reach the onboarder alone, even after a
+    packet without that provider names the same device. An event on a device bound to nothing
+    is every member's, like the device list."""
+    from datetime import UTC, datetime
+    from typing import Any
+
+    from solus_api.graph.packet import TelemetryPacket
+    from solus_api.livebench.bench_router import ObserverEventIn
+    from solus_api.livebench.sessions import SessionManager
+    from test_bench_router import TapConn
+    from test_in_graph import _onboard, _team
+
+    team = await _team(client, alice_headers, bob_headers)
+    result = await _onboard(db, team)  # out of the graph: Alice's alone
+    alias, loose, now = "mujoco/arm/shoulder", "usb:UNBOUND/1", datetime.now(UTC)
+    part = await db.get(GraphEntity, result.part_ids[0])
+    assert part is not None
+    part.attrs = {**part.attrs, "sim_aliases": [{"provider": "mujoco", "device_id": alias}]}
+    await db.commit()
+
+    class Observer:
+        def add(self, packet: TelemetryPacket) -> list[dict[str, Any]]:
+            at = packet.timestamp.isoformat()
+            return [
+                {"kind": "change_point", "device_id": packet.device_id, "signal": "s", "at": at}
+            ]
+
+    plumbing = app.state.telemetry_plumbing
+    manager = SessionManager(
+        plumbing, observer_factory=Observer, event_sink=app.state.bench_events.record
+    )
+    conn = TapConn()
+
+    async def open_conn() -> TapConn:
+        return conn
+
+    await manager.start(
+        team.project_id,
+        mode="sim",
+        provider="mujoco",
+        label="Sim arm",
+        open_conn=open_conn,
+        robot_entity_id=result.robot.id,
+        owner_user_id=team.alice_id,
+        evaluate=False,
+    )
+    packet = TelemetryPacket(device_id=alias, timestamp=now, values={"shoulder.position": 1.0})
+    await conn.tap(packet)
+    await plumbing.ingest(team.project_id, packet)  # no provider: the alias resolves to nothing
+    await conn.tap(packet)
+    event = ObserverEventIn(kind="change_point", device_id=loose, signal="s", at=now)
+    app.state.bench_events.append(team.project_id, event)
+
+    async def events(headers: dict[str, str]) -> list[str]:
+        response = await client.get(team.url("bench", "events"), headers=headers)
+        assert response.status_code == 200, response.text
+        assert "owner" not in response.text
+        return [row["device_id"] for row in response.json()["data"]]
+
+    assert await events(alice_headers) == [alias, alias, loose]
+    assert await events(bob_headers) == [loose]
+    await manager.aclose_all()

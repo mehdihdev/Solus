@@ -8,9 +8,6 @@ import { ROBOT_CATEGORY_LABELS, type RobotCategory } from '../../../lib/api/hard
 import { useSettingsStore } from '../../../store/settingsStore'
 import { GraphNavigator, type GraphNavigatorProps } from '../navigation/GraphNavigator'
 import { topologyProjection } from './topologyProjection'
-import { HostAttachmentCard } from './HostAttachmentCard'
-import { ExtractionReviewCard } from './ExtractionReviewCard'
-import { PresenceCard } from './PresenceCard'
 import { useHardwareGeneration } from '../hardware/useHardwareGeneration'
 
 export function RobotTopologyGraph(props: GraphNavigatorProps): React.JSX.Element {
@@ -119,60 +116,10 @@ function TopologyGraph(props: GraphNavigatorProps): React.JSX.Element {
         renderContent={(entity) => {
           const node = nodes.get(entity.id)
           return node ? (
-            <>
-              <TopologyNodeContent
-                node={node}
-                edges={edges.filter((edge) => edge.target === node.id)}
-              />
-              {node.role === 'brain' && (
-                <ExtractionReviewCard
-                  projectId={props.projectId}
-                  brainId={node.id}
-                  onConfirmed={() => setRetry((value) => value + 1)}
-                  robots={topologies
-                    .filter((topology) => topology.nodes.some((item) => item.id === node.id))
-                    .map((topology) => ({
-                      id: topology.robot_id,
-                      name:
-                        props.entities.find((item) => item.id === topology.robot_id)?.name ??
-                        'Robot'
-                    }))}
-                />
-              )}
-              {node.role === 'brain' &&
-                node.brain_kind !== 'host' &&
-                node.channel === 'usb_serial' && (
-                  <PresenceCard
-                    projectId={props.projectId}
-                    brainId={node.id}
-                    robots={topologies
-                      .filter((topology) => topology.nodes.some((item) => item.id === node.id))
-                      .map((topology) => ({
-                        id: topology.robot_id,
-                        name:
-                          props.entities.find((item) => item.id === topology.robot_id)?.name ??
-                          'Robot'
-                      }))}
-                  />
-                )}
-              {node.role === 'brain' &&
-                node.brain_kind !== 'host' &&
-                supportsHostConnection(node.channel) && (
-                  <HostAttachmentCard
-                    projectId={props.projectId}
-                    endpointId={node.id}
-                    robots={topologies
-                      .filter((topology) => topology.nodes.some((item) => item.id === node.id))
-                      .map((topology) => ({
-                        id: topology.robot_id,
-                        name:
-                          props.entities.find((item) => item.id === topology.robot_id)?.name ??
-                          'Robot'
-                      }))}
-                    onConfirmed={() => setRetry((value) => value + 1)}
-                  />
-                )}
-            </>
+            <TopologyNodeContent
+              node={node}
+              edges={edges.filter((edge) => edge.target === node.id)}
+            />
           ) : (
             props.renderContent?.(entity)
           )
@@ -236,8 +183,4 @@ function topologyMetadata(topologies: HardwareTopology[]): {
     topologies.flatMap((topology) => topology.nodes.map((node) => [node.id, node] as const))
   )
   return { categories, edges, nodes }
-}
-
-function supportsHostConnection(channel: string | null | undefined): boolean {
-  return ['usb_serial', 'usb_can'].includes(channel ?? '')
 }

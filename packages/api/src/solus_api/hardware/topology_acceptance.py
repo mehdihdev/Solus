@@ -12,7 +12,7 @@ from sqlalchemy import select
 from solus_api.core.errors import APIError
 from solus_api.graph.edges import write_edge
 from solus_api.graph.inference import infer_after_acceptance
-from solus_api.graph.read_scope import resolve_scope
+from solus_api.graph.read_scope import flags_of, resolve_scope
 from solus_api.hardware.config import is_private_source
 from solus_api.hardware.operations import ReviewedHardwareOperations
 from solus_api.hardware.topology import EVIDENCE_MARKER as MARKER
@@ -128,6 +128,9 @@ class TopologyAcceptanceService(TopologyProposalService):
         if not hmac.compare_digest(proposal.proposal_digest, body.proposal_digest):
             raise APIError(409, "proposal_changed", "Source evidence changed; review again.")
         topology = await read_topology(self.session, self.project_id, robot_id)
+        # Read (and 404'd if not the reader's) by read_topology; its evidence follows it.
+        robot = await self.session.get(GraphEntity, robot_id)
+        assert robot is not None
         scope = await resolve_scope(self.session, self.project_id, self.user_id)
         retained = set(
             await self.session.scalars(
@@ -161,6 +164,7 @@ class TopologyAcceptanceService(TopologyProposalService):
                             "managed_by": MARKER,
                             "nonoperational": True,
                             "robot_id": str(robot_id),
+                            **flags_of(robot.attrs),
                         },
                     )
                 )

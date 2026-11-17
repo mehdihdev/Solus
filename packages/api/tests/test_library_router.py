@@ -1,5 +1,5 @@
 """R4 library routes (docs/api/hardware.md §5): search and preview definitions, import a
-platform into a new robot (parts under their categories, a LIBRARY-provenance config, a
+platform into a new robot (parts it contains directly, a LIBRARY-provenance config, a
 reconciliation pass against detected devices), import one part into a robot. Scoped through
 `ProjectCtx` (non-member → 404), MEMBER on writes, an event on every mutation."""
 
@@ -11,7 +11,7 @@ from conftest import BOB, add_member, create_project, create_team, me
 from fastapi import FastAPI
 from httpx import AsyncClient
 from solus_api.hardware import library_router
-from solus_api.models import DataEvent, GraphEntity, User
+from solus_api.models import DataEvent, GraphEdge, GraphEntity, User
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_hardware_detect import _wire_device
@@ -95,6 +95,18 @@ async def _parts_of(db: AsyncSession, robot_id: str) -> list[GraphEntity]:
         .order_by(GraphEntity.id)
     )
     return list(rows)
+
+
+async def _contained(db: AsyncSession, robot_id: str) -> set[uuid.UUID]:
+    """What the robot root `contains` directly (SOLUSDEV-326: no category nodes between)."""
+    rows = await db.scalars(
+        select(GraphEdge.dst_id).where(
+            GraphEdge.src_id == uuid.UUID(robot_id),
+            GraphEdge.relation_type == "contains",
+            GraphEdge.deleted_at.is_(None),
+        )
+    )
+    return set(rows)
 
 
 async def _consent(db: AsyncSession) -> None:
@@ -203,12 +215,9 @@ async def test_import_platform_creates_the_robot_its_parts_and_a_library_config(
 
     parts = await _parts_of(db, robot["id"])
     assert {str(p.id) for p in parts} == set(data["part_ids"])
-    by_category: dict[str, list[GraphEntity]] = {}
+    assert await _contained(db, robot["id"]) == {p.id for p in parts}  # the robot holds them
     for part in parts:
-        by_category.setdefault(part.attrs["category"], []).append(part)
-    assert len(by_category["actuators"]) == 5 and len(by_category["end_effectors"]) == 1
-    assert by_category["end_effectors"][0].attrs["role"] == "gripper"
-    for part in parts:
+        assert "category" not in part.attrs  # SOLUSDEV-326: no category is stored
         assert part.external_ref is None and part.origin == "manual"
         assert part.attrs["provenance"] == "library"
         assert part.attrs["definition_id"] == "sts3215"
@@ -253,14 +262,14 @@ async def test_import_platform_honours_a_name_and_validates_the_body(
     assert missing.status_code == 404, missing.text
 
 
-async def test_import_drone_places_parts_under_their_categories_on_one_bus(
+async def test_import_drone_puts_its_parts_in_the_robot_on_one_bus(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
     project_id, _ = await _project(client, alice_headers)
     data = await _import_platform(client, alice_headers, project_id, "px4-quadrotor")
     parts = await _parts_of(db, data["robot"]["id"])
-    categories = sorted(p.attrs["category"] for p in parts)
-    assert categories == ["actuators"] * 4 + ["controllers"] + ["sensors"] * 3
+    assert len(parts) == 8
+    assert await _contained(db, data["robot"]["id"]) == {p.id for p in parts}
     config = await _config(client, alice_headers, project_id, data["robot"]["id"])
     assert config["protocol"]["driver_id"] == "mavlink"
     assert [e["address"] for e in config["bus_map"]] == DRONE_ADDRESSES
@@ -298,7 +307,7 @@ async def test_import_part_into_a_robot(
     data = resp.json()["data"]
     entity = data["entity"]
     assert entity["type"] == "part" and entity["name"] == "Bosch BMP390"
-    assert entity["properties"]["category"] == "sensors"
+    assert "category" not in entity["properties"]
     assert entity["properties"]["definition_id"] == "bmp390"
     assert entity["properties"]["provenance"] == "library"
     assert entity["properties"]["manufacturer"] == "Bosch"
@@ -320,15 +329,22 @@ async def test_import_part_into_a_robot(
     }
     assert len(config["bus_map"]) == 6  # the platform's bus map is untouched
 
-    overridden = await client.post(
+    retired = await client.post(
         _url(project_id, "parts", "lipo-4s", "import"),
         headers=alice_headers,
         json={"robot_id": robot_id, "category": "structure"},
     )
-    assert overridden.status_code == 201, overridden.text
-    assert overridden.json()["data"]["entity"]["properties"]["category"] == "structure"
+    assert retired.status_code == 422, retired.text  # SOLUSDEV-326 P2: no body takes one
+    second = await client.post(
+        _url(project_id, "parts", "lipo-4s", "import"),
+        headers=alice_headers,
+        json={"robot_id": robot_id},
+    )
+    assert second.status_code == 201, second.text
+    assert "category" not in second.json()["data"]["entity"]["properties"]
     parts = await _parts_of(db, robot_id)
     assert len(parts) == 8
+    assert await _contained(db, robot_id) == {p.id for p in parts}
 
 
 async def test_import_part_404s_and_422s(
@@ -349,7 +365,11 @@ async def test_import_part_404s_and_422s(
         json={"robot_id": str(uuid.uuid4())},
     )
     assert unknown_robot.status_code == 404, unknown_robot.text
-    for body in ({}, {"robot_id": robot_id, "category": "engines"}, {"robot_id": robot_id, "x": 1}):
+    for body in (
+        {},
+        {"robot_id": robot_id, "category": "structure"},
+        {"robot_id": robot_id, "x": 1},
+    ):
         resp = await client.post(
             _url(project_id, "parts", "bmp390", "import"), headers=alice_headers, json=body
         )

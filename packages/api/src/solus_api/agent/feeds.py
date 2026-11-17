@@ -135,7 +135,11 @@ class DbSolSystems:
         project_id: UUID,
         window: TelemetryWindow,
     ) -> TelemetrySummaryView:
-        return await self._telemetry.get_telemetry(project_id, window)
+        # SOLUSDEV-326: hardware another member keeps out of the graph never reaches this
+        # viewer's turn — the tool and the context window both read through here.
+        async with self._sessionmaker() as session:
+            hidden = await current_scope(project_id).hidden_ids(session)
+        return await self._telemetry.get_telemetry(project_id, window, exclude=hidden)
 
     async def get_error_history(
         self,
@@ -191,9 +195,12 @@ class DbSolSystems:
         # filtered one (SEC H1). The bucket rides in the cache's kind dimension, so
         # both the exact AND the similarity path are bound by it.
         project_id = filter.project_id
+        # The caller's view keys it too: their branch snapshots, and (SOLUSDEV-326) the viewer
+        # whose un-added hardware a retrieval may return.
+        scope = current_scope(project_id)
         bucket = (
             f"{kind}|{k}|{','.join(sorted(filter.source_types or []))}"
-            f"|{','.join(sorted(filter.domains or []))}|{current_scope(project_id).replacements}"
+            f"|{','.join(sorted(filter.domains or []))}|{scope.replacements}|{scope.viewer_id}"
         )
         cached = self._cache.lookup(project_id, bucket, query_text, None)
         if cached is not None:

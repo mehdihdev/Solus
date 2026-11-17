@@ -15,13 +15,14 @@ import uuid
 from typing import Final, Literal
 
 from solus_contracts.relations import RelationType
-from sqlalchemy import select
+from sqlalchemy import not_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from solus_api.graph import kinds
 from solus_api.graph.edges import is_candidate
 from solus_api.graph.inference.manifest_edges import REQUIREMENT_KINDS
+from solus_api.graph.read_scope import IN_GRAPH
 from solus_api.models import GraphEdge, GraphEntity, SolusEntry, SolusSection, utcnow
 from solus_api.services.solus_config import put_config_entry
 from solus_api.services.solus_graph import SolusGraph
@@ -46,11 +47,12 @@ def _ecosystem(requirement: GraphEntity) -> str | None:
 
 
 async def build_environment_spec(session: AsyncSession, project_id: uuid.UUID) -> EnvironmentSpec:
-    requirement = aliased(GraphEntity)
+    requirement, requirer = aliased(GraphEntity), aliased(GraphEntity)
     rows = (
         await session.execute(
             select(GraphEdge, requirement)
             .join(requirement, requirement.id == GraphEdge.dst_id)
+            .join(requirer, requirer.id == GraphEdge.src_id)
             .where(
                 GraphEdge.project_id == project_id,
                 GraphEdge.relation_type.in_(_RELATIONS),
@@ -58,6 +60,9 @@ async def build_environment_spec(session: AsyncSession, project_id: uuid.UUID) -
                 requirement.project_id == project_id,
                 requirement.deleted_at.is_(None),
                 requirement.kind.in_(sorted(REQUIREMENT_KINDS)),
+                # SOLUSDEV-326: the spec is every member's; hardware out of the graph is none of it.
+                not_(requirer.attrs.contains({IN_GRAPH: False})),
+                not_(requirement.attrs.contains({IN_GRAPH: False})),
             )
             .order_by(requirement.name, GraphEdge.id)
         )

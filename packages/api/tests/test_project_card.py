@@ -58,6 +58,8 @@ from solus_api.models import (
     Domain,
     GraphEntity,
     Project,
+    SolusEntry,
+    SolusEntryKind,
     SolusSection,
     Source,
     SourceStatus,
@@ -277,8 +279,22 @@ async def test_card_lists_robots_sources_solus_counts_budgets(
 
     assert card.name == "Rover"
     assert card.robots == (
-        CardRobot(entity_id=arm.id, name="Arm A", external_ref="dev-1", host_machine_id="host-a"),
-        CardRobot(entity_id=spare.id, name="Arm B", external_ref=None, host_machine_id=None),
+        CardRobot(
+            entity_id=arm.id,
+            name="Arm A",
+            external_ref="dev-1",
+            host_machine_id="host-a",
+            in_graph=True,
+            onboarded_by=None,
+        ),
+        CardRobot(
+            entity_id=spare.id,
+            name="Arm B",
+            external_ref=None,
+            host_machine_id=None,
+            in_graph=True,
+            onboarded_by=None,
+        ),
     )
     assert card.sources == (
         CardSource(type="github", name="Rover firmware", capabilities=capabilities["github"]),
@@ -344,6 +360,8 @@ def _wide_card(
                 name=f"robot {i:02d} " + "r" * 60,
                 external_ref=f"dev-{i}",
                 host_machine_id=None,
+                in_graph=True,
+                onboarded_by=None,
             )
             for i in range(robots)
         ),
@@ -920,3 +938,141 @@ async def test_card_failure_yields_no_card_not_an_error(
 
     records = [r for r in caplog.records if r.name == _LOGGER]
     assert len(records) == 2 and all(r.exc_info is not None for r in records)
+
+
+# ── SOLUSDEV-326: hardware out of the graph is on its onboarder's card alone ─────
+
+
+def _robot_row(name: str, *, onboarder: uuid.UUID | None = None) -> CardRobot:
+    return CardRobot(
+        entity_id=uuid.uuid4(),
+        name=name,
+        external_ref=None,
+        host_machine_id=None,
+        in_graph=onboarder is None,
+        onboarded_by=onboarder,
+    )
+
+
+def test_a_hidden_robot_renders_for_its_onboarder_alone() -> None:
+    onboarder = uuid.uuid4()
+    card = ProjectCard(
+        name="Rover",
+        robots=(_robot_row("Shared arm"), _robot_row("Private arm", onboarder=onboarder)),
+        sources=(),
+        solus={},
+        subsections={},
+    )
+
+    def text(viewer: uuid.UUID | None) -> str:
+        return render_card(
+            card,
+            findings={},
+            machine=None,
+            active_device_ids=frozenset(),
+            budgets="no budgets",
+            viewer=viewer,
+        )
+
+    assert "Private arm" in text(onboarder) and "robots (2)" in text(onboarder)
+    for other in (uuid.uuid4(), None):
+        assert "Private arm" not in text(other) and "robots (1): Shared arm" in text(other)
+
+
+async def test_the_card_reads_visibility_counts_only_shared_configs_and_rebuilds_old_json(
+    engine: AsyncEngine, db: AsyncSession, settings: Settings
+) -> None:
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    project_id, _ = await _project(db)
+    onboarder, teammate = uuid.uuid4(), uuid.uuid4()
+    shared = await _robot(db, project_id, "Shared arm")
+    hidden = await _robot(db, project_id, "Private arm")
+    hidden.attrs = {"in_graph": False, "onboarded_by": str(onboarder)}
+    for robot in (shared, hidden):
+        db.add(
+            SolusEntry(
+                project_id=project_id,
+                section=SolusSection.ENVIRONMENT,
+                subsection="hardware",
+                kind=SolusEntryKind.CONFIG,
+                text=f"Hardware config — {robot.name}",
+                payload={"schema_version": 2, "entity_id": str(robot.id)},
+                configured_entity_id=robot.id,
+                config_version=1,
+            )
+        )
+    await db.commit()
+
+    registry = build_registry(settings)
+    card = await build_project_card(db, project_id, catalog=registry.catalog())
+    assert {(r.name, r.in_graph, r.onboarded_by) for r in card.robots} == {
+        ("Shared arm", True, None),
+        ("Private arm", False, onboarder),
+    }
+    # The cached card is every member's: its counts leave another person's config out.
+    assert card.solus == {"environment": 1}
+
+    store = InMemoryCacheStore()
+    old = card.model_dump(mode="json")
+    for robot in old["robots"]:
+        del robot["in_graph"], robot["onboarded_by"]  # a card cached before SOLUSDEV-326
+    await store.set(f"solus:project_card:{project_id}", json.dumps(old), 600)
+    cache = ProjectCardCache(store)
+    assert await cache.get(project_id) is None  # an old shape is a miss, never trusted
+
+    def inputs(viewer: uuid.UUID) -> CardInputs:
+        return CardInputs(
+            cache=cache,
+            connectors=registry,
+            findings={},
+            machine=None,
+            active_device_ids=frozenset(),
+            budgets="no budgets",
+            viewer_id=viewer,
+        )
+
+    theirs = await project_card_section(maker, project_id, inputs(teammate))
+    mine = await project_card_section(maker, project_id, inputs(onboarder))
+    assert theirs is not None and mine is not None
+    assert "Private arm" not in theirs.text and "Shared arm" in theirs.text
+    assert "Private arm" in mine.text
+
+
+async def test_a_turn_card_carries_the_callers_view(
+    app: FastAPI,
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    db: AsyncSession,
+) -> None:
+    """Through the SOL route: Alice's un-added robot is on her turn's card, never on Bob's."""
+    alice = await me(client, alice_headers)
+    team = await create_team(client, alice_headers)
+    project = await create_project(client, alice_headers, team["id"])
+    await me(client, bob_headers)
+    await add_member(client, alice_headers, bob_headers, BOB, team["id"])
+    hidden = await _robot(db, uuid.UUID(project["id"]), "Private arm")
+    hidden.attrs = {"in_graph": False, "onboarded_by": alice["id"]}
+    await db.commit()
+
+    async def turn_card(headers: dict[str, str]) -> str:
+        recorder = _Recorder()
+        app.state.agent_runner = recorder
+        conversation = await client.post(
+            f"/api/v1/projects/{project['id']}/sol/conversations", json={}, headers=headers
+        )
+        reply = await client.post(
+            f"/api/v1/projects/{project['id']}/sol/conversations/"
+            f"{conversation.json()['data']['id']}/messages",
+            json={"content": "which robots do we have?"},
+            headers=headers,
+        )
+        assert reply.status_code == 200, reply.text
+        section = await project_card_section(
+            recorder.ctx.sessionmaker, recorder.ctx.project_id, recorder.ctx.project_card
+        )
+        assert section is not None
+        return section.text
+
+    assert "Private arm" in await turn_card(alice_headers)
+    assert "Private arm" not in await turn_card(bob_headers)

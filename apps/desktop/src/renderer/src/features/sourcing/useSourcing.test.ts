@@ -226,13 +226,13 @@ function sourcingRequestOutcomesTests(): void {
     await waitFor(() => expect(result.current.phase).toBe('candidates'))
     await act(() =>
       result.current.actions.select('aaaaaaaaaaaaaaaa', {
-        category_entity_id: 'cat-1',
+        robot_entity_id: 'robot-1',
         quantity: 2
       })
     )
     expect(api.selectSourcingCandidate).toHaveBeenCalledWith('p1', 'req-1', {
       candidate_id: 'aaaaaaaaaaaaaaaa',
-      category_entity_id: 'cat-1',
+      robot_entity_id: 'robot-1',
       quantity: 2
     })
     expect(result.current.phase).toBe('selected')

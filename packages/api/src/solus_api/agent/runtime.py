@@ -155,10 +155,15 @@ def build_sol_registry(
     graph_hub: "LiveHub | None" = None,
     enqueue_sim: "SimEnqueue | None" = None,
     artifact_max_bytes: int | None = None,
+    hardware_local: Any | None = None,
 ) -> ToolRegistry:
     """Assemble the tool set SOL may invoke for ONE request, each tool bound to the
     request's project scope by Solus code. v1 exposes the W0-04 reference tool; new
     tools are registered here, never proposed by a model.
+
+    `hardware_local` is this API's local runner when it may watch the machine's devices
+    (`device_watch.watcher_wanted`, SOLUSDEV-326): only then, and only for a person, are the
+    hardware reads registered — a hosted API has none.
 
     When a bridge session registry + full scope are supplied (SOLUSDEV-154), one
     BridgeTool per model-facing entry of the LIVE cloud-validated inventory is added —
@@ -214,6 +219,7 @@ def build_sol_registry(
             fetch_environments=fetch_environments,
             graph_hub=graph_hub,
             enqueue_sim=enqueue_sim,
+            hardware_local=hardware_local,
         )
     # SOLUSDEV-321 P5 (R104, D10): SOL looks at one labelled view, as the requesting person;
     # absent without the person, their team and both stores (the guard is in the call).
@@ -355,9 +361,23 @@ def _register_user_tools(
     fetch_environments: "EnvironmentFetch | None" = None,
     graph_hub: "LiveHub | None" = None,
     enqueue_sim: "SimEnqueue | None" = None,
+    hardware_local: Any | None = None,
 ) -> None:
     """Tools that act AS the requesting user (their id is recorded on every row).
     Function-local imports throughout (house pattern)."""
+    if hardware_local is not None:
+        # SOLUSDEV-326 P2-T4: the hardware reads, as this member, on a local API alone; P2-T5:
+        # with the app's hub to publish through, the card tools (each write parks a card).
+        from solus_api.agent.tools.hardware_onboarding import register_hardware_tools
+
+        register_hardware_tools(
+            registry,
+            session_factory,
+            project_id,
+            user_id=user_id,
+            local=hardware_local,
+            hub=graph_hub,
+        )
     # SOLUSDEV-321 P4-T4 (R90, R110): `get_sim_result`; with the app's hub, `simulate` and the gated
     # `apply_sim_change`. No model call: rungs 1 and 3 are code, rungs 2 and 4 named gated tools.
     from solus_api.agent.tools.simulate import register_simulation_tools
@@ -374,6 +394,10 @@ def _register_user_tools(
     from solus_api.agent.tools.solus_entry import build_add_solus_entry_tool
 
     registry.register(build_add_solus_entry_tool(session_factory, project_id, user_id=user_id))
+    # SOLUSDEV-326: `ask_user`, the question card — ungated; the person answers it as a turn.
+    from solus_api.agent.tools.ask_user import register_ask_user
+
+    register_ask_user(registry, session_factory, project_id, user_id=user_id)
     # SOLUSDEV-246 (STORE ST5): a READ — torque is Solus arithmetic over the
     # graph, never the model's.
     from solus_api.sourcing.tools import build_derive_torque_tool
@@ -1063,6 +1087,11 @@ class TurnView:
     content: str
 
 
+def _no_working_line(call: ToolCall) -> str | None:
+    """A turn bound to no registry frames no `working` line."""
+    return None
+
+
 @dataclass(frozen=True)
 class AgentRunContext:
     """Everything a runner needs for one turn. Assembled by Solus code per request;
@@ -1091,6 +1120,9 @@ class AgentRunContext:
     #: (see modes.build_mode_dispatch), this field just makes the choice explicit
     #: and inspectable. Guide is the safe default — it never mutates.
     action_mode: ActionMode = ActionMode.GUIDE
+    #: The request's `force_confirmation` (SOLUSDEV-326: the Hardware page always sends it): every
+    #: action this turn proposes parks a card, and Build's prompt line says so.
+    force_confirmation: bool = False
     executed_build_calls: set[str] = field(default_factory=set)
     #: S1-W3: the composer's "Think harder". One tier above what the estimator
     #: says the live message needs (HARD stays HARD), passed to the gateway as an
@@ -1182,6 +1214,9 @@ class AgentRunContext:
     #: for THIS turn only — never stored. Its route ordering reaches the system prompt
     #: (`front_app.route_note`); its name and title only the live turn's fenced block.
     front_app: "FrontAppBinding | None" = None
+    #: SOLUSDEV-326: a call's Solus-authored `working` line for its `tool_call` frame — the
+    #: route binds `cards.working_line` to the turn's registry. A lookup, never a dispatch.
+    working: Callable[[ToolCall], str | None] = _no_working_line
 
 
 #: A proposed call → its result. The gate is inside; see `build_dispatch`.
@@ -1331,7 +1366,7 @@ class ScaffoldRunner:
 
         results: list[ToolResult] = []
         for call in plan_tool_calls(ctx.prompt)[: turn_limits(ctx.action_mode).tool_calls]:
-            yield AgentEvent.tool_call(call)
+            yield AgentEvent.tool_call(call, working=ctx.working(call))
             result = await ctx.dispatch(call)  # gates, then invokes — §7
             results.append(result)
             yield AgentEvent.tool_result(result)
@@ -1659,6 +1694,10 @@ class LlmRunner:
             if ctx.conversation_id is not None
             else prompt.new_nonce()
         )
+        from solus_api.agent.tools.hardware_cards import HARDWARE_CARDS
+        from solus_api.agent.tools.hardware_onboarding import LIST_DEVICES
+
+        offered_names = {tool.name for tool in ctx.tools}
         system = prompt.system_prompt(
             ctx.sol_mode,
             ctx.custom_instruction,
@@ -1668,6 +1707,11 @@ class LlmRunner:
             nonce=nonce,
             expertise=ctx.expertise,
             front_app=ctx.front_app,
+            # SOLUSDEV-326: the hardware note, or why there is none, from the turn's own tools.
+            # The card sentence only where the card tools are (they need the app's live hub).
+            hardware=LIST_DEVICES in offered_names,
+            hardware_cards=not offered_names.isdisjoint(HARDWARE_CARDS),
+            every_action_carded=ctx.force_confirmation,
         )
         # P1-T5: the model is offered every tool but the ones only the server drives (research).
         # P7: a GUI tool's knowledge note is read for the release on the asker's own machine.
@@ -1911,7 +1955,7 @@ class LlmRunner:
                     args=use.args,
                     call_id=use.id,
                 )
-                yield AgentEvent.tool_call(call)
+                yield AgentEvent.tool_call(call, working=ctx.working(call))
                 result = await model_dispatch(call)  # gates, then invokes
                 descriptor = next((d for d in offered if d.name == call.tool), None)
                 # Mutation flags still protect Guide; actual Build dispatch

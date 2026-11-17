@@ -12,6 +12,8 @@ from solus_api.billing.entitlements import effective_limits, is_local_trial_expi
 from solus_api.billing.plans import CHECKOUTABLE_PLANS
 from solus_api.connectors.eda import MAX_EXPORT_BYTES
 from solus_api.connectors.quota import QuotaState
+from solus_api.graph.kinds import MACHINE
+from solus_api.graph.read_scope import OWNER_ONLY_MACHINE_ATTRS, current_scope, owns_machine
 from solus_api.models import (
     SOL_CUSTOM_INSTRUCTION_CAP,
     AccountConnection,
@@ -492,6 +494,15 @@ def serialize_legacy_connection(
     }
 
 
+def _readable_attrs(entity: GraphEntity) -> dict[str, Any]:
+    """A machine's owner-only attrs reach its owner alone — the bound read scope's viewer
+    (SOLUSDEV-326); outside a request nobody is its owner."""
+    viewer = current_scope(entity.project_id).viewer_id
+    if entity.kind != MACHINE or owns_machine(entity.attrs, viewer):
+        return entity.attrs
+    return {k: v for k, v in entity.attrs.items() if k not in OWNER_ONLY_MACHINE_ATTRS}
+
+
 def serialize_entity(entity: GraphEntity) -> dict[str, Any]:
     # Connector-facing view: stable public keys (type/source_key/properties) sourced
     # from the unified graph columns (kind/external_ref/attrs). See Decision A.
@@ -504,7 +515,7 @@ def serialize_entity(entity: GraphEntity) -> dict[str, Any]:
         "type": entity.kind,
         "domain": entity.domain.value,
         "name": entity.name,
-        "properties": entity.attrs,
+        "properties": _readable_attrs(entity),
         "version": entity.version,
         "created_at": entity.created_at,
         "updated_at": entity.updated_at,

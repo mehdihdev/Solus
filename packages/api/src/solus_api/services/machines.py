@@ -136,7 +136,9 @@ async def upsert_machine(
         "owner_user_id": str(user_id),
         "tool_versions": versions,
         "simulators": derive_simulators(versions),
+        # SOLUSDEV-326: the device memory and each member's "Not now" (hardware/device_memory.py).
         "devices": prior.get("devices", []),
+        "dismissed": prior.get("dismissed", {}),
         "flash_history": prior.get("flash_history", []),
         "recent_commands": prior.get("recent_commands", []),
     }

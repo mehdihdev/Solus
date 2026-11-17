@@ -358,7 +358,7 @@ function positionViewport(
   stage: HTMLElement,
   location: Location
 ): HTMLElement | undefined {
-  // The device rail reserves a right padding; centre in the content box, not under the rail.
+  // An overlay (GraphNavigator `overlay`) reserves a right padding; centre in the content box, not under it.
   const railPad = parseFloat(getComputedStyle(viewport).paddingRight) || 0
   viewport.scrollLeft = Math.max(0, (stage.scrollWidth - viewport.clientWidth + railPad) / 2)
   viewport.scrollTop = Math.max(0, (stage.scrollHeight - viewport.clientHeight) / 2)

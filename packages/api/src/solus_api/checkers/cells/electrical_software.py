@@ -106,7 +106,7 @@ class BusBandwidthCapsLoopRate(UnstatedFactRule):
         facts=(
             FactNeed(
                 name="bus_bitrate_hz",
-                set_in="the robot's v2 config `protocol.params.bitrate_hz`",
+                set_in="the robot's v2 config `identity.<brain>.protocol.params.bitrate_hz`",
             ),
         ),
     )

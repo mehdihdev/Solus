@@ -28,6 +28,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_code_process_input_route import TAIL, ProcessCompanion, waiting_entry
 from test_sol import _create_conversation, _project
+from test_sol_notice import _noticed
+from test_sol_resume import _continued
 
 
 class _Capture:
@@ -308,6 +310,25 @@ async def test_wakes_and_resumes_share_the_six_turn_cap(
     assert (
         await client.post(_url(project, convo), json=_wake(3), headers=alice_headers)
     ).status_code == 200
+
+
+async def test_a_device_notice_does_not_clear_the_wake_cap(
+    client: AsyncClient,
+    app: FastAPI,
+    alice_headers: dict[str, str],
+    db: AsyncSession,
+    capture: _Capture,
+) -> None:
+    """The cap is the one per-message bound on wakes that send Enter on their own; a notice the
+    renderer sends on plug-in is a turn Solus wrote, so it leaves the cap where it was."""
+    _, project, convo, _companion = await _setup(client, app, alice_headers, db)
+    await _continued(db, project, convo, 6)
+    await _noticed(client, db, alice_headers, project, convo)
+
+    woken = await client.post(_url(project, convo), json=_wake(), headers=alice_headers)
+
+    assert woken.status_code == 409, woken.text
+    assert woken.json()["error"]["code"] == "resume_limit"
 
 
 async def test_a_wake_counts_toward_the_resume_chain(

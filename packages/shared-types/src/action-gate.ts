@@ -86,6 +86,8 @@ export interface ToolConfirmationEvent {
   readonly summary: string;
   /** Empty when the tool offers no preview; the summary is then the consent. */
   readonly preview: readonly DiffRow[];
+  /** SOLUSDEV-326: the Solus-authored card, when the tool authors one. Presentation only. */
+  readonly card?: Card | null;
 }
 
 /**
@@ -136,6 +138,76 @@ export function isConfirmationRefused(outcome: {
   return !outcome.data.ok;
 }
 
+// ── SOLUSDEV-326: cards ──────────────────────────────────────────────────────
+// See docs/contracts/action-gate.md §Cards. A card is the Solus-authored
+// presentation of a parked call, computed once from its STORED arguments. It is
+// never part of the consent or the stale check, and never sent back: the decision
+// body is still a decision and nothing else.
+
+/** The four kinds a card takes; the Hardware page's slot draws each its own way. */
+export const CARD_KINDS = ["offer", "approval", "step", "problem"] as const;
+export type CardKind = (typeof CARD_KINDS)[number];
+
+/** A value the card shows. Never sent back: an edit becomes the person's answer turn. */
+export interface CardField {
+  readonly label: string;
+  readonly value: string;
+}
+
+export interface Card {
+  readonly kind: CardKind;
+  /** At most 8 words, one line; an approval's starts "Approve:". */
+  readonly title: string;
+  /** At most 2 lines; `backtick` spans render as code chips. */
+  readonly body: string;
+  /** Guide mode's one-sentence explanation behind "more"; null in Expert. */
+  readonly more: string | null;
+  readonly field: CardField | null;
+  /** At most 24 characters. */
+  readonly primary: string;
+  readonly secondary: string | null;
+  /** The one line "Done so far" gains on approve. */
+  readonly receipt: string;
+  /** Server-set: SOL continues after any decision on this card. */
+  readonly resumes: boolean;
+}
+
+export interface OpenCard {
+  readonly confirmation_id: string;
+  readonly conversation_id: string;
+  readonly tool: string;
+  readonly card: Card;
+  /** ISO 8601; an expired card becomes a Problem with "Ask again". */
+  readonly expires_at: string;
+}
+
+/** `GET …/sol/cards/open`: the caller's oldest open card here, and how many more wait. */
+export interface OpenCards {
+  readonly card: OpenCard | null;
+  readonly queued: number;
+}
+
+/** `MessageCreate.notice`: something was plugged in; the server writes the turn. */
+export interface DeviceNotice {
+  readonly kind: "device";
+  readonly device_ref: string;
+}
+
+/**
+ * `MessageCreate.answer`: 0 is the primary button, 1 the secondary. It may also name an open card
+ * with a `field`: an edit, choice 0 with `text` the new value, which expires the card undecided.
+ */
+export interface QuestionAnswer {
+  readonly question_id: string;
+  readonly choice: 0 | 1;
+  readonly text?: string | null;
+}
+
+/** The open-card route. */
+export function openCardsPath(projectId: string): string {
+  return `/api/v1/projects/${encodeURIComponent(projectId)}/sol/cards/open`;
+}
+
 /** The shipped decide route (`routers/sol.py:446`). */
 export function confirmationDecisionPath(
   projectId: string,
@@ -149,11 +221,62 @@ export function confirmationDecisionPath(
 // lost on a variable), so these lists — proven complete against the interfaces
 // by CompleteKeysOf — are compared at runtime with the manifest Pydantic emits.
 
-const TC_FIELDS = ["confirmation_id", "tool", "args", "summary", "preview"] as const;
+const TC_FIELDS = [
+  "confirmation_id",
+  "tool",
+  "args",
+  "summary",
+  "preview",
+  "card",
+] as const;
 export const TOOL_CONFIRMATION_EVENT_FIELDS: CompleteKeysOf<
   ToolConfirmationEvent,
   typeof TC_FIELDS
 > = TC_FIELDS;
 
 const DR_FIELDS = ["label", "before", "after"] as const;
-export const DIFF_ROW_FIELDS: CompleteKeysOf<DiffRow, typeof DR_FIELDS> = DR_FIELDS;
+export const DIFF_ROW_FIELDS: CompleteKeysOf<DiffRow, typeof DR_FIELDS> =
+  DR_FIELDS;
+
+const CARD_KEYS = [
+  "kind",
+  "title",
+  "body",
+  "more",
+  "field",
+  "primary",
+  "secondary",
+  "receipt",
+  "resumes",
+] as const;
+export const CARD_FIELDS: CompleteKeysOf<Card, typeof CARD_KEYS> = CARD_KEYS;
+
+const CF_FIELDS = ["label", "value"] as const;
+export const CARD_FIELD_FIELDS: CompleteKeysOf<CardField, typeof CF_FIELDS> =
+  CF_FIELDS;
+
+const OC_FIELDS = [
+  "confirmation_id",
+  "conversation_id",
+  "tool",
+  "card",
+  "expires_at",
+] as const;
+export const OPEN_CARD_FIELDS: CompleteKeysOf<OpenCard, typeof OC_FIELDS> =
+  OC_FIELDS;
+
+const OCS_FIELDS = ["card", "queued"] as const;
+export const OPEN_CARDS_FIELDS: CompleteKeysOf<OpenCards, typeof OCS_FIELDS> =
+  OCS_FIELDS;
+
+const DN_FIELDS = ["kind", "device_ref"] as const;
+export const DEVICE_NOTICE_FIELDS: CompleteKeysOf<
+  DeviceNotice,
+  typeof DN_FIELDS
+> = DN_FIELDS;
+
+const QA_FIELDS = ["question_id", "choice", "text"] as const;
+export const QUESTION_ANSWER_FIELDS: CompleteKeysOf<
+  QuestionAnswer,
+  typeof QA_FIELDS
+> = QA_FIELDS;

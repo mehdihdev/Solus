@@ -136,7 +136,7 @@ async def _view(
     bundle: Bom, session: SessionDep
 ) -> tuple[list[BomRow], service.BomInputs, service.BomConfig]:
     project_id = bundle.ctx.project.id
-    inputs = await service.load_inputs(session, project_id)
+    inputs = await service.load_inputs(session, project_id, viewer_id=bundle.ctx.user.id)
     config = await service.load_config(session, project_id, bundle.manifest)
     return inputs.rows(), inputs, config
 
@@ -216,12 +216,18 @@ async def patch_row(
         )
     rows, _, _ = await _view(bundle, session)
     row = _find(rows, key)
+    # SOLUSDEV-326 (docs/api/hardware.md §1a): an overlay is every member's to read, so a row only
+    # hardware out of the graph holds takes none, and one is built from the row as they see it.
+    shared = (await service.load_inputs(session, project_id, viewer_id=None)).rows()
+    seen = next((other for other in shared if other.key == key), None)
+    if seen is None:
+        raise APIError(409, "conflict", f"Add {row.name} to the graph before editing its BOM row.")
     try:
         await service.upsert_overlay(
             session,
             project_id=project_id,
             user_id=bundle.ctx.user.id,
-            row=row,
+            row=seen,
             patch=patch,
             manifest=bundle.manifest,
         )
@@ -238,7 +244,8 @@ async def delete_row(key: RowKey, bundle: Bom, session: SessionDep) -> None:
     project_id = bundle.ctx.project.id
     if key.startswith("item:"):
         target = await service.find_item(session, project_id, uuid.UUID(key.split(":", 1)[1]))
-    else:
+    else:  # SOLUSDEV-326: only a row in the caller's view (`_find` is the 404 otherwise)
+        _find((await _view(bundle, session))[0], key)
         target = await service.find_overlay(session, project_id, key)
     if target is None:
         raise APIError(404, "not_found", "No such BOM row")

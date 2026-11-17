@@ -3,7 +3,6 @@
 // everything else to the WS-01 widgets, status-branched at the rail so a load in flight
 // never reads as "Nothing focused" and an error prints once.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetMarks } from '../../../lib/perf/marks'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Entity } from '../../../lib/api/resources'
 import { useWorkspaceStore } from '../../../store/workspaceStore'
@@ -74,7 +73,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   useWorkspaceStore.getState().reset()
   useFocusStore.getState().reset()
-  resetMarks()
   performance.clearMarks()
   performance.clearMeasures()
 })
@@ -156,6 +154,7 @@ describe('NodeSidebar — focused entity', () => {
 })
 
 describe('NodeSidebar — routing by type', () => {
+  // `robot_category` is a legacy row (SOLUSDEV-326 retired it); it still routes, never breaks.
   it.each(['physical_robot', 'robot_category'])('routes a %s to the robots hook', (type) => {
     useFocusStore.setState({ focusedEntityId: 'r1', status: 'loading' })
     mount(part({ id: 'r1', type, domain: 'project', name: 'Rover' }))

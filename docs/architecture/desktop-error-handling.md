@@ -28,11 +28,11 @@ next main renderer, signed in ── diag:take-crash-marker ──► one client
 
 ## Boundaries
 
-| Where                         | Surface                                                                                            | Scope    | Fallback                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------- |
-| `main.tsx` root, every window | `root` / `sol_window` / `ext_window` (from the hash)                                               | `app`    | Reload app · Copy details                                                   |
-| `main.tsx` root, `#/overlay`  | `overlay`                                                                                          | `silent` | nothing drawn (click-through window over the user's screen); still reported |
-| `WorkspaceShell` `ScreenView` | the shell route: `home` `workspace` `bench` `sol` `store` `billing` `settings` `alert` `extension` | `panel`  | Reload panel · Reload app · Copy details                                    |
+| Where                         | Surface                                                                                                       | Scope    | Fallback                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------- |
+| `main.tsx` root, every window | `root` / `sol_window` / `ext_window` (from the hash)                                                          | `app`    | Reload app · Copy details                                                   |
+| `main.tsx` root, `#/overlay`  | `overlay`                                                                                                     | `silent` | nothing drawn (click-through window over the user's screen); still reported |
+| `WorkspaceShell` `ScreenView` | the shell route: `home` `workspace` `hardware` `bench` `sol` `store` `billing` `settings` `alert` `extension` | `panel`  | Reload panel · Reload app · Copy details                                    |
 
 The panel boundary sits inside the route-keyed wrapper, so the nav rail is outside it and
 navigating away and back also starts the screen fresh. **Reload panel** clears the boundary and

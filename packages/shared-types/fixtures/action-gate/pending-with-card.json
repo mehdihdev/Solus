@@ -1,0 +1,22 @@
+{
+  "confirmation_id": "0b7e2c4a-6d1f-4c8e-9a3b-5f2d1e7c9a40",
+  "tool": "hardware.add_parts",
+  "args": {
+    "device_ref": "usb:port-5-1.2.3",
+    "robot": { "kind": "new", "name": "Rover arm" },
+    "rows": ["usb:port-5-1.2.3/1", "usb:port-5-1.2.3/2", "usb:port-5-1.2.3/3"]
+  },
+  "summary": "Add 3 servos on usb:port-5-1.2.3 to a new robot, Rover arm",
+  "preview": [{ "label": "Robot", "before": null, "after": "Rover arm (new)" }],
+  "card": {
+    "kind": "approval",
+    "title": "Approve: add 3 servos as Rover arm",
+    "body": "They answer on `/dev/ttyUSB0` at 1 Mbaud. Their names come from arm.yaml.",
+    "more": "A robot groups the parts that move together. You can rename it later.",
+    "field": { "label": "Robot name", "value": "Rover arm" },
+    "primary": "Approve",
+    "secondary": "Not now",
+    "receipt": "3 servos added as Rover arm",
+    "resumes": true
+  }
+}

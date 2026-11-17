@@ -98,9 +98,10 @@ async def test_put_config_refuses_another_robots_document(
     assert excinfo.value.status_code == 422
 
 
-async def test_create_part_lands_under_the_category_and_in_the_config(
+async def test_create_part_lands_in_the_robot_and_in_the_config(
     client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
 ) -> None:
+    """SOLUSDEV-326: the robot contains the part directly; no category is stored."""
     project_id = await _store_project(client, alice_headers)
     robot_id = await _store_robot(client, alice_headers, project_id)
     robot = await robot_root(db, project_id, robot_id)
@@ -109,55 +110,30 @@ async def test_create_part_lands_under_the_category_and_in_the_config(
         project_id,
         robot,
         name="Pressure sensor",
-        category="sensors",
         specs={"interface": "I2C", "supply_v": 3.3},
         lifecycle=LifecycleState.PLANNED,
         created_by=None,
     )
     await db.commit()
     assert part.kind == PART_KIND and part.origin == "manual" and part.source_id is None
-    assert part.attrs["category"] == "sensors" and part.attrs["specs"]["interface"] == "I2C"
-    category = await db.scalar(
-        select(GraphEntity).where(
-            GraphEntity.kind == "robot_category",
-            GraphEntity.attrs["robot_id"].astext == str(robot_id),
-            GraphEntity.attrs["category"].astext == "sensors",
+    assert part.attrs["robot_id"] == str(robot_id) and part.attrs["specs"]["interface"] == "I2C"
+    assert "category" not in part.attrs
+    edges = list(
+        await db.scalars(
+            select(GraphEdge).where(
+                GraphEdge.dst_id == part.id,
+                GraphEdge.relation_type == "contains",
+                GraphEdge.deleted_at.is_(None),
+            )
         )
     )
-    assert category is not None
-    edge = await db.scalar(
-        select(GraphEdge).where(
-            GraphEdge.src_id == category.id,
-            GraphEdge.dst_id == part.id,
-            GraphEdge.relation_type == "contains",
-            GraphEdge.deleted_at.is_(None),
-        )
-    )
-    assert edge is not None and edge.origin == "manual" and edge.source_id is None
+    assert [(edge.src_id, edge.origin, edge.source_id) for edge in edges] == [
+        (robot_id, "manual", None)
+    ]
     _, config = await read_entity_config(db, project_id, part.id)
     assert config is not None and config.component is not None
     assert config.component.lifecycle is LifecycleState.PLANNED
     assert config.provenance_of("component.lifecycle").by is FieldProvenance.USER
-
-
-async def test_create_part_refuses_an_unknown_category(
-    client: AsyncClient, alice_headers: dict[str, str], db: AsyncSession
-) -> None:
-    project_id = await _store_project(client, alice_headers)
-    robot_id = await _store_robot(client, alice_headers, project_id)
-    robot = await robot_root(db, project_id, robot_id)
-    with pytest.raises(APIError) as excinfo:
-        await create_part(
-            db,
-            project_id,
-            robot,
-            name="x",
-            category="propulsion",
-            specs={},
-            lifecycle=LifecycleState.PLANNED,
-            created_by=None,
-        )
-    assert excinfo.value.status_code == 422
 
 
 async def test_promote_keeps_the_entity_id_and_edges(
@@ -171,7 +147,6 @@ async def test_promote_keeps_the_entity_id_and_edges(
         project_id,
         robot,
         name="ESC",
-        category="actuators",
         specs={},
         lifecycle=LifecycleState.ORDERED,
         created_by=None,
@@ -198,7 +173,6 @@ async def test_promote_refuses_a_part_of_another_robot(
         project_id,
         first,
         name="IMU",
-        category="sensors",
         specs={},
         lifecycle=LifecycleState.PLANNED,
         created_by=None,
@@ -213,11 +187,16 @@ async def test_robot_root_only_accepts_live_manual_robots(
 ) -> None:
     project_id = await _store_project(client, alice_headers)
     robot_id = await _store_robot(client, alice_headers, project_id)
-    category = await db.scalar(
-        select(GraphEntity).where(GraphEntity.attrs["robot_id"].astext == str(robot_id))
+    part, _ = await create_part(
+        db,
+        project_id,
+        await robot_root(db, project_id, robot_id),
+        name="IMU",
+        specs={},
+        lifecycle=LifecycleState.PLANNED,
+        created_by=None,
     )
-    assert category is not None
     with pytest.raises(APIError):
-        await robot_root(db, project_id, category.id)
+        await robot_root(db, project_id, part.id)  # a robot's part is not a robot
     with pytest.raises(APIError):
         await robot_root(db, uuid.uuid4(), robot_id)

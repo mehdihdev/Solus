@@ -109,6 +109,7 @@ async def snapshot(
         view = view.model_copy(update={"signals": view.signals[:64]})
         device = view.model_dump(mode="json")
         roles = manager.channel_roles(project, device_id)
+        display = manager.channel_display(project, device_id)
         for series, original in zip(device["signals"], view.signals, strict=True):
             points = [
                 point.model_dump(mode="json")
@@ -118,6 +119,7 @@ async def snapshot(
             series["points"] = downsample(points, 128)
             if series["signal"] in roles:
                 series["display_role"] = roles[series["signal"]]
+            series.update(display.get(series["signal"], {}))
         devices.append(device)
     return {
         "type": "telemetry",

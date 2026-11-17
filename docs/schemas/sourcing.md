@@ -12,25 +12,25 @@ One Job per sourcing request; the ARQ function `sourcing_request(ctx, request_id
 
 ## 2. `sourcing_requests`
 
-| column                  | type                  | notes                                                                 |
-| ----------------------- | --------------------- | --------------------------------------------------------------------- |
-| `id`                    | uuid PK               | uuid7                                                                 |
-| `project_id`            | uuid FK projects      | the tenancy anchor; every read filters on it                          |
-| `created_by`            | uuid FK users         | the metered user                                                      |
-| `job_id`                | uuid FK jobs, null    |                                                                       |
-| `status`                | jobstatus CHECK       | mirrors the Job                                                       |
-| `door`                  | varchar(16)           | `workspace` \| `bom`                                                  |
-| `spec`                  | jsonb                 | the `RequirementSpec` + `assembly_name` + `preferences` (never served) |
-| `torque`                | jsonb, null           | the derived torque payload                                            |
-| `assembly_entity_id`    | uuid, null            | the assembly the torque came from                                     |
-| `candidates`            | jsonb                 | `[Candidate]` after the rules pass (included)                         |
-| `excluded`              | jsonb                 | `[{candidate, reasons}]`                                              |
-| `rules`                 | jsonb, null           | the effective rules snapshot used                                     |
-| `model`                 | varchar, null         | the completion's model name                                           |
-| `error`                 | jsonb, null           | `{code, message}`                                                     |
-| `selected_candidate_id` | varchar(16), null     |                                                                       |
-| `selected_entity_id`    | uuid, null            | the planned `part` entity                                             |
-| `created_at`, `finished_at` | timestamptz       |                                                                       |
+| column                      | type               | notes                                                                  |
+| --------------------------- | ------------------ | ---------------------------------------------------------------------- |
+| `id`                        | uuid PK            | uuid7                                                                  |
+| `project_id`                | uuid FK projects   | the tenancy anchor; every read filters on it                           |
+| `created_by`                | uuid FK users      | the metered user                                                       |
+| `job_id`                    | uuid FK jobs, null |                                                                        |
+| `status`                    | jobstatus CHECK    | mirrors the Job                                                        |
+| `door`                      | varchar(16)        | `workspace` \| `bom`                                                   |
+| `spec`                      | jsonb              | the `RequirementSpec` + `assembly_name` + `preferences` (never served) |
+| `torque`                    | jsonb, null        | the derived torque payload                                             |
+| `assembly_entity_id`        | uuid, null         | the assembly the torque came from                                      |
+| `candidates`                | jsonb              | `[Candidate]` after the rules pass (included)                          |
+| `excluded`                  | jsonb              | `[{candidate, reasons}]`                                               |
+| `rules`                     | jsonb, null        | the effective rules snapshot used                                      |
+| `model`                     | varchar, null      | the completion's model name                                            |
+| `error`                     | jsonb, null        | `{code, message}`                                                      |
+| `selected_candidate_id`     | varchar(16), null  |                                                                        |
+| `selected_entity_id`        | uuid, null         | the planned `part` entity                                              |
+| `created_at`, `finished_at` | timestamptz        |                                                                        |
 
 Index: `(project_id, created_at desc)`.
 
@@ -39,5 +39,6 @@ Index: `(project_id, created_at desc)`.
 - Rules layer: one manual `sourcing_rules` entity per project (`domain project`, attrs = the
   rules), created by `PUT …/rules`.
 - Selection: a manual `part` entity (`properties.lifecycle = planned`, `sourcing`,
-  `vendor_cad_url`, supplier/cost/part number/quantity) and, for the Workspace door, a `contains`
-  edge from the chosen `robot_category`.
+  `vendor_cad_url`, supplier/cost/part number/quantity, `robot_id` with a robot) and, for the
+  Workspace door, a manual `contains` edge from the chosen Physical Robot root
+  (`robot_entity_id`; SOLUSDEV-326 retired `robot_category` containers).

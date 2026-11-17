@@ -30,7 +30,7 @@ before the canvas does. Every panel has the same chrome — the node's domain do
 (`SOURCE · ONSHAPE` for an account anchor, `<source type or domain> · <type>` otherwise), the
 name, and `AUTHORED BY` / `LAST EDITED` only when the record carries them (`.solus` entries:
 SOL authorship and `updated_at`; nothing is invented) — then a body by type: physical robot —
-rename, parts by category, connection, pending suggestions, unassigned parts, delete; `.solus`
+rename, its parts (`PARTS · N`), connection, pending suggestions, delete; `.solus`
 root/section/entry — `CONTENT OVERVIEW`, `NODES UNDERNEATH` / `CONTENTS`, the composer, and a
 footer of **Add / Edit · Upload · Ask SOL**; any other entity — **CONNECTIONS · N** (one card per
 neighbourhood edge: the other node, the relation, the edge sentence, and a status pill
@@ -104,16 +104,17 @@ Top-left **Add** opens a centred two-column modal titled **Add to graph** (desig
 The left column, **INTEGRATIONS**, lists the accounts connected in Home (provider logo tile ·
 login · the cached listing's real document count; non-connected or unsupported rows disabled),
 a **.solus** row (Upload documents) and a **Hardware** row. The right pane follows the selected
-row. For an account: `Connected as <login>`, a search box, and the cached documents as checkbox
+tab; the Hardware row is not a tab. For an account: `Connected as <login>`, a search box, and the cached documents as checkbox
 rows — a document already attached shows an **In graph** pill and re-selecting it only focuses
 its node; the others toggle into a pick set. Tree-shaped providers keep their document tree.
 For **.solus**: a dashed dropzone (`Drop documents here or click to choose`, `MD · PDF · CSV ·
 PNG — saved to .solus › <section>`), landing in the focused `.solus` node's section, else
-Documentation, through the existing import handler (8 MiB cap). For **Hardware**: the three
-sections in reading order — Devices found · Search · Describe something new — then a collapsed
-**Unassigned parts** disclosure; no card grid, preserving file/connector parts and the
-private-source subsection (`hardware-onboarding.md`); offline it shows one honest line and
-disables every control. The footer reads `Adds to <target>`, offers Cancel, and confirms with
+Documentation, through the existing import handler (8 MiB cap). The **Hardware** row
+(`Opens the Hardware page`) is a plain button: it closes the modal and the shell opens the
+Hardware page. No hardware onboarding lives in this modal — the embedded Devices found · Search ·
+Describe something new flow and its Unassigned parts disclosure are removed (SOLUSDEV-326), and
+with them the modal's "Find a sourced part" door (`sourcing.md`). The Hardware page
+(`hardware-onboarding.md`) is where hardware is added, with SOL. The footer reads `Adds to <target>`, offers Cancel, and confirms with
 **Add N documents** (`Select documents` while nothing is picked) or **Choose files**; picked
 documents import in order through the existing attach/sync path, then a shell toast names the
 count and source and the modal closes; a failed import stays open and visible.
@@ -128,39 +129,39 @@ usable. No provider call occurs on graph selection, zoom or layout changes.
 
 ## Physical Robot
 
-A robot comes to exist three ways, all in Add › Hardware (`hardware-onboarding.md`): a
-detected device's one-question card (Add saves it and schedules optional connection), a library
-platform (Search › Add as new robot), or explicit robot creation elsewhere in the workspace.
-**Describe something new** creates a part, including an unassigned part when no robot exists.
-A name saves context; connection and actual
-streaming require separate verified configuration and packet evidence. Standalone parts are
-supported by the v2 API without requiring robot creation.
-Detected devices not yet bound also dock as **pending cards at the canvas edge**, the
-same cards Add › Hardware › Devices found shows, so a device plugged in mid-session is
-visible without opening Add; adding or dismissing one clears it in both places.
-Supplier results (STORE ST5, `sourcing.md`) appear inline under the same Search input.
-An explicit metered supplier search uses the existing engine; typing alone never spends credits.
-The existing supplier selection endpoint creates a planned part. Details expand inline and no
-library, supplier or preview modal remains in Hardware. Existing BOM sourcing is independent.
-These controls are disabled offline. A robot's name is editable inline in the robot's sidebar, where rename, delete,
-unassigned parts, pending suggestions and connection status live. Multiple robots coexist
+A robot comes to exist through hardware onboarding with SOL (`hardware-onboarding.md`). The
+workspace itself asks nothing about a plugged-in device: there is no canvas-edge device rail, no
+detected-device card and no Add › Hardware form (removed in SOLUSDEV-326). A name saves context;
+connection and actual streaming require separate verified configuration and packet evidence.
+Existing BOM sourcing is independent. A robot's name is editable inline in the robot's sidebar, where rename, delete,
+pending suggestions and connection status live. The sidebar lists no unassigned parts and has no
+Attach (removed in SOLUSDEV-326 P3): a manual part no robot holds is on the Hardware page under
+"Not on a robot", and attaching one to a robot is SOL's. Multiple robots coexist
 with independent names and containment.
-Enter a robot to see Sensors, Actuators / motors, Controllers, End effectors,
-Power, Structure, Wiring; enter a category to see its parts. Empty categories
-show an honest empty state. Every configured subject owns an independent v2 CONFIG; robot
+Enter a robot to see its parts: the robot contains them directly (SOLUSDEV-326), listed
+under one `Parts · N` heading; a robot with none shows an honest empty state. There are no
+category groups (a legacy category row, if one is ever shown, still lists what it contains).
+Every configured subject owns an independent v2 CONFIG; robot
 and controller connection fields refer to current part configs through the runtime adapter.
 Absent config remains absent until an explicit save; selecting it never creates database rows.
 
+**Not in the graph yet (SOLUSDEV-326).** Hardware onboarded with SOL can stay in its
+onboarder's hardware until they add it. Until then it has no card on the canvas, even for the
+onboarder, and no teammate sees it anywhere: canvas, sidebar, search, Live Bench or SOL (only
+findings and activity rows about it stay readable, [hardware §1a](../api/hardware.md)). Search
+and ⌘K still find it for its onboarder, but a reveal never selects a node that has no card; the
+Hardware page is where it opens. **Add to workspace graph** puts it on the canvas for
+everyone, together with its parts, brains, buses, configs and recorded bench runs (Add robot /
+Add on the Hardware page, or SOL's card). **Remove from graph** takes all of it back to the
+onboarder.
+
 Deleting a robot shows an inline two-step confirmation in the sidebar and explains that
-its parts are retained. After confirmation the parts remain reachable as unassigned: Add › Hardware ›
-**Unassigned parts** (collapsed; nothing is read until opened) uses one unified paginated
-query for retained, manual and connector parts, each with Part of ▾ + Category ▾ + Add. No
-second orphan fetch duplicates those rows. Deletion disables obsolete device bindings and
+its parts are retained. After confirmation its manual parts are listed on the Hardware page
+under "Not on a robot"; a connector's part stays under its document. Deletion disables obsolete device bindings and
 cancels pending connection attempts; a new robot may claim the released device. No part or unrelated cross-domain link
 is silently deleted; no inferred fingerprint link is automatically accepted.
-The retained-parts prompt survives reload and lists at most 24 parts per page; selecting
-one reveals its actual node even when a service document still contains it. Deleting a
-robot clears any selected category that was removed. A surviving selected part follows
+Deleting a
+robot clears any selected (legacy) category that was removed. A surviving selected part follows
 its remaining containment path. An authenticated project remains writable independently
 of the legacy onboarding completion flag, subject to server role checks.
 

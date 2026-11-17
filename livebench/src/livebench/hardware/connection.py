@@ -18,6 +18,7 @@ from solus_api.hardware.config import HardwareConfig, ProtocolBinding, Transport
 
 from livebench.hardware.channel import TransportRegistry
 from livebench.hardware.driver import DriverRegistry
+from livebench.hardware.serial_owner import Claimant, claiming
 from livebench.telemetry.observing_source import EventSink, Observer
 from livebench.telemetry.reconnect import ReconnectingSource
 from livebench.telemetry.robot import _observed
@@ -60,6 +61,26 @@ def part_routes(config: HardwareConfig) -> dict[str, str]:
     return {name: key for name, key in routes.items() if name not in ambiguous}
 
 
+def route_key(routes: Mapping[str, str], name: str, fallback: str) -> str:
+    """The graph key a signal goes out under: its exact route, else its `<part>` prefix's, else
+    the device's own key."""
+    return routes.get(name) or routes.get(name.split(".", 1)[0], fallback)
+
+
+def display_facts(
+    config: HardwareConfig, routes: Mapping[str, str], fallback: str
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Each part channel's declared display and display range (SOLUSDEV-326), under the same key
+    its packets go out under; a plain plot channel adds nothing (telemetry-packet.md §2a)."""
+    display: dict[str, dict[str, dict[str, Any]]] = {}
+    for part in config.parts.values():
+        for channel in part.telemetry:
+            if view := channel.presentation():
+                key = route_key(routes, channel.name, fallback)
+                display.setdefault(key, {})[channel.name] = view
+    return display
+
+
 class PartRoutingSource:
     """Splits every packet by signal prefix so each part's readings go out under the part's own
     graph key — the telemetry resolver matches `device_id` against `external_ref`, and a sweep
@@ -74,10 +95,7 @@ class PartRoutingSource:
         async for packet in self._inner:
             groups: dict[str, list[str]] = {}
             for name in packet.values:
-                key = self._routes.get(name) or self._routes.get(
-                    name.split(".", 1)[0], packet.device_id
-                )
-                groups.setdefault(key, []).append(name)
+                groups.setdefault(route_key(self._routes, name, packet.device_id), []).append(name)
             for key, names in groups.items():
                 yield packet.model_copy(
                     update={
@@ -98,15 +116,21 @@ def _bindings(config: HardwareConfig) -> tuple[TransportBinding, ProtocolBinding
 
 
 def build_source_factory(
-    config: HardwareConfig, *, transports: TransportRegistry, drivers: DriverRegistry
+    config: HardwareConfig,
+    *,
+    transports: TransportRegistry,
+    drivers: DriverRegistry,
+    claimant: Claimant | None = None,
 ) -> Callable[[], PacketSource]:
-    """A factory the reconnect loop calls per incarnation; each call re-opens by identity."""
+    """A factory the reconnect loop calls per incarnation; each call re-opens by identity,
+    claiming the device for `claimant` from the serial owner (SOLUSDEV-326)."""
     identity, protocol = _bindings(config)
     drivers.validate_params(protocol)  # bad parameters fail before any port is touched
     params = dict(protocol.params)
 
     def factory() -> PacketSource:
-        channel = transports.open(identity, params)
+        with claiming(claimant or Claimant()):
+            channel = transports.open(identity, params)
         try:
             return drivers.open_source(config, channel)
         except Exception:
@@ -120,25 +144,31 @@ def open_robot_connection(
     config: HardwareConfig,
     *,
     project_id: UUID | None,
+    user_id: UUID | None = None,
     transports: TransportRegistry,
     drivers: DriverRegistry,
     observers: Sequence[Observer] = (),
     on_event: EventSink | None = None,
     reconnect: bool = True,
 ) -> RobotConnection:
-    """Open eagerly (an absent device fails at the call site, not inside the reconnect loop).
-    Blocking; callers run it off-loop."""
+    """Open eagerly (an absent or busy device fails at the call site, not inside the reconnect
+    loop), every open claiming the device as `user_id`'s session in `project_id`. Blocking;
+    callers run it off-loop."""
     identity, protocol = _bindings(config)
-    factory = build_source_factory(config, transports=transports, drivers=drivers)
-    transports.open(identity, dict(protocol.params)).close()
+    claimant = Claimant.of("session", project_id, user_id)
+    factory = build_source_factory(
+        config, transports=transports, drivers=drivers, claimant=claimant
+    )
+    with claiming(claimant):
+        transports.open(identity, dict(protocol.params)).close()
     source: PacketSource = ReconnectingSource(factory) if reconnect else factory()
     routes = part_routes(config)
     if routes:
         source = PartRoutingSource(source, routes)
     channel_roles: dict[str, dict[str, str]] = {}
     for name, role in drivers.channel_roles(config).items():
-        key = routes.get(name) or routes.get(name.split(".", 1)[0], identity.device_ref)
-        channel_roles.setdefault(key, {})[name] = role
+        channel_roles.setdefault(route_key(routes, name, identity.device_ref), {})[name] = role
+    display = display_facts(config, routes, identity.device_ref)
     return RobotConnection(
         _observed(source, observers, on_event),
         project_id=project_id,
@@ -146,5 +176,6 @@ def open_robot_connection(
             "device_ref": identity.device_ref,
             "driver_id": protocol.driver_id,
             **({"channel_roles": channel_roles} if channel_roles else {}),
+            **({"channel_display": display} if display else {}),
         },
     )

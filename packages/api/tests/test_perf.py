@@ -15,6 +15,7 @@ from solus_api.agent.feeds import DbSolSystems
 from solus_api.agent.interfaces import RetrievalFilter
 from solus_api.agent.perf import SemanticCache
 from solus_api.graph.buffer import InMemoryTelemetryBuffer
+from solus_api.graph.read_scope import GraphReadScope, bind_scope
 from solus_api.graph.resolver import DbEntityResolver
 from solus_api.graph.telemetry import TelemetryPlumbing
 from solus_api.models import Domain, GraphEntity, Membership, Project, Role, Team, User
@@ -211,3 +212,38 @@ async def test_feeds_cache_never_caches_empty_results(
     await systems.record_error_solution(project.id, "i2c conflict", "re-strap AD0", "electrical")
     hits = await systems.get_error_history("i2c conflict", 5, scoped)
     assert [h.chunk for h in hits] == ["i2c conflict"]  # not masked by a cached empty
+
+
+async def test_feeds_cache_never_serves_one_persons_view_to_another(
+    db: AsyncSession, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """SOLUSDEV-326: retrieval runs in the caller's view, so a part its onboarder has not added
+    to the graph must not reach a teammate through the semantic cache either."""
+    project = await _seed_perf_project(db, "viewers")
+    onboarder, teammate = uuid.uuid4(), uuid.uuid4()
+    db.add(
+        GraphEntity(
+            project_id=project.id,
+            kind="part",
+            domain=Domain.ELECTRICAL,
+            name="imu sensor",
+            external_ref="ref-imu-hidden",
+            attrs={"in_graph": False, "onboarded_by": str(onboarder)},
+        )
+    )
+    await db.commit()
+    systems = DbSolSystems(
+        maker,
+        TelemetryPlumbing(InMemoryTelemetryBuffer(), DbEntityResolver(maker)),
+        cache=SemanticCache(clock=_Clock()),
+    )
+    scoped = RetrievalFilter(project_id=project.id)
+
+    async def ask(viewer: uuid.UUID) -> list[str]:
+        with bind_scope(GraphReadScope(project.id, viewer_id=viewer)):
+            return [hit.chunk for hit in await systems.rag_query("imu sensor", 5, scoped)]
+
+    assert await ask(onboarder) == ["imu sensor"]
+    assert await ask(teammate) == []
+    assert systems.cache_stats()["hits"] == 0
+    assert await ask(onboarder) == ["imu sensor"] and systems.cache_stats()["hits"] == 1

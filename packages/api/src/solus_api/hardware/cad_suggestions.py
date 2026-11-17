@@ -7,13 +7,12 @@ import math
 import uuid
 from typing import Any
 
-from sqlalchemy import String, cast, or_, select
+from sqlalchemy import not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from solus_api.core.errors import APIError
 from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
-from solus_api.graph.read_scope import resolve_scope
+from solus_api.graph.read_scope import GraphReadScope, resolve_scope, visible_to
 from solus_api.hardware.links import LinkSuggestion, LinkTier, list_suggestions, persist_suggestions
 from solus_api.hardware.store import PART_KINDS, attach_existing_parts, robot_root
 from solus_api.linking.linker import LINK_ORIGIN, RELATION_SAME_AS
@@ -26,47 +25,19 @@ from solus_api.models import (
     SuggestionStatus,
     utcnow,
 )
-from solus_api.services.physical_robots import ROBOT_CATEGORIES
+from solus_api.services.physical_robots import ownership_edge
 from solus_api.services.solus_graph import lock_project
 
 
 async def _owners(
     session: AsyncSession, project_id: uuid.UUID, part_id: uuid.UUID
-) -> set[tuple[uuid.UUID, str]]:
-    category, robot, parent = aliased(GraphEntity), aliased(GraphEntity), aliased(GraphEdge)
-    rows = await session.execute(
-        select(robot.id, category.attrs["category"].astext)
-        .select_from(GraphEdge)
-        .join(category, category.id == GraphEdge.src_id)
-        .join(parent, parent.dst_id == category.id)
-        .join(robot, robot.id == parent.src_id)
-        .where(
-            GraphEdge.project_id == project_id,
-            GraphEdge.dst_id == part_id,
-            GraphEdge.relation_type == "contains",
-            GraphEdge.origin == "manual",
-            GraphEdge.source_id.is_(None),
-            GraphEdge.deleted_at.is_(None),
-            category.project_id == project_id,
-            category.kind == "robot_category",
-            category.origin == "manual",
-            category.source_id.is_(None),
-            category.deleted_at.is_(None),
-            category.attrs["robot_id"].astext == cast(robot.id, String),
-            category.attrs["category"].astext.in_(ROBOT_CATEGORIES),
-            parent.project_id == project_id,
-            parent.relation_type == "contains",
-            parent.origin == "manual",
-            parent.source_id.is_(None),
-            parent.deleted_at.is_(None),
-            robot.project_id == project_id,
-            robot.kind == "physical_robot",
-            robot.origin == "manual",
-            robot.source_id.is_(None),
-            robot.deleted_at.is_(None),
+) -> set[uuid.UUID]:
+    """The robots that own the part (`ownership_edge`)."""
+    return set(
+        await session.scalars(
+            select(GraphEdge.src_id).where(ownership_edge(project_id), GraphEdge.dst_id == part_id)
         )
     )
-    return {(row[0], row[1]) for row in rows}
 
 
 async def _association(
@@ -76,7 +47,7 @@ async def _association(
     user_id: uuid.UUID,
     *,
     allow_attached: bool = False,
-) -> tuple[LinkSuggestion, str] | None:
+) -> LinkSuggestion | None:
     scope = await resolve_scope(session, project_id, user_id)
     part = await session.scalar(
         select(GraphEntity)
@@ -117,7 +88,7 @@ async def _association(
     )
     if len(edges) > 64:
         return None
-    owners: set[tuple[uuid.UUID, str]] = set()
+    owners: set[uuid.UUID] = set()
     evidence: list[ModalityMatch] = []
     for edge in edges:
         if (
@@ -162,32 +133,46 @@ async def _association(
                     "source_id": str(part.source_id),
                     "part_version": part.version,
                     "counterpart_version": counterpart.version,
-                    "targets": sorted(f"{robot}:{category}" for robot, category in targets),
+                    # Robot ids. A suggestion stored as `robot:category` no longer matches,
+                    # so its accept is a 409 asking for a fresh review (fail-safe).
+                    "targets": sorted(str(robot) for robot in targets),
                 },
             )
         )
     if len(owners) != 1 or (existing and existing != owners) or not evidence:
         return None
-    robot_id, category = next(iter(owners))
     return LinkSuggestion(
         subject_ref=str(part_id),
         subject_kind="part",
-        candidate_robot_id=robot_id,
+        candidate_robot_id=next(iter(owners)),
         confidence=min(item.confidence for item in evidence),
         tier=LinkTier.HIGH,
         evidence=evidence,
         reason="An existing matched CAD identity link points to a part owned by this robot",
-    ), category
+    )
+
+
+async def cad_association(
+    session: AsyncSession, project_id: uuid.UUID, part_id: uuid.UUID, user_id: uuid.UUID
+) -> LinkSuggestion | None:
+    """The robot an unattached connected CAD part belongs to, by its matched identity links, as
+    `user_id` sees the graph; None when there is none, no single one, or one they may not see (a
+    teammate's robot out of the graph, §1a). Writes nothing (SOLUSDEV-326: SOL's
+    `hardware.read_evidence`); `propose_cad_suggestions` files it."""
+    proposal = await _association(session, project_id, part_id, user_id)
+    robot = await session.get(GraphEntity, proposal.candidate_robot_id) if proposal else None
+    if robot is None or GraphReadScope(project_id, viewer_id=user_id).hides(robot.attrs):
+        return None
+    return proposal
 
 
 async def propose_cad_suggestions(
     session: AsyncSession, project_id: uuid.UUID, part_id: uuid.UUID, user_id: uuid.UUID
 ) -> list[HardwareSuggestion]:
     await lock_project(session, project_id)
-    association = await _association(session, project_id, part_id, user_id)
-    if association is None:
+    proposal = await _association(session, project_id, part_id, user_id)
+    if proposal is None:
         return []
-    proposal, _ = association
     current_evidence = [match.model_dump(mode="json") for match in proposal.evidence]
     for row in await list_suggestions(session, project_id):
         if (
@@ -224,10 +209,9 @@ async def accept_cad_suggestion(
         part_id = uuid.UUID(suggestion.subject_ref)
     except ValueError:
         raise APIError(409, "conflict", "CAD suggestion does not identify a graph part") from None
-    association = await _association(session, project_id, part_id, user_id, allow_attached=True)
-    if association is None:
+    proposal = await _association(session, project_id, part_id, user_id, allow_attached=True)
+    if proposal is None:
         raise APIError(409, "conflict", "CAD identity evidence changed; request a new review")
-    proposal, category = association
     evidence = [match.model_dump(mode="json") for match in proposal.evidence]
     if (
         suggestion.status is not SuggestionStatus.ACCEPTED
@@ -237,7 +221,7 @@ async def accept_cad_suggestion(
         raise APIError(409, "conflict", "CAD identity evidence changed; request a new review")
     robot = await robot_root(session, project_id, proposal.candidate_robot_id)
     attached, _, _ = await attach_existing_parts(
-        session, project_id, robot, entity_ids=[part_id], category=category, created_by=user_id
+        session, project_id, robot, entity_ids=[part_id], created_by=user_id
     )
     return {
         "attached_count": len(attached),
@@ -264,13 +248,24 @@ def is_cad_suggestion(row: HardwareSuggestion) -> bool:
     )
 
 
-async def filter_visible_cad_suggestions(
+async def filter_visible_suggestions(
     session: AsyncSession,
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     rows: list[HardwareSuggestion],
 ) -> list[HardwareSuggestion]:
-    """Filter personal revision references without rewriting the shared decision journal."""
+    """Filter, without rewriting the shared decision journal, what the reader cannot see: a CAD
+    suggestion's personal revision references, and (SOLUSDEV-326) a robot another member has not
+    added to the graph."""
+    hidden = set(
+        await session.scalars(
+            select(GraphEntity.id).where(
+                GraphEntity.project_id == project_id,
+                GraphEntity.id.in_({row.candidate_robot_id for row in rows}),
+                not_(visible_to(user_id)),
+            )
+        )
+    )
     required: dict[uuid.UUID, set[uuid.UUID]] = {}
     for row in rows:
         if row.project_id != project_id or not is_cad_suggestion(row):
@@ -302,5 +297,6 @@ async def filter_visible_cad_suggestions(
         row
         for row in rows
         if row.project_id == project_id
+        and row.candidate_robot_id not in hidden
         and (not is_cad_suggestion(row) or (row.id in required and required[row.id] <= visible))
     ]

@@ -57,7 +57,14 @@ protocol unchanged.
   the reply, open, label shimmering: SOL's thought summary as it streams, and each tool step as
   it starts — a mark (pulsing accent dot while running, ✓ done, ✕ failed), the step's name in
   words (`kicad.read_netlist` → `Read netlist`) and under it the persisted `tool → outcome` line
-  with the step's redacted args. A thought stretch sits after the steps that preceded it. Until the
+  with the step's redacted args. A call the gate parked for the person's OK is not a failure: its
+  step has a neutral mark (○, muted) and reads `tool → waiting for your OK` while its card is
+  open, then `approved by you` / `rejected by you` once decided here; when neither is known (a
+  reloaded turn, an answered question) it reads `asked for your OK`. The gate answers a park and
+  a real refusal with the same `unauthorized`, so a step is parked only on proof — live, the
+  `tool_confirmation` frame that follows its result; reloaded, the stored row's own "parked,
+  awaiting your approval" — and a refusal (Guide, a rejected call) keeps ✕ and its code. A
+  thought stretch sits after the steps that preceded it. Until the
   first thought or step arrives the reply shows the same shimmering **Thinking…** label. The block
   stays live for the whole turn (text SOL writes before a tool call does not end it); when the turn
   ends it folds into one line, `Thought for 12s · 3 steps` (thinking time only, not the tool runs;
@@ -97,7 +104,8 @@ protocol unchanged.
   footer): no Guide/Build badge, **Think harder**, **Confirm every change** or routing line on
   the page, the pill or the sidebar. SOL builds, routes and asks for confirmation as needed:
   every send goes in Build (`action_mode: "do"`), auto-routed (no `think_harder`, no
-  pre-flight `POST …/classify` call from the composer) and without `force_confirmation` — the
+  pre-flight `POST …/classify` call from the composer) and without `force_confirmation` (the
+  Hardware screen's sidebar is the exception, below) — the
   server still cards destructive, remote, install, hardware and unclassified actions (ADR
   action-mode amendment, SOLUSDEV-261). The plan card's "Show me how instead" is the one
   Guide send, for that message only. Every send carries
@@ -152,8 +160,11 @@ protocol unchanged.
     JSON text. Live turns only — a reloaded tool turn is the persisted `tool → outcome` line.
 
 SOLUSDEV-262's **Confirm every change** composer switch is retired (SOLUSDEV-327): the chat
-surfaces never send `force_confirmation`. The flag stays in the API for callers that need every
-change carded (the Workspace's firmware-telemetry and host-mirror offers still set it).
+surfaces never send `force_confirmation`, with one exception — the Hardware surface
+(SOLUSDEV-326). On the Hardware screen the page's card slot and the SOL sidebar send every turn
+with `force_confirmation: true`, so every gated call parks a card (`hardware-onboarding.md`,
+`sol-sidebar.md` §3); no control turns it on or off. The flag stays in the API for callers that
+need every change carded.
 
 SOLUSDEV-261 approval-card polish preserves the CTR-03 flow: a clear review heading,
 always-visible action summary, responsive labeled Before/After values with exact
@@ -236,6 +247,9 @@ solus_sol_pinned_v1`, keyed by project and conversation; a fresh chat's pins fol
 - A reply that finishes while the user is elsewhere raises the shell toast
   ("SOL replied" / "SOL turn failed", author-safe) with a **View** action
   jumping to the SOL page when the workspace is still on that project.
+  "Elsewhere" is anywhere but the SOL page or a screen with the SOL sidebar open (it shows the
+  same chat): on any screen with the sidebar closed, the Hardware page included, the toast
+  rises.
 - Each chat's settled turns mirror to `~/.solus/projects/<id>/sol/` (ADR-034
   Layer 1 cache): returning to a chat paints instantly from the cache, the
   server load then wins, and a cached chat stays readable when the API is
@@ -333,7 +347,8 @@ Governing spec: `docs/api/code-command-execution.md`. Applies identically to the
 - **SOL continues.** After an approved command card finishes, the client starts a resume turn
   (`resume_confirmation_id`) without adding a user bubble. SOL reads the result and either
   proposes the next step (which is another card) or answers. A `resume_limit` answer shows
-  "SOL paused — reply to continue". Rejecting a card does not resume.
+  "SOL paused — reply to continue". Rejecting a command card does not resume (a card that
+  carries `card.resumes` does, see "Cards in the thread").
 - **Running processes strip.** Above the composer, when this machine has processes started by
   SOL for the open project: one row per process (name or program, state, elapsed time) with
   **Output** (expands a bounded, keyboard-scrollable plain-text region, polled while open) and
@@ -351,3 +366,90 @@ They appear as a compact command row (program, status, `auto`) with a code-block
 region. Risky commands, workspace programs and shell scripts still show the card. Command output
 and SOL's markdown code blocks share one code-block surface, and each block has a top-right
 Copy button. The truncation label appears only when output was actually truncated.
+
+## Cards in the thread — SOLUSDEV-326
+
+A parked row can carry a Solus-authored `card` (`docs/contracts/action-gate.md` §Cards): on the
+`tool_confirmation` frame and on each row of `GET …/conversations/{id}/confirmations`, so a card
+is drawn the same live and after a reload. A card that is not the contract's shape is dropped and
+the row falls back to the ordinary approval card (`lib/api/card.ts`, the one check the Hardware
+page's slot uses too).
+
+- **Same copy, same result.** A row with a card renders in the existing `.confirmation-card`
+  (`features/sol/ChatCard.tsx`): the card's title, its body with `backtick` spans as code chips,
+  Guide's `more` line when there is one, and the card's own button labels in place of
+  Approve / Reject. The primary approves and the secondary rejects through the same decide route;
+  the decision body is still a decision and nothing else. An **approval** card has
+  `border-left-color: var(--warn)` and an 8% warn tint; the other kinds keep the card as it is.
+  The card's text is built from model-proposed arguments and renders as text only.
+- **An edit answers its card.** A gated card's field can be typed into, and what is typed is never
+  an argument of the parked call. The primary over an edited field does not call the decide
+  route: it posts `MessageCreate.answer {question_id: <the card's confirmation id>, choice: 0,
+text: <the new value>}` as a turn in that conversation, exactly as the Hardware page's slot
+  does. The server expires the card without deciding it and writes the turn, `<field label>:
+"<new value>"`. The card leaves the thread when the turn is admitted and comes back, live, when
+  it did not go through. The turn shows as the answer receipt line, naming the edit:
+  `Edited: <field label> — <new value>`, one rendering live and after a reload, text only (the
+  label and the value are read out of the stored words, whatever `attrs.answer` adds for an
+  edit). The secondary over an edited field is still only a rejection; an untouched field
+  approves.
+- **A question is answered, not decided.** A row whose tool is `ask_user` shows its two button
+  labels and, when it has a field, an input. A press posts `MessageCreate.answer
+{question_id, choice, text?}` (0 is the primary; `text` only when the person changed the field)
+  as a turn in that conversation and never calls the decide route, which knows no question. The
+  question leaves the thread with the press — and, when it was the last row of a restored
+  "Awaiting your approval" item, that item goes with it. The answer shows as a quiet
+  right-aligned receipt line, never the person's bubble: `Answered: <label>`, then
+  ` — <their text>` when they typed some ("Not now" stands in for a missing secondary). It is
+  one rendering, live and after a reload: the turn is known by its stored `attrs.answer`
+  (never by its words) and the label is read out of the words the server stores for it,
+  `Chose "<label>"`. The label is model-written, so it is drawn as text only, never markup. The turn
+  goes as every send does (`action_mode: "do"`, no `force_confirmation`). When the turn does not go through, the
+  question returns to the thread with its buttons live, and the failure is in the thread.
+- **SOL continues after a card.** After any outcome of a row whose card carries the server-sent
+  `resumes: true` (approved, rejected / "Not now", or refused as stale or expired) the client
+  starts the resume turn (`resume_confirmation_id`), as it does after an approved command. A
+  card decided while SOL is still replying resumes once, after that reply settles (the resume
+  waits its turn; it is dropped if the person opens another chat meanwhile). The
+  flag is the server's (it re-checks the STORED card); the renderer keeps no list of card tools.
+  The command tools an approval resumes after are the server's list (`COMMAND_TOOLS`,
+  `agent/command_gate.py`): pytest writes it to
+  `packages/shared-types/fixtures/action-gate/_resume_tools.json` and the renderer's
+  `RESUME_TOOLS` is held to that file by a drift test. `code.process_input` is drawn as a
+  command card but is not in the list: SOL is woken for a waiting process instead.
+- **The pill's plan** (SOLUSDEV-319) batches only rows with no card. A row with a card keeps its
+  own card in the pill's thread and is decided on its own.
+
+## Cards decided outside the thread — SOLUSDEV-326
+
+The Hardware page (`features/hardware/HardwareScreen.tsx`, `hardware-onboarding.md`) answers
+cards in its own slot, on the project's current chat with the Hardware surface
+(`useSolChat(projectId, 'hardware')`): every turn that chat starts — typed, device notice,
+answer, a decision's resume — goes as `action_mode: "do"` with `force_confirmation: true`. That
+override is one function (`surfaceSettings`); there is no second send path. On that screen the
+SOL sidebar uses the same surface (`sol-sidebar.md` §3). It is the same session this page shows.
+
+- **Cards stay in the page.** With `cardsInSlot` (the sidebar on Hardware) a row that carries a
+  card is not drawn in the thread: the slot shows it. A row with no card (a command, a CAD edit)
+  can never reach a slot, so it stays in the thread where it can be decided. The
+  running-processes strip is not rendered there either.
+- **Working line.** The chat exposes `working`: the running tool's own words from the
+  `tool_call` frame's `working` field ("Reading the USB adapter on /dev/ttyUSB0"), which the slot
+  shows.
+- **A device notice** (`sendNotice(device_ref)`, `MessageCreate.notice`): nothing of the
+  person's is sent and no bubble is drawn. The thread shows a quiet Solus system line from the
+  moment the notice is admitted — "Solus told SOL about a device plugged into this computer." —
+  and after a reload the server's stored words, for any turn whose `attrs.authored_by` is
+  `solus`. A notice the server debounced (409 `notice_debounced`) or refused because the device
+  has gone (422) leaves nothing behind, line included.
+- **A card decided in the slot** (`cardDecided(confirmation_id, decision | null)`) leaves the
+  thread as one decided here does: its row is dropped with the same "Approval recorded." /
+  "Action rejected." words, and no history load restores it; `null`, a refusal, drops it with no
+  such word, and an "Awaiting your approval" item it was the last row of goes with it.
+- **Turns for a card** (`answer(question_id, choice, text?, conversation_id?, mode?,
+onAdmitted?)`, `resumeCard(openCard)`, a send given a `conversationId`) first open the
+  conversation the card was asked in (`OpenCard.conversation_id`), so the thread shown is the
+  one the card belongs to. Each waits for a live turn to settle — a reply that is streaming is
+  never cut off by a press on a card from another conversation — and turns that queued behind
+  the same reply then go one after the other, never two at once. A sign-out or account switch
+  drops whatever was queued.

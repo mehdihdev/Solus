@@ -21,6 +21,8 @@ from sqlalchemy.orm import aliased
 
 from solus_api.core.errors import APIError
 from solus_api.fingerprint.contract import MatchState, Modality, ModalityMatch, SourceRef
+from solus_api.graph.read_scope import current_scope
+from solus_api.hardware.bindings import bound_elsewhere
 from solus_api.hardware.config import (
     BusMapEntry,
     CalibrationMode,
@@ -31,6 +33,7 @@ from solus_api.hardware.config import (
     TransportBinding,
     merge_layers,
     part_ref,
+    pin_rows,
     unit_for_mode,
 )
 from solus_api.hardware.links import (
@@ -43,7 +46,7 @@ from solus_api.hardware.links import (
     suggest_links,
 )
 from solus_api.hardware.repo_evidence import SourceRefs
-from solus_api.hardware.runtime import resolve_runtime_config
+from solus_api.hardware.runtime import bound_refs, brains_of, resolve_runtime_config
 from solus_api.hardware.store import (
     PART_KIND,
     attach_part,
@@ -51,6 +54,7 @@ from solus_api.hardware.store import (
     put_config,
     robot_root,
 )
+from solus_api.livebench.sessions import DeviceBusyError
 from solus_api.models import (
     GraphEntity,
     HardwareSuggestion,
@@ -58,12 +62,8 @@ from solus_api.models import (
     SolusEntryKind,
     SuggestionStatus,
 )
-from solus_api.services.physical_robots import ROBOT_CATEGORIES, PhysicalRobotService, RobotName
+from solus_api.services.physical_robots import PhysicalRobotService, RobotName
 from solus_api.services.solus_graph import lock_project
-
-Category = Literal[
-    "sensors", "actuators", "controllers", "end_effectors", "power", "structure", "wiring"
-]
 
 MAX_ACCEPTED_ROWS = 256
 MAX_REPO_ROOT_CHARS = 4096
@@ -95,6 +95,13 @@ class DetectedDeviceOut(_Wire):
     pid: int | None = None
     headline: str = Field(default="", max_length=128)
     identity_basis: IdentityBasis = "serial"
+    #: SOLUSDEV-326 — filled API-side for each reader (`hardware/device_memory.annotate`), never
+    #: by the local runtime: the robot or part whose config or ref binds the device (when the
+    #: reader may see it), whether the reader said "Not now" to it, and when this machine last
+    #: saw it (its owner's alone).
+    bound_to: uuid.UUID | None = None
+    dismissed: bool = False
+    last_seen: str | None = None
 
 
 class StreamOut(_Wire):
@@ -196,7 +203,6 @@ class AcceptedRow(BaseModel):
         Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
         | None
     ) = None
-    category: Category = "actuators"
 
 
 class NewRobotTarget(BaseModel):
@@ -257,11 +263,16 @@ async def propose_via_local(
     repo_root: str | None,
     budget_s: float,
     repo_sources: list[dict[str, Any]] | None = None,
+    listener: tuple[uuid.UUID, uuid.UUID] | None = None,
 ) -> ProposalOut:
-    """Run the local runtime's interrogation off-loop and re-validate its proposal."""
+    """Run the local runtime's interrogation off-loop and re-validate its proposal. `listener`
+    is the (project, member) it interrogates for (SOLUSDEV-326): that member's own session there
+    is listened to; without it the interrogation is nobody's and every holder is only busy."""
     options: dict[str, Any] = {"repo_root": repo_root, "budget_s": budget_s}
     if repo_sources:
         options["repo_sources"] = repo_sources
+    if listener is not None:
+        options["scope"], options["member"] = str(listener[0]), str(listener[1])
     try:
         raw = await asyncio.wait_for(
             asyncio.to_thread(local.propose_device, device_ref, **options),
@@ -271,6 +282,8 @@ async def propose_via_local(
         raise APIError(
             422, "invalid_source", "The selected source could not be parsed. Review its contents."
         ) from exc
+    except DeviceBusyError as exc:  # SOLUSDEV-326: busy was read as "no protocol recognised"
+        raise APIError(409, "device_busy", str(exc), details=exc.details()) from exc
     except TimeoutError as exc:
         # The worker thread cannot be cancelled and finishes on its own; the request just
         # stops waiting for it.
@@ -388,6 +401,26 @@ def _chosen_repo_config(proposal: ProposalOut, repo_config_id: str | None) -> Re
     return next(iter(matches.values()), None)
 
 
+async def _named_holder(
+    session: AsyncSession, project_id: uuid.UUID, robot_id: object, *held: GraphEntity
+) -> str:
+    """The robot a refusal says holds a device or row: `robot <id>` only when the bound reader
+    may see it and what it holds, else other hardware — a refusal never names hardware its
+    reader cannot see (§1a)."""
+    try:
+        robot = await session.get(GraphEntity, uuid.UUID(str(robot_id)))
+    except ValueError:  # held by no robot (a lone part names none)
+        robot = None
+    scope = current_scope(project_id)
+    if (
+        robot is None
+        or robot.project_id != project_id
+        or any(scope.hides(entity.attrs) for entity in (robot, *held))
+    ):
+        return "other hardware in this project"
+    return f"robot {robot.id}"
+
+
 async def _already_confirmed(
     session: AsyncSession, project_id: uuid.UUID, row_ids: list[str]
 ) -> None:
@@ -400,10 +433,11 @@ async def _already_confirmed(
         )
     )
     if owned is not None:
+        holder = await _named_holder(session, project_id, owned.attrs.get("robot_id"), owned)
         raise APIError(
             409,
             "conflict",
-            f"{owned.external_ref} is already part of robot {owned.attrs.get('robot_id')} — "
+            f"{owned.external_ref} is already part of {holder} — "
             "reconnecting a known machine needs no second robot",
         )
 
@@ -434,6 +468,24 @@ async def robot_candidates(session: AsyncSession, project_id: uuid.UUID) -> list
         config = await resolve_runtime_config(session, project_id, robot.id)
         candidates.append(RobotCandidate(robot_entity_id=robot.id, name=robot.name, config=config))
     return candidates
+
+
+async def _refuse_bound_elsewhere(
+    session: AsyncSession, project_id: uuid.UUID, robot_id: uuid.UUID, device_ref: str
+) -> None:
+    """One config per device project-wide, checked before anything is written: another robot's
+    stored brains (a backfilled config has no binding edge yet) or another subject's current
+    binding (a lone part's board) already holding the device refuse the bind."""
+    await lock_project(session, project_id)
+    robots = await robot_candidates(session, project_id)
+    held = any(c.robot_entity_id != robot_id and device_ref in bound_refs(c.config) for c in robots)
+    if held or await bound_elsewhere(session, project_id, robot_id, {device_ref}):
+        raise APIError(
+            409,
+            "binding_conflict",
+            f"{device_ref} is already bound to other hardware in this project; "
+            "review its existing binding",
+        )
 
 
 async def _retained_owner(
@@ -478,7 +530,7 @@ async def _retained_owner(
         candidate = eligible.get(owner)
         if (
             candidate is None
-            or candidate.config.identity is not None
+            or bound_refs(candidate.config)
             or part.attrs.get("device_ref") != proposal.device_ref
             or part.attrs.get("address") != row.address
             or str(part.id) not in candidate.config.parts
@@ -538,11 +590,11 @@ async def reconcile_device(
             for row in proposal.rows
         ],
     )
-    # A robot already bound to THIS device is not a candidate — there is nothing to link.
+    # A robot with a brain already bound to THIS device is not a candidate — nothing to link.
     candidates = [
         c
         for c in await robot_candidates(session, project_id)
-        if c.config.identity is None or c.config.identity.device_ref != proposal.device_ref
+        if proposal.device_ref not in bound_refs(c.config)
     ]
     retained, suggestions = await _retained_owner(session, project_id, proposal, candidates)
     if not retained:
@@ -552,9 +604,59 @@ async def reconcile_device(
     return [row for row in pending if row.subject_ref == proposal.device_ref]
 
 
-def _mark_live(document: dict[str, Any], answered: set[str]) -> None:
+def _landing(saved: HardwareConfig, device_ref: str) -> HardwareConfig | None:
+    """The saved brain a device lands on: its own, else the first still waiting for a
+    device; None when the device joins the robot as a new brain."""
+    brains = brains_of(saved)
+    own = [b for b in brains if b.identity is not None and b.identity.device_ref == device_ref]
+    waiting = [b for b in brains if b.identity is None]
+    return next(iter(own or waiting), None)
+
+
+def aimed_at(config: HardwareConfig, device_ref: str) -> HardwareConfig:
+    """`config` as the v1 document of the brain `device_ref` lands on, which is the brain
+    `put_config` merges it into: rows that sat implicitly on the document's brain name it
+    first, and identity and protocol (with their records) become the landing brain's — none
+    for a new brain, whose identity the caller sets."""
+    brain = _landing(config, device_ref)
+    current = config.identity.device_ref if config.identity else None
+    if brain is not None and (brain.identity.device_ref if brain.identity else None) == current:
+        return config
+    document = config.model_dump(mode="json")
+    if current is not None:
+        pin_rows(document, current)
+    heads = ("identity", "protocol")
+    document["provenance"] = {
+        path: record
+        for path, record in document["provenance"].items()
+        if path.split(".")[0] not in heads
+    }
+    document["identity"] = document["protocol"] = None
+    if brain is not None:
+        document.update(brain.model_dump(mode="json", include=set(heads)))
+        document["provenance"].update(
+            {
+                path: record.model_dump(mode="json")
+                for path, record in brain.provenance.items()
+                if path.split(".")[0] in heads
+            }
+        )
+    return HardwareConfig.model_validate(document)
+
+
+def _rows_on(document: dict[str, Any], device_ref: str) -> list[int]:
+    """Rows of an aimed v1 document that sit on its brain: implicit, or naming it."""
+    return [
+        index
+        for index, row in enumerate(document["bus_map"])
+        if row.get("brain") in (None, device_ref)
+    ]
+
+
+def _mark_live(document: dict[str, Any], answered: set[str], rows: list[int]) -> None:
     """A bound part that answered at its bus-map address is live — by detection."""
-    for entry in document["bus_map"]:
+    for index in rows:
+        entry = document["bus_map"][index]
         part_id = entry.get("part_entity_id")
         if part_id in document["parts"] and entry["address"] in answered:
             document["parts"][part_id]["lifecycle"] = LifecycleState.LIVE.value
@@ -562,6 +664,29 @@ def _mark_live(document: dict[str, Any], answered: set[str]) -> None:
                 "by": FieldProvenance.DETECTED.value,
                 "source": None,
             }
+
+
+def _detected_rows(
+    document: dict[str, Any], proposal: ProposalOut, driver_id: str, rows: list[int]
+) -> None:
+    """The wire's rows on this brain: a saved row keeps its part, a new address joins."""
+    by_address = {document["bus_map"][index]["address"]: index for index in rows}
+    for row in proposal.rows:
+        index = by_address.get(row.address)
+        if index is None:
+            document["bus_map"].append(
+                {
+                    "protocol": driver_id,
+                    "address": row.address,
+                    "part_entity_id": None,
+                    "model": row.model,
+                }
+            )
+            rows.append(len(document["bus_map"]) - 1)
+        else:
+            entry = document["bus_map"][index]
+            entry["protocol"] = driver_id
+            entry["model"] = entry.get("model") or row.model
 
 
 async def bind_device(
@@ -573,43 +698,32 @@ async def bind_device(
     created_by: uuid.UUID,
 ) -> HardwareConfig:
     """Bind a detected device to an existing robot (an accepted suggestion): the wire's
-    identity, driver and parameters enter the config as `detected`, the bus map keeps the
-    robot's parts, and each part's external_ref becomes `<device ref>/<address>` so its
+    identity, driver and parameters enter the config as `detected` on the brain this device
+    is — a device new to the robot joins as another brain; one another config in the project
+    binds is refused before anything is written — that brain's bus map keeps the robot's
+    parts, and each of its parts' external_ref becomes `<device ref>/<address>` so its
     telemetry resolves."""
     if proposal.identity is None or proposal.driver_id is None:
         raise APIError(422, "validation_error", "this device has no protocol to bind yet")
+    await _refuse_bound_elsewhere(session, project_id, robot.id, proposal.identity.device_ref)
     _, config = await ensure_config(session, project_id, robot, created_by=created_by)
-    if config.identity is not None and config.identity.device_ref != proposal.device_ref:
-        raise APIError(
-            409, "conflict", f"{robot.name} is already bound to {config.identity.device_ref}"
-        )
-    document = config.model_dump(mode="json")
+    document = aimed_at(config, proposal.device_ref).model_dump(mode="json")
     document["identity"] = proposal.identity.model_dump(mode="json")
     document["protocol"] = {"driver_id": proposal.driver_id, "params": dict(proposal.params)}
-    by_address = {entry["address"]: entry for entry in document["bus_map"]}
-    for row in proposal.rows:
-        entry = by_address.get(row.address)
-        if entry is None:
-            document["bus_map"].append(
-                {
-                    "protocol": proposal.driver_id,
-                    "address": row.address,
-                    "part_entity_id": None,
-                    "model": row.model,
-                }
-            )
-        else:
-            entry["protocol"] = proposal.driver_id
-            entry["model"] = entry.get("model") or row.model
-    for path in ("identity", "protocol", "bus_map"):
-        document["provenance"] = {
-            k: v for k, v in document["provenance"].items() if not k.startswith(path)
-        }
-        document["provenance"][path] = {"by": FieldProvenance.DETECTED.value, "source": None}
-    _mark_live(document, {row.address for row in proposal.rows})
+    rows = _rows_on(document, proposal.device_ref)
+    _detected_rows(document, proposal, proposal.driver_id, rows)
+    detected = {"by": FieldProvenance.DETECTED.value, "source": None}
+    stale = ("identity", "protocol", *(f"bus_map.{index}" for index in rows))
+    document["provenance"] = {
+        path: record
+        for path, record in document["provenance"].items()
+        if not any(path == head or path.startswith(f"{head}.") for head in stale)
+    }
+    document["provenance"].update({head: detected for head in stale})
+    _mark_live(document, {row.address for row in proposal.rows}, rows)
     bound = HardwareConfig.model_validate(document)
     await put_config(session, project_id, robot, bound, created_by=created_by)
-    for entry in bound.bus_map:
+    for entry in (bound.bus_map[index] for index in rows):
         if entry.part_entity_id is None:
             continue
         part = await session.get(GraphEntity, entry.part_entity_id)
@@ -634,19 +748,17 @@ class ConfirmResult(BaseModel):
 
 
 def _merge_confirmation(saved: HardwareConfig, additions: HardwareConfig) -> HardwareConfig:
-    """Append reviewed new parts without replacing the owner's saved decisions."""
+    """Append reviewed new parts without replacing the owner's saved decisions; the merge is
+    on the brain the device lands on (a device new to the robot joins as another brain)."""
     _check_saved_connection(saved, additions)
+    if additions.identity is not None:
+        saved = aimed_at(saved, additions.identity.device_ref)
     document = saved.model_dump(mode="json")
     provenance = {
         path: saved.provenance_of(path).model_dump(mode="json") for path in saved.leaf_paths()
     }
     incoming = additions.model_dump(mode="json")
-    for field in ("identity", "protocol", "disambiguated_by"):
-        if document[field] is None:
-            document[field] = incoming[field]
-            for path in additions.leaf_paths():
-                if path == field or path.startswith(f"{field}."):
-                    provenance[path] = additions.provenance_of(path).model_dump(mode="json")
+    _fill_brain(document, provenance, additions)
     document["parts"].update(incoming["parts"])
     for path in additions.leaf_paths():
         if path.startswith("parts."):
@@ -663,36 +775,67 @@ def _merge_confirmation(saved: HardwareConfig, additions: HardwareConfig) -> Har
     return HardwareConfig.model_validate(document)
 
 
+def _fill_brain(
+    document: dict[str, Any], provenance: dict[str, Any], additions: HardwareConfig
+) -> None:
+    """What the landing brain does not say yet (identity, driver, disambiguation) comes from
+    the review, with its records."""
+    incoming = additions.model_dump(mode="json")
+    for field in ("identity", "protocol", "disambiguated_by"):
+        if document[field] is None:
+            document[field] = incoming[field]
+            for path in additions.leaf_paths():
+                if path == field or path.startswith(f"{field}."):
+                    provenance[path] = additions.provenance_of(path).model_dump(mode="json")
+
+
 def _check_saved_connection(saved: HardwareConfig, additions: HardwareConfig) -> None:
-    """A review for adding parts cannot authorize replacing an existing connection."""
-    if saved.identity is not None and additions.identity is not None:
-        if saved.identity.identity_key() != additions.identity.identity_key():
-            raise APIError(
-                409, "proposal_changed", "Saved device identity differs; review configuration"
-            )
-    if saved.protocol is not None and saved.protocol != additions.protocol:
+    """A review for adding parts cannot authorize replacing the connection of the brain the
+    device lands on (compared per brain; a device new to the robot replaces nothing)."""
+    brain = _landing(saved, additions.identity.device_ref) if additions.identity else saved
+    if brain is None:
+        return
+    if brain.protocol is not None and brain.protocol != additions.protocol:
         raise APIError(409, "proposal_changed", "Saved protocol differs; review configuration")
-    endpoints = {(row.protocol, row.address) for row in saved.bus_map}
+    endpoints = {(row.protocol, row.address) for row in brain.bus_map}
     if any((row.protocol, row.address) in endpoints for row in additions.bus_map):
         raise APIError(
             409, "proposal_changed", "A proposed bus address already has a saved binding"
         )
 
 
+def _connection_lands(saved: HardwareConfig, identity: TransportBinding) -> None:
+    """A bare connection may bind a brain still waiting for its device, or join as a new
+    brain — never take over a brain that has a driver or bus rows."""
+    brain = _landing(saved, identity.device_ref)
+    if brain is None:
+        return
+    if brain.identity is not None and (
+        brain.identity.vid != identity.vid or brain.identity.pid != identity.pid
+    ):
+        raise APIError(409, "proposal_changed", "Saved USB identity differs; review configuration")
+    if brain.protocol is not None or brain.bus_map:
+        raise APIError(
+            409, "conflict", "Connection-only acceptance cannot replace configured hardware"
+        )
+
+
 def accepted_part_name(
     robot_name: str,
     address: str,
-    category: str,
     accepted: str | None,
     proposed: str | None,
     repo: str | None,
+    *,
+    streamed: bool,
 ) -> str:
-    """Preserve evidence names; bus addresses make unnamed motor labels stable."""
+    """Preserve evidence names; an unnamed row is a motor at its stable bus address, or on a
+    line stream (`streamed`) the reading at that column (SOLUSDEV-326: no body says which)."""
     return (
         accepted
         or proposed
         or repo
-        or (f"{robot_name}-Motor-{address}" if category == "actuators" else f"address {address}")
+        or (f"address {address}" if streamed else f"{robot_name}-Motor-{address}")
     )
 
 
@@ -702,6 +845,9 @@ async def _confirm_connection(
     proposal: ProposalOut,
     body: ConfirmIn,
     created_by: uuid.UUID,
+    *,
+    in_graph: bool,
+    onboarded_by: uuid.UUID | None,
 ) -> ConfirmResult:
     identity = proposal.identity
     if (
@@ -716,20 +862,11 @@ async def _confirm_connection(
         raise APIError(422, "validation_error", "Only an unidentified USB connection is eligible")
     await lock_project(session, project_id)
     candidates = await robot_candidates(session, project_id)
-    owner = next(
-        (
-            c
-            for c in candidates
-            if c.config.identity is not None
-            and c.config.identity.identity_key() == identity.identity_key()
-        ),
-        None,
-    )
+    owner = next((c for c in candidates if identity.device_ref in bound_refs(c.config)), None)
     if owner is not None:
         if body.target.kind == "existing" and body.target.robot_id != owner.robot_entity_id:
-            raise APIError(
-                409, "conflict", f"Connection already belongs to robot {owner.robot_entity_id}"
-            )
+            holder = await _named_holder(session, project_id, owner.robot_entity_id)
+            raise APIError(409, "conflict", f"Connection already belongs to {holder}")
         robot = await robot_root(session, project_id, owner.robot_entity_id)
         saved = owner.config
         created = False
@@ -738,7 +875,9 @@ async def _confirm_connection(
         saved = await resolve_runtime_config(session, project_id, robot.id)
         created = False
     else:
-        robot = await PhysicalRobotService(session).create(project_id, body.target.name)
+        robot = await PhysicalRobotService(session).create(
+            project_id, body.target.name, in_graph=in_graph, onboarded_by=onboarded_by
+        )
         saved = None
         created = True
     config = merge_layers(
@@ -750,16 +889,7 @@ async def _confirm_connection(
         ],
     )
     if saved is not None:
-        if saved.identity is not None and (
-            saved.identity.vid != identity.vid or saved.identity.pid != identity.pid
-        ):
-            raise APIError(
-                409, "proposal_changed", "Saved USB identity differs; review configuration"
-            )
-        if saved.protocol is not None or saved.bus_map or saved.parts:
-            raise APIError(
-                409, "conflict", "Connection-only acceptance cannot replace configured hardware"
-            )
+        _connection_lands(saved, identity)
         config = _merge_confirmation(saved, config)
     entry = await put_config(session, project_id, robot, config, created_by=created_by)
     return ConfirmResult(
@@ -778,12 +908,26 @@ async def confirm_proposal(
     proposal: ProposalOut,
     body: ConfirmIn,
     created_by: uuid.UUID,
+    in_graph: bool = True,
+    onboarded_by: uuid.UUID | None = None,
 ) -> ConfirmResult:
-    """Graph + config writes for a confirmation. Flushes; the caller owns the commit."""
+    """Graph + config writes for a confirmation. Flushes; the caller owns the commit. A new
+    robot is created in the graph or, for its onboarder alone, out of it (SOLUSDEV-326); its
+    parts, brains and config nodes follow it."""
     if body.connection_only:
-        return await _confirm_connection(session, project_id, proposal, body, created_by)
+        return await _confirm_connection(
+            session,
+            project_id,
+            proposal,
+            body,
+            created_by,
+            in_graph=in_graph,
+            onboarded_by=onboarded_by,
+        )
     if proposal.identity is None or proposal.driver_id is None:
         raise APIError(422, "validation_error", "this device has no protocol to confirm yet")
+    if proposal.identity.device_ref != proposal.device_ref:
+        raise APIError(409, "proposal_changed", "The device's identity changed; propose again")
     rows = {row.id: row for row in proposal.rows}
     unknown = [a.row_id for a in body.accepted if a.row_id not in rows]
     if unknown:
@@ -794,7 +938,9 @@ async def confirm_proposal(
 
     saved: HardwareConfig | None = None
     if body.target.kind == "new":
-        robot = await PhysicalRobotService(session).create(project_id, body.target.name)
+        robot = await PhysicalRobotService(session).create(
+            project_id, body.target.name, in_graph=in_graph, onboarded_by=onboarded_by
+        )
         created = True
     else:
         await lock_project(session, project_id)
@@ -816,17 +962,16 @@ async def confirm_proposal(
         name = accepted_part_name(
             robot.name,
             row.address,
-            accepted.category,
             accepted.function_name,
             row.proposed_function,
             repo_part.name if repo_part else None,
+            streamed=proposal.stream is not None,
         )
         part = await attach_part(
             session,
             project_id,
             robot,
             name=name,
-            category=accepted.category,
             attrs={"address": row.address, "model": row.model, "device_ref": proposal.device_ref},
             provenance=FieldProvenance.REPO if repo_part else FieldProvenance.DETECTED,
             external_ref=row.id,
@@ -884,7 +1029,6 @@ async def confirm_proposal(
 
 
 __all__ = [
-    "ROBOT_CATEGORIES",
     "AcceptedRow",
     "ConfirmIn",
     "ConfirmResult",

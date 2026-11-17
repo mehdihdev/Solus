@@ -247,6 +247,40 @@ _SIMULATION_NOTE: Final = (
 )
 
 
+#: SOLUSDEV-326 P2-T4: how SOL onboards hardware — on a local API, where the hardware reads are
+#: registered (`agent/tools/hardware_onboarding.py`). ONE constant, so the prompt stays byte-stable
+#: across a conversation's turns; vendor-free, like the shared code. Reasoning, not routing: no
+#: card order lives in code.
+_HARDWARE_LOOK: Final = (
+    "Hardware on this computer: look before you act. hardware.list_devices says what is "
+    "plugged in, hardware.inspect_device listens to one device, and hardware.expected_parts and "
+    "hardware.list_parts say what the workspace and the person's hardware already describe. "
+    "Match what you find against the workspace before the library (hardware.search_library), "
+    "state the evidence for each claim, ask one thing at a time (ask_user), and leave a device "
+    "you cannot identify streaming as it is rather than guess. Listening is free; "
+)
+HARDWARE_NOTE: Final = _HARDWARE_LOOK + (
+    "anything that "
+    "restarts, writes to, flashes or moves hardware, or writes the graph, parks a card."
+)
+#: The reads without the card tools (they register only with the app's live hub): the prompt
+#: never promises a card for a write it offers no tool for.
+HARDWARE_READS_NOTE: Final = _HARDWARE_LOOK + (
+    "a listen that would restart a board parks a card. Adding hardware to the workspace is not "
+    "available on this API — say so when asked to add it."
+)
+#: The same position on an API without the reads, so SOL can say why it cannot see a device.
+NO_HARDWARE_NOTE: Final = (
+    "Hardware tools run only on a local Solus API; this API is hosted, so what is plugged into "
+    "the person's computer is out of your reach here — say so when asked to find or onboard it."
+)
+#: Build's line when every action the turn proposes parks a card (`force_confirmation`: the
+#: Hardware page always sends it, SOLUSDEV-326).
+_CARDED_BUILD_LINE: Final = (
+    "Current action mode: Build, and every action parks a card: each one you call waits for the "
+    "person's approval — never claim it ran; only its result says so."
+)
+
 #: Solus-authored framing for the user's saved preference (SOLUSDEV-233). The
 #: preference itself arrives fenced as data below this note — it can style
 #: answers but can never change rules, tools, or what counts as data.
@@ -360,6 +394,18 @@ def bounded_payload(sections: Mapping[str, str], cap: int) -> dict[str, str]:
     return out
 
 
+def _mode_line(action_mode: ActionMode, *, every_action_carded: bool) -> str:
+    if action_mode is not ActionMode.DO:
+        return "Current action mode: Guide. Explain and use read-only tools; never execute changes."
+    if every_action_carded:
+        return _CARDED_BUILD_LINE
+    return (
+        "Current action mode: Build. Execute requested routine edits automatically through "
+        "the tools; Solus validates their complete fresh previews. Only actual pending "
+        "results require a person's approval."
+    )
+
+
 def system_prompt(
     mode: SolMode,
     custom_instruction: str | None = None,
@@ -370,6 +416,9 @@ def system_prompt(
     nonce: str | None = None,
     expertise: Expertise | None = None,
     front_app: FrontAppBinding | None = None,
+    hardware: bool | None = None,
+    hardware_cards: bool = True,
+    every_action_carded: bool = False,
 ) -> str:
     """The ONLY instruction text in the prompt. Solus-authored end to end — no
     ingested content ever reaches this position (ADR-016 for the mode note).
@@ -397,6 +446,13 @@ def system_prompt(
     `front_app` (SOLUSDEV-319 slice 4) adds the Solus-authored route ordering
     (`front_app.route_note`, chosen from validated booleans alone); the app's name and
     title never come here — they ride the live turn in a fenced `kind=front_app` block.
+
+    `hardware` (SOLUSDEV-326) says whether the turn's registry carries the hardware reads: True
+    adds `HARDWARE_NOTE`, False `NO_HARDWARE_NOTE`, None (a caller that does not know) neither.
+    `hardware_cards` says whether it carries the hardware card tools too: with the reads alone
+    the note is `HARDWARE_READS_NOTE`.
+    `every_action_carded` is the request's `force_confirmation`: Build's line then says every
+    action parks a card.
     """
     # Function-local: expertise reads the graph's models, which this module never loads;
     # front_app imports this module.
@@ -408,15 +464,12 @@ def system_prompt(
     register = register_line(expertise)
     if register is not None:
         parts.append(register)
-    parts.append(
-        "Current action mode: Build. Execute requested routine edits automatically through "
-        "the tools; Solus validates their complete fresh previews. Only actual pending "
-        "results require a person's approval."
-        if action_mode is ActionMode.DO
-        else "Current action mode: Guide. Explain and use read-only tools; never execute changes."
-    )
+    parts.append(_mode_line(action_mode, every_action_carded=every_action_carded))
     if action_mode is ActionMode.DO:
         parts.extend((REASONING_NOTE, _COMMAND_NOTE))
+    if hardware is not None:
+        local = HARDWARE_NOTE if hardware_cards else HARDWARE_READS_NOTE
+        parts.append(local if hardware else NO_HARDWARE_NOTE)
     if front_app is not None:
         parts.append(route_note(front_app))
     fence = nonce or new_nonce()

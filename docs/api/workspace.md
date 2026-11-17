@@ -73,22 +73,22 @@ entity serialization and response envelopes apply; no new graph schema is needed
 - `POST /entities`: `{type: "physical_robot", name: string}` → 201 with the
   created root entity. Names are required, trimmed, nonblank and at most 512
   characters; unknown fields are rejected. Project/model names are not defaults.
-  Each call atomically creates a new root, seven distinct `robot_category`
-  entities, and seven manual `contains` edges. Categories use `category` keys
-  `sensors`, `actuators`, `controllers`, `end_effectors`, `power`, `structure`,
-  `wiring`, plus `robot_id` in properties. Containers have domain `project`.
+  Each call creates the root only (domain `project`), with no edge (SOLUSDEV-326:
+  `robot_category` nodes are retired). A robot owns a part through one live manual
+  (source-less) `contains` edge from the root to the part; a manual part also records
+  `robot_id` in its properties. The graph hint counts one created entity.
   Root references may initially be null. Configurations are created and versioned
   through the hardware routes; clients cannot write convenience references directly.
 - `PATCH /entities/{entity_id}`: `{name: string}` → updated root entity. Requires
   `If-Match: <integer version>`; names follow the creation validation.
 - `DELETE /entities/{entity_id}`: requires the same `If-Match`; after concrete UI
   confirmation, returns `{deleted_entity_id, retained_part_ids: UUID[]}`. It
-  soft-deletes the root, explicitly owned categories and containment edges only.
+  soft-deletes the root and its manual `contains` edges only.
   Actual parts, their identity/properties, independent CONFIG entry IDs/values/provenance
   and unrelated relationships survive. Disable stale connection bindings; do not transfer
   endpoints automatically or recreate retained-part configs with defaults.
 - `GET /entities?orphaned_from_robot=true`: existing paginated entity payload,
-  limited to live parts formerly owned through a deleted manual robot/category
+  limited to live parts formerly owned through a deleted manual robot's
   containment edge and not owned by another live robot. This retained evidence
   makes the prompt persistent across reloads. Service containment does not hide
   an orphan from this read. Part properties are never rewritten to flag orphans.
@@ -101,7 +101,7 @@ live project, reread the entity, and compare its version before writes. Missing
 or malformed If-Match returns 422; a stale version returns 409 `conflict` with
 the current version/name. Successful mutations increment the root version.
 
-`PhysicalRobotService.create` is the transaction-scoped robot/category creation hook used by
+`PhysicalRobotService.create` is the transaction-scoped robot root creation hook used by
 manual and reviewed hardware creation. Every accepted operation creates an independent
 instance with the required supplied name; the outer hardware service handles idempotency.
 It does not call providers or commit. New generic hardware creation, part configuration,

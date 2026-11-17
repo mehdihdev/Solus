@@ -21,7 +21,11 @@ from solus_api.connectors.registry import ConnectorRegistry
 from solus_api.graph.codec import to_wire
 from solus_api.graph.packet import TelemetryPacket
 from solus_api.livebench.bench_router import BenchSessionIn, ReplayRealConfig
-from solus_api.livebench.sessions import AmbiguousDeviceError, DeviceNotFoundError
+from solus_api.livebench.sessions import (
+    AmbiguousDeviceError,
+    DeviceBusyError,
+    DeviceNotFoundError,
+)
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -583,6 +587,49 @@ async def test_serial_session_binds_by_serial_and_maps_device_errors(
     assert missing.json()["error"]["code"] == "device_not_found"
 
 
+async def test_a_serial_session_claims_the_device_for_the_requesting_member(
+    client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal
+) -> None:
+    """SOLUSDEV-326: the serial owner names a holder only to the member it works for, in its own
+    project (a teammate's session may be on hardware hidden from them, docs/api/hardware.md §1a),
+    so the requesting user's id reaches the local opener with the project's."""
+    project_id = await _member_project(client, alice_headers)
+    alice = await me(client, alice_headers)
+    body = {"mode": "real", "config": {"provider": "serial", "serial_number": "5B42135040"}}
+    resp = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions", json=body, headers=alice_headers
+    )
+    assert resp.status_code == 201, resp.text
+    (opened,) = fake_local.opened
+    assert (opened["project_id"], opened["user_id"]) == (
+        uuid.UUID(project_id),
+        uuid.UUID(alice["id"]),
+    )
+
+
+async def test_a_busy_serial_device_is_409_device_busy_never_unavailable(
+    client: AsyncClient,
+    alice_headers: dict[str, str],
+    bob_headers: dict[str, str],
+    fake_local: FakeLocal,
+) -> None:
+    """SOLUSDEV-326: busy used to look like silence; it is a typed 409 naming the holder."""
+    project_id = await _member_project(client, alice_headers)
+    url = f"/api/v1/projects/{project_id}/bench/sessions"
+    body = {"mode": "real", "config": {"provider": "serial", "serial_number": "5B42135040"}}
+    fake_local.serial_error = DeviceBusyError("usb:5B42135040", "upload")
+    busy = await client.post(url, json=body, headers=alice_headers)
+    assert busy.status_code == 409, busy.text
+    error = busy.json()["error"]
+    assert error["code"] == "device_busy"
+    assert error["details"] == [{"device_ref": "usb:5B42135040", "holder": "upload"}]
+    assert "busy" in error["message"]
+    await me(client, bob_headers)  # another team's member learns nothing about the device
+    assert (await client.post(url, json=body, headers=bob_headers)).status_code == 404
+    assert (await client.post(url, json=body)).status_code == 401
+    assert fake_local.opened == []
+
+
 async def test_unavailable_simulator_cannot_be_started(
     client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal, app: FastAPI
 ) -> None:
@@ -814,6 +861,35 @@ async def test_device_recent_only_labels_declared_session_channels(
     assert a["signals"][0]["display_role"] == "diagnostic"
     assert "display_role" not in a["signals"][1]
     assert "display_role" not in b["signals"][0]
+
+
+async def test_device_recent_carries_the_configs_channel_display(
+    client: AsyncClient, alice_headers: dict[str, str], fake_local: FakeLocal
+) -> None:
+    """SOLUSDEV-326: a channel's display and display range ride the role path to the series."""
+    project_id = await _member_project(client, alice_headers)
+    started = await client.post(
+        f"/api/v1/projects/{project_id}/bench/sessions",
+        json={"mode": "sim", "config": {"provider": "mujoco"}},
+        headers=alice_headers,
+    )
+    assert started.status_code == 201
+    conn = fake_local.conns[0]
+    angle = {"display": "angle", "range": {"min": -90.0, "max": 90.0}}
+    conn.device_facts = {"channel_display": {"a": {"j.position": angle}}}
+    from solus_api.graph.codec import from_wire
+
+    await conn.tap(from_wire(wire_packet("a", 0, {"j.position": 1, "j.load": 2})))
+    response = await client.get(
+        f"/api/v1/projects/{project_id}/bench/device-recent",
+        params={"device_id": ["a"]},
+        headers=alice_headers,
+    )
+    assert response.status_code == 200
+    (a,) = response.json()["data"]["devices"]
+    series = {row["signal"]: row for row in a["signals"]}
+    assert {key: series["j.position"][key] for key in angle} == angle
+    assert "display" not in series["j.load"] and "range" not in series["j.load"]
 
 
 # --- SOLUSDEV-322 P3-T5: GazeboSimConfig family / world / model ----------------------------------

@@ -1,11 +1,30 @@
 {
-  "DiffRow": [
-    "after",
-    "before",
-    "label"
+  "Card": [
+    "body",
+    "field",
+    "kind",
+    "more",
+    "primary",
+    "receipt",
+    "resumes",
+    "secondary",
+    "title"
   ],
+  "CardField": ["label", "value"],
+  "DeviceNotice": ["device_ref", "kind"],
+  "DiffRow": ["after", "before", "label"],
+  "OpenCard": [
+    "card",
+    "confirmation_id",
+    "conversation_id",
+    "expires_at",
+    "tool"
+  ],
+  "OpenCards": ["card", "queued"],
+  "QuestionAnswer": ["choice", "question_id", "text"],
   "ToolConfirmationEvent": [
     "args",
+    "card",
     "confirmation_id",
     "preview",
     "summary",

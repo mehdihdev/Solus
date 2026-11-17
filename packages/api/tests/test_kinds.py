@@ -12,7 +12,8 @@ _TWINS: Final[list[tuple[str, str, str]]] = [
     ("solus_api.services.solus_graph", "DOCUMENT_KIND", "DOCUMENT"),
     ("solus_api.services.solus_graph", "CONFIG_NODE_KIND", "HARDWARE_CONFIG"),
     ("solus_api.hardware.store", "ROBOT_KIND", "PHYSICAL_ROBOT"),
-    ("solus_api.hardware.store", "CATEGORY_KIND", "ROBOT_CATEGORY"),
+    # SOLUSDEV-326: store.CATEGORY_KIND is gone (robots contain parts directly);
+    # kinds.ROBOT_CATEGORY stays as a legacy kind that readers tolerate.
     ("solus_api.hardware.store", "PART_KIND", "PART"),
     ("solus_api.hardware.companion_deployment", "KIND", "COMPANION_DEPLOYMENT_PLAN"),
     ("solus_api.hardware.presence_topology", "KIND", "HARDWARE_WIRING_PROPOSAL"),

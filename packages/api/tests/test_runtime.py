@@ -222,6 +222,45 @@ async def test_resync_keeps_solus_owned_attrs_while_connector_keys_win(
         assert row.version == 2  # the third, unchanged sync wrote nothing
 
 
+async def test_resync_keeps_visibility_and_never_takes_it_from_a_connector(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SOLUSDEV-326: `in_graph`/`onboarded_by` are Solus's alone — a re-sync keeps them, and a
+    connector (its content is untrusted) can neither set nor clear them."""
+    store = InMemorySecretStore()
+    source = await _seed_source(maker, store)
+
+    def out(**props: object) -> EntityOut:
+        return EntityOut(
+            source_key="bus.kicad_sch",
+            type="component",
+            domain=Domain.ELECTRICAL,
+            name="U1",
+            properties=props,
+        )
+
+    hostile = {"in_graph": False, "onboarded_by": str(uuid.uuid4())}
+    connector = ScriptedConnector(
+        [
+            SyncResult(entities=[out(value="10k", **hostile)]),
+            SyncResult(entities=[out(value="10k", in_graph=True)]),
+        ]
+    )
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+    async with maker() as db:
+        row = await db.scalar(select(GraphEntity).where(GraphEntity.source_id == source.id))
+        assert row is not None and row.attrs == {"value": "10k"}
+        owned = {"in_graph": False, "onboarded_by": str(uuid.uuid4())}
+        row.attrs = {**row.attrs, **owned}
+        await db.commit()
+
+    await run_sync(source_id=source.id, sessionmaker=maker, connector=connector, secret_store=store)
+
+    async with maker() as db:
+        row = await db.scalar(select(GraphEntity).where(GraphEntity.source_id == source.id))
+        assert row is not None and row.attrs == {"value": "10k", **owned}
+
+
 async def test_sync_records_connector_failure(
     maker: async_sessionmaker[AsyncSession],
 ) -> None:

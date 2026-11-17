@@ -328,3 +328,57 @@ def test_persisted_answer_reads_only_the_answer_source_budget_and_research_frame
         AgentEvent.done(),
     )
     assert [persisted_answer(other) for other in others] == [{}, {}, {}, {}]
+
+
+def test_tool_call_carries_the_tools_working_line_masked_and_bounded_only_when_given() -> None:
+    """SOLUSDEV-326: the Solus-authored line a tool says while a call runs, masked like the
+    arguments (token by token: it is prose) and cut to its bound after masking."""
+    from solus_api.agent.stream import WORKING_CAP
+
+    call = ToolCall(tool="hw.inspect", args={}, call_id="c1")
+    assert "working" not in AgentEvent.tool_call(call).data
+    assert "working" not in AgentEvent.tool_call(call, working=None).data
+    shown = AgentEvent.tool_call(call, working="Reading token=abc on /dev/ttyUSB0")
+    assert shown.data["working"] == "Reading token=[REDACTED] on /dev/ttyUSB0"
+    long = AgentEvent.tool_call(call, working="w" * (WORKING_CAP - 3) + " token=ab")
+    assert len(long.data["working"]) == WORKING_CAP
+
+
+def test_a_working_line_whose_masking_or_cut_moves_a_chip_edge_is_masked_whole() -> None:
+    """SOLUSDEV-326 P2-T4 review: a model value on the line is one chip (agent/cards.chip).
+    Masking a secret-shaped tail eats the chip's closing edge, and the cut can drop it: either
+    leaves the value's words outside the chip, read as Solus's own beside the next card, so that
+    line is masked whole — as a card's texts are (cards.shown_card)."""
+    from solus_api.agent.stream import WORKING_CAP
+
+    call = ToolCall(tool="hw.inspect", args={}, call_id="c1")
+    kept = AgentEvent.tool_call(call, working="Searching the library for `servo token=x arm`")
+    assert kept.data["working"] == "Searching the library for `servo token=[REDACTED] arm`"
+    eaten = AgentEvent.tool_call(call, working="Searching for `servo is safe password=x`")
+    cut = AgentEvent.tool_call(call, working="w" * (WORKING_CAP - 2) + " `servo`")
+    assert eaten.data["working"] == cut.data["working"] == REDACTED
+
+
+def test_tool_confirmation_carries_the_card_as_the_contract_twin_reads_it() -> None:
+    """SOLUSDEV-326 (action-gate §Cards 2): null when the tool authors none."""
+    from solus_api.contracts.action_gate import ToolConfirmationEvent
+
+    card = {
+        "kind": "approval",
+        "title": "Approve: add Rover arm",
+        "body": "On `/dev/ttyUSB0`.",
+        "more": None,
+        "field": None,
+        "primary": "Approve",
+        "secondary": "Not now",
+        "receipt": "Rover arm added",
+        "resumes": True,
+    }
+    with_card = AgentEvent.tool_confirmation(
+        confirmation_id="c", tool="t", args={}, summary="s", card=card
+    )
+    without = AgentEvent.tool_confirmation(confirmation_id="c", tool="t", args={}, summary="s")
+    assert with_card.data["card"] == card
+    assert without.data["card"] is None
+    for event in (with_card, without):
+        ToolConfirmationEvent.model_validate(event.data)

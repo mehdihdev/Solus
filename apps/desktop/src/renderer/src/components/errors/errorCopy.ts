@@ -12,6 +12,7 @@ export const SURFACE_LABELS: Readonly<Record<ErrorSurface, string>> = {
   root: 'Solus',
   home: 'Home',
   workspace: 'Workspace',
+  hardware: 'Hardware',
   bench: 'Live Bench',
   sol: 'SOL',
   store: 'Store',

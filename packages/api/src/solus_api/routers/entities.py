@@ -170,12 +170,7 @@ async def create_entity(
     require_role(ctx, Role.MEMBER)
     root = await PhysicalRobotService(session).create(ctx.project.id, body.name)
     await _commit_robot_change(
-        request,
-        ctx,
-        session,
-        root,
-        "created",
-        GraphChangeCounts(entities_created=8, relations_created=7),
+        request, ctx, session, root, "created", GraphChangeCounts(entities_created=1)
     )
     return envelope(serialize_entity(root))
 

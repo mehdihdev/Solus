@@ -1,11 +1,10 @@
-import { apiBaseUrl, createApiClient, type ApiClient, type Page } from '../../../lib/api/client'
+import { apiBaseUrl, createApiClient, type ApiClient } from '../../../lib/api/client'
 import { ApiError } from '../../../lib/api/envelope.types'
 import {
   createPhysicalRobot,
   deletePhysicalRobot,
   renamePhysicalRobot
 } from '../../../lib/api/physicalRobots'
-import { listUnassignedParts } from '../../../lib/api/hardware'
 import type { Entity } from '../../../lib/api/resources'
 import { useAuthStore } from '../../../store/authStore'
 
@@ -27,44 +26,17 @@ interface RobotError {
 export interface RobotView {
   busy: string | null
   error: RobotError | null
-  parts: Entity[]
-  loading: boolean
-  readError: string | null
-  cursors: (string | null)[]
-  next: string | null
 }
 type Current = () => boolean
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The request failed. Please try again.'
 }
-function verifyPage(
-  page: Page<Entity[]>,
-  projectId: string,
-  cursors: (string | null)[]
-): string | null {
-  if (page.data.length > 24 || page.data.some((part) => part.project_id !== projectId))
-    throw new Error('The unassigned parts response could not be verified. Please retry.')
-  const next = page.meta.has_next ? page.meta.next_cursor : null
-  if (page.meta.has_next && (!next || cursors.includes(next)))
-    throw new Error('The next page of unassigned parts could not be read. Please retry.')
-  return next ?? null
-}
-
-/** One mounted workspace owns its writes and orphan-page reads. */
+/** One mounted workspace owns its robot writes. */
 export class RobotSession {
-  private state: RobotView = {
-    busy: null,
-    error: null,
-    parts: [],
-    loading: false,
-    readError: null,
-    cursors: [null],
-    next: null
-  }
+  private state: RobotView = { busy: null, error: null }
   private listeners = new Set<() => void>()
   private active = false
   private lifecycle = 0
-  private readSequence = 0
   private mutation: Promise<boolean> | null = null
 
   constructor(
@@ -104,46 +76,6 @@ export class RobotSession {
         return useAuthStore.getState().accessToken
       }
     })
-  }
-  load = async (cursors: (string | null)[] = [null]): Promise<void> => {
-    const current = this.guard()
-    if (!current()) return
-    const sequence = ++this.readSequence
-    this.publish({ loading: true, readError: null })
-    try {
-      // Fresh clients prevent an older identical GET from absorbing an invalidation.
-      const page = await listUnassignedParts(
-        this.projectId,
-        cursors.at(-1) ?? null,
-        this.client(current)
-      )
-      if (!current() || sequence !== this.readSequence) return
-      const next = verifyPage(page, this.projectId, cursors)
-      this.publish({
-        parts: [...new Map(page.data.map((part) => [part.id, part])).values()],
-        next,
-        cursors,
-        loading: false
-      })
-    } catch (error) {
-      if (current() && sequence === this.readSequence)
-        this.publish({ loading: false, readError: messageOf(error) })
-    }
-  }
-  next = (): void => {
-    if (!this.state.loading && this.state.next)
-      void this.load([...this.state.cursors, this.state.next])
-  }
-  previous = (): void => {
-    if (!this.state.loading && this.state.cursors.length > 1)
-      void this.load(this.state.cursors.slice(0, -1))
-  }
-  retry = (): void => {
-    void this.load(this.state.cursors)
-  }
-  reveal = (entityId: string): void => {
-    if (this.guard()() && this.state.parts.some((part) => part.id === entityId))
-      this.onReveal(entityId)
   }
   private run(
     key: string,
@@ -204,9 +136,7 @@ export class RobotSession {
     this.run(entity.id, async (client, current) => {
       this.requireEditable(entity)
       await deletePhysicalRobot(this.projectId, entity, client)
-      if (!current()) return
-      this.onChanged(entity.id)
-      void this.load()
+      if (current()) this.onChanged(entity.id)
     })
   private requireEditable(entity: Entity): void {
     if (!editableRobot(entity, this.projectId))

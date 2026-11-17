@@ -22,6 +22,7 @@ SWEEP_GLOBS: Final = (  # not hardware/definitions/ (the seed)
     "simulation/*.py",
     "simulation/providers/*.py",
     "software/*.py",
+    "agent/tools/hardware_*.py",
 )
 VENDOR_WORDS: Final = re.compile(
     r"\b(feetech|dynamixel|lerobot|sts3215|sts3250|scs0009|so-?10[01]|px4|pixhawk|odrive"
@@ -81,6 +82,17 @@ def test_the_software_package_is_under_the_ratchet() -> None:
     swept = {p.relative_to(SRC_ROOT).as_posix() for p in _swept_files()}
     assert "software/__init__.py" in swept
     assert "software/*.py" in SWEEP_GLOBS
+
+
+def test_sols_hardware_tools_are_under_the_ratchet() -> None:
+    """SOL's hardware reads and card tools speak of devices, parts and boards by structure
+    (SOLUSDEV-326 P2): a vendor or a chip family named there fails here, not in review."""
+    swept = {p.relative_to(SRC_ROOT).as_posix() for p in _swept_files()}
+    assert {
+        "agent/tools/hardware_onboarding.py",
+        "agent/tools/hardware_cards.py",
+        "agent/tools/hardware_graph_cards.py",
+    } <= swept
 
 
 CONNECTION_PATHS = (

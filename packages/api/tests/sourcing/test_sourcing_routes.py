@@ -234,16 +234,14 @@ async def _seed_assembly(db: AsyncSession, project_id: str) -> dict[str, uuid.UU
     return {"assembly": assembly.id, **{k: v.id for k, v in parts.items()}}
 
 
-async def _robot(client: AsyncClient, headers: dict[str, str], project_id: str) -> dict[str, str]:
-    """A Physical Robot's category ids by key (the Workspace door's container)."""
+async def _robot(client: AsyncClient, headers: dict[str, str], project_id: str) -> str:
+    """A Physical Robot's id: the Workspace door's container (SOLUSDEV-326: it contains the
+    selected part directly)."""
     resp = await client.post(
         f"/api/v1/projects/{project_id}/entities", json={"type": "physical_robot"}, headers=headers
     )
     assert resp.status_code == 201, resp.text
-    listed = await client.get(
-        f"/api/v1/projects/{project_id}/entities?type=robot_category&limit=50", headers=headers
-    )
-    return {e["properties"]["category"]: e["id"] for e in listed.json()["data"]}
+    return str(resp.json()["data"]["id"])
 
 
 # --------------------------------------------------------------------- rules
@@ -383,7 +381,7 @@ async def test_a_request_runs_the_metered_job_filters_by_rules_and_selects_a_pla
     await _fund(db, alice["id"])
     await consent(db, alice["id"])
     ids = await _seed_assembly(db, project_id)
-    categories = await _robot(client, alice_headers, project_id)
+    robot_id = await _robot(client, alice_headers, project_id)
     rules = await client.put(
         _src(project_id) + "/rules",
         json={
@@ -448,11 +446,11 @@ async def test_a_request_runs_the_metered_job_filters_by_rules_and_selects_a_pla
     job = await db.get(Job, uuid.UUID(job_id))
     assert job is not None and job.status is JobStatus.SUCCEEDED and job.progress == 100
 
-    # Select → a PLANNED manual part under the actuators category.
+    # Select → a PLANNED manual (mechanical) part the robot contains.
     chosen = by_name["NEMA 23 23HS22-2804S"]["id"]
     selected = await client.post(
         _src(project_id) + f"/requests/{request_id}/select",
-        json={"candidate_id": chosen, "category_entity_id": categories["actuators"], "quantity": 2},
+        json={"candidate_id": chosen, "robot_entity_id": robot_id, "quantity": 2},
         headers=alice_headers,
     )
     assert selected.status_code == 201, selected.text
@@ -464,14 +462,15 @@ async def test_a_request_runs_the_metered_job_filters_by_rules_and_selects_a_pla
     )
     props = entity["properties"]
     assert props["lifecycle"] == "planned" and props["quantity"] == 2
+    assert props["robot_id"] == robot_id and "category" not in props
     assert props["part_number"] == "23HS22-2804S" and props["supplier"] == "StepperOnline"
     assert props["vendor_cad_url"].startswith("https://")
     assert props["sourcing"]["optimizes_for"] == "torque per dollar"
     assert selected.json()["data"]["request"]["selected_entity_id"] == entity["id"]
-    # Visible to the Workspace: contained by the category (a manual edge).
+    # Visible to the Workspace: contained by the robot (a manual edge).
     edge = await db.scalar(
         select(GraphEdge).where(
-            GraphEdge.src_id == uuid.UUID(categories["actuators"]),
+            GraphEdge.src_id == uuid.UUID(robot_id),
             GraphEdge.dst_id == uuid.UUID(entity["id"]),
             GraphEdge.relation_type == "contains",
         )
@@ -506,10 +505,20 @@ async def test_a_request_runs_the_metered_job_filters_by_rules_and_selects_a_pla
     assert (
         await client.post(
             _src(project_id) + f"/requests/{request_id}/select",
-            json={"candidate_id": chosen, "category_entity_id": str(uuid.uuid4())},
+            json={"candidate_id": chosen, "robot_entity_id": str(uuid.uuid4())},
             headers=alice_headers,
         )
     ).status_code == 404
+    # The retired body fields are unknown now: `category_entity_id`, and (SOLUSDEV-326 P2)
+    # `category`, which only ever picked the domain.
+    for retired in ({"category_entity_id": str(uuid.uuid4())}, {"category": "sensors"}):
+        assert (
+            await client.post(
+                _src(project_id) + f"/requests/{request_id}/select",
+                json={"candidate_id": chosen, **retired},
+                headers=alice_headers,
+            )
+        ).status_code == 422
 
 
 async def test_requests_are_project_scoped_and_member_only(
@@ -533,6 +542,11 @@ async def test_requests_are_project_scoped_and_member_only(
     assert (
         await client.get(_src(project_id) + f"/requests/{request_id}", headers=bob_headers)
     ).status_code == 404
+    # The select body (SOLUSDEV-326: robot_entity_id): a stranger 404s, no token 401s.
+    select = {"candidate_id": "0000000000000000", "robot_entity_id": str(uuid.uuid4())}
+    select_url = _src(project_id) + f"/requests/{request_id}/select"
+    assert (await client.post(select_url, json=select, headers=bob_headers)).status_code == 404
+    assert (await client.post(select_url, json=select)).status_code == 401
     bob = await me(client, bob_headers)
     await add_member(client, alice_headers, bob_headers, bob, team_id, role="viewer")
     listed = await client.get(_src(project_id) + "/requests", headers=bob_headers)
@@ -807,7 +821,7 @@ async def test_torque_counts_sub_assemblies_or_names_them_never_drops_them(
 async def test_torque_and_select_refuse_another_projects_real_resources(
     client: AsyncClient, db: AsyncSession, alice_headers: dict[str, str]
 ) -> None:
-    """Real foreign ids, not random ones (security review H2): project B's assembly and category
+    """Real foreign ids, not random ones (security review H2): project B's assembly and robot
     are 404 from project A, byte-identical to a non-existent id, and nothing is created."""
     _, project_a = await project_for(client, alice_headers)
     _, project_b = await project_for(client, alice_headers)
@@ -818,12 +832,7 @@ async def test_torque_and_select_refuse_another_projects_real_resources(
         headers=alice_headers,
     )
     assert robot.status_code == 201, robot.text
-    categories = await client.get(
-        f"/api/v1/projects/{project_b}/entities",
-        params={"type": "robot_category"},
-        headers=alice_headers,
-    )
-    category_b = categories.json()["data"][0]["id"]
+    robot_b = robot.json()["data"]["id"]
     foreign_torque = await client.post(
         _src(project_a) + "/torque",
         json={"assembly_entity_id": str(foreign["assembly"])},
@@ -836,7 +845,7 @@ async def test_torque_and_select_refuse_another_projects_real_resources(
     )
     assert foreign_torque.status_code == 404
     assert foreign_torque.json() == ghost_torque.json()
-    # A succeeded request in A, then select into B's category.
+    # A succeeded request in A, then select into B's robot.
     alice = await me(client, alice_headers)
     await _fund(db, alice["id"])
     created = await client.post(
@@ -853,12 +862,12 @@ async def test_torque_and_select_refuse_another_projects_real_resources(
     candidate_id = shown.json()["data"]["candidates"][0]["id"]
     foreign_select = await client.post(
         _src(project_a) + f"/requests/{request_id}/select",
-        json={"candidate_id": candidate_id, "category_entity_id": category_b},
+        json={"candidate_id": candidate_id, "robot_entity_id": robot_b},
         headers=alice_headers,
     )
     ghost_select = await client.post(
         _src(project_a) + f"/requests/{request_id}/select",
-        json={"candidate_id": candidate_id, "category_entity_id": str(uuid.uuid4())},
+        json={"candidate_id": candidate_id, "robot_entity_id": str(uuid.uuid4())},
         headers=alice_headers,
     )
     assert foreign_select.status_code == 404

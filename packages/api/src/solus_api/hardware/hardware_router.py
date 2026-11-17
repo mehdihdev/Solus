@@ -12,31 +12,37 @@ from time import perf_counter
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StringConstraints
 
 from solus_api.core.errors import APIError
 from solus_api.core.pagination import cursor_filter, page_meta
 from solus_api.core.responses import envelope
 from solus_api.deps import BridgeSessionsDep, ProjectCtx, RequireVerified, SessionDep, require_role
 from solus_api.graph.live import graph_changed_frame
+from solus_api.graph.read_scope import visible_to
+from solus_api.hardware import detection_service
 from solus_api.hardware.companion_deployment import (
     PrepareCompanionDeployment,
     get_companion_deployment_service,
 )
-from solus_api.hardware.config import EntityHardwareConfig, HardwareConfig, LifecycleState, Scalar
-from solus_api.hardware.connections import connection_state
+from solus_api.hardware.config import (
+    DEVICE_REF_PATTERN,
+    EntityHardwareConfig,
+    HardwareConfig,
+    LifecycleState,
+    Scalar,
+)
 from solus_api.hardware.detect import (
     ConfirmIn,
     ProposeIn,
-    bind_device,
-    bound_repo_config_ids,
-    confirm_proposal,
     detected_devices_wire,
-    exclude_bound,
-    propose_via_local,
-    reconcile_device,
-    validated_repo_root,
+)
+from solus_api.hardware.device_memory import (
+    annotate,
+    clear_dismissals,
+    device_context,
+    dismiss,
+    this_machine,
 )
 from solus_api.hardware.host_topology import (
     HostAttachment,
@@ -46,15 +52,13 @@ from solus_api.hardware.host_topology import (
     LocalHostProvider,
     host_provider,
 )
-from solus_api.hardware.links import decide_suggestion, list_suggestions, serialize_suggestion
-from solus_api.hardware.local_runtime import open_local_hardware, prepare_local_hardware
+from solus_api.hardware.in_graph import set_in_graph
+from solus_api.hardware.links import list_suggestions, serialize_suggestion
 from solus_api.hardware.local_sources import LocalHardwareSources
 from solus_api.hardware.operations import HardwareEntityCreate, ReviewedHardwareOperations
-from solus_api.hardware.ownership import assign_parent, current_parent
+from solus_api.hardware.ownership import assign_parent, list_parts
 from solus_api.hardware.presence import PreparePresence, PresenceService
 from solus_api.hardware.presence_topology import AcceptWiring, WiringRequest, WiringService
-from solus_api.hardware.proposal_cache import PROPOSALS
-from solus_api.hardware.repo_evidence import read_repo_evidence
 from solus_api.hardware.runtime import resolve_runtime_config
 from solus_api.hardware.store import (
     MAX_ATTACH,
@@ -83,18 +87,13 @@ from solus_api.hardware.topology_proposals import (
     proposal_sources,
 )
 from solus_api.livebench.bench_router import get_bench_local, get_session_manager
-from solus_api.models import GraphEntity, HardwareSuggestion, Role, SuggestionStatus, utcnow
+from solus_api.models import GraphEntity, Role, SuggestionStatus, utcnow
 from solus_api.schemas import serialize_entity
 from solus_api.services.events import emit_event
 from solus_api.services.physical_robots import GraphChangeCounts
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/projects/{project_id}/hardware")
-
-#: The seven categories (the store re-checks against `ROBOT_CATEGORIES`, the one source).
-Category = Literal[
-    "sensors", "actuators", "controllers", "end_effectors", "power", "structure", "wiring"
-]
 
 
 class EntityConfigIn(BaseModel):
@@ -107,7 +106,6 @@ class ParentIn(BaseModel):
     parent_id: uuid.UUID | None
     expected_parent_id: uuid.UUID | None
     version: int = Field(ge=0, strict=True)
-    category: Category | None = None
 
 
 ConfigMatch = Annotated[str, Header(alias="If-Match", pattern=r"^(0|[1-9][0-9]{0,9})$")]
@@ -141,7 +139,9 @@ async def create_hardware_entity(
                 project_id=ctx.project.id,
                 source_id=None,
                 sync_id=None,
-                counts=GraphChangeCounts(entities_created=8 if body.kind == "robot" else 1),
+                counts=GraphChangeCounts(
+                    entities_created=1, relations_created=1 if result["parent_id"] else 0
+                ),
                 at=utcnow().isoformat(),
             ),
         )
@@ -157,6 +157,40 @@ def _entity_config_view(
         "version": entry.config_version if entry else 0,
         "config": config.model_dump(mode="json") if config else None,
     }
+
+
+class InGraphIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    in_graph: StrictBool
+
+
+@router.put("/entities/{entity_id}/graph")
+async def put_in_graph(
+    entity_id: uuid.UUID,
+    body: InGraphIn,
+    request: Request,
+    ctx: ProjectCtx,
+    session: SessionDep,
+    _verified: RequireVerified,
+) -> dict[str, Any]:
+    """Add a robot (with its own hardware) or a lone part to the workspace graph, or take it
+    out (SOLUSDEV-326, docs/api/hardware.md §1a). Only hardware the caller can see."""
+    require_role(ctx, Role.MEMBER)
+    change = await set_in_graph(
+        session,
+        ctx.project,
+        ctx.user,
+        entity_id,
+        body.in_graph,
+        hub=request.app.state.graph_hub,
+    )
+    return envelope(
+        {
+            "entity": serialize_entity(change.entity),
+            "in_graph": body.in_graph,
+            "updated": change.updated,
+        }
+    )
 
 
 @router.get("/entities/{entity_id}/config")
@@ -186,10 +220,6 @@ async def replace_entity_config(
         expected_version=int(if_match),
         created_by=ctx.user.id,
     )
-    if subject.kind == "physical_robot":
-        from solus_api.hardware.topology import sync_topology
-
-        await sync_topology(session, ctx.project.id, subject.id)
     _emit_hardware_event(
         ctx,
         session,
@@ -212,7 +242,7 @@ async def change_parent(
         parent_id=body.parent_id,
         expected_parent_id=body.expected_parent_id,
         version=body.version,
-        category=body.category,
+        actor_id=ctx.user.id,
     )
     _emit_hardware_event(
         ctx,
@@ -248,37 +278,13 @@ async def list_hardware_parts(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     cursor: Annotated[str | None, Query(max_length=256)] = None,
 ) -> dict[str, Any]:
-    from sqlalchemy import select
-
-    from solus_api.hardware.store import PART_KINDS
-
-    stmt = (
-        unassigned_parts_stmt(ctx.project.id)
-        if ownership == "unassigned"
-        else select(GraphEntity).where(
-            GraphEntity.project_id == ctx.project.id,
-            GraphEntity.kind.in_(PART_KINDS),
-            GraphEntity.deleted_at.is_(None),
-        )
+    rows, meta = await list_parts(
+        session, ctx.project.id, ctx.user.id, ownership=ownership, limit=limit, cursor=cursor
     )
-    if cursor:
-        stmt = stmt.where(cursor_filter(GraphEntity.created_at, GraphEntity.id, cursor))
-    rows = list(
-        (
-            await session.scalars(
-                stmt.order_by(GraphEntity.created_at.desc(), GraphEntity.id.desc()).limit(limit + 1)
-            )
-        ).all()
-    )
-    visible, meta = page_meta(rows, limit)
     return envelope(
         [
-            {
-                **serialize_entity(part),
-                "parent_id": await current_parent(session, ctx.project.id, part.id),
-                "ownership_version": part.version,
-            }
-            for part in visible
+            {**serialize_entity(part), "parent_id": parent, "ownership_version": part.version}
+            for part, parent in rows
         ],
         meta=meta,
     )
@@ -294,7 +300,6 @@ class PartIn(BaseModel):
     name: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512, strict=True)
     ]
-    category: Category
     specs: dict[str, Scalar] = Field(default_factory=dict, max_length=MAX_SPECS)
     lifecycle: LifecycleState = LifecycleState.PLANNED
 
@@ -516,7 +521,6 @@ async def author_part(
         ctx.project.id,
         robot,
         name=body.name,
-        category=body.category,
         specs=body.specs,
         lifecycle=body.lifecycle,
         created_by=ctx.user.id,
@@ -525,7 +529,7 @@ async def author_part(
         ctx,
         session,
         "hardware.part_created",
-        {"robot_id": str(robot.id), "part_id": str(part.id), "category": body.category},
+        {"robot_id": str(robot.id), "part_id": str(part.id)},
     )
     await session.commit()
     await request.app.state.graph_hub.publish(
@@ -573,7 +577,6 @@ async def promote_lifecycle(
 class AttachIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     entity_ids: list[uuid.UUID] = Field(min_length=1, max_length=MAX_ATTACH)
-    category: Category
 
 
 @router.get("/unassigned")
@@ -583,8 +586,8 @@ async def list_unassigned(
     limit: Annotated[int, Query(ge=1, le=100)] = 24,
     cursor: Annotated[str | None, Query(max_length=256)] = None,
 ) -> dict[str, Any]:
-    """Connector-sourced parts no robot category owns yet (From a file)."""
-    stmt = unassigned_parts_stmt(ctx.project.id)
+    """Part-like entities no robot owns yet (From a file), less another member's un-added parts."""
+    stmt = unassigned_parts_stmt(ctx.project.id).where(visible_to(ctx.user.id))
     if cursor:
         stmt = stmt.where(cursor_filter(GraphEntity.created_at, GraphEntity.id, cursor))
     stmt = stmt.order_by(GraphEntity.created_at.desc(), GraphEntity.id.desc()).limit(limit + 1)
@@ -600,18 +603,13 @@ async def attach_parts(
     require_role(ctx, Role.MEMBER)
     robot = await robot_root(session, ctx.project.id, robot_id)
     attached, skipped, entry = await attach_existing_parts(
-        session,
-        ctx.project.id,
-        robot,
-        entity_ids=body.entity_ids,
-        category=body.category,
-        created_by=ctx.user.id,
+        session, ctx.project.id, robot, entity_ids=body.entity_ids, created_by=ctx.user.id
     )
     _emit_hardware_event(
         ctx,
         session,
         "hardware.parts_attached",
-        {"robot_id": str(robot.id), "attached": len(attached), "category": body.category},
+        {"robot_id": str(robot.id), "attached": len(attached)},
     )
     await session.commit()
     if attached:
@@ -636,10 +634,53 @@ def _local_runner(request: Request) -> Any:
 
 
 @router.get("/detected")
-async def list_detected(ctx: ProjectCtx, request: Request) -> dict[str, Any]:
-    """Devices on this machine at whichever level is honestly known (opens no port)."""
+async def list_detected(ctx: ProjectCtx, session: SessionDep, request: Request) -> dict[str, Any]:
+    """Devices on this machine at whichever level is honestly known (opens no port), each with
+    what the caller may know of it (§4, SOLUSDEV-326): what binds it, their "Not now", and —
+    for the machine's owner — when it was last seen."""
     local = _local_runner(request)
-    return envelope(detected_devices_wire(await asyncio.to_thread(local.detect_devices)))
+    devices = detected_devices_wire(await asyncio.to_thread(local.detect_devices))
+    host = await LocalHostProvider(local).identity()
+    machine = await this_machine(session, ctx.project.id, host)
+    context = await device_context(session, ctx.project.id, devices, machine)
+    return envelope(annotate(devices, context, ctx.user.id))
+
+
+class DismissalIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_ref: str = Field(min_length=1, max_length=160, pattern=DEVICE_REF_PATTERN)
+
+
+async def _this_host(request: Request) -> str | None:
+    """This API's machine (its companion identity); 503 on an API that runs on no one's."""
+    return await LocalHostProvider(_local_runner(request)).identity()
+
+
+@router.post("/devices/dismissals")
+async def dismiss_device(
+    body: DismissalIn, ctx: ProjectCtx, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    """The caller's "Not now" to a device on this machine (§4): kept across restarts and
+    replugs until they clear it. Their own list comes back."""
+    require_role(ctx, Role.MEMBER)
+    host = await _this_host(request)
+    dismissed = await dismiss(session, ctx.project.id, host, ctx.user.id, body.device_ref)
+    _emit_hardware_event(ctx, session, "hardware.device_dismissed", {"device_ref": body.device_ref})
+    await session.commit()
+    return envelope({"dismissed": dismissed})
+
+
+@router.delete("/devices/dismissals")
+async def clear_device_dismissals(
+    ctx: ProjectCtx, session: SessionDep, request: Request
+) -> dict[str, Any]:
+    """Forget every "Not now" the caller said on this machine ("+ Add hardware")."""
+    require_role(ctx, Role.MEMBER)
+    host = await _this_host(request)
+    cleared = await clear_dismissals(session, ctx.project.id, host, ctx.user.id)
+    _emit_hardware_event(ctx, session, "hardware.dismissals_cleared", {"count": cleared})
+    await session.commit()
+    return envelope({"dismissed": []})
 
 
 @router.post("/detected/{device_ref}/propose")
@@ -650,25 +691,13 @@ async def propose_detected(
     request: Request,
     body: ProposeIn | None = None,
 ) -> dict[str, Any]:
-    local = _local_runner(request)
-    options = body or ProposeIn()
-    repo_root = validated_repo_root(options.repo_root)
-    evidence = await read_repo_evidence(local, ctx.project.id, ctx.user.id, options.source_refs)
-    fresh = await propose_via_local(
-        local,
-        device_ref,
-        repo_root=repo_root,
-        budget_s=options.budget_s,
-        repo_sources=evidence.sources,
-    )
-    current = await read_repo_evidence(local, ctx.project.id, ctx.user.id, options.source_refs)
-    if current.digest != evidence.digest:
-        raise APIError(409, "source_changed", "The source changed during review. Propose again.")
-    PROPOSALS.put(evidence.key(ctx.project.id, ctx.user.id, device_ref), fresh)
-    proposal = exclude_bound(fresh, await bound_repo_config_ids(session, ctx.project.id))
-    suggestions = await reconcile_device(session, ctx.project.id, proposal)
-    proposal = proposal.model_copy(
-        update={"suggestions": [serialize_suggestion(row) for row in suggestions]}
+    proposal = await detection_service.propose_detected(
+        session,
+        _local_runner(request),
+        project_id=ctx.project.id,
+        user_id=ctx.user.id,
+        device_ref=device_ref,
+        options=body or ProposeIn(),
     )
     _emit_hardware_event(
         ctx,
@@ -691,55 +720,17 @@ async def confirm_detected(
     require_role(ctx, Role.MEMBER)
     local = _local_runner(request)
     started = perf_counter()
-    repo_root = validated_repo_root(body.repo_root)
-    evidence = await read_repo_evidence(local, ctx.project.id, ctx.user.id, body.source_refs)
-    # Source-backed confirmation must refer to this actor's still-current reviewed snapshot.
-    cached = PROPOSALS.take(
-        evidence.key(ctx.project.id, ctx.user.id, device_ref), [a.row_id for a in body.accepted]
+    connections = request.app.state.hardware_connections
+    confirmed = await detection_service.confirm_detected(
+        session,
+        local,
+        connections,
+        project_id=ctx.project.id,
+        user_id=ctx.user.id,
+        device_ref=device_ref,
+        body=body,
     )
-    if body.source_refs and cached is None:
-        raise APIError(409, "proposal_changed", "Source review expired or changed. Propose again.")
-    if cached is not None:
-        devices = detected_devices_wire(await asyncio.to_thread(local.detect_devices))
-        if not any(device["device_ref"] == device_ref for device in devices):
-            raise APIError(404, "device_not_found", "The device is no longer connected")
-    proposal = exclude_bound(
-        cached
-        if cached is not None
-        else await propose_via_local(local, device_ref, repo_root=repo_root, budget_s=0.5),
-        await bound_repo_config_ids(session, ctx.project.id),
-    )
-    if body.connection_only:
-        devices = detected_devices_wire(await asyncio.to_thread(local.detect_devices))
-        matching = [device for device in devices if device["device_ref"] == device_ref]
-        expected = proposal.identity.model_dump(mode="json") if proposal.identity else None
-        if (
-            len(matching) != 1
-            or matching[0].get("ambiguous")
-            or expected is None
-            or not isinstance(matching[0].get("identity"), dict)
-            or any(
-                matching[0]["identity"].get(key) != expected.get(key)
-                for key in ("kind", "binding", "vid", "pid")
-            )
-        ):
-            raise APIError(
-                409, "device_changed", "Device identity changed; review the connection again"
-            )
-    start_session = body.start_session and not body.connection_only
-    runtime_id = (
-        await request.app.state.hardware_connections.ensure_owner() if start_session else None
-    )
-    proposed_at = perf_counter()
-    result = await confirm_proposal(
-        session, project_id=ctx.project.id, proposal=proposal, body=body, created_by=ctx.user.id
-    )
-    attempt_id = uuid.uuid4() if start_session else None
-    if attempt_id is not None:
-        result.robot.attrs = {
-            **result.robot.attrs,
-            "connection": connection_state(attempt_id, runtime_id=runtime_id),
-        }
+    result = confirmed.result
     _emit_hardware_event(
         ctx,
         session,
@@ -752,7 +743,7 @@ async def confirm_detected(
         },
     )
     await session.commit()
-    created = len(result.part_ids) + (8 if result.created_robot else 0)
+    # Written: the robot root when new, and each part with its robot -> part `contains` edge.
     await request.app.state.graph_hub.publish(
         ctx.project.id,
         graph_changed_frame(
@@ -760,26 +751,25 @@ async def confirm_detected(
             source_id=None,
             sync_id=None,
             counts=GraphChangeCounts(
-                entities_created=created,
-                relations_created=len(result.part_ids) + (7 if result.created_robot else 0),
+                entities_created=len(result.part_ids) + int(result.created_robot),
+                relations_created=len(result.part_ids),
             ),
             at=utcnow().isoformat(),
         ),
     )
     written_at = perf_counter()
-    if attempt_id is not None:
-        request.app.state.hardware_connections.schedule(
-            ctx.project.id, ctx.user.id, result.robot.id, attempt_id, body.window_seconds
+    if confirmed.attempt_id is not None:
+        connections.schedule(
+            ctx.project.id, ctx.user.id, result.robot.id, confirmed.attempt_id, body.window_seconds
         )
-    session_id, session_error = None, None
     logger.info(
         "hardware.confirm timings",
         extra={
             "project_id": str(ctx.project.id),
             "device_ref": device_ref,
-            "proposal_reused": cached is not None,
-            "propose_s": round(proposed_at - started, 4),
-            "write_s": round(written_at - proposed_at, 4),
+            "proposal_reused": confirmed.proposal_reused,
+            "propose_s": round(confirmed.proposed_at - started, 4),
+            "write_s": round(written_at - confirmed.proposed_at, 4),
             "session_s": round(perf_counter() - written_at, 4),
         },
     )
@@ -788,77 +778,29 @@ async def confirm_detected(
             "robot": serialize_entity(result.robot),
             "part_ids": result.part_ids,
             "config_entry_id": result.robot.attrs.get("hardware_config_ref"),
-            "session_id": session_id,
-            "session_error": session_error,
+            "session_id": None,
+            "session_error": None,
         }
     )
-
-
-async def _start_robot_session(
-    request: Request,
-    local: Any,
-    project_id: uuid.UUID,
-    robot: GraphEntity,
-    window_seconds: float,
-    *,
-    session: AsyncSession,
-    account_id: uuid.UUID,
-) -> tuple[uuid.UUID | None, str | None]:
-    """Open the robot's session through the driver registry; the robot exists either way,
-    so a session that does not start is reported, never raised."""
-    try:
-        config = await resolve_runtime_config(session, project_id, robot.id)
-        entry, owner_config = await read_entity_config(session, project_id, robot.id)
-        identity, protocol = config.identity, config.protocol
-        if entry is None or identity is None or protocol is None:
-            return None, "the robot's config has no transport identity or protocol"
-        document = await asyncio.to_thread(
-            prepare_local_hardware,
-            local,
-            config,
-            project_id,
-            account_id,
-            entry.id,
-            owner_config=owner_config,
-        )
-
-        async def open_robot() -> Any:
-            return await open_local_hardware(local, document, project_id)
-
-        record = await get_session_manager(request).start(
-            project_id,
-            mode="real",
-            provider="robot",
-            label=f"Robot {robot.name} ({identity.device_ref})",
-            open_conn=open_robot,
-            window_seconds=window_seconds,
-            device={
-                "device_ref": identity.device_ref,
-                "driver_id": protocol.driver_id,
-                "serial_number": identity.binding,
-                "device_path": getattr(identity, "last_seen_path", None),
-                "baud": protocol.params.get("baud"),
-            },
-            # SOLUSDEV-321 P2-T3: the robot's session runs its window evaluator as this member
-            robot_entity_id=robot.id,
-            owner_user_id=account_id,
-        )
-    except APIError as exc:
-        return None, exc.message
-    except Exception as exc:
-        logger.warning("session after binding failed: %s", type(exc).__name__)
-        return None, f"{type(exc).__name__}: the session did not start"
-    return record.id, None
 
 
 @router.post("/parts/{part_id}/suggestions")
 async def propose_part_suggestions(
     part_id: uuid.UUID, ctx: ProjectCtx, session: SessionDep, _verified: RequireVerified
 ) -> dict[str, Any]:
-    from solus_api.hardware.cad_suggestions import propose_cad_suggestions
+    from solus_api.hardware.cad_suggestions import (
+        filter_visible_suggestions,
+        propose_cad_suggestions,
+    )
 
     require_role(ctx, Role.MEMBER)
-    rows = await propose_cad_suggestions(session, ctx.project.id, part_id, ctx.user.id)
+    # SOLUSDEV-326: its counterpart's robot may be one the caller cannot see (§1a).
+    rows = await filter_visible_suggestions(
+        session,
+        ctx.project.id,
+        ctx.user.id,
+        await propose_cad_suggestions(session, ctx.project.id, part_id, ctx.user.id),
+    )
     _emit_hardware_event(
         ctx, session, "hardware.part_links_proposed", {"part_id": str(part_id), "count": len(rows)}
     )
@@ -877,9 +819,9 @@ async def get_suggestions(
     except ValueError:
         raise APIError(422, "validation_error", "Unknown suggestion status") from None
     rows = await list_suggestions(session, ctx.project.id, status=parsed)
-    from solus_api.hardware.cad_suggestions import filter_visible_cad_suggestions
+    from solus_api.hardware.cad_suggestions import filter_visible_suggestions
 
-    rows = await filter_visible_cad_suggestions(session, ctx.project.id, ctx.user.id, rows)
+    rows = await filter_visible_suggestions(session, ctx.project.id, ctx.user.id, rows)
     return envelope([serialize_suggestion(row) for row in rows])
 
 
@@ -893,74 +835,47 @@ async def _decide(
     reason: str | None,
 ) -> dict[str, Any]:
     require_role(ctx, Role.MEMBER)
-    row = await decide_suggestion(
-        session, ctx.project.id, suggestion_id, accept, ctx.user.id, reason=reason
+    decision = await detection_service.decide_and_link(
+        session,
+        get_bench_local(request),
+        get_session_manager(request),
+        project_id=ctx.project.id,
+        user_id=ctx.user.id,
+        suggestion_id=suggestion_id,
+        accept=accept,
+        reason=reason,
     )
+    row = decision.row
     _emit_hardware_event(
         ctx,
         session,
         "hardware.suggestion_decided",
         {"suggestion_id": str(row.id), "decision": row.status.value},
     )
-    binding: dict[str, Any] = {
-        "bound": False,
-        "robot_id": row.candidate_robot_id,
-        "session_id": None,
-        "session_error": None,
-        "bind_error": None,
-    }
-    attached_count = 0
-    if accept and row.subject_kind == "device":
-        binding.update(await _bind_accepted_device(request, ctx, session, row))
-    elif accept and row.subject_kind == "part":
-        from solus_api.hardware.cad_suggestions import accept_cad_suggestion, is_cad_suggestion
-
-        if is_cad_suggestion(row):
-            outcome = await accept_cad_suggestion(session, ctx.project.id, row, ctx.user.id)
-            attached_count = outcome.pop("attached_count", 0)
-            binding.update(outcome)
+    if decision.device_bound:
+        _emit_hardware_event(
+            ctx,
+            session,
+            "hardware.device_bound",
+            {
+                "robot_id": str(row.candidate_robot_id),
+                "device_ref": row.subject_ref,
+                "suggestion_id": str(row.id),
+            },
+        )
     await session.commit()
-    if attached_count:
+    if decision.attached_count:
         await request.app.state.graph_hub.publish(
             ctx.project.id,
             graph_changed_frame(
                 project_id=ctx.project.id,
                 source_id=None,
                 sync_id=None,
-                counts=GraphChangeCounts(relations_created=attached_count),
+                counts=GraphChangeCounts(relations_created=decision.attached_count),
                 at=utcnow().isoformat(),
             ),
         )
-    return envelope({**serialize_suggestion(row), **binding})
-
-
-async def _bind_accepted_device(
-    request: Request, ctx: ProjectCtx, session: SessionDep, row: HardwareSuggestion
-) -> dict[str, Any]:
-    """An accepted device suggestion binds the wire to that robot: re-propose (the wire is
-    the truth), write identity/protocol/bus map, key the parts, open the session."""
-    local = get_bench_local(request)
-    if local is None:
-        return {"bind_error": "the local runner (livebench) is not installed on this server"}
-    try:
-        proposal = exclude_bound(
-            await propose_via_local(local, row.subject_ref, repo_root=None, budget_s=0.5),
-            await bound_repo_config_ids(session, ctx.project.id),
-        )
-        robot = await robot_root(session, ctx.project.id, row.candidate_robot_id)
-        await bind_device(session, ctx.project.id, robot, proposal, created_by=ctx.user.id)
-    except APIError as exc:
-        return {"bind_error": exc.message}
-    _emit_hardware_event(
-        ctx,
-        session,
-        "hardware.device_bound",
-        {"robot_id": str(robot.id), "device_ref": row.subject_ref, "suggestion_id": str(row.id)},
-    )
-    session_id, session_error = await _start_robot_session(
-        request, local, ctx.project.id, robot, 1.0, session=session, account_id=ctx.user.id
-    )
-    return {"bound": True, "session_id": session_id, "session_error": session_error}
+    return envelope({**serialize_suggestion(row), **decision.binding})
 
 
 @router.post("/suggestions/{suggestion_id}/accept")

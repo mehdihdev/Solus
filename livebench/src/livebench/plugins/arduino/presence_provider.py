@@ -9,9 +9,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import UUID
 
 from solus_api.hardware.presence import PresenceRefusalError
+from solus_api.livebench.sessions import DeviceBusyError
 
+from livebench.hardware.serial_owner import SERIAL_OWNER, Claimant, SerialOwner
 from livebench.plugins.arduino.arduino_flash import run_cli
 from livebench.plugins.arduino.presence import PresenceCompiler
 from livebench.plugins.arduino.wiring import validate_wiring
@@ -40,11 +43,13 @@ class LocalPresenceProvider:
         binary: str,
         library: Path,
         enumerate_ports: Callable[[], list[PortIdentity]] = enumerate_usb_serial,
+        owner: SerialOwner = SERIAL_OWNER,
     ):
         self.binary, self.library = binary, library
         if not Path(binary).is_absolute() or not library.is_absolute():
             raise ValueError("pinned absolute compiler/library required")
         self.enumerate_ports = enumerate_ports
+        self.owner = owner
 
     def profiles(self) -> list[dict[str, Any]]:
         available = os.access(self.binary, os.X_OK) and self.library.is_dir()
@@ -111,20 +116,38 @@ class LocalPresenceProvider:
             "binary_sha256": prepared.binary_sha256,
         }
 
-    async def upload(self, target: dict[str, Any], profile_id: str, firmware: bytes) -> None:
+    async def upload(
+        self,
+        target: dict[str, Any],
+        profile_id: str,
+        firmware: bytes,
+        *,
+        project_id: UUID | None = None,
+        user_id: UUID | None = None,
+    ) -> None:
         if not 0 < len(firmware) <= 100000:
             raise PresenceRefusalError("Invalid firmware size")
         await asyncio.to_thread(self.validate, target, profile_id)
-        # Opening without termios or DTR changes obtains only the same advisory
-        # lock pyserial exclusive=True uses. It does not reset or query the board.
+        device_ref = f"usb:{target['binding']}"
+        # SOLUSDEV-326: nothing else in this process opens the port while the upload runs. It
+        # claims for the flashing member in the plan's project: only that member's own holders
+        # and claims are named, never a teammate's (it may be on hardware hidden from them, §1a).
+        claimant = Claimant.of("upload", project_id, user_id)
+        with self.owner.holding(device_ref, claimant):
+            await self._upload(device_ref, target, profile_id, firmware)
+
+    async def _upload(
+        self, device_ref: str, target: dict[str, Any], profile_id: str, firmware: bytes
+    ) -> None:
+        # The open changes no termios and queries nothing; it takes only the advisory lock
+        # pyserial's exclusive=True uses, so another program holding the port is busy. (The open
+        # may pulse DTR — harmless here, the upload restarts the board anyway.)
         fd = os.open(target["path"], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as exc:
-                raise PresenceRefusalError(
-                    "Device is in use; stop its session before approving"
-                ) from exc
+                raise DeviceBusyError(device_ref, None) from exc
             await asyncio.to_thread(self.validate, target, profile_id)
             with TemporaryDirectory(prefix="solus-approved-presence-") as directory:
                 artifact = Path(directory) / "presence.hex"

@@ -53,6 +53,24 @@ describe('solCache', () => {
     expect(items?.every((m) => !m.pending && m.confirmations.length === 0)).toBe(true)
   })
 
+  it('keeps a Solus-written turn one: a cached notice or answer never repaints as a bubble', async () => {
+    writeCachedChat('p1', 'c1', [
+      item({ kind: 'notice', content: 'Solus noticed a device.' }),
+      item({ kind: 'answer', content: 'Chose "Yes"' }),
+      item({ content: 'typed' })
+    ])
+    read.mockResolvedValue(write.mock.calls[0][2])
+    expect((await readCachedChat('p1', 'c1'))?.map((m) => m.kind)).toEqual([
+      'notice',
+      'answer',
+      undefined
+    ])
+    read.mockResolvedValue(
+      JSON.stringify({ schema_version: 1, items: [{ role: 'user', content: 'x', kind: 'boss' }] })
+    )
+    expect((await readCachedChat('p1', 'c1'))?.[0].kind).toBeUndefined()
+  })
+
   it('discards malformed cache files instead of rendering them', async () => {
     const oversizedItem = JSON.stringify({
       schema_version: 1,

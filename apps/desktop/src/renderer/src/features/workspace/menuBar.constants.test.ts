@@ -23,4 +23,18 @@ describe('MENUS', () => {
       if (scoped) expect(m.projectHint).toBeTruthy()
     }
   })
+
+  it('lists Hardware in View between Workspace and Live Bench (SOLUSDEV-326)', () => {
+    const view = MENUS.find((m) => m.id === 'view')
+    const screens = view?.items.flatMap((i) => (i !== 'separator' && 'screen' in i ? [i] : []))
+    expect(screens?.map((i) => i.label)).toEqual([
+      'Home',
+      'Workspace',
+      'Hardware',
+      'Live Bench',
+      'SOL',
+      'Store'
+    ])
+    expect(screens?.find((i) => i.label === 'Hardware')?.screen).toBe('hardware')
+  })
 })

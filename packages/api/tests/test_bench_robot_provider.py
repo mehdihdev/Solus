@@ -23,10 +23,12 @@ class _RobotLocal(FakeLocal):
         super().__init__()
         self.robot_error: Exception | None = None
 
-    async def open_robot(self, config: dict[str, Any], *, project_id: uuid.UUID) -> TapConn:
+    async def open_robot(
+        self, config: dict[str, Any], *, project_id: uuid.UUID, user_id: uuid.UUID | None = None
+    ) -> TapConn:
         if self.robot_error is not None:
             raise self.robot_error
-        return await self._open("robot", config=config, project_id=project_id)
+        return await self._open("robot", config=config, project_id=project_id, user_id=user_id)
 
 
 @pytest.fixture

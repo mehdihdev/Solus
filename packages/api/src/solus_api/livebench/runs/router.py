@@ -16,7 +16,7 @@ from solus_api.core.errors import APIError
 from solus_api.core.responses import envelope
 from solus_api.deps import ProjectCtx, SessionDep, require_role, require_verified
 from solus_api.graph import kinds
-from solus_api.graph.read_scope import current_scope
+from solus_api.graph.read_scope import current_scope, visible_to
 from solus_api.livebench.runs import analysis, narration, store
 from solus_api.livebench.runs.capture import Capture, RunCaptureManager
 from solus_api.livebench.runs.models import (
@@ -189,6 +189,7 @@ async def list_runs(
         GraphEntity.kind == store.RUN_KIND,
         GraphEntity.origin == "system",
         GraphEntity.deleted_at.is_(None),
+        visible_to(ctx.user.id),  # SOLUSDEV-326: runs of another member's un-added hardware
     )
     if cursor is not None:
         previous = await store.record(session, ctx.project.id, cursor)
@@ -311,6 +312,8 @@ async def stop_run(
     if info is None:
         info = store.summary(entity)
         if info.status == "running":
+            # The project lock before the record's: the order Add/Remove from graph takes them.
+            await lock_project(session, ctx.project.id)
             entity = await store.record(session, ctx.project.id, run_id, lock=True)
             info = store.summary(entity)
             if info.status == "running":

@@ -12,7 +12,7 @@ def test_entity_config_needs_no_connection_and_validates_each_valued_leaf() -> N
     entity_id = uuid.uuid4()
     config = EntityHardwareConfig(entity_id=entity_id)
     assert config.schema_version == 2
-    assert config.identity is None
+    assert config.identity == []
     with pytest.raises(ValidationError, match="provenance"):
         EntityHardwareConfig.model_validate(
             {"entity_id": entity_id, "component": {"limits": {"values": {"max": 90}}}}
@@ -125,8 +125,9 @@ def test_owner_component_collision_merges_without_losing_connection(top: dict[st
         },
     }
     config = split_legacy_document(legacy)[owner]
-    assert config.identity is not None and config.identity.binding == "fixture"
-    assert config.protocol is not None and config.protocol.params == {"baud": 115200}
+    (brain,) = config.identity  # SOLUSDEV-326: the one v1 identity is the config's one brain
+    assert brain.binding is not None and brain.binding.binding == "fixture"
+    assert brain.protocol is not None and brain.protocol.params == {"baud": 115200}
     assert len(config.bus_map) == 1 and config.disambiguated_by == "user"
     assert config.component is not None and config.component.limits is not None
     assert config.component.limits.values == {"max": 50}

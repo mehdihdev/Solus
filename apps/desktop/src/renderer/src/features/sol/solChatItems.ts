@@ -2,7 +2,7 @@
 // solChatStore.ts to keep it focused): turning server turns and stream events
 // into immutable ChatItem updates. No store access, no side effects.
 import { ApiError } from '../../lib/api/envelope.types'
-import type { AutoRun } from '../../lib/api/solStream'
+import type { AutoRun, PendingConfirmation } from '../../lib/api/solStream'
 import { toResearchSources } from './researchSources'
 import { toThinkingInfo } from './thinking'
 import type { SolTurn } from './solApi'
@@ -18,10 +18,41 @@ import {
 /** Per-turn rendered-content ceiling (SEC-H3). Far above any real reply. */
 export const MAX_TURN_CHARS = 200_000
 
+/** Which Solus-written turn a stored user turn is, from the server's own attrs — never from its
+ *  words: a notice is `authored_by: "solus"`, an answer carries the `answer` it settled. */
+function storedKind(turn: SolTurn): Pick<ChatItem, 'kind'> {
+  if (turn.role !== 'user') return {}
+  if (turn.attrs.authored_by === 'solus') return { kind: 'notice' }
+  const answer = turn.attrs.answer
+  return typeof answer === 'object' && answer !== null ? { kind: 'answer' } : {}
+}
+
+const CHOSE = /^Chose ("(?:[^"\\]|\\.)*")(?: — ([\s\S]*))?$/
+
+const EDITED = /^([\s\S]*?): ("(?:[^"\\]|\\.)*")$/
+
+/** An answer turn's words as the receipt the thread shows (routers/sol_cards.py `answer_prompt`,
+ *  and `answerLabel` live): `Chose "<label>"`, then ` — <typed>`, reads "Answered: Yes"; an
+ *  edit's `<field label>: "<value>"` reads "Edited: Robot name — Rover arm". Read from the words
+ *  alone, so it holds whatever mark `attrs.answer` carries for an edit. The label and the value
+ *  come back as plain strings, for a text node only. */
+export function answerReceipt(content: string): string {
+  try {
+    const chose = CHOSE.exec(content)
+    if (chose) return `Answered: ${String(JSON.parse(chose[1]))}${chose[2] ? ` — ${chose[2]}` : ''}`
+    const edited = EDITED.exec(content)
+    if (edited) return `Edited: ${edited[1]} — ${String(JSON.parse(edited[2]))}`
+  } catch {
+    // Not the server's quoting: the words stand as they are.
+  }
+  return content
+}
+
 export function turnToItem(turn: SolTurn): ChatItem {
   return {
     id: turn.id,
     role: turn.role,
+    ...storedKind(turn),
     content: turn.content,
     citations: [],
     trace: [],
@@ -157,11 +188,78 @@ export function applyEvent(patch: Patch, event: SolStreamEvent): void {
   }
 }
 
-function attachToolArgs(patch: Patch, callId: string, args: ToolArgs): void {
+/** What a `tool_call` frame says beside the call itself: its args and its working line. */
+function attachToStep(
+  patch: Patch,
+  callId: string,
+  extra: { args?: ToolArgs; working?: string }
+): void {
   patch((item) => ({
     ...item,
-    trace: item.trace.map((step) => (step.callId === callId ? { ...step, args } : step))
+    trace: item.trace.map((step) => (step.callId === callId ? { ...step, ...extra } : step))
   }))
+}
+
+/** SOLUSDEV-326: what SOL is doing right now, in the tool's own words: the newest call still in
+ *  flight on a reply that has nothing to say yet. Null whenever there is text to read instead. */
+export function workingLine(items: readonly ChatItem[]): string | null {
+  const last = items[items.length - 1]
+  if (!last?.pending || last.content) return null
+  const step = [...last.trace].reverse().find((entry) => entry.ok === null && entry.working)
+  return step?.working ?? null
+}
+
+/** The gate's answer to a call it will not run now: a park and a real refusal alike
+ *  (agent/tools/shapes.py `ToolErrorCode.UNAUTHORIZED`). */
+const GATE_REFUSED = 'unauthorized'
+
+/** SOLUSDEV-326: a parked call's step stops reading as a failure. The server streams a parked
+ *  call's `tool_confirmation` straight after its result (routers/sol.py `_drain_parked`), so the
+ *  frame's step is the newest one of its tool the gate refused and no card has claimed. A refusal
+ *  with no frame after it (Guide, a rejected call, the same action proposed twice) stays one.
+ *  Run on every frame, before the store drops a card it already shows. */
+export function markParked(patch: Patch, event: SolStreamEvent): void {
+  if (event.type !== 'tool_confirmation') return
+  const { confirmationId, tool } = event.pending
+  patch((item) => {
+    const at = item.trace.findLastIndex(
+      (step) => step.tool === tool && step.errorCode === GATE_REFUSED && !step.parked
+    )
+    if (at < 0) return item
+    const trace = item.trace.map((step, i) =>
+      i === at ? { ...step, parked: { confirmationId } } : step
+    )
+    return { ...item, trace }
+  })
+}
+
+/** The steps after a card was decided: the one it parked says which way. */
+export function decidedTrace(
+  trace: ChatItem['trace'],
+  confirmationId: string,
+  decision: 'approve' | 'reject'
+): ChatItem['trace'] {
+  return trace.map((step) =>
+    step.parked?.confirmationId === confirmationId
+      ? { ...step, parked: { confirmationId, decision } }
+      : step
+  )
+}
+
+/** The message text after a decision: a restored approvals item says what
+ *  happened; a chat message gains an "Approval update" line. */
+export function decidedContent(
+  m: ChatItem,
+  confirmationId: string,
+  decision: 'approve' | 'reject'
+): string {
+  const approved = decision === 'approve'
+  if (!m.id.startsWith('approvals-')) {
+    const tool = m.confirmations.find((c) => c.confirmationId === confirmationId)?.tool ?? 'Action'
+    return `${m.content}\n\nApproval update: ${tool} ${approved ? 'approval recorded' : 'was rejected'}.`
+  }
+  if (m.confirmations.length !== 1) return m.content
+  return approved ? 'Approval recorded.' : 'Action rejected.'
 }
 
 /** SOLUSDEV-321 P7: the reasoning already hung on cards — every entry but the one still waiting. */
@@ -194,7 +292,12 @@ export function applyReasoningFrame(patch: Patch, event: SolStreamEvent): void {
       patch((item) => ({ ...item, budgetReached: event.budget }))
       return
     case 'tool_call':
-      if (event.args) attachToolArgs(patch, event.callId, event.args)
+      if (event.args || event.working) {
+        attachToStep(patch, event.callId, {
+          ...(event.args ? { args: event.args } : {}),
+          ...(event.working ? { working: event.working } : {})
+        })
+      }
       return
     case 'reasoning':
       // A newer round's reasoning replaces one still waiting for its card.
@@ -207,4 +310,30 @@ export function applyReasoningFrame(patch: Patch, event: SolStreamEvent): void {
       patch((item) => hangOnCard(item, event.pending.confirmationId))
       return
   }
+}
+
+/** A history load merged with what is live: the loaded turns, then the conversation's still-open
+ *  rows the live items do not already carry (one "Awaiting your approval" item), then the local
+ *  items a send appended meanwhile. `decided` names rows decided here since the server listed them. */
+export function withRestored(
+  loaded: readonly ChatItem[],
+  current: readonly ChatItem[],
+  conversationId: string,
+  approvals: readonly PendingConfirmation[],
+  decided: (confirmationId: string) => boolean
+): ChatItem[] {
+  const local = current.filter((m) => m.id.startsWith('local-'))
+  const liveIds = new Set(local.flatMap((m) => m.confirmations.map((c) => c.confirmationId)))
+  const restored = approvals.filter(
+    (c) => !liveIds.has(c.confirmationId) && !decided(c.confirmationId)
+  )
+  const awaiting: ChatItem[] = restored.length
+    ? [
+        {
+          ...blankItem(`approvals-${conversationId}`, 'assistant', 'Awaiting your approval'),
+          confirmations: restored
+        }
+      ]
+    : []
+  return [...loaded, ...awaiting, ...local]
 }

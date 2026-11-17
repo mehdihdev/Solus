@@ -24,18 +24,24 @@ const account = (override: Partial<Connection>): Connection => ({
 function mount(
   accounts: Connection[],
   over: Partial<CatalogSnapshot> = {}
-): { onSelect: ReturnType<typeof vi.fn>; onRefresh: ReturnType<typeof vi.fn> } {
+): {
+  onSelect: ReturnType<typeof vi.fn>
+  onRefresh: ReturnType<typeof vi.fn>
+  onOpenHardware: ReturnType<typeof vi.fn>
+} {
   const onSelect = vi.fn()
   const onRefresh = vi.fn()
+  const onOpenHardware = vi.fn()
   render(
     <AddSourceRows
       state={{ status: 'ready', accounts, error: null, documents: {}, ...over }}
       selected={{ kind: 'account', id: 'c1' }}
       onSelect={onSelect}
       onRefresh={onRefresh}
+      onOpenHardware={onOpenHardware}
     />
   )
-  return { onSelect, onRefresh }
+  return { onSelect, onRefresh, onOpenHardware }
 }
 
 describe('AddSourceRows', () => {
@@ -66,12 +72,15 @@ describe('AddSourceRows', () => {
   })
 
   it('keeps a non-connected account disabled and always offers .solus and Hardware', () => {
-    const { onSelect, onRefresh } = mount([account({ status: 'revoked' })])
+    const { onSelect, onRefresh, onOpenHardware } = mount([account({ status: 'revoked' })])
     expect(screen.getByRole('tab', { name: 'onshape · builder' })).toBeDisabled()
     fireEvent.click(screen.getByRole('tab', { name: '.solus' }))
     expect(onSelect).toHaveBeenLastCalledWith({ kind: 'solus' })
-    fireEvent.click(screen.getByRole('tab', { name: 'Hardware' }))
-    expect(onSelect).toHaveBeenLastCalledWith({ kind: 'hardware' })
+    // SOLUSDEV-326: Hardware is a way out to the Hardware page, not a tab of this modal.
+    expect(screen.queryByRole('tab', { name: 'Hardware' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Hardware' }))
+    expect(onOpenHardware).toHaveBeenCalledOnce()
+    expect(onSelect).toHaveBeenCalledOnce()
     fireEvent.click(screen.getByRole('button', { name: 'Refresh accounts' }))
     expect(onRefresh).toHaveBeenCalledOnce()
   })

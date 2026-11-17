@@ -49,6 +49,7 @@ export const MENUS: readonly MenuSpec[] = [
     items: [
       { label: 'Home', screen: 'home' },
       { label: 'Workspace', screen: 'workspace' },
+      { label: 'Hardware', screen: 'hardware' },
       { label: 'Live Bench', screen: 'bench' },
       { label: 'SOL', screen: 'sol' },
       { label: 'Store', screen: 'store' }

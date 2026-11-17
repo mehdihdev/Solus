@@ -175,3 +175,21 @@ it('marker click opens finding', () => {
   expect(screen.queryByRole('button', { name: /^Open finding/ })).not.toBeInTheDocument()
   expect(screen.getByLabelText('threshold_breach at 2026-09-14T12:00:01Z')).toBeInTheDocument()
 })
+
+it('spans at least the channel display range, in the chosen unit, and never hides a reading', () => {
+  const at = (second: number): string => `2026-09-14T12:00:0${second}Z`
+  const series = (values: number[]): Parameters<typeof SignalWidget>[0]['series'] => ({
+    signal: 'angle',
+    range: { min: -1, max: 3 },
+    points: values.map((value, index) => ({ timestamp: at(index * 2), value, unit: 'rad' }))
+  })
+  const props = { userId: null, projectId: 'p', deviceId: 'd' }
+  const view = render(<SignalWidget {...props} series={series([0, 1])} />)
+  const line = (): string | null =>
+    screen.getByRole('img').querySelector('polyline')?.getAttribute('points') ?? null
+  expect(line()).toBe('0.0,36.0 240.0,24.0')
+  fireEvent.change(screen.getByLabelText('Display unit for angle'), { target: { value: 'deg' } })
+  expect(line()).toBe('0.0,36.0 240.0,24.0')
+  view.rerender(<SignalWidget {...props} series={series([0, 10])} />)
+  expect(line()).toBe('0.0,43.6 240.0,0.0')
+})

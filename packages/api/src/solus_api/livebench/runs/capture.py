@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from solus_api.graph.findings import MAX_LIMIT, FindingStatus, list_findings
 from solus_api.graph.packet import TelemetryPacket
+from solus_api.graph.read_scope import system_view
 from solus_api.livebench.runs import store
 from solus_api.livebench.runs.models import (
     MAX_BYTES,
@@ -23,6 +24,7 @@ from solus_api.livebench.runs.models import (
 )
 from solus_api.livebench.sessions import SessionManager, SessionNotFoundError
 from solus_api.models import GraphEntity, utcnow
+from solus_api.services.solus_graph import lock_project
 from solus_api.storage import ArtifactStore
 
 logger = logging.getLogger(__name__)
@@ -191,25 +193,37 @@ class RunCaptureManager:
                 capture.info.ended_at = utcnow()
             info = capture.info.model_copy(deep=True)
             manifest = capture.manifest.model_copy(deep=True)
-            async with self.sessions() as session:
-                entity = await store.record(session, capture.project_id, info.id, lock=True)
-                persisted = store.summary(entity)
-                if persisted.status != "running":
-                    self.active.pop(info.id, None)
-                    capture.info = persisted
-                    return persisted
-                found = await findings_during(session, capture.project_id, info)
-                manifest.findings = _fitting(found, MAX_BYTES - 1024 - capture.byte_count)
-                if len(manifest.findings) < len(found):
-                    logger.warning(
-                        "run findings trimmed: run=%s kept=%s of=%s",
-                        info.id,
-                        len(manifest.findings),
-                        len(found),
+            # SOLUSDEV-326: a checkpoint outlives the request that started its capture and
+            # copies its ContextVars; it saves in the system view, so no one person's view of
+            # the robot (another member may take it out of the graph) stops the run.
+            with system_view():
+                async with self.sessions() as session:
+                    if final:  # the project lock before the record's: Add/Remove's order
+                        await lock_project(session, capture.project_id)
+                    entity = await store.record(session, capture.project_id, info.id, lock=True)
+                    persisted = store.summary(entity)
+                    if persisted.status != "running":
+                        self.active.pop(info.id, None)
+                        capture.info = persisted
+                        return persisted
+                    found = await findings_during(session, capture.project_id, info)
+                    manifest.findings = _fitting(found, MAX_BYTES - 1024 - capture.byte_count)
+                    if len(manifest.findings) < len(found):
+                        logger.warning(
+                            "run findings trimmed: run=%s kept=%s of=%s",
+                            info.id,
+                            len(manifest.findings),
+                            len(found),
+                        )
+                    await store.save(
+                        session,
+                        self.artifacts,
+                        entity,
+                        info,
+                        manifest,
+                        capture.user_id,
+                        final=final,
                     )
-                await store.save(
-                    session, self.artifacts, entity, info, manifest, capture.user_id, final=final
-                )
             if final:
                 capture.info = info
             else:

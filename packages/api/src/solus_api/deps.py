@@ -572,11 +572,13 @@ async def get_sol_registry(
     from solus_api.agent.runtime import build_sol_registry
     from solus_api.agent.tools.hosted_tools import load_hosted_inventory
     from solus_api.hardware.companion_deployment import get_companion_deployment_service
+    from solus_api.hardware.device_watch import watcher_wanted
     from solus_api.hardware.presence import PresenceService
     from solus_api.routers.sol import create_scene_enqueue
     from solus_api.simulation.sim_ladder import jobs_queued
     from solus_api.widgets.guard import load_bundle_capabilities
 
+    local = getattr(request.app.state, "bench_local", None)
     return build_sol_registry(
         sessionmaker,
         ctx.project.id,
@@ -629,6 +631,9 @@ async def get_sol_registry(
         # Redis, or inline, there is none and rung 3 says so rather than running in the request.
         graph_hub=getattr(request.app.state, "graph_hub", None),
         enqueue_sim=create_sim_enqueue(request.app) if jobs_queued(settings) else None,
+        # SOLUSDEV-326 P2-T4: the hardware reads only where this machine's devices are watched —
+        # a local runner, and never a production API (the device watcher's own condition).
+        hardware_local=local if watcher_wanted(settings.app_env, local) else None,
     )
 
 

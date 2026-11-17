@@ -69,6 +69,11 @@ export const Icons = {
     '0 0 17 17',
     '<path d="M7 10l3-3M5.5 8L3.8 9.7a2.6 2.6 0 003.6 3.6L9 11.6M11.5 9l1.7-1.7a2.6 2.6 0 00-3.6-3.6L8 5.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
   ),
+  /** SOLUSDEV-326: the Hardware rail glyph — a chip: body, centre die, two pins per side. */
+  hardware: makeIcon(
+    '0 0 16 16',
+    '<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="4" y="4" width="8" height="8" rx="1.2"/><rect x="6.5" y="6.5" width="3" height="3" rx=".5"/><path d="M6 1.5V4M10 1.5V4M6 12v2.5M10 12v2.5M1.5 6H4M1.5 10H4M12 6h2.5M12 10h2.5"/></g>'
+  ),
   bench: makeIcon(
     '0 0 17 17',
     '<path d="M1 9h3l2-5 3 9 2-4h5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'

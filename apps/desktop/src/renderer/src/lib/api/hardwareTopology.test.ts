@@ -44,3 +44,26 @@ it('accepts omitted optional metadata from the generated API schema', async () =
   const client = { request: vi.fn().mockResolvedValue(data) } as unknown as ApiClient
   expect(await readHardwareTopology('p', 'r', undefined, client)).toEqual(data)
 })
+
+it('accepts onboard brains and a measured clock and refuses a malformed clock', async () => {
+  const clock = {
+    offset_ms: -12.5,
+    jitter_ms: 0.8,
+    measured_at: '2026-11-15T10:00:00Z',
+    method: 'rtt8'
+  }
+  const brain = { id: 'computer', name: 'ip:10.0.0.2', role: 'brain', brain_kind: 'onboard' }
+  const read = (node: Record<string, unknown>): Promise<unknown> =>
+    readHardwareTopology('p', 'r', undefined, {
+      request: vi.fn().mockResolvedValue({ robot_id: 'r', nodes: [node], edges: [], roots: [] })
+    } as unknown as ApiClient)
+  expect((await read({ ...brain, clock })) as object).toMatchObject({ nodes: [{ clock }] })
+  expect(await read({ ...brain, clock: null })).toBeTruthy()
+  for (const bad of [
+    { ...clock, offset_ms: 'soon' },
+    { ...clock, jitter_ms: Number.NaN },
+    { ...clock, measured_at: 7 },
+    'yesterday'
+  ])
+    await expect(read({ ...brain, clock: bad })).rejects.toThrow('Invalid hardware topology')
+})

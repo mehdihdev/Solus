@@ -21,12 +21,22 @@ import json
 from pathlib import Path
 
 from pydantic import BaseModel
+from solus_api.agent.command_gate import COMMAND_TOOLS
 from solus_api.contracts import action_gate, impact, tool_knowledge
 
 FIXTURES = Path(__file__).resolve().parents[3] / "shared-types" / "fixtures"
 
 CONTRACTS: dict[str, list[type[BaseModel]]] = {
-    "action-gate": [action_gate.ToolConfirmationEvent, action_gate.DiffRow],
+    "action-gate": [
+        action_gate.ToolConfirmationEvent,
+        action_gate.DiffRow,
+        action_gate.Card,
+        action_gate.CardField,
+        action_gate.OpenCard,
+        action_gate.OpenCards,
+        action_gate.DeviceNotice,
+        action_gate.QuestionAnswer,
+    ],
     "impact": [
         impact.ImpactResult,
         impact.ImpactNode,
@@ -61,4 +71,22 @@ def test_the_field_manifests_are_current() -> None:
     assert not stale, (
         f"field manifests were stale and have been regenerated: {stale}. "
         "Commit them — the TypeScript suite checks its types against these."
+    )
+
+
+def test_the_resume_tool_list_is_current() -> None:
+    """SOLUSDEV-326 (action-gate.md §Cards 7): the tools a resume may follow once approved.
+
+    The server's COMMAND_TOOLS is the authority (`sol_resume` refuses any other resume). The
+    renderer starts a resume from its own copy; this writes the server's list beside the field
+    manifests, and the desktop suite (commandCard.test.ts) holds its copy to this file.
+    """
+    path = FIXTURES / "action-gate" / "_resume_tools.json"
+    expected = sorted(COMMAND_TOOLS)
+    committed = json.loads(path.read_text()) if path.is_file() else None
+    if committed != expected:
+        path.write_text(json.dumps(expected, indent=2) + "\n")
+    assert committed == expected, (
+        f"{path} was stale and has been regenerated. Commit it and bring the renderer's "
+        "RESUME_TOOLS (features/sol/commandCard.ts) in line."
     )

@@ -26,6 +26,12 @@ export function compareNodes(a: Entity, b: Entity): number {
  * in `entities` for lookups but never become roots, children or drawn links. */
 const OFF_CANVAS: ReadonlySet<string> = new Set(['finding'])
 
+/** Hardware its onboarder has not added to the workspace graph (SOLUSDEV-326) stays in the
+ * snapshot for the sidebar and the palette, but has no card on the canvas, not even theirs. */
+export function inGraph(entity: Entity | undefined): boolean {
+  return entity?.properties?.in_graph !== false
+}
+
 function rawIndex(entities: readonly Entity[], relations: readonly Relation[]) {
   const byId = new Map(entities.map((entity) => [entity.id, entity]))
   const outgoing = new Map<string, Relation[]>()
@@ -83,7 +89,10 @@ export function buildNavigationIndex(
 ): NavigationIndex {
   const { raw, valid: linked } = rawIndex(entities, relations)
   const forest = new ContainmentForest(raw)
-  const onCanvas = (id: string): boolean => !OFF_CANVAS.has(raw.entities.get(id)?.type ?? '')
+  const onCanvas = (id: string): boolean => {
+    const entity = raw.entities.get(id)
+    return !OFF_CANVAS.has(entity?.type ?? '') && inGraph(entity)
+  }
   const valid = linked.filter(
     (edge) => onCanvas(edge.from_entity_id) && onCanvas(edge.to_entity_id)
   )

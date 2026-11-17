@@ -28,6 +28,7 @@ const LABELS: Readonly<Record<string, string>> = {
   home: 'HOME',
   workspace: 'WORKSPACE',
   bench: 'LIVE BENCH',
+  hardware: 'HARDWARE',
   store: 'STORE',
   billing: 'BILLING',
   settings: 'SETTINGS',
@@ -45,6 +46,12 @@ const SCREENS: Readonly<Record<string, Omit<ScreenCopy, 'label'>>> = {
     greeting: "I'm watching the bench with you. Ask about a signal or what to test.",
     suggestions: ['What should I test first?', 'What can I put on the bench?'],
     placeholder: 'Ask about the bench'
+  },
+  hardware: {
+    greeting:
+      'SOL sees what is plugged into this computer. Plug something in, or tell it what you have.',
+    suggestions: ['What is plugged in?', "What does the workspace describe that isn't here?"],
+    placeholder: 'Ask SOL, or tell it what you have'
   },
   home: {
     greeting: 'Ask about this project, or what changed since you were last here.',

@@ -15,7 +15,16 @@ import actionGateFields from "../fixtures/action-gate/_fields.json";
 import impactFields from "../fixtures/impact/_fields.json";
 import liveEventFields from "../fixtures/live-events/_fields.json";
 import toolKnowledgeFields from "../fixtures/tool-knowledge/_fields.json";
-import { DIFF_ROW_FIELDS, TOOL_CONFIRMATION_EVENT_FIELDS } from "./action-gate";
+import {
+  CARD_FIELDS,
+  CARD_FIELD_FIELDS,
+  DEVICE_NOTICE_FIELDS,
+  DIFF_ROW_FIELDS,
+  OPEN_CARDS_FIELDS,
+  OPEN_CARD_FIELDS,
+  QUESTION_ANSWER_FIELDS,
+  TOOL_CONFIRMATION_EVENT_FIELDS,
+} from "./action-gate";
 import {
   CONSEQUENCE_EVIDENCE_FIELDS,
   CONSEQUENCE_FIELDS,
@@ -130,6 +139,12 @@ const PAIRS: readonly (readonly [
     ACCOUNT_STREAM_READY_FIELDS,
     liveEventFields.AccountStreamReady,
   ],
+  ["Card", CARD_FIELDS, actionGateFields.Card],
+  ["CardField", CARD_FIELD_FIELDS, actionGateFields.CardField],
+  ["OpenCard", OPEN_CARD_FIELDS, actionGateFields.OpenCard],
+  ["OpenCards", OPEN_CARDS_FIELDS, actionGateFields.OpenCards],
+  ["DeviceNotice", DEVICE_NOTICE_FIELDS, actionGateFields.DeviceNotice],
+  ["QuestionAnswer", QUESTION_ANSWER_FIELDS, actionGateFields.QuestionAnswer],
 ];
 
 describe("the TypeScript and Pydantic definitions declare the same fields", () => {
@@ -138,6 +153,6 @@ describe("the TypeScript and Pydantic definitions declare the same fields", () =
   });
 
   test("every paired contract is covered — a new one must be added here", () => {
-    expect(PAIRS).toHaveLength(30);
+    expect(PAIRS).toHaveLength(36);
   });
 });
