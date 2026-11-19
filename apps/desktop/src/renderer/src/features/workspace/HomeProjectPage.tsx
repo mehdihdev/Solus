@@ -216,7 +216,9 @@ function Detail(props: WithLive & { layout: ProjectPageLayout }): React.JSX.Elem
         <>
           <Header {...props} current={current} description={description} />
           <div style={PAIR}>
-            <Card pad={16} style={{ minWidth: 0, display: 'grid', gap: 14 }}>
+            {/* A shrinkable track: an `auto` one takes the longest unbroken line (a deep folder
+                path) as its floor and pushes the card's content past its edge. */}
+            <Card pad={16} style={FOLDER_CARD}>
               <ProjectFolderCard
                 key={current.id}
                 projectId={current.id}
@@ -313,9 +315,16 @@ const ACTIVITY_COLUMN: React.CSSProperties = {
   background: 'var(--sur)'
 }
 
+const FOLDER_CARD: React.CSSProperties = {
+  minWidth: 0,
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1fr)',
+  gap: 14
+}
+
 const PAIR: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))',
   gap: 16,
   alignItems: 'start'
 }

@@ -148,6 +148,20 @@ describe('HomeProjectPage — the project', () => {
     expect(p.onManageSources).toHaveBeenCalled()
   })
 
+  it('lets the folder + sources card shrink to its half of the pair — a long path ellipsizes, never overflows', () => {
+    setup()
+    const card = screen.getByTestId('folder-card').parentElement
+    expect(card).toHaveStyle({ minWidth: '0', gridTemplateColumns: 'minmax(0, 1fr)' })
+  })
+
+  it('pairs the two cards only when each gets 480px — tighter, they stack instead of cramping', () => {
+    setup()
+    const pair = screen.getByTestId('folder-card').parentElement?.parentElement
+    expect(pair).toHaveStyle({
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 480px), 1fr))'
+    })
+  })
+
   it('puts the activity in its own column when full, below the project otherwise', () => {
     setup({ layout: 'full' })
     const column = screen.getByTestId('project-page-activity')

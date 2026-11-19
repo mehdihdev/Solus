@@ -186,7 +186,7 @@ project column, and from Connected accounts' "Back to <project>". Design canvas:
   clicking one makes it current through the project choke point and the page stays. **New
   project** for members and up. Archived projects and the row ⋯ stay on the overview's table.
 - **The project**: name (h2), repo line, description, **Live Bench** and **Open workspace**;
-  then, side by side when there is room (each ≥ 420px, else stacked): a card with ON THIS
+  then, side by side when there is room (each ≥ 480px, else stacked): a card with ON THIS
   COMPUTER (`ProjectFolderCard`, full) and SOURCES (`ProjectSourcesSummary`, every tool; Add
   additional sources opens Connected accounts with a way back), and the full **.solus** card
   (`SolusCard`, editable). No tabs.
