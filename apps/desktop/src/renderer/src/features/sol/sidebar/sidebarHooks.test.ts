@@ -61,7 +61,10 @@ describe('useSidebarResize', () => {
   it('cleans up a drag cut short by unmount or pointer cancel', () => {
     useSolSidebarStore.getState().reset()
     const { result, unmount } = renderHook(() => useSidebarResize())
-    const down = { clientX: 1000, preventDefault: vi.fn() } as unknown as React.PointerEvent<HTMLElement>
+    const down = {
+      clientX: 1000,
+      preventDefault: vi.fn()
+    } as unknown as React.PointerEvent<HTMLElement>
     act(() => result.current.onPointerDown(down))
     expect(document.body).toHaveClass('sol-sb-resizing')
     window.dispatchEvent(new Event('pointercancel'))
@@ -72,6 +75,53 @@ describe('useSidebarResize', () => {
     const move = new MouseEvent('pointermove', { clientX: 900 })
     window.dispatchEvent(move)
     expect(useSolSidebarStore.getState().width).toBe(SIDEBAR_DEFAULT_WIDTH)
+  })
+})
+
+describe('useSidebarResize — width that scales until dragged (SOLUSDEV-328)', () => {
+  const setWindow = (width: number): void => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+    window.dispatchEvent(new Event('resize'))
+  }
+
+  it('follows the window while the person has not sized it', () => {
+    useSolSidebarStore.getState().reset()
+    setWindow(1920)
+    const { result } = renderHook(() => useSidebarResize())
+    expect(result.current.width).toBe(422)
+    act(() => setWindow(2560))
+    expect(result.current.width).toBe(480)
+  })
+
+  it('keeps a dragged width once set, whatever the window does', () => {
+    useSolSidebarStore.getState().reset()
+    setWindow(2560)
+    const { result } = renderHook(() => useSidebarResize())
+    const down = {
+      clientX: 1000,
+      preventDefault: vi.fn()
+    } as unknown as React.PointerEvent<HTMLElement>
+    act(() => result.current.onPointerDown(down))
+    act(() => {
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 1060 }))
+      window.dispatchEvent(new Event('pointerup'))
+    })
+    expect(result.current.width).toBe(420)
+    act(() => setWindow(1200))
+    expect(result.current.width).toBe(420)
+  })
+
+  it('steps from the scaled width on the keyboard', () => {
+    useSolSidebarStore.getState().reset()
+    setWindow(1920)
+    const { result } = renderHook(() => useSidebarResize())
+    const key = {
+      key: 'ArrowLeft',
+      preventDefault: vi.fn()
+    } as unknown as React.KeyboardEvent<HTMLElement>
+    act(() => result.current.onKeyDown(key))
+    expect(useSolSidebarStore.getState().width).toBe(438)
+    expect(useSolSidebarStore.getState().userSized).toBe(true)
   })
 })
 
