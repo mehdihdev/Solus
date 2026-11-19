@@ -4,7 +4,7 @@
 // the Members and Connected accounts views, the account-level actions, and the honest
 // offline state. The data hooks are mocked to drive each state.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from './HomeScreen'
 import * as homeData from './useHomeData'
@@ -251,6 +251,10 @@ describe('HomeScreen — the active team’s project list', () => {
   homeTeamProjectContextTests()
 })
 
+describe('HomeScreen — the project page (SOLUSDEV-328, design P2)', () => {
+  homeProjectPageTests()
+})
+
 describe('HomeScreen — connected accounts view', () => {
   it('is one click away in the pane, handed the current project', async () => {
     mockHome()
@@ -445,12 +449,11 @@ describe('HomeScreen — teams and states', () => {
 })
 
 describe('the .solus card (SOLUSDEV-253)', () => {
-  it("hosts the current project's .solus in its own tab, and nothing offline", async () => {
+  it("hosts the current project's .solus on its page, and nothing offline", async () => {
     mockHome()
     useWorkspaceStore.setState({ project: ROVER })
     const { unmount } = render(<HomeScreen onOpenProject={vi.fn()} />)
     await showProject('Rover MK2')
-    await userEvent.click(within(pane()).getByRole('tab', { name: '.solus' }))
     expect(screen.getByTestId('solus-card')).toHaveAttribute('data-project', 'p1')
     unmount()
     mockHome({ status: 'offline' })
@@ -555,28 +558,82 @@ function homeProjectNavigationTests(): void {
   })
 }
 
-function homeTeamProjectContextTests(): void {
-  it("carries the current project's setup list and recent rail in Overview", async () => {
+function homeProjectPageTests(): void {
+  it("shows the project page: the team's projects beside the current one, no tabs (P2)", async () => {
     mockHome()
     useWorkspaceStore.setState({ project: ROVER })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await showProject('Rover MK2')
     const p = pane()
-    expect(within(p).getByRole('tab', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
+    expect(within(p).queryByRole('tablist')).toBeNull()
+    expect(within(p).getByRole('list', { name: 'Projects in Strider' })).toBeInTheDocument()
+    expect(within(p).getByRole('button', { name: 'Show Rover MK2' })).toHaveAttribute(
+      'aria-current',
       'true'
     )
-    expect(within(p).getByText('PROJECT SETUP')).toBeInTheDocument()
     expect(within(p).getByText('ON THIS COMPUTER')).toBeInTheDocument()
-    // .solus is summarised here; the full card lives on its own tab.
-    expect(within(p).getByRole('button', { name: 'Add instructions' })).toBeInTheDocument()
-    expect(within(p).getByText('RECENT')).toBeInTheDocument()
-    // Not under the desktop bridge here, so the card degrades to its honest note.
+    // Not under the desktop bridge here, so the folder card degrades to its honest note.
     expect(within(p).getByText(/available in the Solus desktop app/)).toBeInTheDocument()
     expect(within(p).getByTestId('project-sources')).toBeInTheDocument()
-    expect(within(p).getByText(/created the project/)).toBeInTheDocument()
+    expect(within(p).getByTestId('solus-card')).toHaveAttribute('data-project', 'p1')
+    // The row's last change, and the project's own feed under it.
+    expect(within(p).getByRole('button', { name: 'Show Rover MK2' })).toHaveTextContent(
+      /created the project/
+    )
+    const detail = within(p).getByTestId('project-page-detail')
+    expect(within(detail).getByText(/created the project/)).toBeInTheDocument()
   })
 
+  it('never shows another team’s current project on the page', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: { id: 'px', name: 'Elsewhere', teamId: 't-other' } })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await showProject('Rover MK2')
+    // Opening Rover made it current; put the other team's project back to prove the guard.
+    act(() =>
+      useWorkspaceStore.setState({ project: { id: 'px', name: 'Elsewhere', teamId: 't-other' } })
+    )
+    const p = pane()
+    expect(
+      within(p).getByText('Pick a project to see its folder, sources and .solus.')
+    ).toBeVisible()
+    expect(within(p).queryByTestId('solus-card')).toBeNull()
+    expect(within(p).queryByRole('button', { name: 'Open workspace' })).toBeNull()
+    expect(within(p).queryByText('Elsewhere')).toBeNull()
+  })
+
+  it('keeps keyboard focus on the pane when the rail swaps under it', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await showProject('Rover MK2')
+    await userEvent.click(within(rail()).getByRole('button', { name: 'Team & invites' }))
+    expect(document.activeElement).toBe(pane())
+  })
+
+  it('switches project from the page’s list and stays on the page', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await showProject('Rover MK2')
+    await userEvent.click(within(pane()).getByRole('button', { name: 'Show Arm' }))
+    expect(useWorkspaceStore.getState().project).toEqual({ id: 'p2', name: 'Arm', teamId: 't1' })
+    expect(within(pane()).getByRole('heading', { level: 2, name: 'Arm' })).toBeInTheDocument()
+  })
+
+  it('folds the team rail to initials on the project page, and back on the overview', async () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(within(rail()).getByText('Welcome back, Maya')).toBeInTheDocument()
+    await showProject('Rover MK2')
+    expect(within(rail()).queryByText('Welcome back, Maya')).toBeNull()
+    await userEvent.click(within(rail()).getByRole('button', { name: 'Strider' }))
+    expect(within(pane()).getByRole('table', { name: 'Projects in Strider' })).toBeInTheDocument()
+    expect(within(rail()).getByText('Welcome back, Maya')).toBeInTheDocument()
+  })
+}
+
+function homeTeamProjectContextTests(): void {
   it('switches the active team from the rail and shows its overview', async () => {
     const home = mockHome()
     render(<HomeScreen onOpenProject={vi.fn()} />)
@@ -617,15 +674,14 @@ function homeTeamProjectContextTests(): void {
     expect(onOpenProject).toHaveBeenCalledWith({ id: 'p2', name: 'Arm', teamId: 't1' })
   })
 
-  it('opens the project’s own full activity in the Activity tab', async () => {
+  it('shows the project’s own full activity on its page', async () => {
     mockHome()
     useWorkspaceStore.setState({ project: { id: 'p2', name: 'Arm', teamId: 't1' } })
     render(<HomeScreen onOpenProject={vi.fn()} />)
     await showProject('Arm')
-    await userEvent.click(within(pane()).getByRole('button', { name: /all activity/i }))
     expect(vi.mocked(projectActivity.useProjectActivity)).toHaveBeenCalledWith('t1', 'p2')
-    const panel = within(pane()).getByRole('tabpanel')
-    expect(within(panel).getByText(/created the project/)).toBeInTheDocument()
+    const detail = within(pane()).getByTestId('project-page-detail')
+    expect(within(detail).getByText('PROJECT ACTIVITY')).toBeInTheDocument()
   })
 
   it('keeps the account card at the rail’s foot with the team’s status', () => {

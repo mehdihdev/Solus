@@ -2,7 +2,15 @@
 // "Fills the window"), never the window's: opening the SOL sidebar reflows it like a resize.
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { HOME_SPLIT_MIN, HOME_WIDE_MIN, homeLayoutFor, useHomeLayout } from './homeLayout'
+import {
+  HOME_SPLIT_MIN,
+  HOME_WIDE_MIN,
+  PROJECT_FULL_MIN,
+  PROJECT_LIST_MIN,
+  homeLayoutFor,
+  projectPageLayoutFor,
+  useHomeLayout
+} from './homeLayout'
 
 describe('homeLayoutFor', () => {
   it('stacks below the split width, splits in between, and goes wide from 1680px', () => {
@@ -15,6 +23,19 @@ describe('homeLayoutFor', () => {
   it('treats an unmeasured width as split, so nothing is hidden before the first measure', () => {
     expect(homeLayoutFor(0)).toBe('split')
     expect(homeLayoutFor(Number.NaN)).toBe('split')
+  })
+})
+
+describe('projectPageLayoutFor (SOLUSDEV-328, design P2)', () => {
+  it('switches projects from the header when narrow, lists them beside the project, adds activity when full', () => {
+    expect(projectPageLayoutFor(PROJECT_LIST_MIN - 1)).toBe('narrow')
+    expect(projectPageLayoutFor(PROJECT_LIST_MIN)).toBe('list')
+    expect(projectPageLayoutFor(PROJECT_FULL_MIN - 1)).toBe('list')
+    expect(projectPageLayoutFor(PROJECT_FULL_MIN)).toBe('full')
+  })
+
+  it('treats an unmeasured width as list', () => {
+    expect(projectPageLayoutFor(0)).toBe('list')
   })
 })
 

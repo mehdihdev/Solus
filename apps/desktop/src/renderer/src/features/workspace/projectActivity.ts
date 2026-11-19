@@ -10,8 +10,6 @@ import type { ActivityApi } from '../../lib/api/resources'
 
 /** Rows fetched per Home load — the server's default page, its cap is 100. */
 export const HOME_ACTIVITY_FETCH_LIMIT = 50
-/** Rows previewed in the Home pane's RECENT ACTIVITY for the current project. */
-export const HOME_PANE_ACTIVITY_COUNT = 5
 
 export type ActivityByProject = Readonly<Record<string, readonly ActivityApi[]>>
 
