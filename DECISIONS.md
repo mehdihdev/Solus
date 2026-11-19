@@ -754,6 +754,11 @@ User-authored configuration of imported entities is stored in Solus-owned CONFIG
 
 **Layer-1 extension:** projects/<projectId>/hardware.json is a machine-private hardware source/hint document, schema version 1, with an accounts map keyed by authenticated user UUID. Each account has sources keyed by opaque source-reference UUID (path, contentSha256) and bindings keyed by configuration-entry UUID (optional lastSeenPath). Desktop MAIN owns writes through validated, sender-gated picker/import workflows; the local hardware runner reads only references belonging to the authenticated project/account. The cloud has no local-file reader. This file contains no calibration facts, graph ownership, credentials, server-owned settings, or durable ambiguous-port consent. It is never synced or included in model context. Files are at most 256 KiB, with at most 16 accounts and 256 sources/bindings per account; source paths are absolute and at most 4096 characters, port hints at most 512, and content digests are 64 lowercase hexadecimal characters. Unknown fields are rejected; writes are atomic, files 0600 under 0700 directories; newer versions are read-only and corruption produces an explicit relink state. A saved port hint never establishes identity after reconnect.
 
+**Amended 2026-11-19 (SOLUSDEV-329, human-approved in-chat):** `config.json` gains a key (beside `sol`),
+`mcp_runtime` `{schema_version: 1, python: {mode: auto|path|managed, path?}}`, holding this
+machine's base-interpreter choice for MCP fork environments (ADR-031 amendment 2026-11-19).
+Readers preserve unknown keys and refuse a newer `schema_version`.
+
 ---
 
 ## ADR-035: Extensions — sandboxed views, a permission-checked host bridge, and an open registry
