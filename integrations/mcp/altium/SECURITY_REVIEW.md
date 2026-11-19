@@ -416,3 +416,54 @@ surfaced). Plus the pointer-handshake gap: `upstream/scripts/altium/Main.pas` ha
 machine-global pointer path while the fork confines it — first-run customer validation must
 confirm the bridge halves meet (runbook troubleshooting §; needs a fork-side decision before
 customer rollout).
+
+
+## 2026-11-19 — Interpreter from `SOLUS_MCP_PYTHON` (SOLUSDEV-329, ADR-031 amendment) — PENDING re-review
+
+> **STATUS: PENDING human re-review by BOTH developers.** A launcher change is a re-review trigger
+> (PROVENANCE.md "Re-review triggers"); any sign-off recorded before this date does not cover the
+> launchers below. Nothing here is signed — signing is a human-only act.
+
+### What changed and why
+
+The ADR-031 amendment of 2026-11-19 moves each Python fork's private environment out of the
+vendored tree into a per-user, owner-only app-data directory (`mcp-envs/altium/`), built at setup
+time from the hash-pinned lockfile. The companion validates the interpreter (resolves inside the
+`mcp-envs` root, owner-only directory, stamp matches the shipped lockfile) and passes it to the
+launcher as an absolute path in `SOLUS_MCP_PYTHON`.
+
+- **`bin/launch`.** The hardcoded `$FORK_DIR/.venv/bin/python3` is gone. The interpreter is
+  `${SOLUS_MCP_PYTHON:-}`; unless it is an absolute path to an executable the launcher prints one
+  line to stderr and exits 78 (EX_CONFIG) — never a PATH lookup, never an in-tree fallback. The
+  `env -i` allowlist, fixed argv, PATH constant and workspace handling are unchanged;
+  `SOLUS_MCP_PYTHON` is the exec target, not a child variable, so the allowlist is not widened.
+- **`bin/launch.cmd`.** The in-tree `.venv\Scripts\python.exe` is replaced by
+  `%SOLUS_MCP_PYTHON%` with an equivalent guard (`exit /b 78` when unset, not an absolute path,
+  missing, or a directory). The EDA_AGENT_* pins and the workspace refusal are unchanged.
+
+### Security assessment
+
+- The interpreter is now chosen by the companion rather than by the tree layout. The trust anchor
+  moves to the companion's `mcp-envs` checks (containment, owner-only, stamp) — review those
+  together with this launcher.
+- The absolute-path requirement closes a PATH/cwd lookup: a relative `SOLUS_MCP_PYTHON` such as
+  `python3` would otherwise pass `[ -x ]` against the caller's cwd and then be resolved by
+  `env` against the pinned PATH.
+
+### Re-review triggers — HIT
+
+- Change to `bin/launch` and `bin/launch.cmd`.
+
+### Evidence
+
+`tests/test_launch_entrypoint.py` executes `bin/launch` with a recording stub interpreter: exit 78 when
+`SOLUS_MCP_PYTHON` is unset, empty, missing, non-executable or relative (a decoy `python3` on PATH
+and in cwd is never run); with a valid value it execs exactly `[$SOLUS_MCP_PYTHON,
+<fork>/solus/server.py]` and the child sees only the declared allowlist. `launch.cmd` is checked
+by content only (no Windows host in CI): `%SOLUS_MCP_PYTHON%`, the `exit /b 78` guard, no `.venv`,
+the `SOLUS_MCP_WORKSPACE` refusal, no argument passthrough. **PENDING(human):** run `launch.cmd`
+on a real Windows machine.
+
+### Sign-off
+
+None — PENDING re-review by both developers (record the result in PROVENANCE.md).

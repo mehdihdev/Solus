@@ -42,16 +42,21 @@ SOLUSDEV-102 as `.github/` only — everything else, including `tests/`, `docs/`
 `assets/`, and the DelphiScript bridge sources under `scripts/altium/`, ships verbatim because
 the Pascal sources ARE the bridge and belong inside the security-review surface).
 
-| Date       | File(s)                                                | What & why                                                                                                                                                                                                                                                                                                                                               | Author                    |
-| ---------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 2026-08-08 | `.github/` (6 files: CI workflows, repo automation)    | Not vendored — upstream repo automation, never imported at runtime; F6 `.github/`-only exclusion human-approved in-session for SOLUSDEV-102.                                                                                                                                                                                                             | SOLUSDEV-102 orchestrator |
-| 2026-08-08 | `upstream/pyproject.toml` (`[tool.ruff]` section only) | Appended a Solus-marked ruff exclusion block (`force-exclude = true`, `extend-exclude = ["**"]`). Ruff resolves the NEAREST config per file, so this vendored pyproject — not the repo root — governs `upstream/`; without the block the H8/H10 quality hooks lint reviewed third-party code. No runtime behavior change (packaging/lint metadata only). | SOLUSDEV-102 orchestrator |
+| Date       | File(s)                                                | What & why                                                                                                                                                                                                                                                                                                                                                                                                            | Author                    |
+| ---------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 2026-08-08 | `.github/` (6 files: CI workflows, repo automation)    | Not vendored — upstream repo automation, never imported at runtime; F6 `.github/`-only exclusion human-approved in-session for SOLUSDEV-102.                                                                                                                                                                                                                                                                          | SOLUSDEV-102 orchestrator |
+| 2026-08-08 | `upstream/pyproject.toml` (`[tool.ruff]` section only) | Appended a Solus-marked ruff exclusion block (`force-exclude = true`, `extend-exclude = ["**"]`). Ruff resolves the NEAREST config per file, so this vendored pyproject — not the repo root — governs `upstream/`; without the block the H8/H10 quality hooks lint reviewed third-party code. No runtime behavior change (packaging/lint metadata only).                                                              | SOLUSDEV-102 orchestrator |
+| 2026-11-19 | `bin/launch`, `bin/launch.cmd`                         | SOLUSDEV-329 (ADR-031 amendment 2026-11-19): the launcher takes its interpreter only from `SOLUS_MCP_PYTHON` (absolute + executable, exit 78 otherwise) instead of the in-tree `.venv`; `bin/launch.cmd` likewise (`exit /b 78`). Not an `upstream/` edit; recorded because a launcher change is a re-review trigger — the sign-offs below are void until both developers re-review (SECURITY_REVIEW.md §2026-11-19). | agent (SOLUSDEV-329 T3)   |
 
-Install-time note (not an `upstream/` edit): `bin/launch` execs the fork-private interpreter
-`integrations/mcp/altium/.venv/bin/python3` (POSIX) / `.venv\Scripts\python.exe` (Windows via
-`bin/launch.cmd`). That virtualenv is NOT committed — the companion install/update step
-materializes it from `requirements.lock.txt` with hash verification (`--require-hashes`
-semantics). The launchers themselves perform zero network I/O and no installs.
+Install-time note (not an `upstream/` edit): `bin/launch` (and `bin/launch.cmd` on Windows) execs ONLY the interpreter
+the companion passes in `SOLUS_MCP_PYTHON` — exit 78 when it is unset, empty, relative or
+not executable; never a PATH lookup, never an in-tree fallback. The fork env is NOT in this
+tree: it is a per-user virtualenv in the Solus app-data `mcp-envs/altium/` directory, built at
+setup time by Solus (Settings → Python for local tools) or by `make mcp-forks` for developers,
+from `requirements.lock.txt` with `--require-hashes`. The companion launches the fork only
+after checking the interpreter resolves inside `mcp-envs/`, the directory is owner-only and the
+env stamp matches this lockfile (ADR-031 amendment 2026-11-19). The launchers perform zero
+network I/O and no installs.
 
 ## Exposed tools
 
