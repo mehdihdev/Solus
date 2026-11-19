@@ -138,6 +138,12 @@ async def _amain(config: CompanionConfig) -> int:
 
 
 def main() -> int:
+    # SOLUSDEV-329: `solus-companion runtime …` is the fork-env provisioning CLI
+    # (mcp-fork-runtime.md §6) — dispatched before any companion startup.
+    if sys.argv[1:2] == ["runtime"]:
+        from solus_companion.runtime import cli
+
+        return cli.main(sys.argv[2:])
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     config = config_from_env()
     servers = discover_servers(config.integrations_root, workspace=config.workspace)
