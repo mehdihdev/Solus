@@ -38,6 +38,11 @@ from solus_companion import __version__
 from solus_companion.credentials import CredentialRelay
 from solus_companion.kicad_discovery import KICAD_CLI_ENV, find_kicad_cli
 from solus_companion.platforms import unavailable_reason
+from solus_companion.runtime.forks import LOCK_NAME, fork_lock
+from solus_companion.runtime.ownership import owner_only_for
+from solus_companion.runtime.roots import ENVS_ROOT_ENV
+from solus_companion.runtime.roots import envs_root as runtime_envs_root
+from solus_companion.runtime.trust import evaluate_trust
 
 logger = logging.getLogger("solus.companion.config")
 
@@ -53,12 +58,9 @@ _SERVER_LINE_RE = re.compile(r"^server:\s*[\"']?([A-Za-z0-9_-]+)[\"']?\s*$")
 
 DEFAULT_INSTANCE_FILE = "~/.solus/companion_id"
 
-#: Where a vendored fork's private dependency environment lives, relative to the
-#: server directory (CAD-00b). Materialized at install time from the fork's
-#: committed lockfile — never at launch, and `bin/launch` does no network I/O.
-PRIVATE_ENV_INTERPRETER = Path(".venv") / "bin" / "python"
-
-#: The variable a fork's `bin/launch` reads to find that interpreter. It is an
+#: The variable a fork's `bin/launch` reads to find its interpreter — the one in
+#: its trusted app-data env (SOLUSDEV-329, mcp-fork-runtime.md §5; never an
+#: in-tree `.venv`, never at launch, and `bin/launch` does no network I/O). It is an
 #: ABSOLUTE path because the README forbids PATH resolution, and because a
 #: PyInstaller-frozen companion's `sys.executable` is the companion itself — so
 #: a launcher that re-execs `sys.executable` would re-exec the companion.
@@ -438,24 +440,36 @@ def _server_url(allowlist: Path, name: str) -> str | None:
     return None
 
 
-def _private_interpreter(root_resolved: Path, server_dir: Path, name: str) -> Path | None:
-    """The fork's own interpreter, or None when it has no private env.
+def _default_envs_root() -> Path | None:
+    """`<data>/mcp-envs` or the dev override; a relative override fails closed."""
+    try:
+        return runtime_envs_root(sys.platform, os.environ, Path.home())
+    except ValueError:
+        logger.error("REFUSED %s: not absolute; locked forks will not launch", ENVS_ROOT_ENV)
+        return None
 
-    A fork with no dependencies needs none, so absence is not an error. A
-    present-but-escaping one IS: the same symlink-swap guard the launch command
-    gets, because this path is executed.
+
+def _fork_interpreter(
+    root_resolved: Path, server_dir: Path, name: str, envs: Path | None
+) -> tuple[Path | None, str | None]:
+    """The trusted env interpreter for a fork with a lockfile (§5).
+
+    Returns `(interpreter, None)` when trusted, `(None, "needs_setup:<code>")`
+    when the fork must not launch, and `(None, None)` for a fork with no lock
+    (no Python dependencies, so no env). An in-tree `<fork>/.venv` is ignored.
     """
-    interpreter = server_dir / PRIVATE_ENV_INTERPRETER
-    if not interpreter.exists():
-        return None
-    resolved = interpreter.resolve()
-    if not resolved.is_relative_to(root_resolved):
-        logger.error("REFUSED private interpreter for %r: resolves outside %s", name, root_resolved)
-        return None
-    if not os.access(resolved, os.X_OK):
-        logger.error("REFUSED private interpreter for %r: %s is not executable", name, interpreter)
-        return None
-    return resolved
+    if not ((server_dir / LOCK_NAME).exists() or (server_dir / LOCK_NAME).is_symlink()):
+        return None, None
+    lock = fork_lock(root_resolved, server_dir)
+    if lock is None or envs is None:
+        return None, "needs_setup:no_env"
+    trust = evaluate_trust(
+        name, lock, envs, platform=sys.platform, policy=owner_only_for(sys.platform)
+    )
+    if not trust.ready:
+        logger.warning("server %r not launched: %s", name, trust.detail)
+        return None, trust.detail
+    return trust.interpreter, None
 
 
 def _env_passthrough(server_dir: Path, name: str) -> tuple[str, ...]:
@@ -488,7 +502,31 @@ def _host_discovered_env(name: str) -> dict[str, str]:
     return {KICAD_CLI_ENV: cli} if cli is not None else {}
 
 
-def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[ServerLaunch, ...]:
+def _companion_server_name(allowlist: Path) -> str | None:
+    """The validated server name, or None when this entry is not ours to launch."""
+    server_dir = allowlist.parent
+    name = _read_server_name(allowlist)
+    if name is None or SERVER_NAME_RE.fullmatch(name) is None or name != server_dir.name:
+        logger.warning(
+            "skipping %s: server field %r missing, unsafe, or != directory name %r",
+            allowlist,
+            name,
+            server_dir.name,
+        )
+        return None
+    owner = _launched_by(allowlist)
+    if owner != "companion":
+        # Not ours to start. Skipping is the WHOLE behaviour: trying anyway
+        # is how a cloud-side fork (no Node here) took the bridge down with
+        # an abnormal session end before `hello` (SOLUSDEV-252, live).
+        logger.info("server %r is launched by %s; not starting it here", name, owner)
+        return None
+    return name
+
+
+def discover_servers(
+    root: Path, *, workspace: str | None = None, envs_root: Path | None = None
+) -> tuple[ServerLaunch, ...]:
     """Scan `<root>/*/allowlist.yaml` for vendored servers (ADR-031).
 
     H3 (companion half): when *workspace* is given (non-empty), every
@@ -496,27 +534,20 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
     — the one knob a fork's own confinement (e.g. the kicad fork's
     `solus/workspace.py::workspace_root()`) trusts. Omitted or empty means no
     server gets that variable, and each fork fails closed rather than
-    confining to an arbitrary cwd."""
+    confining to an arbitrary cwd.
+
+    SOLUSDEV-329: a fork with a `requirements.lock.txt` launches only from its
+    trusted env under *envs_root* (default: the OS app-data `mcp-envs`, or
+    `SOLUS_COMPANION_MCP_ENVS_ROOT`); otherwise it is reported `not_launched`
+    with `needs_setup:<code>` as its status detail."""
     root_resolved = root.resolve()
+    envs = envs_root if envs_root is not None else _default_envs_root()
     declared_env = {"SOLUS_MCP_WORKSPACE": workspace} if workspace else {}
     servers: list[ServerLaunch] = []
     for allowlist in sorted(root.glob("*/allowlist.yaml")):
         server_dir = allowlist.parent
-        name = _read_server_name(allowlist)
-        if name is None or SERVER_NAME_RE.fullmatch(name) is None or name != server_dir.name:
-            logger.warning(
-                "skipping %s: server field %r missing, unsafe, or != directory name %r",
-                allowlist,
-                name,
-                server_dir.name,
-            )
-            continue
-        owner = _launched_by(allowlist)
-        if owner != "companion":
-            # Not ours to start. Skipping is the WHOLE behaviour: trying anyway
-            # is how a cloud-side fork (no Node here) took the bridge down with
-            # an abnormal session end before `hello` (SOLUSDEV-252, live).
-            logger.info("server %r is launched by %s; not starting it here", name, owner)
+        name = _companion_server_name(allowlist)
+        if name is None:
             continue
         reason = unavailable_reason(root_resolved, server_dir, sys.platform)
         if reason is not None:
@@ -531,10 +562,13 @@ def discover_servers(root: Path, *, workspace: str | None = None) -> tuple[Serve
             command = _launch_command(root_resolved, server_dir, name)
             if command is None:
                 continue
+        interpreter, setup = _fork_interpreter(root_resolved, server_dir, name, envs)
+        if setup is not None:
+            servers.append(ServerLaunch(name=name, unavailable_reason=setup))
+            continue
         # Start from main's H3 workspace knob, then add ours — one dict, so
         # neither variable is lost.
         env: dict[str, str] = dict(declared_env)
-        interpreter = _private_interpreter(root_resolved, server_dir, name)
         if interpreter is not None:
             env[INTERPRETER_ENV] = str(interpreter)
         env.update(_host_discovered_env(name))

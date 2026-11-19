@@ -239,6 +239,19 @@ def test_status_snapshot_shape(supervisor: Supervisor) -> None:
     assert parsed.tzinfo is not None  # ISO-8601, UTC-aware
 
 
+async def test_needs_setup_fork_reports_not_launched_with_its_detail() -> None:
+    """SOLUSDEV-329: a fork without a trusted env never spawns; its §5 code
+    rides the existing not_launched status entry as `detail`."""
+    sup = Supervisor((ServerLaunch(name="kicad", unavailable_reason="needs_setup:no_env"),))
+    await sup.start_all()
+    try:
+        (entry,) = sup.status_snapshot()
+        assert entry["state"] == "not_launched"
+        assert entry["detail"] == "needs_setup:no_env"
+    finally:
+        await sup.stop_all()
+
+
 async def test_transitions_poke_status_event() -> None:
     sup = _make_supervisor()
     assert not sup.status_changed.is_set()

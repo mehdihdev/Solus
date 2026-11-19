@@ -42,6 +42,14 @@ def test_discover_servers_finds_mock_fixture() -> None:
     assert servers[0].args == ()
 
 
+def test_the_fixture_fork_has_no_in_tree_interpreter() -> None:
+    """SOLUSDEV-329: the mock fork has no lock, so it gets no interpreter — and an
+    in-tree `.venv` is never consulted (mcp-fork-runtime.md §5)."""
+    (server,) = discover_servers(FIXTURE_ROOT)
+    assert "SOLUS_MCP_PYTHON" not in server.env
+    assert not (FIXTURE_ROOT / "mock" / ".venv").exists()
+
+
 # --- H3 (companion half): SOLUS_MCP_WORKSPACE propagation ------------------------
 
 
