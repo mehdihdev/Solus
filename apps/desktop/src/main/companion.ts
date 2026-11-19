@@ -241,8 +241,9 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-/** Signal the companion's whole process tree; best-effort on every path. */
-function killTree(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
+/** Signal the companion's whole process tree; best-effort on every path.
+ *  Exported for the `runtime` CLI runs (SOLUSDEV-329), spawned the same way. */
+export function killTree(pid: number, signal: 'SIGTERM' | 'SIGKILL'): void {
   if (process.platform === 'win32') {
     execFile(TASKKILL, ['/pid', String(pid), '/T', '/F'], () => undefined)
     return
@@ -528,6 +529,14 @@ export function notifyCompanionDriveChanged(): void {
  *  that reported them is gone. */
 export function onCompanionDriveWindow(listener: ((bounds: Rect | null) => void) | null): void {
   driveGeometry.setListener(listener)
+}
+
+/** SOLUSDEV-329 (mcp-fork-runtime.md §9): a provision made forks trusted;
+ *  the companion discovers forks only at launch, so replace the child. A
+ *  no-op until the supervisor is armed and a project is selected. */
+export function respawnCompanion(): void {
+  if (child === null && restartTimer === null) return
+  replaceChild()
 }
 
 /** Kill the current child (if any) and spawn a fresh one against the current

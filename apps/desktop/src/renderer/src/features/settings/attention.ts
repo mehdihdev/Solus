@@ -5,6 +5,7 @@ import type { SolState } from '../../../../main/sol-window/solWindow'
 import type { Connection, Subscription } from '../../lib/api/resources'
 import { trialState } from './billingFormat'
 import type { DriveStatus } from '../../lib/driveBridge'
+import { forkName } from './pythonTools/pythonToolsCopy'
 import { driveBlocked, driveNeedsApproval, missingGrants, type DriveGrant } from './driveCopy'
 
 /** A trial this close to its end earns a callout. */
@@ -16,6 +17,7 @@ export type AttentionItem =
   | { kind: 'drive'; missing: readonly DriveGrant[] }
   | { kind: 'trial'; days: number; ended: boolean }
   | { kind: 'reconnect'; connectionId: string; provider: string; login: string | null }
+  | { kind: 'python_tools'; tools: readonly string[] }
 
 export interface AttentionInput {
   sol: SolState | null
@@ -23,6 +25,8 @@ export interface AttentionInput {
   connections: readonly Connection[]
   /** SOLUSDEV-319: "SOL can use your mouse and keyboard"; absent outside Electron. */
   drive?: DriveStatus | null
+  /** SOLUSDEV-329: forks needing setup and whether setup runs; absent outside Electron. */
+  pythonTools?: { needsSetup: readonly string[]; running: boolean } | null
   now?: number
 }
 
@@ -65,12 +69,19 @@ function reconnectItems(connections: readonly Connection[]): AttentionItem[] {
     }))
 }
 
+/** One card while any local tool needs setup and none is being set up. */
+function pythonToolsItem(input: AttentionInput['pythonTools']): AttentionItem[] {
+  if (!input || input.running || input.needsSetup.length === 0) return []
+  return [{ kind: 'python_tools', tools: input.needsSetup.map(forkName) }]
+}
+
 export function attentionItems(input: AttentionInput): AttentionItem[] {
   const now = input.now ?? Date.now()
   return [
     ...captureItem(input.sol),
     ...driveItems(input.drive),
     ...trialItem(input.subscription, now),
-    ...reconnectItems(input.connections)
+    ...reconnectItems(input.connections),
+    ...pythonToolsItem(input.pythonTools)
   ]
 }

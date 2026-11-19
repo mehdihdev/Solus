@@ -43,6 +43,8 @@ import { TeamSection } from './sections/TeamSection'
 import { PrivacySection } from './sections/PrivacySection'
 import { DeveloperSection } from './sections/DeveloperSection'
 import { AboutSection } from './sections/AboutSection'
+import { PythonToolsSection } from './pythonTools/PythonToolsSection'
+import { getMcpRuntimeBridge, usePythonTools, type PythonTools } from './pythonTools/usePythonTools'
 
 function OfflineNotice(): React.JSX.Element {
   const reason = useOfflineReason()
@@ -68,6 +70,7 @@ interface PageContext {
   sol: DesktopSol
   drive: DriveSettings
   credits: CreditsView
+  python: PythonTools
   navigate: (screen: MainScreen) => void
   openHome: (view: HomePaneView) => void
 }
@@ -108,6 +111,7 @@ const SECTION_RENDERERS: Readonly<Record<SectionId, (ctx: PageContext) => React.
   ),
   team: (ctx) => <TeamSection team={ctx.team} onOpenTeam={() => ctx.openHome('members')} />,
   privacy: (ctx) => <PrivacySection data={ctx.settings} />,
+  python: (ctx) => <PythonToolsSection tools={ctx.python} />,
   developer: () => <DeveloperSection />,
   about: () => <AboutSection />
 }
@@ -122,6 +126,8 @@ function applicableSections(ctx: PageContext, desktop: boolean): ReadonlySet<Sec
   // Developer mode (SOLUSDEV-235 §4) loads folders through main, so it exists
   // only under the desktop app — the browser preview never sees the section.
   if (desktop) ids.push('developer')
+  // SOLUSDEV-329: the fork runtime lives in main — desktop app only.
+  if (ctx.python.available) ids.push('python')
   return new Set(ids)
 }
 
@@ -134,7 +140,11 @@ function attentionActions(ctx: PageContext): AttentionActions {
     openAccounts: () => ctx.openHome('accounts'),
     requestDrivePermissions: ctx.drive.requestPermissions,
     turnOffDrive: () => ctx.drive.setDrive(false),
-    openDriveApproval: ctx.drive.openApproval
+    openDriveApproval: ctx.drive.openApproval,
+    setupLocalTools: () => {
+      scrollTo(sectionAnchor('python'))
+      ctx.python.actions.setupNeeded()
+    }
   }
 }
 
@@ -152,6 +162,8 @@ function useSettingsPage(onNavigate?: (screen: MainScreen) => void): {
   const drive = useDriveStatus(driveBridge)
   const online = settings.status === 'ready'
   const credits = useCredits(online)
+  const [runtimeBridge] = useState(getMcpRuntimeBridge)
+  const python = usePythonTools(runtimeBridge)
   const navigate = (screen: MainScreen): void => onNavigate?.(screen)
   const openHome = (view: HomePaneView): void => {
     useShellStore.getState().requestHomeView(view)
@@ -163,11 +175,26 @@ function useSettingsPage(onNavigate?: (screen: MainScreen) => void): {
         sol: sol.state,
         drive: drive.status,
         subscription: online ? settings.subscription : null,
-        connections: online ? accounts.connections : []
+        connections: online ? accounts.connections : [],
+        pythonTools: python.available
+          ? { needsSetup: python.needsSetup, running: python.running }
+          : null
       }),
-    [sol.state, drive.status, online, settings.subscription, accounts.connections]
+    [
+      sol.state,
+      drive.status,
+      online,
+      settings.subscription,
+      accounts.connections,
+      python.available,
+      python.needsSetup,
+      python.running
+    ]
   )
-  return { ctx: { settings, team, accounts, sol, drive, credits, navigate, openHome }, items }
+  return {
+    ctx: { settings, team, accounts, sol, drive, credits, python, navigate, openHome },
+    items
+  }
 }
 
 export interface SettingsScreenProps {

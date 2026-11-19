@@ -20,6 +20,8 @@ export interface AttentionActions {
   turnOffDrive: () => void
   /** Slice 3b: open System Settings › Login Items. */
   openDriveApproval: () => void
+  /** SOLUSDEV-329: scroll to Python for local tools and start setup. */
+  setupLocalTools: () => void
 }
 
 const SCREEN_RECORDING_PATH = 'System Settings › Privacy & Security › Screen Recording › Solus'
@@ -123,6 +125,29 @@ function DriveApprovalCard({ actions }: { actions: AttentionActions }): React.JS
   )
 }
 
+function PythonToolsCard({
+  item,
+  actions
+}: {
+  item: Extract<AttentionItem, { kind: 'python_tools' }>
+  actions: AttentionActions
+}): React.JSX.Element {
+  return (
+    <Callout
+      tone="warn"
+      title="Local tools need setup"
+      actions={
+        <Button kind="primary" size="sm" onClick={actions.setupLocalTools}>
+          Set up local tools
+        </Button>
+      }
+    >
+      {item.tools.join(', ')} can&apos;t run until Solus sets up their Python environments on this
+      computer.
+    </Callout>
+  )
+}
+
 function AttentionCard({
   item,
   actions
@@ -137,6 +162,8 @@ function AttentionCard({
       return <DriveApprovalCard actions={actions} />
     case 'drive':
       return <DriveCard item={item} actions={actions} />
+    case 'python_tools':
+      return <PythonToolsCard item={item} actions={actions} />
     case 'trial':
       return (
         <Callout

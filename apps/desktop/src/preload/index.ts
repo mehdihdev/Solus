@@ -3,6 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 import { createOrbOverlayBridge } from './orbOverlayBridge'
 import { createSolBridge } from './solBridge'
 import { createDiagnosticsBridge } from './diagnosticsBridge'
+import { createMcpRuntimeBridge } from '../main/mcpRuntime/preloadBridge'
 import { EXT_CHANNELS } from '../main/extensions/extensions.constants'
 import { WINDOW_CHROME_CHANNEL, type WindowChrome } from '../main/windowChrome'
 import { WINDOW_SIZE_CHANNEL, type WindowSizeRequest } from '../main/windowSize'
@@ -198,6 +199,9 @@ const solus = {
   sol: createSolBridge(ipcRenderer),
   // SOLUSDEV-311: error reporting to main (validated, scrubbed and logged there).
   diagnostics: createDiagnosticsBridge(ipcRenderer),
+  // SOLUSDEV-329: Python for local tools (mcp-fork-runtime.md §9) — detect,
+  // status, the interpreter choice, provision/install with progress pushes.
+  mcpRuntime: createMcpRuntimeBridge(ipcRenderer),
   // Extensions (SOLUSDEV-235 / ADR-035, EXT-05): the machine-local bundle cache,
   // developer mode, the window host, and the network egress proxy. The main
   // process re-validates every argument; nothing here holds a credential.

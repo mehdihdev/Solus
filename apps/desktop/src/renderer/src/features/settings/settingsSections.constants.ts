@@ -13,6 +13,7 @@ export type SectionId =
   | 'tools'
   | 'team'
   | 'privacy'
+  | 'python'
   | 'developer'
   | 'about'
 
@@ -66,6 +67,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDef[] = [
     title: 'Privacy & data',
     group: 'System',
     keywords: ['usage data', 'consent', 'collection', 'delete account']
+  },
+  {
+    id: 'python',
+    title: 'Python for local tools',
+    group: 'System',
+    keywords: ['python', 'interpreter', 'kicad', 'local tools', 'setup', 'repair', 'venv']
   },
   {
     id: 'developer',

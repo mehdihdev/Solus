@@ -222,3 +222,52 @@ describe('SettingsScreen — links out', () => {
     expect(onNavigate).toHaveBeenCalledWith('billing')
   })
 })
+
+describe('SettingsScreen — Python for local tools (SOLUSDEV-329)', () => {
+  function installRuntime(): { provision: ReturnType<typeof vi.fn> } {
+    const provision = vi.fn(async () => ({ runId: 'r1' }))
+    const runtime = {
+      detect: vi.fn(async () => ({ candidates: [] })),
+      status: vi.fn(async () => ({
+        forks: [
+          {
+            type: 'status',
+            fork: 'kicad',
+            state: 'needs_setup',
+            detail: 'needs_setup:no_env',
+            base_version: null,
+            managed: false
+          }
+        ]
+      })),
+      getChoice: vi.fn(async () => ({ mode: 'auto', path: null, writable: true })),
+      choose: vi.fn(),
+      provision,
+      installManaged: vi.fn(),
+      cancel: vi.fn(),
+      onProgress: () => () => undefined
+    }
+    ;(window as unknown as { solus?: unknown }).solus = { mcpRuntime: runtime }
+    return { provision }
+  }
+  afterEach(() => {
+    delete (window as unknown as { solus?: unknown }).solus
+  })
+
+  it('is absent outside the desktop app', () => {
+    render(<SettingsScreen />)
+    expect(screen.queryByRole('region', { name: 'Python for local tools' })).toBeNull()
+  })
+
+  it('shows the section and a Needs-attention card that starts setup only on click', async () => {
+    const { provision } = installRuntime()
+    render(<SettingsScreen />)
+    expect(region('Python for local tools')).toBeInTheDocument()
+    const card = await screen.findByRole('group', { name: 'Local tools need setup' })
+    expect(within(card).getByText(/KiCad/)).toBeInTheDocument()
+    expect(provision).not.toHaveBeenCalled()
+    await userEvent.click(within(card).getByRole('button', { name: 'Set up local tools' }))
+    expect(provision).toHaveBeenCalledWith({ trigger: 'settings', forks: ['kicad'] })
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+})

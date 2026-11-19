@@ -239,3 +239,15 @@ function allowedHosts(configuredUrl: string | undefined): string {
   }
   return [...hosts].join(',')
 }
+
+/** SOLUSDEV-329 (mcp-fork-runtime.md §2, §6): the env for a `runtime …` CLI
+ *  run. Dev inherits (so the per-worktree SOLUS_COMPANION_MCP_ENVS_ROOT
+ *  override passes through); packaged starts from the allowlist, so the
+ *  override — which packaged builds never set — and PYTHON* never reach it.
+ *  No bridge variables: the CLI dials nothing. */
+export function runtimeCliEnv(
+  inherited: Record<string, string | undefined>,
+  packaged: boolean
+): Record<string, string | undefined> {
+  return packaged ? allowlisted(inherited) : { ...inherited }
+}

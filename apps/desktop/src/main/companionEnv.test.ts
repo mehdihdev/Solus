@@ -13,6 +13,7 @@
 // Rule 2 exists because that host is where the user's bearer token gets sent.
 import { describe, expect, it } from 'vitest'
 import {
+  runtimeCliEnv,
   companionDrive,
   companionEnv,
   driveDecisionKey,
@@ -473,5 +474,30 @@ describe('driveDecisionKey', () => {
     ['on, folder', FOLDER]
   ])('is stable for %s', (_label, d) => {
     expect(driveDecisionKey(d)).toBe(driveDecisionKey(d === null ? null : { ...d }))
+  })
+})
+
+describe('runtimeCliEnv (SOLUSDEV-329, mcp-fork-runtime.md §2/§6)', () => {
+  const inherited = {
+    PATH: '/usr/bin',
+    HOME: '/home/dev',
+    SOLUS_COMPANION_MCP_ENVS_ROOT: '/tmp/wt-envs',
+    PYTHONPATH: '/evil',
+    SOLUS_COMPANION_URL: 'wss://x/api/v1/projects/p/bridge'
+  }
+
+  it('dev passes the per-worktree envs-root override through', () => {
+    expect(runtimeCliEnv(inherited, false).SOLUS_COMPANION_MCP_ENVS_ROOT).toBe('/tmp/wt-envs')
+  })
+
+  it('packaged never sets the override and starts from the allowlist', () => {
+    const env = runtimeCliEnv(inherited, true)
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/dev' })
+  })
+
+  it('never derives bridge variables for a CLI run', () => {
+    const env = runtimeCliEnv({ PATH: '/usr/bin' }, false)
+    expect(env.SOLUS_COMPANION_URL).toBeUndefined()
+    expect(env.SOLUS_COMPANION_DRIVE).toBeUndefined()
   })
 })
