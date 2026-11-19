@@ -302,6 +302,30 @@ describe('project switch (SOLUSDEV-253)', () => {
   }, 10_000)
 })
 
+describe('respawnCompanion (SOLUSDEV-329, mcp-fork-runtime.md §9)', () => {
+  const signals = (kill: KillSpy, sig: string): number[] =>
+    kill.mock.calls.filter(([, s]) => s === sig).map(([pid]) => pid as number)
+
+  it('replaces the running child so newly trusted forks launch', async () => {
+    await withSupervisor('sleep 30', async (companion, kill) => {
+      companion.setCompanionProject('project-a')
+      kill.mockClear()
+      companion.respawnCompanion()
+      const termed = signals(kill, 'SIGTERM')
+      expect(termed).toHaveLength(1)
+      expect(termed[0]).toBeLessThan(0) // the whole process group
+    })
+  })
+
+  it('does nothing while no project is selected (nothing to serve)', async () => {
+    await withSupervisor('sleep 30', async (companion, kill) => {
+      kill.mockClear()
+      companion.respawnCompanion()
+      expect(signals(kill, 'SIGTERM')).toEqual([])
+    })
+  })
+})
+
 type KillSpy = MockInstance<typeof process.kill>
 
 async function withSupervisor(
