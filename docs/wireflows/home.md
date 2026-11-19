@@ -75,8 +75,10 @@ views below are unchanged.
   unverified email "Verify your email to see the invitations sent to it."
 - **ACCOUNT** card at the rail's foot, unchanged (Connected accounts, Team & invites).
 - **Pane — Team overview** (`TeamOverview`, the default view; a Settings deep link still
-  picks its pane):
-  - **Header**: initials tile, the team name (h2), a mono line "<PLAN> · N MEMBERS" ("ONLY
+  picks its pane). SOLUSDEV-328 (A2) reworks its body — see **Fills the window** below; the
+  header and projects table keep the rules here, the members preview, You-in and Work-with-others
+  cards described further down are superseded there:
+  - **Header** (a bar across the pane): initials tile, the team name (h2), a mono line "<PLAN> · N MEMBERS" ("ONLY
     YOU" on the personal workspace), up to four member avatars and "+N", then **Invite to
     <team>** for owners and admins — a member or viewer reads "You're a <Role> here · ask an
     owner or admin to invite" instead — and the team ⋯ menu (`TeamMenu`: Invite teammate,
@@ -100,10 +102,101 @@ views below are unchanged.
     Join only.
   - **The personal workspace** is solo: no roster, no You-in card and no Work with others —
     its ⋯ menu still offers Join team and New team.
-- **Pane — Project**: unchanged, with "← Back to <team>" above it returning to the overview.
+- **Pane — Project**: superseded by the **Project page** (SOLUSDEV-328, design P2) below.
 - Dropped from design D (no data behind them yet): per-project domain owners, warnings,
   members' last-seen and domain, a per-team SOL mode (ADR-016 keeps it per user), "needs you"
   badges, and moving a project between teams.
+
+## Fills the window: full-height columns (SOLUSDEV-328, design A2)
+
+The team overview follows the SOL page's rule — fixed side columns, a fluid middle, every
+column full height and scrolling on its own — instead of a capped, left-pinned document. Design
+canvas: Claude Design "Responsive Homepage", row A2.
+
+```
+| rail | Arm Lab  ACTIVE · 4 MEMBERS                      (AV)(AV)  [Invite to Arm Lab] ⋯ | SOL  |
+|      | PROJECTS · 4   [New] │ Rover MK2  [Live Bench][Open ws] │ MEMBERS · 4    Manage  |      |
+|      | ┃Rover MK2  strider… ┃│ ┌ SOURCES ──┐ ┌ .SOLUS ──────┐  │ (AV) Maya Owner·3mo    |      |
+|      |  Arm        —        │ └───────────┘ └──────────────┘  │ ┆ PENDING INVITES · 1 ┆ |      |
+|      |  Gripper v3 …        │ PROJECT ACTIVITY        N EVENTS │ TEAM ACTIVITY          |      |
+|      |  ▸ ARCHIVED (1)      │ … fills the height, Load more    │ … fills the height     |      |
+```
+
+- **Columns come from the overview's own width** (`homeLayout.ts`, a `ResizeObserver` on the
+  overview — never `window.innerWidth`), so the docked SOL sidebar reflows Home exactly like a
+  narrower window:
+  - **wide** (≥ 1680px): PROJECTS │ the CURRENT PROJECT │ TEAM (340px, `--sur`).
+  - **split** (880–1679px): PROJECTS │ TEAM.
+  - **stack** (< 880px): one scroll — projects, then the team column beneath.
+    Where nothing can measure (tests), the overview is split.
+- **The pane is not capped** for the overview or the project page (no 1180px max-width, no
+  padding); Team & invites and Connected accounts keep their readable column.
+- **PROJECTS** is the table above, unchanged. On a **wide** overview a project name makes the
+  project current and shows it in the project column — Home stays on the overview, the row is
+  marked (`aria-current` on the name button, accent edge on its first cell). On split or stack it opens the project pane as before.
+- **The project column** (`HomeProjectColumn`, wide only): the current project **when it
+  belongs to the team on show** — its name (h3), repo line and description, **Live Bench** and
+  **Open workspace**; SOURCES (`ProjectSourcesSummary`) and .SOLUS (`SolusSummaryRow`, whose
+  Add instructions opens the project pane) side by side; then PROJECT ACTIVITY (the
+  server-filtered, paged `ProjectActivityFeed`) filling the rest. No tabs. No current project of
+  this team: "Pick a project to see it here." — nothing is picked for the person.
+- **The team column** (`TeamColumn`): **MEMBERS · N** — every member (avatar, name, "<Role> ·
+  joined <when>", email on hover), in a section capped at 40% of the column that scrolls on its
+  own, with "All N members and invites" (the Team & invites view); "Loading the team…" until the
+  roster is known. **PENDING INVITES · N** for owners and admins (as before). **TEAM ACTIVITY**
+  fills the rest: the team feed with actors (`ActivityRow`), "No activity yet…" when empty, and
+  **Load older activity** while the server has more (cursor paging, `activity-feed.md`).
+- **Retired** from the overview: the six-member preview, **YOU IN <TEAM>** (role and join date
+  now sit on each member row) and **WORK WITH OTHERS** (Invite is in the header for managers —
+  members and viewers still read who to ask — and Join stays in the team rail and the ⋯ menu).
+- **The personal workspace** keeps the team column for its feed only — no members, no invites.
+
+## Project page (SOLUSDEV-328, design P2)
+
+Replaces the tabbed project pane (Overview · Sources · .solus · Activity, SOLUSDEV-317). Reached
+from a project name on a split or stacked overview, from Add instructions in the wide overview's
+project column, and from Connected accounts' "Back to <project>". Design canvas: Claude Design
+"Responsive Homepage", row P2.
+
+```
+| AL | ← Strider       │ Rover MK2  strider/rover-fw     [Live Bench][Open ws] │ PROJECT ACTIVITY |
+| FR | PROJECTS · 4    │ ┌ ON THIS COMPUTER + SOURCES ┐ ┌ .SOLUS ─────────────┐ │ 24 EVENTS        |
+| PE | ┃Rover MK2     ┃ │ │ ~/robots/rover-mk2          │ │ Goals · Constraints │ │ …                |
+| +  |  Arm            │ │ GitHub · KiCad · Onshape    │ │ …                   │ │ … fills the      |
+|    |  Gripper v3     │ └─────────────────────────────┘ └─────────────────────┘ │   height         |
+| ⚇  | [New project]   │                                                       │ [Load more]      |
+```
+
+- **The team rail folds to an initials strip** (`TeamRailStrip`, 64px, `aside "Teams"`): every
+  team by initials (collaborative first, the active one `aria-current`; clicking one makes it
+  active and shows its overview, where the full rail returns), **Create a team**, **Join with
+  an invite code**, "N invitations waiting" when any are (opens the overview, whose rail answers
+  them), and at its foot **Connected accounts** and **Team & invites** as icon buttons
+  (`aria-pressed`).
+- **Columns come from the page's own width** (`projectPageLayoutFor` in `homeLayout.ts`, measured
+  like the overview; unmeasured is list):
+  - **full** (≥ 1380px): PROJECTS (260px) │ the project │ PROJECT ACTIVITY (340px, `--sur`).
+  - **list** (900–1379px): PROJECTS │ the project, its activity under it.
+  - **narrow** (< 900px): no list — "← <team>", a **Switch project** select ("Pick a project"
+    when the current one is not a live project of the team) and **New project** (members and up)
+    above the project; activity under it.
+- **PROJECTS** (`list "Projects in <team>"` / "Your projects"): "← <team>" (back to the
+  overview), PROJECTS · N, one button per live project ("Show <name>": name and its latest
+  activity line, or "No recent activity"), the current one `aria-current` with the accent border;
+  clicking one makes it current through the project choke point and the page stays. **New
+  project** for members and up. Archived projects and the row ⋯ stay on the overview's table.
+- **The project**: name (h2), repo line, description, **Live Bench** and **Open workspace**;
+  then, side by side when there is room (each ≥ 480px, else stacked): a card with ON THIS
+  COMPUTER (`ProjectFolderCard`, full) and SOURCES (`ProjectSourcesSummary`, every tool; Add
+  additional sources opens Connected accounts with a way back), and the full **.solus** card
+  (`SolusCard`, editable). No tabs.
+- **PROJECT ACTIVITY** is the server-filtered, paged `ProjectActivityFeed`.
+- Switching project remounts the .solus card, so an open composer or import never carries over.
+  When the rail swaps between full and strip, keyboard focus that would be lost lands on the pane.
+- **No current project of this team**: the list stays; the project area reads "Pick a project
+  to see its folder, sources and .solus."
+- Retired with the tabbed pane: `HomeProjectPane`, `ProjectSetupList` and the five-row RECENT
+  rail (the full feed replaces it).
 
 ## Layout: sidebar + one pane (SOLUSDEV-317 redesign, concept B — sidebar superseded by the team rail above)
 

@@ -71,8 +71,14 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
 - **Proactive notes** (SOL speaking first, with actions under the note): the panel renders any
   SOL message the session holds, so when a later ticket (Live Bench) adds proactive notes they
   appear here with their action buttons. This ticket adds no proactive trigger of its own.
-- **Width:** default 360px; drag the left edge between 320 and 480px; the width is remembered
-  (same storage as §2). Keyboard: the resize handle is a focusable `separator` — ←/→ step 16px.
+- **Width:** drag the left edge between 320 and 480px; the dragged width is remembered (same
+  storage as §2). Keyboard: the resize handle is a focusable `separator` — ←/→ step 16px.
+  **Until the person sizes it** (SOLUSDEV-328), the panel takes 22% of the window, held to
+  360–480px: 360 up to a ~1640px window, 422 at 1920, 480 from ~2180 — so a wide screen gives
+  the thread room instead of leaving it squeezed beside a half-empty screen. The first drag or
+  arrow step starts from the width on screen and from then on the person's width wins at every
+  window size (`userSized`, persisted). A save from before this rule counts as sized only when
+  its width is off the old 360 default.
 - **On Hardware** (SOLUSDEV-326; `hardware-onboarding.md`). The sidebar is the Hardware screen's
   only SOL panel, and its chat is the Hardware surface (`useSolChat(projectId, 'hardware')`), the
   same session the page's card slot drives:

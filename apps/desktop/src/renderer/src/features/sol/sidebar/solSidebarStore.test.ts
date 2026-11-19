@@ -6,6 +6,7 @@ import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
   clampSidebarWidth,
+  scaledSidebarWidth,
   selectSidebarOpen,
   useSolSidebarStore
 } from './solSidebarStore'
@@ -45,6 +46,53 @@ describe('solSidebarStore', () => {
     expect(clampSidebarWidth(Number.NaN)).toBe(SIDEBAR_DEFAULT_WIDTH)
     useSolSidebarStore.getState().setWidth(700)
     expect(useSolSidebarStore.getState().width).toBe(SIDEBAR_MAX_WIDTH)
+  })
+})
+
+describe('solSidebarStore — window share and storage (SOLUSDEV-328)', () => {
+  it('scales its starting width with the window, 22% held to 360–480', () => {
+    expect(scaledSidebarWidth(1024)).toBe(SIDEBAR_DEFAULT_WIDTH)
+    expect(scaledSidebarWidth(1920)).toBe(422)
+    expect(scaledSidebarWidth(2560)).toBe(SIDEBAR_MAX_WIDTH)
+    expect(scaledSidebarWidth(Number.NaN)).toBe(SIDEBAR_DEFAULT_WIDTH)
+  })
+
+  it('is not user-sized until the person resizes it, and reset forgets it', () => {
+    expect(useSolSidebarStore.getState().userSized).toBe(false)
+    useSolSidebarStore.getState().setWidth(400)
+    expect(useSolSidebarStore.getState().userSized).toBe(true)
+    useSolSidebarStore.getState().reset()
+    expect(useSolSidebarStore.getState().userSized).toBe(false)
+  })
+
+  it('treats a stored pre-328 width as user-sized only when it was dragged off the default', async () => {
+    localStorage.setItem(
+      'solus.sol-sidebar',
+      JSON.stringify({ state: { open: true, width: SIDEBAR_DEFAULT_WIDTH }, version: 1 })
+    )
+    await useSolSidebarStore.persist.rehydrate()
+    expect(useSolSidebarStore.getState().userSized).toBe(false)
+    localStorage.setItem(
+      'solus.sol-sidebar',
+      JSON.stringify({ state: { open: true, width: 420 }, version: 1 })
+    )
+    await useSolSidebarStore.persist.rehydrate()
+    expect(useSolSidebarStore.getState().userSized).toBe(true)
+    localStorage.setItem(
+      'solus.sol-sidebar',
+      JSON.stringify({ state: { open: true, width: 420, userSized: 'yes' }, version: 1 })
+    )
+    await useSolSidebarStore.persist.rehydrate()
+    expect(useSolSidebarStore.getState().userSized).toBe(false)
+    for (const malformed of ['true', 1, {}]) {
+      localStorage.setItem(
+        'solus.sol-sidebar',
+        JSON.stringify({ state: { open: true, width: 420, userSized: malformed }, version: 1 })
+      )
+      await useSolSidebarStore.persist.rehydrate()
+      expect(useSolSidebarStore.getState().userSized).toBe(false)
+    }
+    localStorage.clear()
   })
 
   it('restores only a boolean open flag from storage', async () => {

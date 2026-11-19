@@ -6,7 +6,7 @@
 // connected accounts. Offline (dev bypass / unreachable API) shows an honest sign-in state —
 // never a demo project (SOLUSDEV-152); a team that is gone says so.
 import './home.css'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Spinner } from '../../components/ui/Spinner'
@@ -29,11 +29,15 @@ import { HomeAccountNav, type AccountsPosition, type HomePaneView } from './Home
 import { useAccountConnections } from './useAccountConnections'
 import { linkedRepos, useProjectRepos, type ReposByProject } from './useProjectRepos'
 import { useProjectSources } from '../project/useProjectSources'
-import { HomeProjectPane } from './HomeProjectPane'
+import { HomeProjectPage } from './HomeProjectPage'
 import { HomeTeamModals, type HomeTeamModal } from './HomeTeamModals'
-import { TeamOverview } from './TeamOverview'
+import { TeamOverview, type TeamOverviewProps } from './TeamOverview'
+import { HomeProjectColumn } from './HomeProjectColumn'
+import type { HomeLayout } from './homeLayout'
 import { TeamProjectsTable } from './TeamProjectsTable'
 import { TeamRail } from './TeamRail'
+import { TeamRailStrip } from './TeamRailStrip'
+import { homeNavDirection, isHomeMorphing, withHomeTransition } from './homeTransition'
 import { useMyInvites, type MyInvites } from './useMyInvites'
 import { useTeamSizes, type TeamSizes } from './useTeamSizes'
 
@@ -132,6 +136,24 @@ interface LiveProps {
 function Sidebar(props: LiveProps): React.JSX.Element {
   const { home, team, view, onShow, openModal } = props
   const accounts = useAccountsPosition(view)
+  const onSwitch = (teamId: string): void => {
+    if (teamId !== home.team?.team_id) home.actions.switchTeam(teamId)
+    onShow('team')
+  }
+  // SOLUSDEV-328 (design P2): the project page folds the rail to initials.
+  if (view === 'project')
+    return (
+      <TeamRailStrip
+        teams={home.teams}
+        activeTeamId={home.team?.team_id ?? null}
+        invitations={props.invites.invites.length}
+        view={view}
+        onSwitch={onSwitch}
+        onNewTeam={() => openModal('newTeam')}
+        onJoin={() => openModal('join')}
+        onShow={onShow}
+      />
+    )
   return (
     <TeamRail
       greeting={props.greeting}
@@ -140,10 +162,7 @@ function Sidebar(props: LiveProps): React.JSX.Element {
       sizes={props.sizes}
       invites={props.invites}
       teamLimit={team.teamLimit}
-      onSwitch={(teamId) => {
-        if (teamId !== home.team?.team_id) home.actions.switchTeam(teamId)
-        onShow('team')
-      }}
+      onSwitch={onSwitch}
       onNewTeam={() => openModal('newTeam')}
       onJoin={() => openModal('join')}
       onUpgrade={props.onUpgrade}
@@ -221,109 +240,166 @@ function useAccountsPosition(view: HomePaneView): AccountsPosition | null {
   return { healthy, attention: live.length - healthy }
 }
 
+/** SOLUSDEV-328: the team overview fills the pane in full-height columns (no cap, no padding);
+ *  the other views keep their readable column. */
+const OVERVIEW_FILL: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  flexDirection: 'column'
+}
+
+const COLUMN_VIEW: React.CSSProperties = { maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }
+
+/** SOLUSDEV-328: the overview and the project page fill the pane in full-height columns. */
+const FILL_VIEWS: readonly HomePaneView[] = ['team', 'project']
+
+/** The rail swaps between full and strip as the view changes, unmounting the button that was
+ *  pressed: a keyboard user's focus would fall to the page, so it lands on the pane instead. */
+function useFocusPaneWhenLost(view: HomePaneView): React.RefObject<HTMLElement | null> {
+  const ref = useRef<HTMLElement>(null)
+  useEffect(() => {
+    const active = document.activeElement
+    if (!active || active === document.body) ref.current?.focus({ preventScroll: true })
+  }, [view])
+  return ref
+}
+
 function Pane(props: LiveProps): React.JSX.Element {
+  const fill = FILL_VIEWS.includes(props.view)
+  const ref = useFocusPaneWhenLost(props.view)
   return (
     <main
+      ref={ref}
+      tabIndex={-1}
+      className="home-vt-pane"
       data-testid="home-pane"
       aria-label="Details"
-      style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}
+      // A parking spot for focus, not a control: no ring round the whole pane.
+      style={{ ...OVERVIEW_FILL, overflowY: fill ? 'hidden' : 'auto', outline: 'none' }}
     >
-      {/* Keyed to what it shows, so each switch of view or project eases in. */}
-      <div
-        key={`${props.view}:${props.currentProject?.id ?? ''}`}
-        className="home-pane-in"
-        style={{ maxWidth: PANE_MAX_WIDTH, padding: '26px 32px 48px' }}
+      {/* Keyed to what it shows, so each switch of view eases in. The full-height views are keyed
+          to the view only: picking a project inside them must not replay the whole pane. */}
+      <PaneBody
+        key={fill ? props.view : `${props.view}:${props.currentProject?.id ?? ''}`}
+        style={fill ? OVERVIEW_FILL : COLUMN_VIEW}
       >
         {props.view === 'team' && <TeamView {...props} />}
         {props.view === 'members' && <MembersView {...props} />}
-        {props.view === 'accounts' && (
-          <>
-            {props.backToProject && props.currentProject && (
-              <BackToProject
-                name={props.currentProject.name}
-                onClick={() => props.onShow('project')}
-              />
-            )}
-            {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account
-                here once; each project picks what it tracks from the same card. */}
-            <ConnectedAccountsCard
-              currentProject={props.currentProject}
-              onNavigate={props.onNavigate}
-            />
-          </>
-        )}
-        {props.view === 'project' && (
-          <>
-            {props.home.team && (
-              <BackToProject
-                name={teamName(props.home.team)}
-                onClick={() => props.onShow('team')}
-              />
-            )}
-            <ProjectView {...props} />
-          </>
-        )}
-      </div>
+        {props.view === 'accounts' && <AccountsView {...props} />}
+        {props.view === 'project' && <ProjectPageView {...props} />}
+      </PaneBody>
     </main>
   )
 }
 
-function ProjectView({
-  home,
-  repos,
-  currentProject,
-  onAddSources,
-  onOpenProject,
-  onNavigate
-}: LiveProps): React.JSX.Element {
-  if (!currentProject)
-    return (
-      <Card pad={24}>
-        <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-          Pick a project from the team overview to see its folder, sources and .solus.
-        </div>
-      </Card>
-    )
-  const project = home.projects.find((p) => p.id === currentProject.id)
+/** The pane's content. It eases in when it mounts — unless a team ↔ project morph brought it,
+ *  which already was its entrance. Decided once at mount: toggling the class later would replay
+ *  the fade the moment the morph ends (SOLUSDEV-328). */
+function PaneBody({
+  style,
+  children
+}: {
+  style: React.CSSProperties
+  children: React.ReactNode
+}): React.JSX.Element {
+  const [easeIn] = useState(() => !isHomeMorphing())
   return (
-    <HomeProjectPane
-      key={currentProject.id}
-      project={currentProject}
-      description={project?.description ?? null}
-      activity={home.activityByProject[currentProject.id] ?? []}
-      repos={repos[currentProject.id] ?? []}
-      onOpen={() => onOpenProject(currentProject)}
-      onBench={() => onNavigate?.('bench')}
-      onManageSources={onAddSources}
+    <div className={easeIn ? 'home-pane-in' : undefined} style={style}>
+      {children}
+    </div>
+  )
+}
+
+function AccountsView(props: LiveProps): React.JSX.Element {
+  return (
+    <>
+      {props.backToProject && props.currentProject && (
+        <BackToProject name={props.currentProject.name} onClick={() => props.onShow('project')} />
+      )}
+      {/* OAuth binds at ACCOUNT scope (SOLUSDEV-241): link a tool account
+          here once; each project picks what it tracks from the same card. */}
+      <ConnectedAccountsCard currentProject={props.currentProject} onNavigate={props.onNavigate} />
+    </>
+  )
+}
+
+/** SOLUSDEV-328 (design P2): the project page — the team's projects beside the current one. */
+function ProjectPageView(props: LiveProps): React.JSX.Element {
+  const { home, currentProject, onShow } = props
+  if (home.team === null) return <NoTeams />
+  const team = home.team
+  const current = currentProject?.teamId === team.team_id ? currentProject : null
+  return (
+    <HomeProjectPage
+      team={team}
+      projects={home.projects}
+      activityByProject={home.activityByProject}
+      current={current}
+      repos={current ? (props.repos[current.id] ?? []) : []}
+      onSelect={switchHomeProject}
+      onBack={() => onShow('team')}
+      onNewProject={props.onNewProject}
+      onOpen={() => current && props.onOpenProject(current)}
+      onBench={() => props.onNavigate?.('bench')}
+      onManageSources={props.onAddSources}
     />
   )
 }
 
-function teamName(team: { name: string; is_personal: boolean }): string {
-  return team.is_personal ? 'Personal workspace' : team.name
-}
-
-/** SOLUSDEV-319 (design D): the active team's overview, Home's default pane. */
-function TeamView(props: LiveProps): React.JSX.Element {
-  const { home, team, repos, openModal, onShow } = props
-  if (home.team === null)
-    return (
+function NoTeams(): React.JSX.Element {
+  return (
+    <div style={{ ...COLUMN_VIEW, overflowY: 'auto' }}>
       <Card pad={24}>
         <div style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
           You&apos;re not on any teams yet. Create one, or join with an invite code.
         </div>
       </Card>
-    )
-  const projects = (
+    </div>
+  )
+}
+
+/** SOLUSDEV-328: the wide overview's project column, for the current project of this team. */
+function ProjectColumn(props: LiveProps & { project: WorkspaceProject | null }): React.JSX.Element {
+  const { project, home, repos } = props
+  const known = project ? home.projects.find((p) => p.id === project.id) : undefined
+  return (
+    <HomeProjectColumn
+      key={project?.id ?? 'none'}
+      project={project}
+      description={known?.description ?? null}
+      repos={project ? (repos[project.id] ?? []) : []}
+      onOpen={() => project && props.onOpenProject(project)}
+      onBench={() => props.onNavigate?.('bench')}
+      onManageSources={props.onAddSources}
+      onAddInstructions={() => props.onShow('project')}
+    />
+  )
+}
+
+/** SOLUSDEV-319 (design D): the active team's overview, Home's default pane. */
+function TeamView(props: LiveProps): React.JSX.Element {
+  const { home, team, repos, openModal, onShow } = props
+  if (home.team === null) return <NoTeams />
+  const activeTeam = home.team
+  // SOLUSDEV-328: the current project, only when it belongs to the team on show.
+  const current =
+    props.currentProject && props.currentProject.teamId === activeTeam.team_id
+      ? props.currentProject
+      : null
+  // A wide overview shows the picked project in its own column; otherwise it opens the pane.
+  const projects = (layout: HomeLayout): React.ReactNode => (
     <TeamProjectsTable
-      team={home.team}
+      team={activeTeam}
       projects={home.projects}
       activityByProject={home.activityByProject}
       reposByProject={repos}
       actions={home.actions}
+      selectedId={layout === 'wide' ? current?.id : undefined}
       onSelect={(p) => {
         switchHomeProject(p)
-        onShow('project')
+        if (layout !== 'wide') onShow('project')
       }}
       onNewProject={props.onNewProject}
       onActionFailed={toastActionFailed}
@@ -331,25 +407,27 @@ function TeamView(props: LiveProps): React.JSX.Element {
   )
   return (
     <TeamOverview
-      key={home.team.team_id}
-      team={home.team}
+      key={activeTeam.team_id}
+      team={activeTeam}
       homeTeam={team}
-      meId={home.me?.id ?? null}
-      projectCount={home.projects.filter((p) => !p.archived_at).length}
       projects={projects}
-      menu={{
-        onJoin: () => openModal('join'),
-        onNewTeam: () => openModal('newTeam'),
-        onInvite: () => openModal('invite'),
-        onRename: () => openModal('rename'),
-        onLeave: () => openModal('leave'),
-        onDelete: () => openModal('delete')
-      }}
+      projectColumn={<ProjectColumn {...props} project={current} />}
+      menu={teamMenu(openModal)}
       onInvite={() => openModal('invite')}
-      onJoin={() => openModal('join')}
       onManageMembers={() => onShow('members')}
     />
   )
+}
+
+function teamMenu(openModal: LiveProps['openModal']): TeamOverviewProps['menu'] {
+  return {
+    onJoin: () => openModal('join'),
+    onNewTeam: () => openModal('newTeam'),
+    onInvite: () => openModal('invite'),
+    onRename: () => openModal('rename'),
+    onLeave: () => openModal('leave'),
+    onDelete: () => openModal('delete')
+  }
 }
 
 /** SOLUSDEV-317 (design A): one roster — the team, its invites and (for admins
@@ -432,10 +510,12 @@ function LiveHome({
   const [view, setView] = useInitialHomeView()
   const [backToProject, setBackToProject] = useState(false)
   // Any navigation clears the way back; only "Add additional sources" sets it.
-  const show = (next: HomePaneView): void => {
-    setBackToProject(false)
-    setView(next)
-  }
+  // SOLUSDEV-328: overview ↔ project page morphs (homeTransition.ts); other switches ease in.
+  const show = (next: HomePaneView): void =>
+    withHomeTransition(homeNavDirection(view, next), () => {
+      setBackToProject(false)
+      setView(next)
+    })
   const repos = useReposByProject(home, currentProject?.id ?? null)
   const switchTeam = home.actions.switchTeam
   // An accepted invitation lands me on the team I joined.

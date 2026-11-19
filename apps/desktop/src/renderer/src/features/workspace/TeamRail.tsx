@@ -44,7 +44,7 @@ const RAIL_STYLE: React.CSSProperties = {
 
 export function TeamRail(props: TeamRailProps): React.JSX.Element {
   return (
-    <aside aria-label="Teams" style={RAIL_STYLE}>
+    <aside aria-label="Teams" className="home-vt-rail" style={RAIL_STYLE}>
       <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em' }}>
         {props.greeting}
       </h1>

@@ -6,7 +6,7 @@ import {
   SIDEBAR_RESIZE_STEP,
   motionMs
 } from './sidebarMotion.constants'
-import { useSolSidebarStore } from './solSidebarStore'
+import { scaledSidebarWidth, useSolSidebarStore } from './solSidebarStore'
 
 /** `entering` renders at width 0 for one frame so the open transition has a start; `leaving`,
  *  `expanding` and `popping` keep the panel mounted while their motion plays. */
@@ -112,9 +112,31 @@ export interface SidebarResize {
   onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => void
 }
 
-/** The left-edge handle: dragging left widens; ←/→ step 16px. The store clamps. */
+/** The window's width, kept current on resize. */
+function useWindowWidth(): number {
+  const read = (): number => (typeof window === 'undefined' ? 0 : window.innerWidth)
+  const [width, setWidth] = useState(read)
+  useEffect(() => {
+    const onResize = (): void => setWidth(read())
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  return width
+}
+
+/** The width the panel shows at: the person's once they sized it, else a share of the window
+ *  (SOLUSDEV-328). */
+function effectiveWidth(windowWidth: number): number {
+  const { userSized, width } = useSolSidebarStore.getState()
+  return userSized ? width : scaledSidebarWidth(windowWidth)
+}
+
+/** The left-edge handle: dragging left widens; ←/→ step 16px. The store clamps. A drag or step
+ *  starts from the width on screen and makes the width the person's. */
 export function useSidebarResize(): SidebarResize {
-  const width = useSolSidebarStore((s) => s.width)
+  const windowWidth = useWindowWidth()
+  const stored = useSolSidebarStore((s) => (s.userSized ? s.width : null))
+  const width = stored ?? scaledSidebarWidth(windowWidth)
   // A drag's teardown, so an unmount (⌘J, Escape mid-drag) or a cancelled pointer never leaves
   // listeners or the app-wide resize cursor behind.
   const endDrag = useRef<(() => void) | null>(null)
@@ -123,7 +145,7 @@ export function useSidebarResize(): SidebarResize {
     event.preventDefault()
     endDrag.current?.()
     const startX = event.clientX
-    const startWidth = useSolSidebarStore.getState().width
+    const startWidth = effectiveWidth(window.innerWidth)
     const onMove = (move: PointerEvent): void =>
       useSolSidebarStore.getState().setWidth(startWidth + (startX - move.clientX))
     const end = (): void => {
@@ -146,8 +168,7 @@ export function useSidebarResize(): SidebarResize {
           : 0
     if (!step) return
     event.preventDefault()
-    const store = useSolSidebarStore.getState()
-    store.setWidth(store.width + step)
+    useSolSidebarStore.getState().setWidth(effectiveWidth(window.innerWidth) + step)
   }
   return { width, onPointerDown, onKeyDown }
 }

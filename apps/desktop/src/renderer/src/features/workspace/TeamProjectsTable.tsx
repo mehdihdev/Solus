@@ -26,6 +26,8 @@ export interface TeamProjectsTableProps {
   onSelect: (project: Project) => void
   onNewProject: () => void
   onActionFailed: (body: string) => void
+  /** SOLUSDEV-328: the project shown in the wide overview's project column, marked current. */
+  selectedId?: string
 }
 
 export function TeamProjectsTable(props: TeamProjectsTableProps): React.JSX.Element {
@@ -76,6 +78,7 @@ export function TeamProjectsTable(props: TeamProjectsTableProps): React.JSX.Elem
                 canManage={canManage}
                 canDelete={canDelete}
                 actions={actions}
+                selected={project.id === props.selectedId}
                 onSelect={props.onSelect}
                 onActionFailed={onActionFailed}
               />
@@ -108,6 +111,7 @@ interface ProjectRowProps {
   canManage: boolean
   canDelete: boolean
   actions: HomeActions
+  selected: boolean
   onSelect: (project: Project) => void
   onActionFailed: (body: string) => void
 }
@@ -115,11 +119,20 @@ interface ProjectRowProps {
 function ProjectRow(props: ProjectRowProps): React.JSX.Element {
   const { project, latest } = props
   return (
-    <tr data-testid={`project-row-${project.id}`} style={{ borderTop: '1px solid var(--bd)' }}>
-      <td style={TD}>
+    <tr
+      data-testid={`project-row-${project.id}`}
+      data-selected={props.selected ? 'true' : undefined}
+      style={{
+        borderTop: '1px solid var(--bd)',
+        background: props.selected ? 'var(--sur)' : undefined
+      }}
+    >
+      {/* The accent edge sits on the cell: a row's box-shadow is unreliable in a collapsed table. */}
+      <td style={props.selected ? { ...TD, boxShadow: 'inset 2px 0 0 var(--acc)' } : TD}>
         <button
           type="button"
           aria-label={`Open ${project.name}`}
+          aria-current={props.selected ? 'true' : undefined}
           className="interactive"
           onClick={() => props.onSelect(project)}
           style={NAME_BUTTON}
