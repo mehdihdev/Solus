@@ -38,6 +38,7 @@ No `upstream/` tree; every file is Solus-authored.
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `allowlist.yaml`      | SOLUSDEV-322 P10 (2026-11-10): server-level `exposure: internal` (docs/contracts/bridge-protocol.md). No tool entry changed; the owned `gazebo.*` wrappers in `agent/tools/gazebo_tools.py` are the only model-facing surface. Ratified in chat on 2026-11-10 by Pratham Madaram.                                      |
 | `platform.json` (new) | SOLUSDEV-329 (2026-11-19): declares the hosts the fork runs on — `linux`, `darwin` — so the companion reports "Gazebo is not available on Windows" instead of spawning it there (`solus_companion.platforms`). Launcher, env passthrough and allowlist unchanged; availability metadata only, not a re-review trigger. |
+| `bin/launch` | SOLUSDEV-329 (2026-11-19): refuses a non-absolute `SOLUS_MCP_PYTHON` (exit 78), matching the other Python forks. **Re-review trigger** — see SECURITY_REVIEW.md 2026-11-19 (PENDING). |
 
 ## Exposed tools
 

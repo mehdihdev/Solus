@@ -6,6 +6,9 @@ export PATH
 BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
 PYTHON="${SOLUS_MCP_PYTHON:-}"
+# SOLUSDEV-329: absolute only — a relative name would pass -x against the cwd
+# (the untrusted workspace) and then be resolved by env on PATH.
+case "$PYTHON" in /*) ;; *) PYTHON="" ;; esac
 if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then exit 78; fi
 WORKSPACE="${SOLUS_MCP_WORKSPACE:-}"
 if [ -z "$WORKSPACE" ]; then exit 78; fi

@@ -80,6 +80,20 @@ def test_launch_exits_78_without_interpreter_or_workspace(tmp_path: Path) -> Non
     assert _run(with_empty).returncode == 78
 
 
+def test_launch_refuses_a_relative_interpreter_even_when_it_resolves(tmp_path: Path) -> None:
+    """SOLUSDEV-329: a relative SOLUS_MCP_PYTHON passes `[ -x ]` against the cwd and
+    `env` would then look it up on PATH; only an absolute path set by Solus is accepted."""
+    decoy = tmp_path / "python3"
+    decoy.write_text("#!/bin/sh\ntouch ran\n")
+    decoy.chmod(0o755)
+    env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "SOLUS_MCP_PYTHON": "python3",
+           "SOLUS_MCP_WORKSPACE": str(tmp_path)}
+    result = subprocess.run([str(LAUNCH)], env=env, cwd=tmp_path, capture_output=True,
+                            text=True, timeout=20, check=False)
+    assert result.returncode == 78
+    assert not (tmp_path / "ran").exists()
+
+
 def test_launch_is_env_i_with_exactly_the_declared_passthrough() -> None:
     text = LAUNCH.read_text()
     assert text.startswith("#!/bin/sh\n")

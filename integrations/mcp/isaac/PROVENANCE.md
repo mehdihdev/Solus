@@ -40,6 +40,7 @@ installation is a release gate, not a claim made here.
 | `solus/runtime.py`              | Worker `OPERATIONS` += the six stage operations.                                                                                                                                                                                                                                                                         |
 | `allowlist.yaml`                | SOLUSDEV-322 P10 (2026-11-10): server-level `exposure: internal` (docs/contracts/bridge-protocol.md). No tool entry changed; the owned `isaac.*` wrappers in `agent/tools/isaac_tools.py` are the only model-facing surface. Ratified in chat on 2026-11-10 by Pratham Madaram.                                          |
 | `platform.json` (new)           | SOLUSDEV-329 (2026-11-19): declares the one host the fork runs on — `linux` — so the companion reports "Isaac Sim is not available on macOS/Windows" instead of spawning it there (`solus_companion.platforms`). Launcher, env passthrough and allowlist unchanged; availability metadata only, not a re-review trigger. |
+| `bin/launch` | SOLUSDEV-329 (2026-11-19): refuses a non-absolute `SOLUS_MCP_PYTHON` (exit 78), matching the other Python forks. **Re-review trigger** — see SECURITY_REVIEW.md 2026-11-19 (PENDING). |
 
 ## Historical model provenance (no longer an active bundled default)
 

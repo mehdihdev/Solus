@@ -87,3 +87,21 @@ def test_launcher_preserves_runtime_but_drops_python_poison(tmp_path: Path) -> N
     }
     assert "PYTHONPATH" not in captured
     assert "AWS_SECRET_ACCESS_KEY" not in captured
+
+
+def test_launcher_refuses_a_relative_interpreter(tmp_path: Path) -> None:
+    """SOLUSDEV-329: only an absolute SOLUS_MCP_PYTHON is accepted (no cwd/PATH lookup)."""
+    import subprocess
+
+    decoy = tmp_path / "python3"
+    decoy.write_text("#!/bin/sh\ntouch ran\n")
+    decoy.chmod(0o755)
+    launcher = Path(__file__).resolve().parents[1] / "bin/launch"
+    result = subprocess.run(
+        ["/bin/sh", str(launcher)],
+        env={"PATH": f"{tmp_path}:/usr/bin:/bin", "SOLUS_MCP_PYTHON": "python3",
+             "SOLUS_MCP_WORKSPACE": str(tmp_path)},
+        cwd=tmp_path, capture_output=True, text=True, timeout=20, check=False,
+    )
+    assert result.returncode == 78
+    assert not (tmp_path / "ran").exists()

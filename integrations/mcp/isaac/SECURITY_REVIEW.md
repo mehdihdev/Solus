@@ -181,3 +181,15 @@ Append-only entry; nothing above is rewritten. Scope: `allowlist.yaml` (server-l
 Verification at this entry (P10 rerun, `docs/qa/acceptance/P8-suites.md` §"P10 rerun"):
 `uv run pytest -q integrations/mcp/gazebo/tests integrations/mcp/isaac/tests integrations/mcp/tests`
 → 506 passed; Isaac remains fixture-only on this aarch64 host.
+
+## 2026-11-19 — Absolute-only `SOLUS_MCP_PYTHON` (SOLUSDEV-329) — PENDING re-review
+
+> **STATUS: PENDING human re-review by BOTH developers.** A launcher change is a re-review
+> trigger; any sign-off recorded before this date does not cover the launcher below. Nothing
+> here is signed — signing is a human-only act.
+
+`bin/launch` already took its interpreter only from `SOLUS_MCP_PYTHON`. It now also refuses a
+non-absolute value (exit 78): a relative name such as `python3` passed `[ -x ]` against the cwd
+— the untrusted workspace — and `env` would then resolve it on PATH. Same guard as the
+kicad/code/local/altium launchers (ADR-031 amendment 2026-11-19). The `env -i` allowlist,
+fixed argv and workspace handling are unchanged. Test: the fork's relative-interpreter test.
