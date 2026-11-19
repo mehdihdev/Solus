@@ -3,7 +3,7 @@
 // (create, open, archive, per-project activity), members, me in it — the project pane,
 // the Members and Connected accounts views, the account-level actions, and the honest
 // offline state. The data hooks are mocked to drive each state.
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { HomeScreen } from './HomeScreen'
@@ -14,6 +14,7 @@ import * as homeTeam from './useHomeTeam'
 import * as projectRepos from './useProjectRepos'
 import * as projectSources from '../project/useProjectSources'
 import * as myInvites from './useMyInvites'
+import * as layout from './homeLayout'
 import { useShellStore } from './shellStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { ActivityApi, Project, TeamSummary } from '../../lib/api/resources'
@@ -27,6 +28,11 @@ vi.mock('./useMe', async (importOriginal) => {
   return { ...actual, useMe: vi.fn() }
 })
 vi.mock('./useProjectActivity', () => ({ useProjectActivity: vi.fn() }))
+// jsdom cannot measure: the overview is split unless a test says wide (SOLUSDEV-328).
+vi.mock('./homeLayout', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./homeLayout')>()
+  return { ...actual, useHomeLayout: vi.fn(() => 'split') }
+})
 vi.mock('./useHomeTeam', () => ({ useHomeTeam: vi.fn() }))
 // Invitations and team sizes have their own hook tests (useMyInvites, useTeamSizes).
 vi.mock('./useMyInvites', () => ({ useMyInvites: vi.fn() }))
@@ -860,17 +866,71 @@ describe('HomeScreen — linked repos under project names', () => {
     expect(within(pane()).getByText('strider/rover-fw')).toBeInTheDocument()
     expect(projectRepos.useProjectRepos).toHaveBeenCalledWith(['p1', 'p2'])
   })
+})
 
-  describe('HomeScreen — motion', () => {
-    it('fades the pane in, keyed to what it shows', async () => {
-      mockHome()
-      useWorkspaceStore.setState({ project: ROVER })
-      render(<HomeScreen onOpenProject={vi.fn()} />)
-      const before = pane().firstElementChild as HTMLElement
-      expect(before).toHaveClass('home-pane-in')
-      await showMembers()
-      expect(pane().firstElementChild).not.toBe(before)
-      expect(pane().firstElementChild).toHaveClass('home-pane-in')
-    })
+describe('HomeScreen — a wide overview (SOLUSDEV-328)', () => {
+  beforeEach(() => vi.mocked(layout.useHomeLayout).mockReturnValue('wide'))
+  afterEach(() => vi.mocked(layout.useHomeLayout).mockReturnValue('split'))
+
+  it('fills the pane edge to edge, the team column beside the projects', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(screen.getByTestId('team-overview')).toHaveAttribute('data-layout', 'wide')
+    expect(pane().firstElementChild).not.toHaveStyle({ maxWidth: '1180px' })
+    expect(screen.getByRole('region', { name: 'Team activity' })).toBeInTheDocument()
+  })
+
+  it('asks for a pick while no project of this team is current', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(
+      within(screen.getByTestId('home-col-project')).getByText('Pick a project to see it here.')
+    ).toBeInTheDocument()
+  })
+
+  it('shows a picked project in its own column and stays on the overview', async () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    await showProject('Rover MK2')
+    expect(useWorkspaceStore.getState().project?.id).toBe('p1')
+    expect(screen.getByTestId('team-overview')).toBeInTheDocument()
+    const column = screen.getByTestId('home-col-project')
+    expect(within(column).getByRole('heading', { level: 3, name: 'Rover MK2' })).toBeVisible()
+    expect(within(row('p1')).getByRole('button', { name: 'Open Rover MK2' })).toHaveAttribute(
+      'aria-current',
+      'true'
+    )
+  })
+
+  it('opens the picked project from its column', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    const onOpenProject = vi.fn()
+    render(<HomeScreen onOpenProject={onOpenProject} />)
+    const column = screen.getByTestId('home-col-project')
+    await userEvent.click(within(column).getByRole('button', { name: 'Open workspace' }))
+    expect(onOpenProject).toHaveBeenCalledWith(ROVER)
+  })
+
+  it('leaves a current project of another team out of the column', () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: { id: 'px', name: 'Elsewhere', teamId: 't-other' } })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(
+      within(screen.getByTestId('home-col-project')).getByText('Pick a project to see it here.')
+    ).toBeInTheDocument()
+  })
+})
+
+describe('HomeScreen — motion', () => {
+  it('fades the pane in, keyed to what it shows', async () => {
+    mockHome()
+    useWorkspaceStore.setState({ project: ROVER })
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    const before = pane().firstElementChild as HTMLElement
+    expect(before).toHaveClass('home-pane-in')
+    await showMembers()
+    expect(pane().firstElementChild).not.toBe(before)
+    expect(pane().firstElementChild).toHaveClass('home-pane-in')
   })
 })

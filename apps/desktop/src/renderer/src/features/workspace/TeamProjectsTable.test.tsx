@@ -95,6 +95,16 @@ describe('TeamProjectsTable', () => {
     expect(p.onSelect).toHaveBeenCalledWith(ARM)
   })
 
+  it('marks the project shown in the wide project column, and only that one (SOLUSDEV-328)', () => {
+    const name = (n: string): HTMLElement => screen.getByRole('button', { name: `Open ${n}` })
+    const { rerender } = render(<TeamProjectsTable {...props({ selectedId: 'p-arm' })} />)
+    expect(name('lerobot so101')).toHaveAttribute('aria-current', 'true')
+    expect(screen.getByTestId('project-row-p-arm')).toHaveAttribute('data-selected', 'true')
+    expect(name('USB Charger Lab')).not.toHaveAttribute('aria-current')
+    rerender(<TeamProjectsTable {...props()} />)
+    expect(name('lerobot so101')).not.toHaveAttribute('aria-current')
+  })
+
   it('offers New project and the row menu to members, neither to viewers', async () => {
     const p = props()
     const first = render(<TeamProjectsTable {...p} />)

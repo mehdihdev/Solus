@@ -1,58 +1,65 @@
-// The active team's overview, Home's default pane (SOLUSDEV-319, multi-team Home, design D —
-// docs/wireflows/home.md "Team overview"): a header naming the team, its plan and size, with
-// the ⋯ menu and a role-aware Invite; the projects (passed in); a preview of the members that
-// links to the full roster (Team & invites); "You in <team>"; and, for managers, the team's
-// pending invites; and "Work with others" (invite here, or join another team). The personal
-// workspace is solo: no roster and no "Work with others" — its ⋯ menu still joins or starts teams.
+// The active team's overview, Home's default pane (SOLUSDEV-319 design D; SOLUSDEV-328 A2 —
+// docs/wireflows/home.md "Team overview" and "Fills the window"). A header bar names the team, its
+// plan and size, with the ⋯ menu and a role-aware Invite. Beneath, full-height columns that each
+// scroll on their own, picked from the overview's OWN width (so the docked SOL sidebar reflows it
+// like a narrower window): projects │ team when split; projects │ current project │ team when
+// wide; one scroll with the team column under the projects when narrow.
+import { useRef } from 'react'
 import { Avatar } from '../../components/ui/Avatar'
 import { Button } from '../../components/ui/Button'
 import { Mono } from '../../components/ui/Mono'
-import type { InviteApi, TeamMemberApi, TeamSummary } from '../../lib/api/resources'
-import { relativeTime } from '../../lib/relativeTime'
-import { MANAGER_ROLES } from '../team/MembersPanel'
+import type { TeamMemberApi, TeamSummary } from '../../lib/api/resources'
+import { useHomeLayout, type HomeLayout } from './homeLayout'
+import { TeamColumn, canManageTeam } from './TeamColumn'
 import { roleLabel, teamInitials } from './teamLabels'
 import { TeamMenu, type TeamMenuProps } from './TeamMenu'
 import type { HomeTeam } from './useHomeTeam'
 
-/** How many members the overview previews before linking to the full roster. */
-export const MEMBER_PREVIEW = 6
+/** The team column's fixed width beside the fluid columns (sol-page.md's context column, +20). */
+export const TEAM_COLUMN_WIDTH = 340
 
 export interface TeamOverviewProps {
   team: TeamSummary
   homeTeam: HomeTeam
-  /** My user id, to find my own membership row. */
-  meId: string | null
-  projectCount: number
-  /** The projects table, composed by Home. */
-  projects: React.ReactNode
+  /** The projects table, composed by Home for the layout on show. */
+  projects: (layout: HomeLayout) => React.ReactNode
+  /** The current project's column, shown only when the overview is wide. */
+  projectColumn: React.ReactNode
   menu: Omit<TeamMenuProps, 'team' | 'myRole'>
   onInvite: () => void
-  onJoin: () => void
   onManageMembers: () => void
+  /** Overrides the measured layout (tests, stories). */
+  layout?: HomeLayout
 }
 
 export function TeamOverview(props: TeamOverviewProps): React.JSX.Element {
-  const personal = props.team.is_personal
+  const ref = useRef<HTMLDivElement>(null)
+  const measured = useHomeLayout(ref)
+  const layout = props.layout ?? measured
+  const stacked = layout === 'stack'
   return (
-    <div style={{ display: 'grid', gap: 22 }}>
+    <div ref={ref} data-testid="team-overview" data-layout={layout} style={ROOT[layout]}>
       <Header {...props} />
-      {props.projects}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' }}>
-        {!personal && <MembersPreview {...props} />}
-        {!personal && (
-          <div style={{ flex: '1 1 280px', display: 'grid', gap: 12 }}>
-            <YouInTeam {...props} />
-            <PendingInvites {...props} />
-            <WorkWithOthers {...props} />
+      <div data-testid="team-overview-body" style={BODY[layout]}>
+        <div data-testid="home-col-projects" style={column(stacked)}>
+          <div style={{ padding: '18px 24px 24px' }}>{props.projects(layout)}</div>
+        </div>
+        {layout === 'wide' && (
+          <div data-testid="home-col-project" style={{ ...column(false), ...DIVIDER }}>
+            {props.projectColumn}
           </div>
         )}
+        <div data-testid="home-col-team" style={stacked ? STACKED_TEAM : TEAM_COLUMN}>
+          <TeamColumn
+            team={props.team}
+            homeTeam={props.homeTeam}
+            onManageMembers={props.onManageMembers}
+            stacked={stacked}
+          />
+        </div>
       </div>
     </div>
   )
-}
-
-function canManage(homeTeam: HomeTeam): boolean {
-  return homeTeam.myRole !== null && MANAGER_ROLES.includes(homeTeam.myRole)
 }
 
 function headerLine(team: TeamSummary, homeTeam: HomeTeam): string {
@@ -71,8 +78,8 @@ function Header(props: TeamOverviewProps): React.JSX.Element {
       <span aria-hidden="true" style={TILE}>
         {teamInitials(team.is_personal ? 'Personal' : team.name)}
       </span>
-      <div style={{ display: 'grid', gap: 4, flex: '1 1 240px', minWidth: 0 }}>
-        <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>{name}</h2>
+      <div style={{ display: 'grid', gap: 3, flex: '1 1 240px', minWidth: 0 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{name}</h2>
         <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
           {headerLine(team, homeTeam)}
         </Mono>
@@ -86,7 +93,7 @@ function Header(props: TeamOverviewProps): React.JSX.Element {
 
 function InviteSlot({ team, homeTeam, onInvite }: TeamOverviewProps): React.JSX.Element | null {
   if (team.is_personal) return null
-  if (canManage(homeTeam))
+  if (canManageTeam(homeTeam))
     return (
       <Button kind="primary" size="sm" onClick={onInvite}>
         Invite to {team.name}
@@ -110,11 +117,11 @@ function Faces({ members }: { members: readonly TeamMemberApi[] }): React.JSX.El
           style={{
             marginLeft: i === 0 ? 0 : -6,
             borderRadius: '50%',
-            border: '2px solid var(--sur)',
+            border: '2px solid var(--bg)',
             display: 'inline-flex'
           }}
         >
-          <Avatar name={m.name ?? m.email} size={26} />
+          <Avatar name={m.name ?? m.email} size={24} />
         </span>
       ))}
       {members.length > shown.length && (
@@ -126,194 +133,73 @@ function Faces({ members }: { members: readonly TeamMemberApi[] }): React.JSX.El
   )
 }
 
-function MembersPreview({ homeTeam, onManageMembers }: TeamOverviewProps): React.JSX.Element {
-  const { members } = homeTeam
-  return (
-    <section aria-label="Members preview" style={{ flex: '2 1 460px', display: 'grid', gap: 10 }}>
-      <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
-        MEMBERS{homeTeam.status === 'ready' ? ` · ${members.length}` : ''}
-      </Mono>
-      <div style={{ border: '1px solid var(--bd)', borderRadius: 4 }}>
-        {homeTeam.status === 'ready' ? (
-          <ul aria-label="Members" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {members.slice(0, MEMBER_PREVIEW).map((m) => (
-              <MemberRow key={m.user_id} member={m} />
-            ))}
-          </ul>
-        ) : (
-          <div style={{ fontSize: 12.5, color: 'var(--mut)', padding: 14 }}>Loading the team…</div>
-        )}
-        {homeTeam.status === 'ready' && (
-          <div style={{ padding: '8px 14px' }}>
-            <button type="button" className="interactive" onClick={onManageMembers} style={LINK}>
-              All {members.length} {members.length === 1 ? 'member' : 'members'} and invites
-            </button>
-          </div>
-        )}
-      </div>
-    </section>
-  )
+/** A column scrolls on its own unless the overview is one stacked scroll. */
+function column(stacked: boolean): React.CSSProperties {
+  return stacked
+    ? { minWidth: 0 }
+    : { minWidth: 0, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }
 }
 
-function MemberRow({ member }: { member: TeamMemberApi }): React.JSX.Element {
-  return (
-    <li
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '10px 14px',
-        borderBottom: '1px solid var(--bd)'
-      }}
-    >
-      <Avatar name={member.name ?? member.email} size={24} />
-      <span style={{ display: 'grid', gap: 2, flex: '1 1 160px', minWidth: 0 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600 }}>{member.name ?? member.email}</span>
-        <span style={{ fontSize: 11, color: 'var(--mut)' }}>{member.email}</span>
-      </span>
-      <span style={ROLE_PILL}>{roleLabel(member.role)}</span>
-    </li>
-  )
-}
-
-function YouInTeam({ team, homeTeam, meId, projectCount }: TeamOverviewProps): React.JSX.Element {
-  const mine = homeTeam.members.find((m) => m.user_id === meId)
-  const label = `You in ${team.name}`
-  return (
-    <section aria-label={label} style={CARD}>
-      <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
-        {label.toUpperCase()}
-      </Mono>
-      <Fact name="Role" value={homeTeam.myRole ? roleLabel(homeTeam.myRole) : '—'} />
-      <Fact name="Joined" value={mine ? relativeTime(mine.joined_at) : '—'} />
-      <Fact name="Projects" value={String(projectCount)} />
-    </section>
-  )
-}
-
-function Fact({ name, value }: { name: string; value: string }): React.JSX.Element {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5 }}>
-      <span style={{ color: 'var(--mut)' }}>{name}</span>
-      <span>{value}</span>
-    </div>
-  )
-}
-
-function inviteeLabel(invite: InviteApi): string {
-  return invite.email ?? (invite.github_login ? `@${invite.github_login}` : 'Invitee')
-}
-
-function PendingInvites({
-  homeTeam,
-  onManageMembers
-}: TeamOverviewProps): React.JSX.Element | null {
-  if (!canManage(homeTeam) || homeTeam.invites.length === 0) return null
-  return (
-    <section
-      aria-label="Pending invites"
-      style={{ ...CARD, borderStyle: 'dashed', background: 'transparent' }}
-    >
-      <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
-        PENDING INVITES · {homeTeam.invites.length}
-      </Mono>
-      {homeTeam.invites.slice(0, 4).map((invite) => (
-        <span key={invite.id} style={{ fontSize: 12, color: 'var(--mut)' }}>
-          {inviteeLabel(invite)} · {roleLabel(invite.role)} · sent {relativeTime(invite.created_at)}
-        </span>
-      ))}
-      <button type="button" className="interactive" onClick={onManageMembers} style={LINK}>
-        Manage invites
-      </button>
-    </section>
-  )
-}
-
-function workWithOthersCopy(team: TeamSummary, manager: boolean): string {
-  return manager
-    ? `Bring someone into ${team.name}, or join another team with an invite code.`
-    : `Have an invite code for another team? Join it here — ${team.name} stays on your list.`
-}
-
-function WorkWithOthers({
-  team,
-  homeTeam,
-  onInvite,
-  onJoin
-}: TeamOverviewProps): React.JSX.Element {
-  const manager = canManage(homeTeam)
-  return (
-    <section aria-label="Work with others" style={CARD}>
-      <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>
-        WORK WITH OTHERS
-      </Mono>
-      <span style={{ fontSize: 12.5, color: 'var(--mut)', lineHeight: 1.55 }}>
-        {workWithOthersCopy(team, manager)}
-      </span>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {manager && (
-          <Button kind="primary" size="sm" onClick={onInvite}>
-            Invite a teammate
-          </Button>
-        )}
-        <Button kind="ghost" size="sm" onClick={onJoin}>
-          Join with an invite code
-        </Button>
-      </div>
-    </section>
-  )
-}
-
-const HEADER_STYLE: React.CSSProperties = {
+const FILL: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  minHeight: 0,
   display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  gap: 16,
-  padding: 18,
-  border: '1px solid var(--bd)',
-  borderRadius: 4,
+  flexDirection: 'column'
+}
+
+const ROOT: Record<HomeLayout, React.CSSProperties> = {
+  stack: { ...FILL, overflowY: 'auto' },
+  split: { ...FILL, overflow: 'hidden' },
+  wide: { ...FILL, overflow: 'hidden' }
+}
+
+const GRID: React.CSSProperties = { flex: 1, minHeight: 0, display: 'grid' }
+
+const BODY: Record<HomeLayout, React.CSSProperties> = {
+  stack: { display: 'block' },
+  split: { ...GRID, gridTemplateColumns: `minmax(0, 1fr) ${TEAM_COLUMN_WIDTH}px` },
+  wide: {
+    ...GRID,
+    gridTemplateColumns: `minmax(360px, 0.85fr) minmax(0, 1.3fr) ${TEAM_COLUMN_WIDTH}px`
+  }
+}
+
+const DIVIDER: React.CSSProperties = { borderLeft: '1px solid var(--bd)' }
+
+/** Its sections scroll on their own (TeamColumn), so the column itself never does. */
+const TEAM_COLUMN: React.CSSProperties = {
+  ...DIVIDER,
+  minWidth: 0,
+  minHeight: 0,
+  overflow: 'hidden',
   background: 'var(--sur)'
 }
 
+const STACKED_TEAM: React.CSSProperties = { minWidth: 0, borderTop: '1px solid var(--bd)' }
+
+const HEADER_STYLE: React.CSSProperties = {
+  flex: 'none',
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  gap: 14,
+  padding: '12px 24px',
+  minHeight: 56,
+  boxSizing: 'border-box',
+  borderBottom: '1px solid var(--bd)'
+}
+
 const TILE: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  borderRadius: 6,
+  width: 32,
+  height: 32,
+  borderRadius: 5,
   background: 'var(--sur2)',
   border: '1px solid var(--bd)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   fontFamily: 'var(--font-mono)',
-  fontSize: 14,
+  fontSize: 11.5,
   color: 'var(--acc)'
-}
-
-const CARD: React.CSSProperties = {
-  display: 'grid',
-  gap: 9,
-  padding: 14,
-  border: '1px solid var(--bd)',
-  borderRadius: 4,
-  background: 'var(--sur)'
-}
-
-const ROLE_PILL: React.CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: 10,
-  letterSpacing: '0.06em',
-  padding: '2px 8px',
-  border: '1px solid var(--bd)',
-  borderRadius: 3
-}
-
-const LINK: React.CSSProperties = {
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  color: 'var(--acc)',
-  cursor: 'pointer',
-  fontFamily: 'var(--font-ui)',
-  fontSize: 12,
-  textAlign: 'left'
 }

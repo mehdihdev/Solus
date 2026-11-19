@@ -1,6 +1,7 @@
-// SOLUSDEV-319 (multi-team Home, design D): the active team's overview — header with plan,
-// size and a role-aware Invite, the projects (passed in), a members preview, "You in <team>",
-// the team's pending invites for managers, "Work with others"; and the solo personal workspace.
+// SOLUSDEV-319 (design D) + SOLUSDEV-328 (A2, fills the window): the active team's overview — a
+// header bar with plan, size and a role-aware Invite, then full-height columns picked from the
+// overview's own width: projects │ team on a split Home, projects │ current project │ team on a wide
+// one, all stacked on a narrow one. "You in <team>" and "Work with others" are retired.
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
@@ -58,9 +59,8 @@ function props(overrides: Partial<TeamOverviewProps> = {}): TeamOverviewProps {
   return {
     team: ARM,
     homeTeam: homeTeam(),
-    meId: 'me',
-    projectCount: 2,
-    projects: <div>projects table</div>,
+    projects: (layout) => <div>projects table ({layout})</div>,
+    projectColumn: <div>project column</div>,
     menu: {
       onJoin: vi.fn(),
       onNewTeam: vi.fn(),
@@ -70,18 +70,16 @@ function props(overrides: Partial<TeamOverviewProps> = {}): TeamOverviewProps {
       onDelete: vi.fn()
     },
     onInvite: vi.fn(),
-    onJoin: vi.fn(),
     onManageMembers: vi.fn(),
     ...overrides
   }
 }
 
-describe('TeamOverview — a team', () => {
-  it('heads the pane with the team, its plan and size, and the projects beneath', () => {
+describe('TeamOverview — header', () => {
+  it('heads the overview with the team, its plan and size', () => {
     render(<TeamOverview {...props()} />)
     expect(screen.getByRole('heading', { level: 2, name: 'Arm Lab' })).toBeInTheDocument()
     expect(screen.getByText('ACTIVE · 3 MEMBERS')).toBeInTheDocument()
-    expect(screen.getByText('projects table')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Team menu' })).toBeInTheDocument()
   })
 
@@ -104,76 +102,58 @@ describe('TeamOverview — a team', () => {
     ).toBeInTheDocument()
   })
 
-  it('previews the members with their roles and links to the full roster', async () => {
-    const p = props({
-      homeTeam: homeTeam({ members: [ME, ...[1, 2, 3, 4, 5, 6, 7].map((n) => member(n))] })
-    })
-    render(<TeamOverview {...p} />)
-    const list = screen.getByRole('list', { name: 'Members' })
-    expect(within(list).getAllByRole('listitem')).toHaveLength(6)
-    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Mehdi H')
-    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Owner')
-    await userEvent.click(screen.getByRole('button', { name: 'All 8 members and invites' }))
-    expect(p.onManageMembers).toHaveBeenCalled()
-  })
-
-  it('says where I stand in the team', () => {
+  it('no longer carries the You-in or Work-with-others cards', () => {
     render(<TeamOverview {...props()} />)
-    const you = screen.getByRole('region', { name: 'You in Arm Lab' })
-    expect(you).toHaveTextContent('Owner')
-    expect(you).toHaveTextContent('3d ago')
-    expect(you).toHaveTextContent('2')
-  })
-
-  it('lists pending invites for managers only', () => {
-    const { unmount } = render(<TeamOverview {...props()} />)
-    expect(screen.getByRole('region', { name: 'Pending invites' })).toHaveTextContent(
-      'sam@example.com'
-    )
-    unmount()
-    render(
-      <TeamOverview
-        {...props({ team: { ...ARM, role: 'member' }, homeTeam: homeTeam({ myRole: 'member' }) })}
-      />
-    )
-    expect(screen.queryByRole('region', { name: 'Pending invites' })).toBeNull()
-  })
-
-  it('waits for the roster without inventing one', () => {
-    render(<TeamOverview {...props({ homeTeam: homeTeam({ status: 'loading', members: [] }) })} />)
-    expect(screen.getByText('Loading the team…')).toBeInTheDocument()
-    expect(screen.queryByRole('list', { name: 'Members' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'You in Arm Lab' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Work with others' })).toBeNull()
   })
 })
 
-describe('TeamOverview — work with others', () => {
-  it('lets managers invite or join another team from Work with others', async () => {
-    const p = props()
-    render(<TeamOverview {...p} />)
-    const card = screen.getByRole('region', { name: 'Work with others' })
-    expect(card).toHaveTextContent(
-      'Bring someone into Arm Lab, or join another team with an invite code.'
-    )
-    await userEvent.click(within(card).getByRole('button', { name: 'Invite a teammate' }))
-    await userEvent.click(within(card).getByRole('button', { name: 'Join with an invite code' }))
-    expect(p.onInvite).toHaveBeenCalled()
-    expect(p.onJoin).toHaveBeenCalled()
+describe('TeamOverview — columns from its own width', () => {
+  it('splits into projects and the team column, the project column held back', () => {
+    render(<TeamOverview {...props({ layout: 'split' })} />)
+    expect(screen.getByTestId('team-overview')).toHaveAttribute('data-layout', 'split')
+    expect(screen.getByText('projects table (split)')).toBeInTheDocument()
+    expect(screen.queryByText('project column')).toBeNull()
+    expect(screen.getByRole('list', { name: 'Members' })).toBeInTheDocument()
   })
 
-  it('offers a member only Join in Work with others', () => {
-    render(
-      <TeamOverview
-        {...props({ team: { ...ARM, role: 'member' }, homeTeam: homeTeam({ myRole: 'member' }) })}
-      />
-    )
-    const card = screen.getByRole('region', { name: 'Work with others' })
-    expect(within(card).queryByRole('button', { name: 'Invite a teammate' })).toBeNull()
-    expect(within(card).getByRole('button', { name: 'Join with an invite code' })).toBeVisible()
+  it('adds the current project as its own column when wide, between projects and team', () => {
+    render(<TeamOverview {...props({ layout: 'wide' })} />)
+    const columns = within(screen.getByTestId('team-overview-body')).getAllByTestId(/^home-col-/)
+    expect(columns.map((c) => c.dataset.testid)).toEqual([
+      'home-col-projects',
+      'home-col-project',
+      'home-col-team'
+    ])
+    expect(screen.getByText('projects table (wide)')).toBeInTheDocument()
+    expect(screen.getByText('project column')).toBeInTheDocument()
+  })
+
+  it('stacks projects over the team column when narrow, as one scroll', () => {
+    render(<TeamOverview {...props({ layout: 'stack' })} />)
+    const overview = screen.getByTestId('team-overview')
+    expect(overview).toHaveAttribute('data-layout', 'stack')
+    expect(overview).toHaveStyle({ overflowY: 'auto' })
+    expect(screen.queryByText('project column')).toBeNull()
+  })
+
+  it('lets each column scroll on its own when split or wide; the team column via its sections', () => {
+    render(<TeamOverview {...props({ layout: 'wide' })} />)
+    for (const id of ['home-col-projects', 'home-col-project'])
+      expect(screen.getByTestId(id)).toHaveStyle({ overflowY: 'auto' })
+    expect(screen.getByTestId('home-col-team')).toHaveStyle({ overflow: 'hidden' })
+    expect(screen.getByTestId('team-column')).toHaveAttribute('data-fit', 'fitted')
+  })
+
+  it('hands the team column the stacked fit when narrow', () => {
+    render(<TeamOverview {...props({ layout: 'stack' })} />)
+    expect(screen.getByTestId('team-column')).toHaveAttribute('data-fit', 'stacked')
   })
 })
 
 describe('TeamOverview — the personal workspace', () => {
-  it('is only mine: no members and no Work with others', () => {
+  it('is only mine: no members, its feed kept', () => {
     const p = props({ team: PERSONAL, homeTeam: homeTeam({ members: [ME], invites: [] }) })
     render(<TeamOverview {...p} />)
     expect(
@@ -181,6 +161,6 @@ describe('TeamOverview — the personal workspace', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('ONLY YOU')).toBeInTheDocument()
     expect(screen.queryByRole('list', { name: 'Members' })).toBeNull()
-    expect(screen.queryByRole('region', { name: 'Work with others' })).toBeNull()
+    expect(screen.getByRole('region', { name: 'Team activity' })).toBeInTheDocument()
   })
 })

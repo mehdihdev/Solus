@@ -20,7 +20,8 @@ export interface TeamActivityPanelProps {
   onLoadMore: () => Promise<void>
 }
 
-function ActivityRow({
+/** One team feed row with its actor; shared by Home's team column (SOLUSDEV-328). */
+export function ActivityRow({
   row,
   members
 }: {
