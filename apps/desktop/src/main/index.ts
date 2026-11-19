@@ -107,6 +107,7 @@ import { pathToFileURL } from 'node:url'
 import { bootDiagnostics, resolveSentryConfig } from './diagnostics/boot'
 import { isAppRendererUrl } from './diagnostics/diagnosticsIpc'
 import { loadSentrySink } from './diagnostics/sentrySink'
+import { registerMcpRuntime } from './mcpRuntime/wiring'
 
 // SOLUSDEV-311: error reporting first — crash handlers are live before
 // anything below can throw (docs/architecture/desktop-error-handling.md).
@@ -682,6 +683,14 @@ if (!app.requestSingleInstanceLock()) {
     registerOAuthHandlers()
 
     registerCompanionHandlers()
+    // SOLUSDEV-329: Python for local tools (mcp-fork-runtime.md §9) — main
+    // window's own main frame only, like the other machine-path channels.
+    registerMcpRuntime({
+      ipcMain,
+      isAllowed: (event) =>
+        isMainRendererSender(event) && event.senderFrame === mainWindow?.webContents.mainFrame,
+      window: () => mainWindow
+    })
 
     startCompanion()
 
