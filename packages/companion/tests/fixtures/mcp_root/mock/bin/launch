@@ -3,9 +3,9 @@
 #
 # `#!/bin/sh` is an ABSOLUTE path: no PATH resolution anywhere, per the MCP-03
 # launcher contract. The interpreter comes from SOLUS_MCP_PYTHON, which the
-# companion sets to the fork's own private-env python (also absolute). A fork
-# with no private env falls back to nothing and fails loudly rather than
-# silently running under whatever `python3` the customer happens to have.
+# companion sets to the fork's trusted app-data env python (also absolute;
+# mcp-fork-runtime.md §5 — never an in-tree .venv). Unset means no trusted env:
+# fail loudly rather than run under whatever `python3` the customer has.
 #
 # cwd is the server directory, set by the companion — so `solus/` is relative.
 set -eu
