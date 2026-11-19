@@ -24,8 +24,13 @@ rem regardless of the inherited profile roots. The residual — the inherited
 rem Windows floor, plus a non-companion caller handing this script its own
 rem unscrubbed environment — is recorded in SECURITY_REVIEW.md.
 rem
+rem PENDING human security re-review (both devs) — the interpreter source
+rem changed in SOLUSDEV-329 (ADR-031 amendment 2026-11-19): it is no longer the
+rem in-tree fork virtualenv but SOLUS_MCP_PYTHON, set by the companion after
+rem validating the app-data mcp-envs\altium env. See SECURITY_REVIEW.md.
+rem
 rem Same guarantees as ./launch otherwise (../tests/test_launch_entrypoint.py):
-rem fixed argv, pinned fork-private interpreter, zero network I/O and zero
+rem fixed argv, the interpreter ONLY from SOLUS_MCP_PYTHON, zero network I/O and zero
 rem package installation at launch, and the three EDA_AGENT_* pins derived
 rem from SOLUS_MCP_WORKSPACE — never inherited — so upstream's machine-global
 rem pointer file (C:\ProgramData\eda-agent\workspace-path.txt) is never read,
@@ -33,6 +38,23 @@ rem written, or repointed.
 setlocal
 
 set "FORK_DIR=%~dp0.."
+
+if "%SOLUS_MCP_PYTHON%"=="" (
+  echo launch.cmd: SOLUS_MCP_PYTHON is not set; refusing to launch without an interpreter set up by Solus 1>&2
+  exit /b 78
+)
+for %%I in ("%SOLUS_MCP_PYTHON%") do if /i not "%%~fI"=="%SOLUS_MCP_PYTHON%" (
+  echo launch.cmd: SOLUS_MCP_PYTHON must be an absolute path; refusing to launch 1>&2
+  exit /b 78
+)
+if not exist "%SOLUS_MCP_PYTHON%" (
+  echo launch.cmd: SOLUS_MCP_PYTHON does not exist; refusing to launch 1>&2
+  exit /b 78
+)
+if exist "%SOLUS_MCP_PYTHON%\*" (
+  echo launch.cmd: SOLUS_MCP_PYTHON is a directory; refusing to launch 1>&2
+  exit /b 78
+)
 
 if "%SOLUS_MCP_WORKSPACE%"=="" (
   echo launch.cmd: SOLUS_MCP_WORKSPACE is not set; refusing to launch without a confined workspace 1>&2
@@ -47,4 +69,4 @@ set "EDA_AGENT_BACKEND=altium"
 set "EDA_AGENT_WORKSPACE=%SOLUS_MCP_WORKSPACE%\.eda-agent-ipc"
 set "EDA_AGENT_POINTER_FILE=%SOLUS_MCP_WORKSPACE%\.eda-agent-ipc\workspace-path.txt"
 
-"%FORK_DIR%\.venv\Scripts\python.exe" "%FORK_DIR%\solus\server.py"
+"%SOLUS_MCP_PYTHON%" "%FORK_DIR%\solus\server.py"

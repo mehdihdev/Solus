@@ -15,7 +15,8 @@ vendored `salitronic/eda-agent` fork:
   `EDA_AGENT_POINTER_FILE`, each derived from `SOLUS_MCP_WORKSPACE`, never
   inherited from the parent environment;
 - `bin/launch.cmd` (human-approved Windows twin — Altium runs only on
-  Windows) pins the same interpreter/entry/EDA_AGENT_* posture; cmd cannot
+  Windows) pins the same entry/EDA_AGENT_* posture and takes the interpreter
+  only from `SOLUS_MCP_PYTHON` (ADR-031 amendment 2026-11-19); cmd cannot
   scrub the environment, so the companion's child-env allowlist
   (`solus_companion.supervisor._child_env`) is the authoritative scrub there
   and the script sets only the pins (residual recorded in SECURITY_REVIEW.md
@@ -27,6 +28,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,7 +36,7 @@ import pytest
 from solus_companion.config import discover_servers
 
 # The bootstrap module must run before the overlay import — keep it first.
-from .altium_paths import LAUNCH, LAUNCH_CMD, MCP_ROOT, overlay_module  # isort: skip
+from .altium_paths import FORK_DIR, LAUNCH, LAUNCH_CMD, MCP_ROOT, overlay_module  # isort: skip
 
 _env_allowlist = overlay_module("env_allowlist")
 DECLARED_ENV_ALLOWLIST: frozenset[str] = _env_allowlist.CHILD_ENV_ALLOWLIST
@@ -82,6 +84,45 @@ def _cmd_commands() -> str:
         line for line in _cmd_text().splitlines() if not line.lstrip().lower().startswith("rem")
     ]
     return "\n".join(lines)
+
+
+def _fake_interpreter(directory: Path) -> tuple[Path, Path, Path]:
+    """An executable `python3` stand-in that records its argv and environment."""
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "python3"
+    argv_log = directory / "argv.txt"
+    env_log = directory / "env.txt"
+    script.write_text(
+        f'#!/bin/sh\nprintf "%s\\n" "$0" "$@" > "{argv_log}"\n/usr/bin/env > "{env_log}"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script, argv_log, env_log
+
+
+def _interpreter_value(tmp_path: Path, kind: str) -> str:
+    """A SOLUS_MCP_PYTHON value the launcher must refuse."""
+    if kind == "missing":
+        return str(tmp_path / "absent" / "python3")
+    if kind == "not-executable":
+        plain = tmp_path / "plain-python3"
+        plain.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        plain.chmod(0o644)
+        return str(plain)
+    if kind == "relative":
+        return "python3"  # the decoy in cwd/PATH must never be chosen
+    return kind
+
+
+def _run_launch(env: dict[str, str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(LAUNCH)], env=env, cwd=cwd, capture_output=True, text=True, timeout=30, check=False
+    )
+
+
+def _dumped_env(env_log: Path) -> dict[str, str]:
+    lines = env_log.read_text(encoding="utf-8").splitlines()
+    return dict(line.split("=", 1) for line in lines if "=" in line)
 
 
 # --- bin/launch: existence, executability, containment ----------------------
@@ -165,16 +206,59 @@ def test_launch_contains_no_network_or_installer_commands() -> None:
         assert token not in text, f"bin/launch contains forbidden token {token!r}"
 
 
-def test_launch_uses_only_the_fixed_private_interpreter() -> None:
+def test_launch_takes_the_interpreter_only_from_solus_mcp_python() -> None:
+    """ADR-031 amendment 2026-11-19: the fork env lives in the app-data
+    `mcp-envs/` dir and the companion hands the validated interpreter over as
+    SOLUS_MCP_PYTHON — never a vendored-tree `.venv`, never a PATH name."""
     commands = _launch_commands()
-    assert '.venv/bin/python3"' in commands, (
-        "the interpreter must be the fork's private .venv/bin/python3"
-    )
-    for match in re.finditer(r"\S*python3?\b", commands):
-        assert match.group().endswith(".venv/bin/python3"), (
-            f"PATH-resolved interpreter in bin/launch: {match.group()!r}"
-        )
+    assert ".venv" not in _launch_text(), "bin/launch must not reference an in-tree .venv"
+    assert 'PYTHON="${SOLUS_MCP_PYTHON:-}"' in commands
+    assert re.search(r"^\s*exit 78$", commands, re.MULTILINE), "missing the exit-78 guard"
+    assert not re.search(r"python", commands), "bare/PATH-resolved python in bin/launch"
     assert not re.search(r"(?:^|\s)node\b", commands), "no node in a python fork's launcher"
+
+
+@pytest.mark.parametrize("value", [None, "", "missing", "not-executable", "relative"])
+def test_launch_exits_78_without_a_valid_solus_mcp_python(
+    tmp_path: Path, value: str | None
+) -> None:
+    decoy, decoy_argv, _ = _fake_interpreter(tmp_path / "on-path")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env = {"PATH": f"{decoy.parent}:/usr/bin:/bin", "SOLUS_MCP_WORKSPACE": str(workspace)}
+    if value is not None:
+        env["SOLUS_MCP_PYTHON"] = _interpreter_value(tmp_path, value)
+
+    result = _run_launch(env, cwd=decoy.parent)
+
+    assert result.returncode == 78, result.stderr
+    assert "SOLUS_MCP_PYTHON" in result.stderr
+    assert not decoy_argv.exists(), "the launcher resolved an interpreter from PATH/cwd"
+
+
+def test_launch_execs_exactly_solus_mcp_python(tmp_path: Path) -> None:
+    interpreter, argv_log, env_log = _fake_interpreter(tmp_path / "mcp-envs" / "altium" / "bin")
+    decoy, decoy_argv, _ = _fake_interpreter(tmp_path / "on-path")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    env = {
+        "PATH": f"{decoy.parent}:/usr/bin:/bin",
+        "SOLUS_MCP_PYTHON": str(interpreter),
+        "SOLUS_MCP_WORKSPACE": str(workspace),
+        "PYTHONPATH": "/must/not/forward",
+        "AWS_SECRET_ACCESS_KEY": "must-not-forward",
+    }
+
+    result = _run_launch(env, cwd=decoy.parent)
+
+    assert result.returncode == 0, result.stderr
+    argv = argv_log.read_text(encoding="utf-8").splitlines()
+    assert argv == [str(interpreter), str(FORK_DIR.resolve() / "solus" / "server.py")]
+    child = _dumped_env(env_log)
+    assert set(child) - DECLARED_ENV_ALLOWLIST - _SHELL_INJECTED == set()
+    assert child["PATH"] == "/usr/bin:/bin"
+    assert child["SOLUS_MCP_WORKSPACE"] == str(workspace)
+    assert not decoy_argv.exists()
 
 
 def test_launch_cds_to_the_companion_passed_workspace_env_var() -> None:
@@ -190,13 +274,21 @@ def test_launch_cds_to_the_companion_passed_workspace_env_var() -> None:
 # --- bin/launch.cmd: the Windows twin ----------------------------------------
 
 
-def test_launch_cmd_exists_and_pins_the_private_interpreter() -> None:
+def test_launch_cmd_takes_the_interpreter_only_from_solus_mcp_python() -> None:
+    """ADR-031 amendment 2026-11-19: no in-tree `.venv` on Windows either."""
     assert LAUNCH_CMD.is_file(), "integrations/mcp/altium/bin/launch.cmd is missing"
     commands = _cmd_commands()
-    assert r".venv\Scripts\python.exe" in commands, (
-        "launch.cmd must pin the fork-private Windows interpreter"
-    )
-    assert r"solus\server.py" in commands, "launch.cmd must run the Solus overlay entrypoint"
+    assert ".venv" not in _cmd_text()
+    assert r'"%SOLUS_MCP_PYTHON%" "%FORK_DIR%\solus\server.py"' in commands
+    assert 'if "%SOLUS_MCP_PYTHON%"==""' in commands
+    assert 'if not exist "%SOLUS_MCP_PYTHON%"' in commands
+    assert "exit /b 78" in commands
+    assert not re.search(r"python", commands), "bare/PATH-resolved python in launch.cmd"
+    assert not re.search(r"%[0-9*]", commands), "launch.cmd must not forward caller arguments"
+
+
+def test_launch_cmd_is_flagged_for_human_security_re_review() -> None:
+    assert "PENDING human security re-review" in _cmd_text()
 
 
 def test_launch_cmd_fails_closed_when_the_workspace_is_unset() -> None:
@@ -296,22 +388,10 @@ _SHELL_INJECTED = frozenset({"PWD", "SHLVL", "_", "OLDPWD"})
 
 @pytest.mark.skipif(os.name != "posix", reason="bin/launch is the POSIX launcher")
 def test_launch_child_env_is_scrubbed_to_the_allowlist(tmp_path: Path) -> None:
-    """Exec a COPY of bin/launch whose fixed private interpreter is replaced
-    by a stub that dumps its environment; every key the child sees must be in
+    """Exec bin/launch with SOLUS_MCP_PYTHON pointing at a stub interpreter
+    that dumps its environment; every key the child sees must be in
     CHILD_ENV_ALLOWLIST (modulo shell-injected names)."""
-    fork = tmp_path / "altium"
-    (fork / "bin").mkdir(parents=True)
-    (fork / "solus").mkdir()
-    (fork / ".venv" / "bin").mkdir(parents=True)
-    shutil.copy2(LAUNCH, fork / "bin" / "launch")
-    (fork / "solus" / "server.py").write_text("", encoding="utf-8")
-    dump = fork / "child-env.txt"
-    stub = fork / ".venv" / "bin" / "python3"
-    # env -i pins PATH=/usr/bin:/bin, so /usr/bin/env resolves; the stub runs
-    # in the workspace cwd and writes the child environment there.
-    stub.write_text(f'#!/bin/sh\n/usr/bin/env > "{dump}"\n', encoding="utf-8")
-    stub.chmod(0o755)
-
+    stub, _, env_log = _fake_interpreter(tmp_path / "mcp-envs" / "altium" / "bin")
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     # A parent environment stuffed with names the launcher must NOT forward —
@@ -319,20 +399,15 @@ def test_launch_child_env_is_scrubbed_to_the_allowlist(tmp_path: Path) -> None:
     parent = {
         **os.environ,
         "SOLUS_MCP_WORKSPACE": str(workspace),
+        "SOLUS_MCP_PYTHON": str(stub),
         "MOUSER_API_KEY": "must-not-forward",
         "USERPROFILE": "C:/Users/leak",
         "EDA_AGENT_CACHE_DIR": "/tmp/leak",
         "AWS_SECRET_ACCESS_KEY": "leak",
     }
-    import subprocess  # noqa: PLC0415 — test-local, argv list only, no shell
+    subprocess.run([str(LAUNCH)], env=parent, check=True, timeout=30)
 
-    subprocess.run([str(fork / "bin" / "launch")], env=parent, check=True, timeout=30)
-
-    observed = {
-        line.split("=", 1)[0]
-        for line in dump.read_text(encoding="utf-8").splitlines()
-        if "=" in line
-    }
+    observed = set(_dumped_env(env_log))
     leaked = observed - DECLARED_ENV_ALLOWLIST - _SHELL_INJECTED
     assert leaked == set(), f"the launcher forwarded non-allowlisted names: {sorted(leaked)}"
     for secret in ("MOUSER_API_KEY", "USERPROFILE", "EDA_AGENT_CACHE_DIR", "AWS_SECRET_ACCESS_KEY"):

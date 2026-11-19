@@ -42,16 +42,22 @@
 
 No `upstream/` exists, so there are no in-tree edits to log. Solus-authored files need no rows.
 
-| Date       | File(s)                                                                                                                                                                                                                                                       | What & why                                                                                                                                                                          | Author               |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
-| 2026-10-18 | `solus/` (new: `command_deny.py`, `command_plan.py`, `sandbox.py`, `git_guard.py`, `landlock_exec.py`, `profiles.py`, `processes.py`, `process_os.py`; changed: `plan.py`, `execute.py`, `server.py`, `roster.py`), `allowlist.yaml` (human-approved entries) | SOLUSDEV-317: sandboxed, confirmed command execution, long-running processes and environment profiles. Solus-authored (no upstream); recorded because it voids the sign-offs below. | agent (SOLUSDEV-317) |
+| Date       | File(s)                                                                                                                                                                                                                                                       | What & why                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Author                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
+| 2026-10-18 | `solus/` (new: `command_deny.py`, `command_plan.py`, `sandbox.py`, `git_guard.py`, `landlock_exec.py`, `profiles.py`, `processes.py`, `process_os.py`; changed: `plan.py`, `execute.py`, `server.py`, `roster.py`), `allowlist.yaml` (human-approved entries) | SOLUSDEV-317: sandboxed, confirmed command execution, long-running processes and environment profiles. Solus-authored (no upstream); recorded because it voids the sign-offs below.                                                                                                                                                                                                                                                                                                                          | agent (SOLUSDEV-317)    |
+| 2026-11-19 | `bin/launch`, `bin/launch.cmd` (new)                                                                                                                                                                                                                          | SOLUSDEV-329 (ADR-031 amendment 2026-11-19): the launcher takes its interpreter only from `SOLUS_MCP_PYTHON` (absolute + executable, exit 78 otherwise) instead of the in-tree `.venv`; new Windows twin `bin/launch.cmd` with the same guard, the `SOLUS_MCP_WORKSPACE` refusal and a system-directories-only PATH pin. Not an `upstream/` edit; recorded because a launcher change is a re-review trigger — the sign-offs below are void until both developers re-review (SECURITY_REVIEW.md §2026-11-19). | agent (SOLUSDEV-329 T3) |
 
-Install-time note: `bin/launch` execs the fork-private interpreter
-`integrations/mcp/code/.venv/bin/python3`. That virtualenv is NOT committed —
-`scripts/install-mcp-forks.sh` materializes it from `requirements.lock.txt` with hash
-verification. `bin/launch` performs zero network I/O and no installs. The installs the server
-performs LATER, on confirmation, act on the USER's workspace venv (ADR-031 amendment
-2026-09-07) — never on this one.
+Install-time note: `bin/launch` (and `bin/launch.cmd` on Windows) execs ONLY the interpreter
+the companion passes in `SOLUS_MCP_PYTHON` — exit 78 when it is unset, empty, relative or
+not executable; never a PATH lookup, never an in-tree fallback. The fork env is NOT in this
+tree: it is a per-user virtualenv in the Solus app-data `mcp-envs/code/` directory, built at
+setup time by Solus (Settings → Python for local tools) or by `make mcp-forks` for developers,
+from `requirements.lock.txt` with `--require-hashes`. The companion launches the fork only
+after checking the interpreter resolves inside `mcp-envs/`, the directory is owner-only and the
+env stamp matches this lockfile (ADR-031 amendment 2026-11-19). The launchers perform zero
+network I/O and no installs. The installs the server performs LATER, on
+confirmation, act on the USER's workspace venv (ADR-031 amendment 2026-09-07) — never on this
+one.
 
 ## Exposed tools
 

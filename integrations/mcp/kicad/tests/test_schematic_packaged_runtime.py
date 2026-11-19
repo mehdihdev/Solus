@@ -1,14 +1,20 @@
-"""Exercise the actual pinned FastMCP runtime through the sanctioned launcher."""
+"""Exercise the actual pinned FastMCP runtime through the sanctioned launcher.
+
+The fork env lives in the app-data `mcp-envs/kicad/` dir (ADR-031 amendment
+2026-11-19), so the test takes its interpreter from SOLUS_TEST_KICAD_PYTHON and
+hands it to bin/launch exactly as the companion does, via SOLUS_MCP_PYTHON."""
 
 import asyncio
+import os
 from pathlib import Path
 
 import pytest
 
 FORK = Path(__file__).resolve().parents[1]
+PYTHON = os.environ.get("SOLUS_TEST_KICAD_PYTHON", "")
 
 
-@pytest.mark.skipif(not (FORK / ".venv/bin/python3").exists(), reason="private runtime unavailable")
+@pytest.mark.skipif(not PYTHON, reason="private runtime unavailable (set SOLUS_TEST_KICAD_PYTHON)")
 async def test_packaged_runtime_strict_tools(tmp_path: Path) -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -16,7 +22,8 @@ async def test_packaged_runtime_strict_tools(tmp_path: Path) -> None:
     async with asyncio.timeout(30):
         async with stdio_client(
             StdioServerParameters(
-                command=str(FORK / "bin/launch"), env={"SOLUS_MCP_WORKSPACE": str(tmp_path)}
+                command=str(FORK / "bin/launch"),
+                env={"SOLUS_MCP_PYTHON": PYTHON, "SOLUS_MCP_WORKSPACE": str(tmp_path)},
             )
         ) as (read, write):
             async with ClientSession(read, write) as session:

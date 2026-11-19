@@ -7,8 +7,10 @@
 #   * fixed argv — no caller-argument passthrough;
 #   * scrubbed child environment — env -i plus the declared allowlist below;
 #   * zero network I/O and zero installs at launch (ADR-031). Dependencies are
-#     materialized at companion install/update time from requirements.lock.txt
-#     (hash-verified) into the fork-private virtualenv referenced below.
+#     materialized at setup time from requirements.lock.txt (hash-verified)
+#     into a per-user app-data env (mcp-envs/code/, ADR-031 amendment
+#     2026-11-19); the companion validates that env's interpreter and hands it
+#     over as an absolute path in SOLUS_MCP_PYTHON.
 #     Nothing here resolves from PATH. (The USER's installs/runs the server
 #     later performs on confirmation are the ADR-031 2026-09-07 amendment —
 #     they act on the user's workspace environment, never on this one.)
@@ -17,8 +19,19 @@ set -eu
 BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 FORK_DIR=$(CDPATH= cd -- "$BIN_DIR/.." && pwd)
 
-# Fixed private interpreter (install-time materialization creates it).
-PYTHON="$FORK_DIR/.venv/bin/python3"
+# The interpreter comes ONLY from SOLUS_MCP_PYTHON, set by the companion after
+# it validated the app-data env (inside mcp-envs/, owner-only, stamp matches
+# the lockfile). Unset, empty, relative or non-executable -> EX_CONFIG (78):
+# never a PATH lookup, never an in-tree fallback.
+PYTHON="${SOLUS_MCP_PYTHON:-}"
+case "$PYTHON" in
+  /*) ;;
+  *) PYTHON="" ;;
+esac
+if [ -z "$PYTHON" ] || [ ! -x "$PYTHON" ]; then
+  echo "launch: SOLUS_MCP_PYTHON must be an absolute, executable interpreter set up by Solus" >&2
+  exit 78
+fi
 
 # The companion passes the linked folder via SOLUS_MCP_WORKSPACE — the one
 # documented cwd knob. cwd falls back to the fork dir for stable relative I/O,
