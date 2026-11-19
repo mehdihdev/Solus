@@ -109,10 +109,14 @@ export function createSolSettings(deps: SolSettingsDeps): SolSettings {
 
   const write = (): void => {
     if (!read.writable) return
+    // Re-read: other main-process writers (mcp_runtime, SOLUSDEV-329) share this
+    // file, so the startup snapshot would erase keys they wrote since.
+    const current = readConfig(path, deps)
+    if (!current.writable) return
     try {
       deps.mkdir(home, SOLUS_HOME_MODE)
       deps.chmod(home, SOLUS_HOME_MODE)
-      const doc = { ...read.doc, schema_version: SOL_CONFIG_SCHEMA_VERSION, sol: state }
+      const doc = { ...current.doc, schema_version: SOL_CONFIG_SCHEMA_VERSION, sol: state }
       const temp = `${path}.${deps.tempSuffix()}.tmp`
       deps.writeFile(temp, `${JSON.stringify(doc, null, 2)}\n`, CONFIG_FILE_MODE)
       try {

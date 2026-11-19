@@ -134,6 +134,33 @@ describe('write', () => {
     expect(JSON.parse(f.files.get(CONFIG) ?? '').sol).not.toHaveProperty('actionMode')
   })
 
+  it('re-reads the file before writing so keys written by others since startup survive (SOLUSDEV-329)', () => {
+    const f = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: {} }) })
+    const s = createSolSettings(f.deps)
+    // Another writer (the mcp_runtime choice) lands after startup.
+    f.files.set(
+      CONFIG,
+      JSON.stringify({
+        schema_version: 1,
+        sol: {},
+        mcp_runtime: { schema_version: 1, python: { mode: 'managed' } }
+      })
+    )
+    s.setDrive(true)
+    const doc = JSON.parse(f.files.get(CONFIG) ?? '')
+    expect(doc.mcp_runtime).toEqual({ schema_version: 1, python: { mode: 'managed' } })
+    expect(doc.sol.drive).toBe(true)
+  })
+
+  it('a file that became newer-versioned after startup is left untouched on write', () => {
+    const f = fakeFs({ [CONFIG]: JSON.stringify({ schema_version: 1, sol: {} }) })
+    const s = createSolSettings(f.deps)
+    const newer = JSON.stringify({ schema_version: SOL_CONFIG_SCHEMA_VERSION + 1 })
+    f.files.set(CONFIG, newer)
+    s.setDrive(true)
+    expect(f.files.get(CONFIG)).toBe(newer)
+  })
+
   it('a failing write warns and never throws', () => {
     const f = fakeFs()
     f.deps.writeFile = () => {
