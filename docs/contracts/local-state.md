@@ -1,6 +1,6 @@
 # Local State — machine-local files under `~/.solus`
 
-**Last updated:** 2026-09-07. Hardware source/hint extension approved in-session for SOLUSDEV-251 (ADR-034).
+**Last updated:** 2026-11-19. `config.json` documented (`sol`, `mcp_runtime`) for SOLUSDEV-329 (ADR-034 amendment 2026-11-19).
 
 **Ratified:** in-session at the SOLUSDEV-166 MR (ADR-034). Design: `docs/architecture/solus-folder.md`.
 **Shapes:** `packages/shared-types/src/local-state.ts` (TypeScript) ·
@@ -20,7 +20,7 @@ touches this directory.
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------------------------------- |
 | `~/.solus/companion_id`               | 32-hex machine identity (pre-dates this)                                                                                                                                                                                                                                                                                                                                                                          | companion            | companion                             |
 | `~/.solus/projects.json`              | `ProjectRegistry` — project→working-copy                                                                                                                                                                                                                                                                                                                                                                          | desktop MAIN process | desktop main, companion               |
-| `~/.solus/config.json`                | machine prefs — **reserved**, schema TBD                                                                                                                                                                                                                                                                                                                                                                          | —                    | —                                     |
+| `~/.solus/config.json`                | machine prefs. File-level `schema_version` 1, 64 KiB cap, 0600, atomic writes; unknown keys preserved by every writer, a newer `schema_version` leaves the file read-only. Keys: `sol` `{screenIntelligence, hotkeys, drive}` (SOLUSDEV-252, `docs/architecture/sol-window.md` §7); `mcp_runtime` `{schema_version: 1, python: {mode: auto\|path\|managed, path?}}` — this machine's base interpreter for MCP fork environments (ADR-034 amendment 2026-11-19, `docs/architecture/mcp-fork-runtime.md` §8) | desktop MAIN process | desktop main (passes the choice to the companion CLI as `--python`) |
 | `~/.solus/projects/<id>/`             | `sol/<conversationId>.json` — SOL chat cache (`{schema_version: 1, items: [{role, content}]}`, 0600, atomic writes, 2 MB byte cap; ADR-034 amendment 2026-09-01). `hardware.json` is specified below; other content **reserved**                                                                                                                                                                                  | desktop MAIN process | desktop main/renderer                 |
 | `~/.solus/preferences.json`           | `EngineeringPreferences` — the user's engineering conventions (`schema_version` 1; `freeText` ≤ 2,400 chars, `codeStyle`/`mechanical`/`electrical`/`documentation`/`unitsStandards` ≤ 800 chars each, `updatedAt`); the one Layer-1 file the USER authors. 0600, atomic writes, 64 KiB byte cap; attached to each SOL turn by the desktop, never stored server-side (ADR-034 amendment 2026-09-06 / SOLUSDEV-244) | desktop MAIN process | desktop main/renderer                 |
 | `~/.solus/logs/`                      | log files — **reserved** (Ticket E)                                                                                                                                                                                                                                                                                                                                                                               | —                    | —                                     |
@@ -279,3 +279,19 @@ side is the real trust boundary for the companion sink:
   touches these paths directly (ADR-035 §1, §4).
 - **Companion**: today only `companion_id`; later tickets may read `projects.json` via
   `solus_contracts.local_state`.
+
+## `config.json` → `mcp_runtime` — the MCP fork interpreter choice
+
+```json
+{ "schema_version": 1, "mcp_runtime": { "schema_version": 1, "python": { "mode": "path", "path": "/opt/homebrew/bin/python3.12" } } }
+```
+
+- `mcp_runtime.schema_version` (required, integer). Currently `1`; a newer value is read-only to
+  this build (the rest of the file stays writable).
+- `python.mode` (required): `auto` (best supported CPython 3.12/3.13 found at setup), `path` (the
+  user's pick), `managed` (the Solus-managed Python 3.12).
+- `python.path` (required iff `mode` is `path`): absolute, ≤ 4096 chars. Machine-private; never
+  synced, never in events or model context.
+- Missing key means `auto`. Unknown fields inside `mcp_runtime` reject.
+- The environments themselves are NOT under `~/.solus`: they are regenerable caches in the OS
+  app-data folder (`docs/architecture/mcp-fork-runtime.md` §2).

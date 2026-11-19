@@ -1,0 +1,5 @@
+{"v":1,"type":"progress","fork":"kicad","step":"install","done":0,"total":58}
+{"v":1,"type":"fork_result","fork":"kicad","outcome":"failed","error_code":"network_unreachable","message":"Could not reach pypi.org."}
+{"v":1,"type":"fork_result","fork":"code","outcome":"failed","error_code":"network_unreachable","message":"Could not reach pypi.org."}
+{"v":1,"type":"error","error_code":"network_unreachable","message":"Could not reach pypi.org. Check your connection and try again."}
+{"v":1,"type":"done","outcome":"failed","ok":0,"failed":2,"skipped":0}

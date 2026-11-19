@@ -1,0 +1,12 @@
+{"v":1,"type":"progress","fork":"kicad","step":"venv","done":0,"total":null}
+{"v":1,"type":"progress","fork":"kicad","step":"install","done":0,"total":58}
+{"v":1,"type":"progress","fork":"kicad","step":"install","done":58,"total":58}
+{"v":1,"type":"progress","fork":"kicad","step":"check","done":1,"total":1}
+{"v":1,"type":"progress","fork":"kicad","step":"stamp","done":1,"total":1}
+{"v":1,"type":"fork_result","fork":"kicad","outcome":"ok","error_code":null,"message":""}
+{"v":1,"type":"progress","fork":"code","step":"venv","done":0,"total":null}
+{"v":1,"type":"progress","fork":"code","step":"install","done":31,"total":31}
+{"v":1,"type":"progress","fork":"code","step":"stamp","done":1,"total":1}
+{"v":1,"type":"fork_result","fork":"code","outcome":"ok","error_code":null,"message":""}
+{"v":1,"type":"fork_result","fork":"altium","outcome":"skipped","error_code":null,"message":"Altium runs on Windows only."}
+{"v":1,"type":"done","outcome":"ok","ok":2,"failed":0,"skipped":1}

@@ -1,0 +1,5 @@
+{"v":1,"type":"candidate","path":"/opt/homebrew/bin/python3.12","version":"3.12.7","implementation":"cpython","source":"known_location","supported":true,"reason":null}
+{"v":1,"type":"candidate","path":"/usr/local/bin/python3.13","version":"3.13.1","implementation":"cpython","source":"path","supported":true,"reason":null}
+{"v":1,"type":"candidate","path":"/usr/bin/python3","version":"3.9.6","implementation":"cpython","source":"path","supported":false,"reason":"python_unsupported_version"}
+{"v":1,"type":"candidate","path":"/opt/pypy/bin/pypy3","version":"3.10.14","implementation":"pypy","source":"path","supported":false,"reason":"python_not_cpython"}
+{"v":1,"type":"done","outcome":"ok","ok":2,"failed":0,"skipped":2}

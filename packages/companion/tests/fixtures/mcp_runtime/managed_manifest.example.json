@@ -1,0 +1,33 @@
+{
+  "_comment": "EXAMPLE ONLY: placeholder release and all-zero hashes. Real values are a human gate (mcp-fork-runtime.md section 7).",
+  "schema_version": 1,
+  "release": "PLACEHOLDER",
+  "python_version": "3.12.x",
+  "assets": {
+    "darwin-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/PLACEHOLDER/PLACEHOLDER-darwin-arm64.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "max_bytes": 80000000
+    },
+    "darwin-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/PLACEHOLDER/PLACEHOLDER-darwin-x64.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "max_bytes": 80000000
+    },
+    "win32-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/PLACEHOLDER/PLACEHOLDER-win32-x64.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "max_bytes": 80000000
+    },
+    "linux-x64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/PLACEHOLDER/PLACEHOLDER-linux-x64.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "max_bytes": 80000000
+    },
+    "linux-arm64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/PLACEHOLDER/PLACEHOLDER-linux-arm64.tar.gz",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "max_bytes": 80000000
+    }
+  }
+}

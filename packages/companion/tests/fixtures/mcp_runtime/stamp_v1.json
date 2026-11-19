@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "fork": "kicad",
+  "lock_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "base": {
+    "path": "/opt/homebrew/bin/python3.12",
+    "version": "3.12.7",
+    "implementation": "cpython",
+    "managed": false
+  },
+  "created_at": "2026-11-19T18:04:00Z"
+}

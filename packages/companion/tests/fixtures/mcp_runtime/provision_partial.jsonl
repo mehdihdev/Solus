@@ -1,0 +1,5 @@
+{"v":1,"type":"progress","fork":"kicad","step":"install","done":58,"total":58}
+{"v":1,"type":"fork_result","fork":"kicad","outcome":"ok","error_code":null,"message":""}
+{"v":1,"type":"progress","fork":"local","step":"venv","done":0,"total":null}
+{"v":1,"type":"fork_result","fork":"local","outcome":"failed","error_code":"venv_copies_unhealthy","message":"The copied interpreter could not start. This Python build cannot be copied; use the Solus-managed Python."}
+{"v":1,"type":"done","outcome":"partial","ok":1,"failed":1,"skipped":0}
