@@ -41,7 +41,7 @@ export function TeamOverview(props: TeamOverviewProps): React.JSX.Element {
     <div ref={ref} data-testid="team-overview" data-layout={layout} style={ROOT[layout]}>
       <Header {...props} />
       <div data-testid="team-overview-body" style={BODY[layout]}>
-        <div data-testid="home-col-projects" style={column(stacked)}>
+        <div data-testid="home-col-projects" className="home-vt-projects" style={column(stacked)}>
           <div style={{ padding: '18px 24px 24px' }}>{props.projects(layout)}</div>
         </div>
         {layout === 'wide' && (

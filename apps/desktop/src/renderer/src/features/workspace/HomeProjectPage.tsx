@@ -86,7 +86,7 @@ function ProjectsList({
 }: WithLive): React.JSX.Element {
   const label = team.is_personal ? 'Your projects' : `Projects in ${team.name}`
   return (
-    <section style={LIST_COLUMN}>
+    <section data-testid="project-page-list" className="home-vt-projects" style={LIST_COLUMN}>
       <div style={{ flex: 'none', display: 'grid', gap: 6, padding: '16px 16px 10px' }}>
         <BackButton team={team} onClick={onBack} />
         <Mono size={9.5} style={{ letterSpacing: '0.08em' }}>

@@ -611,6 +611,12 @@ function homeProjectPageTests(): void {
     expect(document.activeElement).toBe(pane())
   })
 
+  it('draws no focus ring round the pane it parks focus on', () => {
+    mockHome()
+    render(<HomeScreen onOpenProject={vi.fn()} />)
+    expect(pane().style.outline).toBe('none')
+  })
+
   it('switches project from the page’s list and stays on the page', async () => {
     mockHome()
     useWorkspaceStore.setState({ project: ROVER })
@@ -630,6 +636,52 @@ function homeProjectPageTests(): void {
     await userEvent.click(within(rail()).getByRole('button', { name: 'Strider' }))
     expect(within(pane()).getByRole('table', { name: 'Projects in Strider' })).toBeInTheDocument()
     expect(within(rail()).getByText('Welcome back, Maya')).toBeInTheDocument()
+  })
+
+  it('morphs between the overview and the project page — in, then back out', async () => {
+    const directions: (string | undefined)[] = []
+    const doc = document as unknown as { startViewTransition?: unknown }
+    doc.startViewTransition = (update: () => void) => {
+      directions.push(document.documentElement.dataset.homeNav)
+      update()
+      return { finished: Promise.resolve() }
+    }
+    try {
+      mockHome()
+      render(<HomeScreen onOpenProject={vi.fn()} />)
+      expect(rail()).toHaveClass('home-vt-rail')
+      expect(pane()).toHaveClass('home-vt-pane')
+      expect(screen.getByTestId('home-col-projects')).toHaveClass('home-vt-projects')
+      await showProject('Rover MK2')
+      expect(rail()).toHaveClass('home-vt-rail')
+      expect(within(pane()).getByTestId('project-page-list')).toHaveClass('home-vt-projects')
+      await userEvent.click(within(rail()).getByRole('button', { name: 'Strider' }))
+      expect(directions).toEqual(['in', 'out'])
+    } finally {
+      delete doc.startViewTransition
+    }
+  })
+
+  it('never replays the pane fade once a morph ends — the morph was the entrance', async () => {
+    let finish: () => void = () => {}
+    const doc = document as unknown as { startViewTransition?: unknown }
+    doc.startViewTransition = (update: () => void) => {
+      update()
+      return { finished: new Promise<void>((resolve) => (finish = resolve)) }
+    }
+    try {
+      mockHome()
+      render(<HomeScreen onOpenProject={vi.fn()} />)
+      await showProject('Rover MK2')
+      const body = pane().firstElementChild
+      expect(body).not.toHaveClass('home-pane-in')
+      await act(async () => finish())
+      expect(document.documentElement.dataset.homeNav).toBeUndefined()
+      expect(pane().firstElementChild).toBe(body)
+      expect(body).not.toHaveClass('home-pane-in')
+    } finally {
+      delete doc.startViewTransition
+    }
   })
 }
 

@@ -25,7 +25,7 @@ export interface TeamRailStripProps {
 export function TeamRailStrip(props: TeamRailStripProps): React.JSX.Element {
   const { invitations, view, onShow } = props
   return (
-    <aside aria-label="Teams" style={STRIP}>
+    <aside aria-label="Teams" className="home-vt-rail" style={STRIP}>
       <ul aria-label="Your teams" style={LIST}>
         {railOrder(props.teams).map((team) => (
           <li key={team.team_id}>

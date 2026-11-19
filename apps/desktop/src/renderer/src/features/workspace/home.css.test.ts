@@ -37,3 +37,38 @@ describe('homeStagger', () => {
     expect(homeStagger(50)).toEqual({ animationDelay: `${HOME_STAGGER_CAP * HOME_STAGGER_MS}ms` })
   })
 })
+
+// SOLUSDEV-328: the overview ↔ project page morph (homeTransition.ts). Each named part is one
+// element in either view, so the browser can move it between the two snapshots.
+describe('home.css — the team ↔ project morph', () => {
+  it.each([
+    ['.home-vt-rail', 'home-rail'],
+    ['.home-vt-projects', 'home-projects'],
+    ['.home-vt-pane', 'home-pane']
+  ])('%s names its part %s', (cls, name) => {
+    const rule = css.slice(css.indexOf(`${cls} {`))
+    expect(rule.slice(0, rule.indexOf('}'))).toContain(`view-transition-name: ${name}`)
+  })
+
+  it('slides the pane each way', () => {
+    expect(css).toContain(":root[data-home-nav='in']::view-transition-new(home-pane)")
+    expect(css).toContain(":root[data-home-nav='out']::view-transition-new(home-pane)")
+    // No CSS switch for the pane fade: removing one when the morph ends would replay it.
+    expect(css).not.toMatch(/data-home-nav\][^{]*\.home-pane-in/)
+  })
+
+  it('fades through: the old picture is all but gone before the new one rises, so layouts never stack', () => {
+    const rule = (sel: string): string => {
+      const at = css.lastIndexOf(sel)
+      return css.slice(at, css.indexOf('}', at))
+    }
+    expect(rule('::view-transition-old(home-rail),')).toMatch(/animation: home-vt-fade-out 0\.12s/)
+    expect(rule('::view-transition-new(home-rail),')).toMatch(
+      /animation: home-vt-fade-in 0\.26s [^;]* 0\.08s both/
+    )
+  })
+
+  it('switches every morph off for reduced motion', () => {
+    expect(reduced).toContain('::view-transition-group(*)')
+  })
+})

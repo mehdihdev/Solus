@@ -37,6 +37,7 @@ import type { HomeLayout } from './homeLayout'
 import { TeamProjectsTable } from './TeamProjectsTable'
 import { TeamRail } from './TeamRail'
 import { TeamRailStrip } from './TeamRailStrip'
+import { homeNavDirection, isHomeMorphing, withHomeTransition } from './homeTransition'
 import { useMyInvites, type MyInvites } from './useMyInvites'
 import { useTeamSizes, type TeamSizes } from './useTeamSizes'
 
@@ -272,23 +273,42 @@ function Pane(props: LiveProps): React.JSX.Element {
     <main
       ref={ref}
       tabIndex={-1}
+      className="home-vt-pane"
       data-testid="home-pane"
       aria-label="Details"
-      style={{ ...OVERVIEW_FILL, overflowY: fill ? 'hidden' : 'auto' }}
+      // A parking spot for focus, not a control: no ring round the whole pane.
+      style={{ ...OVERVIEW_FILL, overflowY: fill ? 'hidden' : 'auto', outline: 'none' }}
     >
       {/* Keyed to what it shows, so each switch of view eases in. The full-height views are keyed
           to the view only: picking a project inside them must not replay the whole pane. */}
-      <div
+      <PaneBody
         key={fill ? props.view : `${props.view}:${props.currentProject?.id ?? ''}`}
-        className="home-pane-in"
         style={fill ? OVERVIEW_FILL : COLUMN_VIEW}
       >
         {props.view === 'team' && <TeamView {...props} />}
         {props.view === 'members' && <MembersView {...props} />}
         {props.view === 'accounts' && <AccountsView {...props} />}
         {props.view === 'project' && <ProjectPageView {...props} />}
-      </div>
+      </PaneBody>
     </main>
+  )
+}
+
+/** The pane's content. It eases in when it mounts — unless a team ↔ project morph brought it,
+ *  which already was its entrance. Decided once at mount: toggling the class later would replay
+ *  the fade the moment the morph ends (SOLUSDEV-328). */
+function PaneBody({
+  style,
+  children
+}: {
+  style: React.CSSProperties
+  children: React.ReactNode
+}): React.JSX.Element {
+  const [easeIn] = useState(() => !isHomeMorphing())
+  return (
+    <div className={easeIn ? 'home-pane-in' : undefined} style={style}>
+      {children}
+    </div>
   )
 }
 
@@ -490,10 +510,12 @@ function LiveHome({
   const [view, setView] = useInitialHomeView()
   const [backToProject, setBackToProject] = useState(false)
   // Any navigation clears the way back; only "Add additional sources" sets it.
-  const show = (next: HomePaneView): void => {
-    setBackToProject(false)
-    setView(next)
-  }
+  // SOLUSDEV-328: overview ↔ project page morphs (homeTransition.ts); other switches ease in.
+  const show = (next: HomePaneView): void =>
+    withHomeTransition(homeNavDirection(view, next), () => {
+      setBackToProject(false)
+      setView(next)
+    })
   const repos = useReposByProject(home, currentProject?.id ?? null)
   const switchTeam = home.actions.switchTeam
   // An accepted invitation lands me on the team I joined.
