@@ -62,6 +62,10 @@ CLIENT_EVENT_TYPES = frozenset(
         "search.palette_opened",
         # SOLUSDEV-327: the SOL sidebar opened, closed, expanded or popped out.
         "sol.sidebar_toggled",
+        # SOLUSDEV-329: Python for local tools (mcp-fork-runtime.md §10).
+        "python_tools.interpreter_chosen",
+        "python_tools.managed_consent",
+        "python_tools.setup_finished",
     }
 )
 MAX_EVENTS_PER_BATCH = 50
@@ -163,6 +167,74 @@ class SolSidebarToggledPayload(BaseModel):
     via: Literal["button", "shortcut", "header", "escape"]
 
 
+#: mcp-fork-runtime.md §6 companion error codes — the only `error_code` values.
+PythonToolsErrorCode = Literal[
+    "python_not_found",
+    "python_unsupported_version",
+    "python_not_cpython",
+    "python_store_alias",
+    "python_probe_failed",
+    "managed_not_installed",
+    "venv_failed",
+    "venv_copies_unhealthy",
+    "pip_failed",
+    "network_unreachable",
+    "hash_mismatch",
+    "wheel_unavailable",
+    "managed_download_failed",
+    "managed_hash_mismatch",
+    "managed_too_large",
+    "managed_extract_refused",
+    "not_owner_only",
+    "disk_full",
+    "timeout",
+    "cancelled",
+    "internal",
+]
+MAX_FAILED_FORKS = 32
+
+
+class PythonInterpreterChosenPayload(BaseModel):
+    """`python_tools.interpreter_chosen` (SOLUSDEV-329): how the interpreter was
+    found and its minor version — never its path or patch level."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["detected", "picked", "managed"]
+    version_minor: Literal["3.12", "3.13"]
+
+
+class PythonManagedConsentPayload(BaseModel):
+    """`python_tools.managed_consent` (SOLUSDEV-329): the managed-Python answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    accepted: bool
+
+
+class PythonSetupFinishedPayload(BaseModel):
+    """`python_tools.setup_finished` (SOLUSDEV-329): a provision run's `done` —
+    outcome, failed-fork count, first failing §6 code (only when not ok) and what
+    started it. Never a message or path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["ok", "partial", "failed", "cancelled"]
+    failed_forks: Annotated[int, Field(ge=0, le=MAX_FAILED_FORKS)]
+    error_code: PythonToolsErrorCode | None = None
+    trigger: Literal["settings", "first_run", "repair"]
+
+    @model_validator(mode="after")
+    def _code_only_on_failure(self) -> PythonSetupFinishedPayload:
+        if "error_code" not in self.model_fields_set:
+            return self
+        if self.error_code is None:
+            raise ValueError("error_code is omitted, never null")
+        if self.outcome == "ok":
+            raise ValueError("error_code is present only when outcome is not ok")
+        return self
+
+
 #: Per-event payload schemas. A client event WITH a schema is validated against
 #: it (unknown keys, bad enums and malformed ids reject); the data-collection
 #: store never accepts free-form strings under a Solus-authored event name.
@@ -172,6 +244,9 @@ PAYLOAD_SCHEMAS: dict[str, type[BaseModel]] = {
     "client.error": ClientErrorPayload,
     "search.palette_opened": SearchPaletteOpenedPayload,
     "sol.sidebar_toggled": SolSidebarToggledPayload,
+    "python_tools.interpreter_chosen": PythonInterpreterChosenPayload,
+    "python_tools.managed_consent": PythonManagedConsentPayload,
+    "python_tools.setup_finished": PythonSetupFinishedPayload,
 }
 
 

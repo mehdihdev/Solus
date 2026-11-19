@@ -641,3 +641,166 @@ async def test_typed_payloads_still_accept_uuid_strings(
     }
     resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
     assert resp.status_code == 202, resp.text
+
+
+# SOLUSDEV-329 — Python for local tools (docs/architecture/mcp-fork-runtime.md §10).
+# Enum and count payloads only — never a path, a patch version or an error message.
+
+_PY_CHOSEN = {"source": "detected", "version_minor": "3.12"}
+_PY_CONSENT = {"accepted": True}
+_PY_FINISHED_OK = {"outcome": "ok", "failed_forks": 0, "trigger": "first_run"}
+_PY_FINISHED_PARTIAL = {
+    "outcome": "partial",
+    "failed_forks": 2,
+    "error_code": "wheel_unavailable",
+    "trigger": "settings",
+}
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        ("python_tools.interpreter_chosen", _PY_CHOSEN),
+        ("python_tools.interpreter_chosen", {"source": "managed", "version_minor": "3.13"}),
+        ("python_tools.interpreter_chosen", {"source": "picked", "version_minor": "3.12"}),
+        ("python_tools.managed_consent", _PY_CONSENT),
+        ("python_tools.managed_consent", {"accepted": False}),
+        ("python_tools.setup_finished", _PY_FINISHED_OK),
+        ("python_tools.setup_finished", _PY_FINISHED_PARTIAL),
+        (
+            "python_tools.setup_finished",
+            {
+                "outcome": "failed",
+                "failed_forks": 32,
+                "error_code": "internal",
+                "trigger": "repair",
+            },
+        ),
+        (
+            "python_tools.setup_finished",
+            {
+                "outcome": "cancelled",
+                "failed_forks": 0,
+                "error_code": "cancelled",
+                "trigger": "settings",
+            },
+        ),
+        (
+            "python_tools.setup_finished",
+            {"outcome": "failed", "failed_forks": 1, "trigger": "repair"},
+        ),
+    ],
+)
+async def test_python_tools_events_are_typed_client_events(
+    client: AsyncClient, db: AsyncSession, event_type: str, payload: dict[str, Any]
+) -> None:
+    """SOLUSDEV-329: the desktop records interpreter choice, managed-Python consent and
+    the end of a provision run — stored exactly as sent, attributed to the caller."""
+    alice_id = await _consented_user(client, db, ALICE)
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    project = await _project(client, headers)
+    event = {"event_type": event_type, "project_id": project["id"], "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    rows = list(
+        (await db.scalars(select(DataEvent).where(DataEvent.event_type == event_type))).all()
+    )
+    assert len(rows) == 1 and str(rows[0].user_id) == alice_id
+    assert rows[0].payload == payload
+    assert str(rows[0].project_id) == project["id"]
+
+
+async def test_python_tools_events_require_auth(client: AsyncClient) -> None:
+    event = {"event_type": "python_tools.managed_consent", "payload": _PY_CONSENT}
+    resp = await client.post("/api/v1/events", json={"events": [event]})
+    assert resp.status_code == 401
+
+
+async def test_python_tools_events_drop_a_foreign_project_id(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    """Another team's project id is stored as no project, never attributed."""
+    alice_headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, alice_headers)
+    project = await _project(client, alice_headers)
+    bob_id = await _consented_user(client, db, BOB)
+    event = {
+        "event_type": "python_tools.setup_finished",
+        "project_id": project["id"],
+        "payload": _PY_FINISHED_OK,
+    }
+    resp = await client.post(
+        "/api/v1/events", json={"events": [event]}, headers=bearer(BOB["sub"], BOB["email"])
+    )
+    assert resp.status_code == 202
+    stmt = select(DataEvent).where(DataEvent.event_type == "python_tools.setup_finished")
+    rows = list((await db.scalars(stmt)).all())
+    assert len(rows) == 1 and str(rows[0].user_id) == bob_id
+    assert rows[0].project_id is None and rows[0].team_id is None
+
+
+async def test_python_tools_events_without_consent_store_nothing(
+    client: AsyncClient, db: AsyncSession
+) -> None:
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = {"event_type": "python_tools.interpreter_chosen", "payload": _PY_CHOSEN}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 202, resp.text
+    stmt = select(DataEvent).where(DataEvent.event_type == "python_tools.interpreter_chosen")
+    assert list((await db.scalars(stmt)).all()) == []
+
+
+_PATH = "/Users/someone/.pyenv/versions/3.12.7/bin/python3"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "payload"),
+    [
+        # interpreter_chosen: unknown keys, bad enums, patch versions, paths, wrong types
+        ("python_tools.interpreter_chosen", {**_PY_CHOSEN, "path": _PATH}),
+        ("python_tools.interpreter_chosen", {"source": "path", "version_minor": "3.12"}),
+        ("python_tools.interpreter_chosen", {"source": "detected", "version_minor": "3.11"}),
+        ("python_tools.interpreter_chosen", {"source": "detected", "version_minor": "3.12.7"}),
+        ("python_tools.interpreter_chosen", {"source": "detected", "version_minor": 3.12}),
+        ("python_tools.interpreter_chosen", {"source": _PATH, "version_minor": "3.12"}),
+        ("python_tools.interpreter_chosen", {"source": "detected", "version_minor": _PATH}),
+        ("python_tools.interpreter_chosen", {"source": "detected"}),
+        ("python_tools.interpreter_chosen", {}),
+        # managed_consent: JSON-strict bool, no extras
+        ("python_tools.managed_consent", {"accepted": "true"}),
+        ("python_tools.managed_consent", {"accepted": 1}),
+        ("python_tools.managed_consent", {"accepted": None}),
+        ("python_tools.managed_consent", {"accepted": True, "reason": _PATH}),
+        ("python_tools.managed_consent", {}),
+        # setup_finished: bounds, enums, strict ints, error_code rules, no free text
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": -1}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": 33}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": 10**9}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": "0"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": 0.0}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "failed_forks": False}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "outcome": "done"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "outcome": "skipped"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "trigger": "launch"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_PARTIAL, "error_code": "made_up"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_PARTIAL, "error_code": _PATH}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_PARTIAL, "error_code": None}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_OK, "error_code": "pip_failed"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_PARTIAL, "message": "pip failed"}),
+        ("python_tools.setup_finished", {**_PY_FINISHED_PARTIAL, "path": _PATH}),
+        ("python_tools.setup_finished", {"outcome": "ok", "failed_forks": 0}),
+        ("python_tools.setup_finished", {"outcome": "ok", "trigger": "settings"}),
+    ],
+)
+async def test_python_tools_payloads_are_strictly_typed(
+    client: AsyncClient, event_type: str, payload: dict[str, Any]
+) -> None:
+    """Unknown keys, bad enums, out-of-range or coercible counts and anything
+    path-like reject — no field of these events accepts free text."""
+    headers = bearer(ALICE["sub"], ALICE["email"])
+    await me(client, headers)
+    event = {"event_type": event_type, "payload": payload}
+    resp = await client.post("/api/v1/events", json={"events": [event]}, headers=headers)
+    assert resp.status_code == 422, (payload, resp.text)
+    assert resp.json()["error"]["code"] == "validation_error"
