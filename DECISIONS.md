@@ -550,6 +550,22 @@ machine. When a process starts waiting, SOL may be woken for one turn per new pr
 existing continuation cap and budget gates. This relaxes the 2026-10-19 "no stdin" rule only for
 interactive processes; one-shot `code.exec` and shell scripts keep stdin closed.
 
+**Amendment (2026-11-19, SOLUSDEV-329 — fork runtimes on customer machines; approved in-session
+by Mehdi per ADR-032 tier 2):** A Pattern-1 fork's private environment is no longer created inside
+the vendored tree. It is a per-fork virtualenv in a Solus-owned, owner-only (0700 / user-only ACL)
+directory under the user's app-data folder (`mcp-envs/<fork>/`), built at setup time and never at
+launch: `python -m venv` from a base interpreter, then `pip install --require-hashes
+--only-binary=:all: --no-deps` from the fork's committed lockfile (PyPI over HTTPS; no sdists, no
+build scripts). The base interpreter is the user's chosen or auto-detected CPython 3.12 or 3.13;
+otherwise, with the user's consent, a Solus-managed python-build-standalone 3.12 downloaded into
+the same app-data folder and verified against a SHA-256 pinned per OS/arch in a Solus-authored
+manifest. Each env carries a stamp (base interpreter path and version, lockfile SHA-256); the
+companion launches a fork only if its interpreter resolves inside the `mcp-envs` root, the
+directory is owner-only, and the stamp matches the shipped lockfile. Otherwise the fork is
+reported as needing setup, never silently skipped. Launchers take the interpreter only from
+`SOLUS_MCP_PYTHON` as set by the companion after those checks, never from PATH. The interpreter
+choice is machine-private (ADR-034). Zero network and zero installs at launch still hold.
+
 ---
 
 ## ADR-032: Agent-editable governance docs (two-tier)
