@@ -12,7 +12,8 @@ function actions(): AttentionActions {
     openAccounts: vi.fn(),
     requestDrivePermissions: vi.fn(),
     turnOffDrive: vi.fn(),
-    openDriveApproval: vi.fn()
+    openDriveApproval: vi.fn(),
+    setupLocalTools: vi.fn()
   }
 }
 
@@ -110,5 +111,17 @@ describe('AttentionSection — drive (SOLUSDEV-319)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Turn off mouse and keyboard' }))
     expect(a.openDriveApproval).toHaveBeenCalled()
     expect(a.turnOffDrive).toHaveBeenCalled()
+  })
+
+  it('local tools card names the tools and starts setup only on click (SOLUSDEV-329)', async () => {
+    const a = actions()
+    render(
+      <AttentionSection items={[{ kind: 'python_tools', tools: ['KiCad', 'Code'] }]} actions={a} />
+    )
+    expect(screen.getByRole('group', { name: 'Local tools need setup' })).toBeInTheDocument()
+    expect(screen.getByText(/KiCad, Code/)).toBeInTheDocument()
+    expect(a.setupLocalTools).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Set up local tools' }))
+    expect(a.setupLocalTools).toHaveBeenCalledTimes(1)
   })
 })

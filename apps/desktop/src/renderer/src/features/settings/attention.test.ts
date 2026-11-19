@@ -155,3 +155,25 @@ describe('attentionItems — drive (SOLUSDEV-319)', () => {
     }
   })
 })
+
+describe('local tools need setup (SOLUSDEV-329)', () => {
+  const base = { sol: null, subscription: null, connections: [], now: NOW }
+
+  it('one card listing the tools by display name, after the reconnect cards', () => {
+    const items = attentionItems({
+      ...base,
+      connections: [conn({ needs_reauth: 'token_error' })],
+      pythonTools: { needsSetup: ['kicad', 'code'], running: false }
+    })
+    expect(items.map((i) => i.kind)).toEqual(['reconnect', 'python_tools'])
+    expect(items[1]).toEqual({ kind: 'python_tools', tools: ['KiCad', 'Code'] })
+  })
+
+  it('no card while setup runs, when nothing needs setup, or outside Electron', () => {
+    expect(
+      attentionItems({ ...base, pythonTools: { needsSetup: ['kicad'], running: true } })
+    ).toEqual([])
+    expect(attentionItems({ ...base, pythonTools: { needsSetup: [], running: false } })).toEqual([])
+    expect(attentionItems({ ...base, pythonTools: null })).toEqual([])
+  })
+})
