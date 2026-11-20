@@ -11,11 +11,13 @@ import os
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
+
+from pydantic import ValidationError
 
 from solus_companion.runtime.errors import ErrorCode, RuntimeSetupError
 from solus_companion.runtime.forks import ForkInfo
@@ -190,7 +192,7 @@ class EnvBuilder:
         if python.is_symlink() or not python.is_file():
             return False
         report: ProbeReport | None = run_probe(str(python), self._runner, self._child_env)
-        if report is None or not judge(report).supported:
+        if report is None or not judge(report, allow_venv=True).supported:
             return False
         inside = tmp.resolve()
         return all(
@@ -211,7 +213,16 @@ class EnvBuilder:
         self._progress(fork.name, "install", total, total)
 
     def _stamp(self, fork: ForkInfo, base: BaseInterpreter, tmp: Path) -> None:
-        stamp = Stamp(
+        try:
+            stamp = self._new_stamp(fork, base)
+        except ValidationError as exc:
+            logger.warning("fork %s stamp refused: %d error(s)", fork.name, exc.error_count())
+            raise RuntimeSetupError("internal") from exc
+        write_stamp(tmp, stamp)
+        self._progress(fork.name, "stamp", 1, 1)
+
+    def _new_stamp(self, fork: ForkInfo, base: BaseInterpreter) -> Stamp:
+        return Stamp(
             schema_version=1,
             fork=fork.name,
             lock_sha256=lock_sha256(fork.lock),
@@ -223,8 +234,6 @@ class EnvBuilder:
             ),
             created_at=self._now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
-        write_stamp(tmp, stamp)
-        self._progress(fork.name, "stamp", 1, 1)
 
     def _swap(self, fork: str, tmp: Path) -> None:
         """Replace whole, never patch: the old env moves aside, the new one
@@ -240,9 +249,27 @@ class EnvBuilder:
 
     def _sweep(self, fork: str) -> None:
         """Leftovers from a crashed or killed earlier run of THIS fork."""
-        for prefix in (f".{fork}.build-", f".{fork}.old-"):
-            for stale in self._envs.glob(prefix + "*"):
-                remove_path(stale)
+        for stale in self._envs.glob(f".{fork}.build-*"):
+            remove_path(stale)
+        recover_swap(self._envs / fork, sorted(self._envs.glob(f".{fork}.old-*")))
+
+
+def _present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def recover_swap(dest: Path, leftovers: Sequence[Path]) -> None:
+    """A run killed between "old moved aside" and "new moved in" leaves `dest`
+    missing and the old tree aside: put the newest one back. Any other
+    leftover (or every one, when `dest` is present) is garbage."""
+    pending = [p for p in leftovers if _present(p)]
+    if pending and not _present(dest):
+        newest = max(pending, key=lambda p: p.lstat().st_mtime)
+        os.replace(newest, dest)
+        logger.warning("restored %s after an interrupted swap", dest.name)
+        pending.remove(newest)
+    for stale in pending:
+        remove_path(stale)
 
 
 def remove_path(path: Path) -> None:

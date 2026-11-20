@@ -46,8 +46,50 @@ class _AclSizeInformation(ctypes.Structure):
     ]
 
 
-def _dll(name: str) -> Any:  # pragma: no cover
-    return getattr(ctypes, "WinDLL")(name, use_last_error=True)  # noqa: B009 — absent off Windows
+_PVOID = ctypes.c_void_p
+_PPVOID = ctypes.POINTER(ctypes.c_void_p)
+_DW = wintypes.DWORD
+_PDW = ctypes.POINTER(wintypes.DWORD)
+Signature = tuple[Any, list[Any]]
+
+#: (restype, argtypes) for every call made below. Without these ctypes passes
+#: and returns C `int`, truncating 64-bit HANDLEs and pointers.
+ADVAPI32_SIGNATURES: dict[str, Signature] = {
+    "ConvertSidToStringSidW": (wintypes.BOOL, [_PVOID, ctypes.POINTER(wintypes.LPWSTR)]),
+    "ConvertStringSidToSidW": (wintypes.BOOL, [wintypes.LPCWSTR, _PPVOID]),
+    "OpenProcessToken": (wintypes.BOOL, [wintypes.HANDLE, _DW, ctypes.POINTER(wintypes.HANDLE)]),
+    "GetTokenInformation": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, _PVOID, _DW, _PDW]),
+    "GetNamedSecurityInfoW": (
+        _DW,
+        [wintypes.LPCWSTR, ctypes.c_int, _DW, _PPVOID, _PPVOID, _PPVOID, _PPVOID, _PPVOID],
+    ),
+    "GetSecurityDescriptorControl": (
+        wintypes.BOOL,
+        [_PVOID, ctypes.POINTER(wintypes.WORD), _PDW],
+    ),
+    "GetAclInformation": (wintypes.BOOL, [_PVOID, _PVOID, _DW, ctypes.c_int]),
+    "GetAce": (wintypes.BOOL, [_PVOID, _DW, _PPVOID]),
+    "InitializeAcl": (wintypes.BOOL, [_PVOID, _DW, _DW]),
+    "AddAccessAllowedAceEx": (wintypes.BOOL, [_PVOID, _DW, _DW, _DW, _PVOID]),
+    "SetNamedSecurityInfoW": (
+        _DW,
+        [wintypes.LPWSTR, ctypes.c_int, _DW, _PVOID, _PVOID, _PVOID, _PVOID],
+    ),
+}
+KERNEL32_SIGNATURES: dict[str, Signature] = {
+    "GetCurrentProcess": (wintypes.HANDLE, []),
+    "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
+    "LocalFree": (_PVOID, [_PVOID]),
+}
+
+
+def _dll(name: str, signatures: dict[str, Signature]) -> Any:  # pragma: no cover
+    dll = getattr(ctypes, "WinDLL")(name, use_last_error=True)  # noqa: B009 — absent off Windows
+    for function, (restype, argtypes) in signatures.items():
+        bound = getattr(dll, function)
+        bound.restype = restype
+        bound.argtypes = argtypes
+    return dll
 
 
 def _check(ok: int) -> None:  # pragma: no cover
@@ -57,8 +99,8 @@ def _check(ok: int) -> None:  # pragma: no cover
 
 class Advapi32Backend:  # pragma: no cover — Windows only
     def __init__(self) -> None:
-        self._advapi = _dll("advapi32")
-        self._kernel = _dll("kernel32")
+        self._advapi = _dll("advapi32", ADVAPI32_SIGNATURES)
+        self._kernel = _dll("kernel32", KERNEL32_SIGNATURES)
 
     def _sid_string(self, sid: Any) -> str:
         text = wintypes.LPWSTR()
@@ -66,7 +108,7 @@ class Advapi32Backend:  # pragma: no cover — Windows only
         try:
             return str(text.value)
         finally:
-            self._kernel.LocalFree(text)
+            self._kernel.LocalFree(ctypes.cast(text, ctypes.c_void_p))
 
     def current_user_sid(self) -> str:
         token = wintypes.HANDLE()

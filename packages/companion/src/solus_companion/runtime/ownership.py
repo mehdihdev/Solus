@@ -6,6 +6,8 @@ off) with exactly two allow ACEs, both full control: the current user and
 SYSTEM. The Windows decision is a pure function over an `AclSnapshot` so it is
 tested everywhere; only the advapi32 reader/writer (winacl.py) is Windows-bound."""
 
+import ctypes
+import logging
 import os
 import stat
 from collections.abc import Callable
@@ -15,7 +17,12 @@ from typing import Literal, Protocol
 
 from solus_companion.runtime.errors import RuntimeSetupError
 
+logger = logging.getLogger("solus.companion.runtime")
+
 SYSTEM_SID = "S-1-5-18"
+#: What the ctypes backend can raise: `_check` → OSError, a bad argument →
+#: ctypes.ArgumentError, a malformed SID/string → ValueError.
+_ACL_ERRORS: tuple[type[Exception], ...] = (OSError, ctypes.ArgumentError, ValueError)
 FILE_ALL_ACCESS = 0x1F01FF
 
 
@@ -93,20 +100,27 @@ class WindowsOwnerOnly:
         self._backend = backend
 
     def check(self, path: Path) -> bool:
-        if path.is_symlink() or not path.is_dir():
+        """Fails closed per folder: an ACL read error is "not owner-only" for
+        that one fork, never an exception that aborts discovery for all."""
+        try:
+            if path.is_symlink() or not path.is_dir():
+                return False
+            snapshot = self._backend.read(path)
+            return snapshot is not None and snapshot_is_owner_only(
+                snapshot, self._backend.current_user_sid()
+            )
+        except _ACL_ERRORS as exc:
+            logger.warning("owner-only check could not read an ACL: %s", type(exc).__name__)
             return False
-        snapshot = self._backend.read(path)
-        return snapshot is not None and snapshot_is_owner_only(
-            snapshot, self._backend.current_user_sid()
-        )
 
     def ensure(self, path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        if path.is_symlink():
-            raise RuntimeSetupError("not_owner_only")
         try:
+            path.mkdir(parents=True, exist_ok=True)
+            if path.is_symlink():
+                raise RuntimeSetupError("not_owner_only")
             self._backend.apply(path, self._backend.current_user_sid())
-        except OSError as exc:
+        except _ACL_ERRORS as exc:
+            logger.warning("owner-only ensure failed: %s", type(exc).__name__)
             raise RuntimeSetupError("not_owner_only") from exc
         if not self.check(path):
             raise RuntimeSetupError("not_owner_only")

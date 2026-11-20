@@ -689,6 +689,15 @@ _PY_FINISHED_PARTIAL = {
             "python_tools.setup_finished",
             {"outcome": "failed", "failed_forks": 1, "trigger": "repair"},
         ),
+        (
+            "python_tools.setup_finished",
+            {
+                "outcome": "failed",
+                "failed_forks": 0,
+                "error_code": "python_is_venv",
+                "trigger": "settings",
+            },
+        ),
     ],
 )
 async def test_python_tools_events_are_typed_client_events(

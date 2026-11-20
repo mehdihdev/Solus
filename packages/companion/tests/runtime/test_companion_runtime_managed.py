@@ -248,6 +248,33 @@ def test_network_failure_is_download_failed(tmp_path: Path) -> None:
     assert _code(caught) == "managed_download_failed"
 
 
+def _interrupted(tmp_path: Path, *, target_too: bool) -> Path:
+    """A run killed between "old release aside" and "new release in"."""
+    root = tmp_path / "mcp-python"
+    root.mkdir(mode=0o700)
+    (root / ".r1.old" / "python" / "bin").mkdir(parents=True)
+    (root / ".r1.old" / "python" / "bin" / "python3").write_text("old")
+    if target_too:
+        (root / "r1" / "python").mkdir(parents=True)
+    return root
+
+
+def test_an_interrupted_swap_restores_the_old_release(tmp_path: Path) -> None:
+    root = _interrupted(tmp_path, target_too=False)
+    with pytest.raises(RuntimeSetupError):
+        _installer(tmp_path, _manifest(b"x"), _Fetcher(b"", fail=True)).install()
+    assert sorted(p.name for p in root.iterdir()) == ["r1"]
+    assert (root / "r1" / "python" / "bin" / "python3").read_text() == "old"
+
+
+def test_an_interrupted_swap_leftover_is_removed_when_the_release_exists(tmp_path: Path) -> None:
+    root = _interrupted(tmp_path, target_too=True)
+    with pytest.raises(RuntimeSetupError):
+        _installer(tmp_path, _manifest(b"x"), _Fetcher(b"", fail=True)).install()
+    assert sorted(p.name for p in root.iterdir()) == ["r1"]
+    assert not (root / "r1" / "python" / "bin").exists()
+
+
 def test_archive_without_an_interpreter_is_refused(tmp_path: Path) -> None:
     data = _tar([("python/README", b"hi")])
     with pytest.raises(RuntimeSetupError) as caught:

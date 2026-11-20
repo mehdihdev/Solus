@@ -10,6 +10,7 @@ ErrorCode = Literal[
     "python_not_cpython",
     "python_store_alias",
     "python_probe_failed",
+    "python_is_venv",
     "managed_not_installed",
     "venv_failed",
     "venv_copies_unhealthy",
@@ -42,6 +43,9 @@ MESSAGES: dict[ErrorCode, str] = {
     "python_not_cpython": "This interpreter is not CPython; use CPython 3.12 or 3.13.",
     "python_store_alias": "Microsoft Store Python is not supported; install it from python.org.",
     "python_probe_failed": "This Python could not be started.",
+    "python_is_venv": (
+        "This Python is a virtual environment; choose the Python it was created from."
+    ),
     "managed_not_installed": "The Solus-managed Python is not installed yet.",
     "venv_failed": "Could not create the Python environment.",
     "venv_copies_unhealthy": (

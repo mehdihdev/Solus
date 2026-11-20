@@ -27,9 +27,20 @@ LOCK_TEXT = (
 )
 
 
-def probe_json(executable: str, version: str = "3.12.7", implementation: str = "cpython") -> str:
+def probe_json(
+    executable: str,
+    version: str = "3.12.7",
+    implementation: str = "cpython",
+    *,
+    venv: bool = False,
+) -> str:
     return json.dumps(
-        {"implementation": implementation, "version": version, "executable": executable}
+        {
+            "implementation": implementation,
+            "version": version,
+            "executable": executable,
+            "venv": venv,
+        }
     )
 
 
@@ -141,7 +152,10 @@ class ProvisionScript:
             return OK
         if "-c" in argv:
             return ProcResult(
-                returncode=0, stdout=probe_json(self.health_executable or argv[0]), stderr=""
+                returncode=0,
+                # The copy under test IS a venv; the health check must still accept it.
+                stdout=probe_json(self.health_executable or argv[0], venv=True),
+                stderr="",
             )
         if "pip" in argv:
             if self.on_pip is not None:

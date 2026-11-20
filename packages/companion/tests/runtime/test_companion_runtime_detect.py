@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import types
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +19,7 @@ from solus_companion.runtime.detect import (
     parse_py_launcher,
     windows_registry_pythons,
 )
+from solus_companion.runtime.errors import MESSAGES
 from solus_companion.runtime.probe import PROBE_SCRIPT, ProbeReport, is_store_alias, judge
 from solus_companion.runtime.proc import ProcResult
 
@@ -49,6 +52,36 @@ def test_unknown_implementation_is_refused() -> None:
     verdict = judge(_report("3.12.1", "graalpy"))
     assert verdict.reason == "python_not_cpython"
     assert verdict.implementation == "unknown"
+
+
+def test_a_venv_interpreter_is_refused_as_a_base() -> None:
+    report = ProbeReport(
+        implementation="cpython", version="3.12.7", executable="/v/python", venv=True
+    )
+    verdict = judge(report)
+    assert (verdict.supported, verdict.reason) == (False, "python_is_venv")
+    assert verdict.version == "3.12.7" and verdict.implementation == "cpython"
+
+
+def test_a_report_without_the_venv_key_is_not_a_venv() -> None:
+    report = ProbeReport.model_validate(
+        {"implementation": "cpython", "version": "3.12.7", "executable": "/x/python"}
+    )
+    assert report.venv is False and judge(report).supported
+
+
+def test_the_real_probe_reports_whether_it_runs_in_a_venv() -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", PROBE_SCRIPT], capture_output=True, text=True, check=True
+    )
+    report = ProbeReport.model_validate_json(result.stdout)
+    assert report.venv is (sys.prefix != sys.base_prefix)
+
+
+def test_venv_message_tells_the_user_what_to_pick() -> None:
+    assert MESSAGES["python_is_venv"] == (
+        "This Python is a virtual environment; choose the Python it was created from."
+    )
 
 
 def test_no_report_is_a_probe_failure() -> None:
@@ -115,6 +148,28 @@ def test_path_candidates_are_probed_argv_only_and_deduped_by_realpath(tmp_path: 
     argv, env, timeout = runner.calls[0]
     assert argv == [str(real), "-I", "-c", PROBE_SCRIPT]
     assert timeout > 0 and "PYTHONPATH" not in env
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_relative_path_entries_are_never_probed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """`.` or `bin` on PATH would resolve against the cwd: skip them entirely."""
+    monkeypatch.chdir(tmp_path)
+    name = "python3.12.exe" if platform == "win32" else "python3.12"
+    planted = write_exe(tmp_path / "bin" / name)
+    write_exe(tmp_path / name)
+    runner = _probing({os.path.realpath(planted): "3.12.7"})
+    sep = ";" if platform == "win32" else ":"
+    host = HostView(
+        platform=platform,
+        env={"PATH": sep.join([".", "bin", ""])},
+        home=tmp_path / "home",
+        system_root=tmp_path / "sys",
+    )
+
+    assert [c for c in Detector(runner, host).detect() if c.source == "path"] == []
+    assert runner.calls == []
 
 
 def test_known_locations_include_pyenv_and_conda(tmp_path: Path) -> None:

@@ -28,6 +28,7 @@ from solus_companion.runtime.managed import (
     load_manifest,
     managed_interpreter,
     platform_key,
+    recover_release,
     urllib_fetch,
 )
 from solus_companion.runtime.ownership import OwnerOnly, owner_only_for
@@ -222,7 +223,9 @@ class RuntimeCommands:
 
     def _base(self, python: Path | None, managed: bool) -> BaseInterpreter:
         if managed:
-            release = python_root(self._envs) / self._deps.manifest().release
+            name = self._deps.manifest().release
+            recover_release(python_root(self._envs), name)
+            release = python_root(self._envs) / name
             path = managed_interpreter(release, self._platform)
             if not path.is_file():
                 raise RuntimeSetupError("managed_not_installed")

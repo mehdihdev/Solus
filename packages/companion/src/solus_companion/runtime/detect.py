@@ -9,6 +9,7 @@ nothing found here is trusted until a fork env built from it passes §5."""
 import importlib
 import ntpath
 import os
+import posixpath
 import re
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -200,7 +201,10 @@ class Detector:
 
     def _on_path(self) -> Iterator[str]:
         windows = self._host.platform == "win32"
-        dirs = [d for d in self._host.env.get("PATH", "").split(";" if windows else ":") if d]
+        isabs = ntpath.isabs if windows else posixpath.isabs
+        entries = self._host.env.get("PATH", "").split(";" if windows else ":")
+        # A relative entry (`.`, `bin`) resolves against the cwd: never probe it.
+        dirs = [d for d in entries if d and isabs(d)]
         for name in _PATH_NAMES:
             for directory in dirs:
                 candidate = Path(directory) / (name + ".exe" if windows else name)

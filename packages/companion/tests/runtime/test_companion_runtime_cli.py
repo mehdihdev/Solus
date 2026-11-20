@@ -55,6 +55,7 @@ class Env:
         make_fork(self.root, "mock", lock=None)
         self.python = write_exe(self.bindir / "python3.12")
         self.versions: dict[str, tuple[str, str]] = {str(self.python): ("3.12.7", "cpython")}
+        self.venvs: set[str] = set()
         self.script = ProvisionScript()
         self.policy = PosixOwnerOnly()
         self.manifest = load_manifest()
@@ -67,7 +68,8 @@ class Env:
             if argv[0] not in self.versions:
                 return ProcResult(1, "", "no such interpreter")
             version, impl = self.versions[argv[0]]
-            return ProcResult(0, probe_json(argv[0], version, impl), "")
+            venv = argv[0] in self.venvs
+            return ProcResult(0, probe_json(argv[0], version, impl, venv=venv), "")
         return self.script(argv, env)
 
     def deps(self) -> cli.CliDeps:
@@ -260,6 +262,25 @@ def test_provision_refuses_an_unsupported_python(machine: Env) -> None:
     assert not machine.envs.exists() or list(machine.envs.iterdir()) == []
 
 
+def test_provision_refuses_an_explicit_venv_python(machine: Env) -> None:
+    """A venv's interpreter is not a base: `venv --copies` from it is fragile."""
+    venv = write_exe(machine.tmp / "venv" / "bin" / "python3")
+    machine.versions[str(venv)] = ("3.12.7", "cpython")
+    machine.venvs.add(str(venv))
+    code, lines = machine.run("provision", "--all", "--python", str(venv))
+    assert code == 2
+    assert [e.error_code for e in _of(lines, ErrorLine)] == ["python_is_venv"]
+    assert not machine.envs.exists() or list(machine.envs.iterdir()) == []
+
+
+def test_detect_marks_a_venv_on_path_unsupported(machine: Env) -> None:
+    machine.venvs.add(str(machine.python))
+    code, lines = machine.run("detect")
+    assert code == 2
+    [candidate] = _of(lines, CandidateLine)
+    assert (candidate.supported, candidate.reason) == (False, "python_is_venv")
+
+
 def test_provision_auto_without_any_python(machine: Env) -> None:
     machine.versions.clear()
     code, lines = machine.run("provision", "--all")
@@ -271,6 +292,18 @@ def test_provision_managed_requires_an_installed_managed_python(machine: Env) ->
     code, lines = machine.run("provision", "--all", "--managed")
     assert code == 2
     assert [e.error_code for e in _of(lines, ErrorLine)] == ["managed_not_installed"]
+
+
+def test_provision_managed_restores_a_release_left_aside_by_a_killed_install(
+    machine: Env,
+) -> None:
+    root = machine.envs.parent / "mcp-python"
+    aside = write_exe(root / f".{machine.manifest.release}.old" / "python" / "bin" / "python3")
+    managed = root / machine.manifest.release / "python" / "bin" / "python3"
+    machine.versions[str(managed)] = ("3.12.7", "cpython")
+    code, _lines = machine.run("provision", "--fork", "kicad", "--managed")
+    assert code == 0
+    assert managed.is_file() and not aside.exists()
 
 
 def test_provision_managed_uses_the_installed_release(machine: Env) -> None:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -175,3 +177,63 @@ def test_windows_ensure_fails_closed_when_the_dacl_does_not_stick(tmp_path: Path
 def test_policy_factory_picks_by_platform() -> None:
     assert isinstance(owner_only_for("darwin"), PosixOwnerOnly)
     assert isinstance(owner_only_for("linux"), PosixOwnerOnly)
+
+
+class _BrokenAcl(_FakeAcl):
+    """Every advapi32 call fails, as an unreadable ACL or a lost token would."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__(_snapshot())
+        self.error = error
+
+    def current_user_sid(self) -> str:
+        raise self.error
+
+    def read(self, path: Path) -> AclSnapshot | None:
+        raise self.error
+
+    def apply(self, path: Path, user_sid: str) -> None:
+        raise self.error
+
+
+_ACL_ERRORS = [OSError(5, "access denied"), ctypes.ArgumentError("bad handle"), ValueError("x")]
+
+
+@pytest.mark.parametrize("error", _ACL_ERRORS)
+def test_windows_check_fails_closed_when_the_acl_cannot_be_read(
+    tmp_path: Path, error: Exception
+) -> None:
+    """One unreadable folder is "not owner-only" for that fork — it must never
+    abort discovery for every other server with a traceback."""
+    assert WindowsOwnerOnly(_BrokenAcl(error)).check(tmp_path) is False
+
+
+@pytest.mark.parametrize("error", _ACL_ERRORS)
+def test_windows_ensure_failures_are_not_owner_only(tmp_path: Path, error: Exception) -> None:
+    with pytest.raises(RuntimeSetupError) as caught:
+        WindowsOwnerOnly(_BrokenAcl(error)).ensure(tmp_path / "x")
+    assert caught.value.code == "not_owner_only"
+
+
+def test_windows_ensure_maps_an_uncreatable_folder_to_not_owner_only(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("x")
+    with pytest.raises(RuntimeSetupError) as caught:
+        WindowsOwnerOnly(_FakeAcl(_snapshot())).ensure(blocker / "x")
+    assert caught.value.code == "not_owner_only"
+
+
+def test_winacl_declares_ctypes_signatures_for_every_call() -> None:
+    """Without argtypes/restype, 64-bit handles are truncated to C int."""
+    from solus_companion.runtime import winacl
+
+    for name in (*winacl.ADVAPI32_SIGNATURES, *winacl.KERNEL32_SIGNATURES):
+        assert name.isidentifier()
+    used = set(re.findall(r"self\._(?:advapi|kernel)\.(\w+)", Path(winacl.__file__).read_text()))
+    assert used == set(winacl.ADVAPI32_SIGNATURES) | set(winacl.KERNEL32_SIGNATURES)
+    for restype, argtypes in (
+        *winacl.ADVAPI32_SIGNATURES.values(),
+        *winacl.KERNEL32_SIGNATURES.values(),
+    ):
+        assert restype is not None and all(a is not None for a in argtypes)
+    assert winacl.KERNEL32_SIGNATURES["GetCurrentProcess"][0] is ctypes.c_void_p

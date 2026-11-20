@@ -1,7 +1,9 @@
 """The interpreter health probe — mcp-fork-runtime.md §3 step 1.
 
 `<python> -I -c PROBE_SCRIPT` prints one JSON object. Only CPython 3.12/3.13 is
-accepted; everything else is refused with the protocol's reason code."""
+accepted, and never a virtual environment's interpreter as a base (`venv
+--copies` from a venv is fragile); everything else is refused with the
+protocol's reason code."""
 
 import json
 import logging
@@ -20,7 +22,8 @@ logger = logging.getLogger("solus.companion.runtime")
 PROBE_SCRIPT = (
     "import json,platform,sys;"
     "print(json.dumps({'implementation':sys.implementation.name,"
-    "'version':platform.python_version(),'executable':sys.executable}))"
+    "'version':platform.python_version(),'executable':sys.executable,"
+    "'venv':sys.prefix!=sys.base_prefix}))"
 )
 PROBE_TIMEOUT_SECONDS = 15.0
 SUPPORTED_VERSION_RE = re.compile(r"^3\.1[23]\.\d+$")
@@ -35,6 +38,8 @@ class ProbeReport(BaseModel):
     implementation: str = Field(max_length=32)
     version: str = Field(max_length=32)
     executable: str = Field(max_length=4096)
+    #: Absent from an older or odd probe → treated as not a venv.
+    venv: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,9 @@ def _implementation(name: str) -> Implementation:
     return name if name in ("cpython", "pypy") else "unknown"  # type: ignore[return-value]
 
 
-def judge(report: ProbeReport | None) -> Verdict:
+def judge(report: ProbeReport | None, *, allow_venv: bool = False) -> Verdict:
+    """`allow_venv` is only for the fork env's own copied interpreter (§3 health
+    check); a base interpreter that is itself a venv is refused."""
     if report is None:
         return Verdict(False, "python_probe_failed", None, "unknown")
     implementation = _implementation(report.implementation)
@@ -69,6 +76,8 @@ def judge(report: ProbeReport | None) -> Verdict:
         return Verdict(False, "python_not_cpython", version, implementation)
     if SUPPORTED_VERSION_RE.fullmatch(report.version) is None:
         return Verdict(False, "python_unsupported_version", version, implementation)
+    if report.venv and not allow_venv:
+        return Verdict(False, "python_is_venv", version, implementation)
     return Verdict(True, None, version, implementation)
 
 
