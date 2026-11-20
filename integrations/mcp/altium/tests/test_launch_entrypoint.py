@@ -33,7 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from solus_companion.config import discover_servers
+from solus_companion.config import _launch_command, discover_servers
 
 # The bootstrap module must run before the overlay import — keep it first.
 from .altium_paths import FORK_DIR, LAUNCH, LAUNCH_CMD, MCP_ROOT, overlay_module  # isort: skip
@@ -361,16 +361,18 @@ def test_discover_servers_finds_altium_in_the_real_tree(
             "allowlist.yaml is a later ALT task's deliverable; real-tree discovery arms then"
         )
     monkeypatch.setattr("solus_companion.config.sys", SimpleNamespace(platform=platform))
+    if platform == "win32":
+        # SOLUSDEV-329: on win32 discovery also needs a trusted app-data env, and that
+        # check needs the Windows ACL APIs; assert the launch guard directly instead.
+        root = MCP_ROOT.resolve()
+        assert _launch_command(root, root / "altium", "altium") == LAUNCH_CMD.resolve()
+        return
     servers = discover_servers(MCP_ROOT)
     by_name = {server.name: server for server in servers}
     assert "altium" in by_name
-    if platform == "win32":
-        assert by_name["altium"].command == LAUNCH_CMD.resolve()
-        assert by_name["altium"].unavailable_reason is None
-    else:
-        host = "Linux" if platform == "linux" else "macOS"
-        assert by_name["altium"].command is None
-        assert by_name["altium"].unavailable_reason == f"Altium Designer is not available on {host}"
+    host = "Linux" if platform == "linux" else "macOS"
+    assert by_name["altium"].command is None
+    assert by_name["altium"].unavailable_reason == f"Altium Designer is not available on {host}"
 
 
 # --- M3 / T4-POSIX: the POSIX launcher actually scrubs the child env --------------

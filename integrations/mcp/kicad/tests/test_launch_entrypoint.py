@@ -27,13 +27,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from solus_companion.config import discover_servers
+from solus_companion.config import _launch_command, discover_servers
 
 from tree_hash import git_tree_hash  # isort: skip
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 MCP_ROOT = REPO_ROOT / "integrations" / "mcp"
 FORK = MCP_ROOT / "kicad"
+
+# SOLUSDEV-329: real-tree discovery needs a trusted app-data env (ADR-031 amendment).
+
+_LIB = str(MCP_ROOT / "tests" / "_lib")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+from trusted_env import trusted_envs_root  # noqa: E402  # isort: skip
+
 UPSTREAM = FORK / "upstream"
 LAUNCH = FORK / "bin" / "launch"
 LAUNCH_CMD = FORK / "bin" / "launch.cmd"
@@ -287,10 +295,13 @@ def test_launch_cmd_is_flagged_for_human_security_re_review() -> None:
     assert "PENDING human security re-review" in _cmd_text()
 
 
-def test_discover_servers_uses_launch_cmd_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_companion_picks_launch_cmd_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On win32 the companion's launch guard resolves kicad's sibling `launch.cmd`.
+    Asked of the guard directly: since SOLUSDEV-329 `discover_servers` also needs a
+    trusted app-data env before it returns a command, which the repo tree lacks."""
     monkeypatch.setattr("solus_companion.config.sys", SimpleNamespace(platform="win32"))
-    by_name = {server.name: server for server in discover_servers(MCP_ROOT)}
-    assert by_name["kicad"].command == LAUNCH_CMD.resolve()
+    root = MCP_ROOT.resolve()
+    assert _launch_command(root, root / "kicad", "kicad") == LAUNCH_CMD.resolve()
 
 
 def test_launch_cds_to_the_companion_passed_workspace_env_var() -> None:
@@ -323,10 +334,10 @@ def test_discover_servers_finds_the_kicad_launch(tmp_path: Path) -> None:
     assert servers[0].args == ()
 
 
-def test_discover_servers_finds_kicad_in_the_real_tree() -> None:
+def test_discover_servers_finds_kicad_in_the_real_tree(tmp_path: Path) -> None:
     if not (FORK / "allowlist.yaml").is_file():
         pytest.skip("allowlist.yaml is T1b's deliverable; real-tree discovery arms then")
-    servers = discover_servers(MCP_ROOT)
+    servers = discover_servers(MCP_ROOT, envs_root=trusted_envs_root(tmp_path, FORK))
     by_name = {server.name: server for server in servers}
     assert "kicad" in by_name
     assert by_name["kicad"].command == LAUNCH.resolve()

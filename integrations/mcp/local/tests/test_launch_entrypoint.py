@@ -24,7 +24,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from solus_companion.config import discover_servers
+from solus_companion.config import _launch_command, discover_servers
 
 # The bootstrap module must run before the overlay import — keep it first.
 from .local_paths import ENV_ALLOW, FORK_DIR, LAUNCH, MCP_ROOT, overlay_module  # isort: skip
@@ -32,6 +32,14 @@ from .local_paths import ENV_ALLOW, FORK_DIR, LAUNCH, MCP_ROOT, overlay_module  
 _env_allowlist = overlay_module("env_allowlist")
 DECLARED_ENV_ALLOWLIST: frozenset[str] = _env_allowlist.CHILD_ENV_ALLOWLIST
 LAUNCH_CMD = FORK_DIR / "bin" / "launch.cmd"
+
+# SOLUSDEV-329: real-tree discovery needs a trusted app-data env (ADR-031 amendment).
+import sys  # noqa: E402
+
+_LIB = str(MCP_ROOT / "tests" / "_lib")
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+from trusted_env import trusted_envs_root  # noqa: E402  # isort: skip
 
 EXPECTED_ENV_ALLOWLIST = frozenset(
     {"HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "PATH", "SOLUS_MCP_WORKSPACE"}
@@ -271,10 +279,12 @@ def test_launch_cmd_is_flagged_for_human_security_re_review() -> None:
     assert "PENDING human security re-review" in _cmd_text()
 
 
-def test_discover_servers_uses_launch_cmd_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_companion_picks_launch_cmd_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Asked of the launch guard: since SOLUSDEV-329 `discover_servers` also needs a
+    trusted app-data env, and the win32 trust check needs the Windows ACL APIs."""
     monkeypatch.setattr("solus_companion.config.sys", SimpleNamespace(platform="win32"))
-    by_name = {server.name: server for server in discover_servers(MCP_ROOT)}
-    assert by_name["local"].command == LAUNCH_CMD.resolve()
+    root = MCP_ROOT.resolve()
+    assert _launch_command(root, root / "local", "local") == LAUNCH_CMD.resolve()
 
 
 def test_launch_cds_to_the_companion_passed_workspace_env_var() -> None:
@@ -324,8 +334,8 @@ def test_discover_servers_finds_the_local_launch_in_a_synthetic_root(tmp_path: P
     assert servers[0].env["SOLUS_MCP_WORKSPACE"] == str(tmp_path)
 
 
-def test_discover_servers_finds_local_in_the_real_tree() -> None:
-    servers = discover_servers(MCP_ROOT)
+def test_discover_servers_finds_local_in_the_real_tree(tmp_path: Path) -> None:
+    servers = discover_servers(MCP_ROOT, envs_root=trusted_envs_root(tmp_path, FORK_DIR))
     by_name = {server.name: server for server in servers}
     assert "local" in by_name
     assert by_name["local"].command == LAUNCH.resolve()
