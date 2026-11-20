@@ -10,7 +10,8 @@ import type { RuntimeErrorCode } from './protocol'
 export const PROBE_CODE =
   'import json,platform,sys;' +
   'print(json.dumps({"implementation":platform.python_implementation().lower(),' +
-  '"version":"%d.%d.%d"%sys.version_info[:3]}))'
+  '"version":"%d.%d.%d"%sys.version_info[:3],' +
+  '"is_venv":sys.prefix!=sys.base_prefix}))'
 
 const PROBE_TIMEOUT_MS = 10_000
 const PROBE_MAX_BUFFER = 4096
@@ -48,23 +49,36 @@ export interface ProbeDeps {
 
 const fail = (error_code: RuntimeErrorCode): ProbeResult => ({ ok: false, error_code })
 
-function parseProbe(stdout: string): ProbeResult {
+interface ProbeOutput {
+  implementation: string
+  version: string
+  is_venv: boolean
+}
+
+/** Untrusted probe stdout → its three fields, or null. */
+function readProbeOutput(stdout: string): ProbeOutput | null {
   let raw: unknown
   try {
     raw = JSON.parse(stdout.trim())
   } catch {
-    return fail('python_probe_failed')
+    return null
   }
-  if (typeof raw !== 'object' || raw === null) return fail('python_probe_failed')
-  const { implementation, version } = raw as Record<string, unknown>
-  if (typeof implementation !== 'string' || typeof version !== 'string') {
-    return fail('python_probe_failed')
-  }
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return fail('python_probe_failed')
-  if (implementation !== 'cpython') return fail('python_not_cpython')
-  const match = VERSION_RE.exec(version)
+  if (typeof raw !== 'object' || raw === null) return null
+  const { implementation, version, is_venv } = raw as Record<string, unknown>
+  if (typeof implementation !== 'string' || typeof is_venv !== 'boolean') return null
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) return null
+  return { implementation, version, is_venv }
+}
+
+function parseProbe(stdout: string): ProbeResult {
+  const out = readProbeOutput(stdout)
+  if (out === null) return fail('python_probe_failed')
+  if (out.implementation !== 'cpython') return fail('python_not_cpython')
+  const match = VERSION_RE.exec(out.version)
   if (!match) return fail('python_unsupported_version')
-  return { ok: true, version, minor: `3.${match[1]}` as SupportedMinor }
+  // A venv's base can move or vanish under it; forks are built from a base.
+  if (out.is_venv) return fail('python_is_venv')
+  return { ok: true, version: out.version, minor: `3.${match[1]}` as SupportedMinor }
 }
 
 export async function probeInterpreter(path: string, deps: ProbeDeps): Promise<ProbeResult> {

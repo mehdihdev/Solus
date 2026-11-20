@@ -8,6 +8,8 @@ import { ATTENTION_ANCHOR } from '../settingsSections.constants'
 import { RevealList } from '../Reveal'
 import type { AttentionItem } from '../attention'
 import { DRIVE_HELPER_NAME } from '../driveCopy'
+import { attentionBody } from '../pythonTools/pythonToolsCopy'
+import { useSettingsStore } from '../../../store/settingsStore'
 
 export interface AttentionActions {
   openCaptureSettings: () => void
@@ -132,6 +134,7 @@ function PythonToolsCard({
   item: Extract<AttentionItem, { kind: 'python_tools' }>
   actions: AttentionActions
 }): React.JSX.Element {
+  const mode = useSettingsStore((s) => s.solMode)
   return (
     <Callout
       tone="warn"
@@ -142,8 +145,7 @@ function PythonToolsCard({
         </Button>
       }
     >
-      {item.tools.join(', ')} can&apos;t run until Solus sets up their Python environments on this
-      computer.
+      {attentionBody(item.tools, mode)}
     </Callout>
   )
 }

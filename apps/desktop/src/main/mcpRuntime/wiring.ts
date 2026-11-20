@@ -31,6 +31,21 @@ async function pickInterpreter(window: BrowserWindow | null): Promise<string | n
   return picked.canceled || picked.filePaths.length !== 1 ? null : picked.filePaths[0]
 }
 
+/** Main's own confirmation before the managed download (security LOW-3). */
+async function confirmManagedDownload(window: BrowserWindow | null): Promise<boolean> {
+  if (window === null) return false
+  const { response } = await dialog.showMessageBox(window, {
+    type: 'question',
+    buttons: ['Download', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1,
+    message: 'Download Python for Solus?',
+    detail:
+      'Solus will download CPython 3.12 from python-build-standalone (about 30 MB) into its app-data folder. Nothing else on your computer changes.'
+  })
+  return response === 0
+}
+
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile()
@@ -65,6 +80,8 @@ export function registerMcpRuntime(wiring: McpRuntimeWiring): void {
         isFile
       }),
     pickInterpreter: () => pickInterpreter(wiring.window()),
+    realpath: realLocalStateDeps.realpath,
+    confirmManagedDownload: () => confirmManagedDownload(wiring.window()),
     respawnCompanion,
     newRunId: randomUUID
   })

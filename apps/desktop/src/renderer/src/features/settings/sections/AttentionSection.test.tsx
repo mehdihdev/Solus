@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AttentionSection, type AttentionActions } from './AttentionSection'
+import { useSettingsStore } from '../../../store/settingsStore'
 
 function actions(): AttentionActions {
   return {
@@ -123,5 +124,22 @@ describe('AttentionSection — drive (SOLUSDEV-319)', () => {
     expect(a.setupLocalTools).not.toHaveBeenCalled()
     await userEvent.click(screen.getByRole('button', { name: 'Set up local tools' }))
     expect(a.setupLocalTools).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    [
+      'Guide',
+      "KiCad, Code can't run until Solus sets up their Python environments on this computer."
+    ],
+    ['Expert', 'KiCad, Code: setup needed.']
+  ] as const)('local tools card copy follows SOL mode %s', (mode, body) => {
+    useSettingsStore.setState({ solMode: mode })
+    render(
+      <AttentionSection
+        items={[{ kind: 'python_tools', tools: ['KiCad', 'Code'] }]}
+        actions={actions()}
+      />
+    )
+    expect(screen.getByRole('group', { name: 'Local tools need setup' })).toHaveTextContent(body)
   })
 })

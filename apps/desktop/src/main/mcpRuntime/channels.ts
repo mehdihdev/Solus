@@ -15,6 +15,8 @@ export const MCP_RUNTIME_CHANNELS = {
   progress: 'mcpRuntime:progress'
 } as const
 
+// `first_run` is reserved for a future first-run prompt: the API accepts it,
+// but nothing in the desktop sends it yet.
 export const PROVISION_TRIGGERS = ['settings', 'first_run', 'repair'] as const
 export type ProvisionTrigger = (typeof PROVISION_TRIGGERS)[number]
 
@@ -32,6 +34,9 @@ export type ChooseResult =
   | { ok: true; version_minor: '3.12' | '3.13' | null }
   | { ok: false; error_code: RuntimeErrorCode }
 
+/** `runId: null` ⇒ the user cancelled main's own download confirmation. */
+export type InstallManagedResult = { runId: string } | { runId: null; error_code: 'cancelled' }
+
 export interface ProgressPush {
   runId: string
   event: RuntimeEvent
@@ -44,7 +49,7 @@ export interface McpRuntimeBridge {
   /** `{ mode: 'path' }` without a path opens main's file picker. */
   choose(request: { mode: RuntimeMode; path?: string }): Promise<ChooseResult>
   provision(request: { trigger: ProvisionTrigger; forks?: string[] }): Promise<{ runId: string }>
-  installManaged(request: { consent: true }): Promise<{ runId: string }>
+  installManaged(request: { consent: true }): Promise<InstallManagedResult>
   cancel(request: { runId: string }): Promise<{ ok: boolean }>
   onProgress(handler: (push: ProgressPush) => void): () => void
 }

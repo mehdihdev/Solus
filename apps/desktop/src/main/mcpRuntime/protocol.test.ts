@@ -229,3 +229,25 @@ describe('createRuntimeLineReader', () => {
     expect(reader.stats().dropped).toBe(2)
   })
 })
+
+describe('python_is_venv (SOLUSDEV-329 Phase 4)', () => {
+  it('accepts python_is_venv as a candidate reason and an error code', () => {
+    const candidate = parseRuntimeLine(
+      JSON.stringify({
+        v: 1,
+        type: 'candidate',
+        path: '/home/dev/.venv/bin/python3.12',
+        version: '3.12.7',
+        implementation: 'cpython',
+        source: 'path',
+        supported: false,
+        reason: 'python_is_venv'
+      })
+    )
+    expect(candidate).toMatchObject({ reason: 'python_is_venv' })
+    const error = parseRuntimeLine(
+      JSON.stringify({ v: 1, type: 'error', error_code: 'python_is_venv', message: 'venv' })
+    )
+    expect(error).toMatchObject({ error_code: 'python_is_venv' })
+  })
+})

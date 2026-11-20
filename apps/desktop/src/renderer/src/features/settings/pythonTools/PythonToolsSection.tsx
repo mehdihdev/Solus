@@ -85,7 +85,9 @@ function Interpreter({ tools, mode }: { tools: PythonTools; mode: SolMode }): Re
           Choose…
         </Button>
       </div>
-      <InlineError message={tools.chooseError ? chooseErrorMessage(tools.chooseError) : null} />
+      <InlineError
+        message={tools.chooseError ? chooseErrorMessage(tools.chooseError, mode) : null}
+      />
     </div>
   )
 }

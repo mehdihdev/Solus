@@ -53,6 +53,11 @@ export const COPY = {
     Guide: 'Every tool is set up and ready.',
     Expert: 'Ready.'
   },
+  isVenv: {
+    Guide:
+      "That Python is a virtual environment: a private copy made from another Python. Solus can't build tools from it, so choose the Python it was made from instead.",
+    Expert: 'Virtual environment refused. Choose its base interpreter.'
+  },
   unavailable: {
     Guide:
       "Solus couldn't reach its local tools helper, so it can't check Python right now. Restart Solus and try again.",
@@ -91,14 +96,18 @@ export function candidateReason(code: RuntimeErrorCode | null, version: string |
       return 'Not CPython — Solus needs CPython'
     case 'python_store_alias':
       return 'Microsoft Store Python is not supported'
+    case 'python_is_venv':
+      return 'Virtual environment — choose the Python it was made from'
     default:
       return "Couldn't run it"
   }
 }
 
 /** The inline message for a refused choice. */
-export function chooseErrorMessage(code: RuntimeErrorCode): string {
+export function chooseErrorMessage(code: RuntimeErrorCode, mode: SolMode): string {
   switch (code) {
+    case 'python_is_venv':
+      return COPY.isVenv[mode]
     case 'python_unsupported_version':
       return 'That Python is not 3.12 or 3.13, so the choice was not saved.'
     case 'python_not_cpython':
@@ -123,6 +132,8 @@ export function fixHint(code: RuntimeErrorCode | null): string {
       return 'A package has no build for this Python. Choose Python 3.12, then Repair.'
     case 'disk_full':
       return 'Free some disk space, then Repair.'
+    case 'python_is_venv':
+      return 'Choose the Python this virtual environment was made from, then Repair.'
     case 'managed_not_installed':
       return 'Install the Solus-managed Python first.'
     case 'managed_hash_mismatch':
@@ -134,6 +145,12 @@ export function fixHint(code: RuntimeErrorCode | null): string {
       return 'Repair to try again.'
   }
 }
+
+/** Settings › Needs attention › Local tools need setup — the card's body. */
+export const attentionBody = (tools: readonly string[], mode: SolMode): string =>
+  mode === 'Guide'
+    ? `${tools.join(', ')} can't run until Solus sets up their Python environments on this computer.`
+    : `${tools.join(', ')}: setup needed.`
 
 export const stepLabel = (step: string, done: number, total: number | null): string =>
   total === null ? `${step}…` : `${step} ${done}/${total}`

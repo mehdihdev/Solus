@@ -21,6 +21,7 @@ export const RUNTIME_ERROR_CODES = [
   'python_unsupported_version',
   'python_not_cpython',
   'python_store_alias',
+  'python_is_venv',
   'python_probe_failed',
   'managed_not_installed',
   'venv_failed',
