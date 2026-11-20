@@ -4,6 +4,7 @@
 // Every call is through the typed bridge; null outside Electron.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
+  InstallManagedResult,
   Candidate,
   ChoiceView,
   ChooseResult,
@@ -113,7 +114,7 @@ function useRun(
   start: (
     kind: RunView['kind'],
     trigger: ProvisionTrigger,
-    call: () => Promise<{ runId: string }>
+    call: () => Promise<InstallManagedResult>
   ) => void
   failed: boolean
 } {
@@ -131,11 +132,17 @@ function useRun(
     }
   }, [run, onFinished])
   const start = useCallback(
-    (kind: RunView['kind'], trigger: ProvisionTrigger, call: () => Promise<{ runId: string }>) => {
+    (
+      kind: RunView['kind'],
+      trigger: ProvisionTrigger,
+      call: () => Promise<InstallManagedResult>
+    ) => {
       setFailed(false)
       setRun(newRun(kind, trigger))
       call().then(
-        ({ runId }) => setRun((r) => (r && r.runId === null ? { ...r, runId } : r)),
+        // runId null: the user said no in main's own confirmation — nothing ran.
+        ({ runId }) =>
+          setRun((r) => (runId === null ? null : r && r.runId === null ? { ...r, runId } : r)),
         () => {
           setFailed(true) // busy / helper unavailable: nothing ran
           setRun(null)

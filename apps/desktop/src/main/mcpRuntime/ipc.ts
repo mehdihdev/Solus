@@ -11,6 +11,7 @@ import {
   PROVISION_TRIGGERS,
   type ChooseResult,
   type ChoiceView,
+  type InstallManagedResult,
   type ProvisionTrigger
 } from './channels'
 import { isForkName, type Candidate, type ForkStatus, type RuntimeEvent } from './protocol'
@@ -49,8 +50,12 @@ export interface McpRuntimeIpcDeps {
   run: RuntimeRunDeps
   settings: RuntimeSettings
   probe(path: string): Promise<ProbeResult>
-  /** Main's file dialog; null when the user cancels. */
+  /** Main's file dialog; null when the user cancels. A user gesture, so its pick may be probed. */
   pickInterpreter(): Promise<string | null>
+  /** Canonical path, or null when it does not exist. */
+  realpath(path: string): string | null
+  /** Main's own dialog naming the managed download and its size; true ⇒ go ahead. */
+  confirmManagedDownload(): Promise<boolean>
   respawnCompanion(): void
   newRunId(): string
 }
@@ -61,7 +66,7 @@ export interface McpRuntimeIpc {
   getChoice(event: IpcEvent): Promise<ChoiceView>
   choose(event: IpcEvent, input: unknown): Promise<ChooseResult>
   provision(event: IpcEvent, input: unknown): Promise<{ runId: string }>
-  installManaged(event: IpcEvent, input: unknown): Promise<{ runId: string }>
+  installManaged(event: IpcEvent, input: unknown): Promise<InstallManagedResult>
   cancel(event: IpcEvent, input: unknown): Promise<{ ok: boolean }>
 }
 
@@ -87,6 +92,9 @@ const isConsent = (input: unknown): boolean =>
 
 export function createMcpRuntimeIpc(deps: McpRuntimeIpcDeps): McpRuntimeIpc {
   let active: { runId: string; run: RuntimeRun } | null = null
+  /** Realpaths of the supported candidates from the latest detect: the only
+   *  renderer-named paths main will ever execute (security MEDIUM-1). */
+  let detected: ReadonlySet<string> = new Set()
 
   const gate = (event: IpcEvent): void => {
     if (!deps.isAllowed(event)) throw new Error('unauthorized sender')
@@ -136,8 +144,14 @@ export function createMcpRuntimeIpc(deps: McpRuntimeIpcDeps): McpRuntimeIpc {
       : { mode: view.mode === 'managed' ? 'managed' : 'auto', path: null }
   }
 
-  /** Resolve the path to save: the request's, or the picker's. */
+  const wasDetected = (path: string): boolean => {
+    const real = deps.realpath(path)
+    return real !== null && detected.has(real)
+  }
+
+  /** Resolve the path to save: a detected candidate's, or the picker's. */
   const choosePath = async (path: string | null): Promise<ChooseResult & { path?: string }> => {
+    if (path !== null && !wasDetected(path)) return { ok: false, error_code: 'python_not_found' }
     const target = path ?? (await deps.pickInterpreter())
     if (target === null) return { ok: false, error_code: 'cancelled' }
     const probe = await deps.probe(target)
@@ -166,7 +180,14 @@ export function createMcpRuntimeIpc(deps: McpRuntimeIpcDeps): McpRuntimeIpc {
     async detect(event) {
       gate(event)
       const events = await collect({ command: 'detect' })
-      return { candidates: events.filter((e): e is Candidate => e.type === 'candidate') }
+      const candidates = events.filter((e): e is Candidate => e.type === 'candidate')
+      detected = new Set(
+        candidates
+          .filter((c) => c.supported)
+          .map((c) => deps.realpath(c.path))
+          .filter((real): real is string => real !== null)
+      )
+      return { candidates }
     },
     async status(event) {
       gate(event)
@@ -195,6 +216,9 @@ export function createMcpRuntimeIpc(deps: McpRuntimeIpcDeps): McpRuntimeIpc {
     async installManaged(event, input) {
       gate(event)
       if (!isConsent(input)) throw new Error('consent required')
+      // The renderer's consent alone is not enough (security LOW-3).
+      const confirmed = await deps.confirmManagedDownload().catch(() => false)
+      if (!confirmed) return { runId: null, error_code: 'cancelled' }
       return {
         runId: startTracked(event, { command: 'install-managed' }, INSTALL_MANAGED_TIMEOUT_MS)
       }

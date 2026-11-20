@@ -59,6 +59,8 @@ function setup(over: Partial<McpRuntimeIpcDeps> = {}): {
     },
     probe: vi.fn(async () => ({ ok: true as const, version: '3.12.7', minor: '3.12' as const })),
     pickInterpreter: vi.fn(async () => '/picked/python3.13'),
+    realpath: (p: string) => p,
+    confirmManagedDownload: vi.fn(async () => true),
     respawnCompanion: vi.fn(),
     newRunId: (() => {
       let n = 0
@@ -78,6 +80,28 @@ const DONE = (ok: number, failed = 0): Record<string, unknown> => ({
   failed,
   skipped: 0
 })
+const candidate = (path: string, supported = true): Record<string, unknown> => ({
+  type: 'candidate',
+  path,
+  version: supported ? '3.12.7' : '3.11.9',
+  implementation: 'cpython',
+  source: 'path',
+  supported,
+  reason: supported ? null : 'python_unsupported_version'
+})
+
+/** Runs `detect` to completion with the given candidate lines. */
+async function detectWith(
+  t: ReturnType<typeof setup>,
+  ...lines: Record<string, unknown>[]
+): Promise<void> {
+  const p = t.ipc.detect(t.ev)
+  await flush()
+  t.children.at(-1)!.emitLines(...lines, DONE(lines.length))
+  await t.children.at(-1)!.close(0)
+  await p
+}
+
 const foreign = { sender: { send: vi.fn(), isDestroyed: () => false } }
 
 describe('sender gate', () => {
@@ -168,8 +192,10 @@ describe('getChoice / choose', () => {
     })
   })
 
-  it('a path is re-probed in main before it is saved', async () => {
-    const { ipc, ev, deps, saved } = setup()
+  it('a detected supported path is re-probed in main before it is saved', async () => {
+    const t = setup()
+    const { ipc, ev, deps, saved } = t
+    await detectWith(t, candidate('/usr/bin/python3.12'))
     await expect(ipc.choose(ev, { mode: 'path', path: '/usr/bin/python3.12' })).resolves.toEqual({
       ok: true,
       version_minor: '3.12'
@@ -178,10 +204,12 @@ describe('getChoice / choose', () => {
     expect(saved).toEqual([{ mode: 'path', path: '/usr/bin/python3.12' }])
   })
 
-  it('an unsupported pick is not saved', async () => {
-    const { ipc, ev, saved } = setup({
+  it("a detected path that fails main's re-probe is not saved", async () => {
+    const t = setup({
       probe: async () => ({ ok: false, error_code: 'python_unsupported_version' })
     })
+    const { ipc, ev, saved } = t
+    await detectWith(t, candidate('/usr/bin/python3'))
     await expect(ipc.choose(ev, { mode: 'path', path: '/usr/bin/python3' })).resolves.toEqual({
       ok: false,
       error_code: 'python_unsupported_version'
@@ -196,6 +224,63 @@ describe('getChoice / choose', () => {
     }
     expect(deps.probe).not.toHaveBeenCalled()
     expect(saved).toEqual([])
+  })
+
+  it('an arbitrary absolute path not in the detect results is refused and never run', async () => {
+    const t = setup()
+    const { ipc, ev, deps, saved } = t
+    await detectWith(t, candidate('/usr/bin/python3.12'))
+    const spawned = vi.mocked(deps.run.spawn).mock.calls.length
+    await expect(ipc.choose(ev, { mode: 'path', path: '/tmp/evil' })).resolves.toEqual({
+      ok: false,
+      error_code: 'python_not_found'
+    })
+    expect(deps.probe).not.toHaveBeenCalled()
+    expect(deps.pickInterpreter).not.toHaveBeenCalled()
+    expect(vi.mocked(deps.run.spawn).mock.calls.length).toBe(spawned)
+    expect(saved).toEqual([])
+  })
+
+  it('a path is refused before any detect has run', async () => {
+    const { ipc, ev, deps } = setup()
+    await expect(ipc.choose(ev, { mode: 'path', path: '/usr/bin/python3.12' })).resolves.toEqual({
+      ok: false,
+      error_code: 'python_not_found'
+    })
+    expect(deps.probe).not.toHaveBeenCalled()
+  })
+
+  it('a detected but unsupported candidate is refused without probing', async () => {
+    const t = setup()
+    await detectWith(t, candidate('/usr/bin/python3.11', false))
+    await expect(
+      t.ipc.choose(t.ev, { mode: 'path', path: '/usr/bin/python3.11' })
+    ).resolves.toMatchObject({ ok: false })
+    expect(t.deps.probe).not.toHaveBeenCalled()
+  })
+
+  it('matches detected candidates by realpath', async () => {
+    const links: Record<string, string> = {
+      '/usr/local/bin/python3': '/opt/py/bin/python3.12',
+      '/opt/py/bin/python3.12': '/opt/py/bin/python3.12'
+    }
+    const t = setup({ realpath: (p) => links[p] ?? null })
+    await detectWith(t, candidate('/opt/py/bin/python3.12'))
+    await expect(
+      t.ipc.choose(t.ev, { mode: 'path', path: '/usr/local/bin/python3' })
+    ).resolves.toMatchObject({ ok: true })
+    await expect(t.ipc.choose(t.ev, { mode: 'path', path: '/missing' })).resolves.toMatchObject({
+      ok: false
+    })
+  })
+
+  it('a newer detect replaces the accepted candidates', async () => {
+    const t = setup()
+    await detectWith(t, candidate('/usr/bin/python3.12'))
+    await detectWith(t, candidate('/usr/bin/python3.13'))
+    await expect(
+      t.ipc.choose(t.ev, { mode: 'path', path: '/usr/bin/python3.12' })
+    ).resolves.toMatchObject({ ok: false, error_code: 'python_not_found' })
   })
 
   it('mode path without a path opens the picker, then probes the pick', async () => {
@@ -329,6 +414,33 @@ describe('installManaged', () => {
       await expect(ipc.installManaged(ev, bad)).rejects.toThrow('consent required')
     }
     expect(deps.run.spawn).not.toHaveBeenCalled()
+  })
+
+  it("main's own confirmation is asked before the download, and a cancel runs nothing", async () => {
+    const { ipc, ev, deps } = setup({ confirmManagedDownload: vi.fn(async () => false) })
+    await expect(ipc.installManaged(ev, { consent: true })).resolves.toEqual({
+      runId: null,
+      error_code: 'cancelled'
+    })
+    expect(deps.confirmManagedDownload).toHaveBeenCalledTimes(1)
+    expect(deps.run.spawn).not.toHaveBeenCalled()
+  })
+
+  it('a failed confirmation dialog runs nothing', async () => {
+    const { ipc, ev, deps } = setup({
+      confirmManagedDownload: vi.fn(async () => Promise.reject(new Error('no window')))
+    })
+    await expect(ipc.installManaged(ev, { consent: true })).resolves.toEqual({
+      runId: null,
+      error_code: 'cancelled'
+    })
+    expect(deps.run.spawn).not.toHaveBeenCalled()
+  })
+
+  it('does not ask for confirmation without the renderer consent', async () => {
+    const { ipc, ev, deps } = setup()
+    await expect(ipc.installManaged(ev, {})).rejects.toThrow('consent required')
+    expect(deps.confirmManagedDownload).not.toHaveBeenCalled()
   })
 
   it('runs `runtime install-managed` and never respawns', async () => {

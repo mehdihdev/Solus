@@ -147,6 +147,21 @@ describe('none found', () => {
   })
 })
 
+describe('managed download cancelled in main', () => {
+  it("cancelling main's confirmation leaves no run and no error, and the offer stays", async () => {
+    const bridge = fakeBridge({ candidates: [cand({ ...PY39 })] })
+    bridge.installManaged = vi.fn(async () => ({ runId: null, error_code: 'cancelled' as const }))
+    await renderWith(bridge)
+    await userEvent.click(screen.getByRole('button', { name: /Install Python for Solus/ }))
+    expect(
+      await screen.findByRole('button', { name: /Install Python for Solus/ })
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Setup couldn't start. Try again in a moment.")).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
+    expect(bridge.choose).not.toHaveBeenCalled()
+  })
+})
+
 describe('candidates', () => {
   it('lists supported interpreters first and unsupported ones dimmed with the reason', async () => {
     await renderWith(fakeBridge())
@@ -184,7 +199,9 @@ describe('candidates', () => {
       await userEvent.click(await screen.findByRole('button', { name: 'Set up now' }))
       const refreshes = vi.mocked(bridge.status).mock.calls.length
       bridge.push(DONE(outcome, 0, 1))
-      await waitFor(() => expect(vi.mocked(bridge.status).mock.calls.length).toBeGreaterThan(refreshes))
+      await waitFor(() =>
+        expect(vi.mocked(bridge.status).mock.calls.length).toBeGreaterThan(refreshes)
+      )
       expect(screen.getAllByText('Needs setup')).toHaveLength(2)
       unmount()
     }
