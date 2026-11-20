@@ -173,6 +173,23 @@ describe('candidates', () => {
     expect(screen.getAllByText('Needs setup')).toHaveLength(2)
   })
 
+  it('a cancelled or failed setup keeps the new choice marked as needing setup', async () => {
+    // Old envs still pass trust, so status says ready; only a fully ok run on the
+    // new base may clear the marking (SOLUSDEV-329 Phase 4).
+    for (const outcome of ['cancelled', 'failed', 'partial']) {
+      const bridge = fakeBridge()
+      const { unmount } = render(<Harness bridge={bridge} />)
+      await waitFor(() => expect(screen.queryByTestId('python-detecting')).toBeNull())
+      await userEvent.click(screen.getByRole('radio', { name: /python3\.13/ }))
+      await userEvent.click(await screen.findByRole('button', { name: 'Set up now' }))
+      const refreshes = vi.mocked(bridge.status).mock.calls.length
+      bridge.push(DONE(outcome, 0, 1))
+      await waitFor(() => expect(vi.mocked(bridge.status).mock.calls.length).toBeGreaterThan(refreshes))
+      expect(screen.getAllByText('Needs setup')).toHaveLength(2)
+      unmount()
+    }
+  })
+
   it('Choose… asks main for its picker and reports a picked interpreter', async () => {
     const bridge = fakeBridge()
     bridge.choose = vi.fn(async () => ({ ok: true as const, version_minor: '3.13' as const }))

@@ -189,7 +189,9 @@ export function usePythonTools(bridge: McpRuntimeBridge | null): PythonTools {
         errorCode: firstFailingCode(done),
         trigger: done.trigger
       })
-      setChoiceChanged(false)
+      // Old envs keep passing trust, so only a fully ok run on the new base may
+      // drop the "choice changed" marking; cancelled/failed/partial keep it.
+      if (done.done?.outcome === 'ok') setChoiceChanged(false)
       refreshStatus()
     },
     [choose, refreshStatus]
