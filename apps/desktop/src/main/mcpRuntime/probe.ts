@@ -49,29 +49,36 @@ export interface ProbeDeps {
 
 const fail = (error_code: RuntimeErrorCode): ProbeResult => ({ ok: false, error_code })
 
-function parseProbe(stdout: string): ProbeResult {
+interface ProbeOutput {
+  implementation: string
+  version: string
+  is_venv: boolean
+}
+
+/** Untrusted probe stdout → its three fields, or null. */
+function readProbeOutput(stdout: string): ProbeOutput | null {
   let raw: unknown
   try {
     raw = JSON.parse(stdout.trim())
   } catch {
-    return fail('python_probe_failed')
+    return null
   }
-  if (typeof raw !== 'object' || raw === null) return fail('python_probe_failed')
+  if (typeof raw !== 'object' || raw === null) return null
   const { implementation, version, is_venv } = raw as Record<string, unknown>
-  if (
-    typeof implementation !== 'string' ||
-    typeof version !== 'string' ||
-    typeof is_venv !== 'boolean'
-  ) {
-    return fail('python_probe_failed')
-  }
-  if (!/^\d+\.\d+\.\d+$/.test(version)) return fail('python_probe_failed')
-  if (implementation !== 'cpython') return fail('python_not_cpython')
-  const match = VERSION_RE.exec(version)
+  if (typeof implementation !== 'string' || typeof is_venv !== 'boolean') return null
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)) return null
+  return { implementation, version, is_venv }
+}
+
+function parseProbe(stdout: string): ProbeResult {
+  const out = readProbeOutput(stdout)
+  if (out === null) return fail('python_probe_failed')
+  if (out.implementation !== 'cpython') return fail('python_not_cpython')
+  const match = VERSION_RE.exec(out.version)
   if (!match) return fail('python_unsupported_version')
   // A venv's base can move or vanish under it; forks are built from a base.
-  if (is_venv) return fail('python_is_venv')
-  return { ok: true, version, minor: `3.${match[1]}` as SupportedMinor }
+  if (out.is_venv) return fail('python_is_venv')
+  return { ok: true, version: out.version, minor: `3.${match[1]}` as SupportedMinor }
 }
 
 export async function probeInterpreter(path: string, deps: ProbeDeps): Promise<ProbeResult> {
