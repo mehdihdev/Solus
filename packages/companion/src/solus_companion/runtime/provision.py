@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError
+
 from solus_companion.runtime.errors import ErrorCode, RuntimeSetupError
 from solus_companion.runtime.forks import ForkInfo
 from solus_companion.runtime.ownership import OwnerOnly
@@ -211,7 +213,16 @@ class EnvBuilder:
         self._progress(fork.name, "install", total, total)
 
     def _stamp(self, fork: ForkInfo, base: BaseInterpreter, tmp: Path) -> None:
-        stamp = Stamp(
+        try:
+            stamp = self._new_stamp(fork, base)
+        except ValidationError as exc:
+            logger.warning("fork %s stamp refused: %d error(s)", fork.name, exc.error_count())
+            raise RuntimeSetupError("internal") from exc
+        write_stamp(tmp, stamp)
+        self._progress(fork.name, "stamp", 1, 1)
+
+    def _new_stamp(self, fork: ForkInfo, base: BaseInterpreter) -> Stamp:
+        return Stamp(
             schema_version=1,
             fork=fork.name,
             lock_sha256=lock_sha256(fork.lock),
@@ -223,8 +234,6 @@ class EnvBuilder:
             ),
             created_at=self._now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
-        write_stamp(tmp, stamp)
-        self._progress(fork.name, "stamp", 1, 1)
 
     def _swap(self, fork: str, tmp: Path) -> None:
         """Replace whole, never patch: the old env moves aside, the new one

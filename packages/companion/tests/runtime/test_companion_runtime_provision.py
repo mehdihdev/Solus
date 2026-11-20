@@ -206,6 +206,17 @@ def test_an_interrupted_swap_leftover_is_removed_when_the_env_exists(tmp_path: P
     assert evaluate_trust("kicad", fork.lock, envs, platform="darwin", policy=POLICY).ready
 
 
+def test_an_unstampable_base_is_internal_not_a_traceback(tmp_path: Path) -> None:
+    envs = tmp_path / "envs"
+    fork = _fork(tmp_path / "mcp")
+    base = BaseInterpreter(path="/x/" + "p" * 4096, version="3.12.7", managed=False)
+
+    outcome = _builder(envs, FakeRunner(ProvisionScript())).build(fork, base)
+
+    assert (outcome.outcome, outcome.error_code) == ("failed", "internal")
+    assert sorted(p.name for p in envs.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("stderr", "code"),
     [
