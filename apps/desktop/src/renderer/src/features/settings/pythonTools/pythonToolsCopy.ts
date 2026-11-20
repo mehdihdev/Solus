@@ -79,7 +79,11 @@ const FORK_NAMES: Readonly<Record<string, string>> = {
 }
 
 /** The OS a platform-limited tool runs on (wireflow "— (Windows only)"). */
-const FORK_PLATFORM: Readonly<Record<string, string>> = { altium: 'Windows' }
+const FORK_PLATFORM: Readonly<Record<string, string>> = {
+  altium: 'Windows',
+  gazebo: 'Linux and macOS',
+  isaac: 'Linux'
+}
 
 export const forkName = (fork: string): string => FORK_NAMES[fork] ?? fork
 

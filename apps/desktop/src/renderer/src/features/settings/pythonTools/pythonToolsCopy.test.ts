@@ -5,7 +5,8 @@ import {
   attentionBody,
   candidateReason,
   chooseErrorMessage,
-  fixHint
+  fixHint,
+  unsupportedPlatform
 } from './pythonToolsCopy'
 
 describe('python_is_venv copy', () => {
@@ -41,5 +42,14 @@ describe('attentionBody', () => {
 
   it('Expert names the tools and the state only', () => {
     expect(attentionBody(['KiCad', 'Code'], 'Expert')).toBe('KiCad, Code: setup needed.')
+  })
+})
+
+describe('unsupportedPlatform', () => {
+  it('names where each OS-limited tool runs (platform.json, SOLUSDEV-329)', () => {
+    expect(unsupportedPlatform('altium')).toBe('— (Windows only)')
+    expect(unsupportedPlatform('isaac')).toBe('— (Linux only)')
+    expect(unsupportedPlatform('gazebo')).toBe('— (Linux and macOS only)')
+    expect(unsupportedPlatform('someday')).toBe('— (not for this OS)')
   })
 })
