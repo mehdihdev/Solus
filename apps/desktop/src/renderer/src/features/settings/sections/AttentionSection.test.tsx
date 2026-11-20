@@ -127,7 +127,10 @@ describe('AttentionSection — drive (SOLUSDEV-319)', () => {
   })
 
   it.each([
-    ['Guide', "KiCad, Code can't run until Solus sets up their Python environments on this computer."],
+    [
+      'Guide',
+      "KiCad, Code can't run until Solus sets up their Python environments on this computer."
+    ],
     ['Expert', 'KiCad, Code: setup needed.']
   ] as const)('local tools card copy follows SOL mode %s', (mode, body) => {
     useSettingsStore.setState({ solMode: mode })
