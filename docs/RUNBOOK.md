@@ -185,7 +185,7 @@ Needs membership of the `dialout` group (or the device world-readable) to enumer
 ## 6. The bridge and the MCP forks
 
 ```bash
-make mcp-forks     # once; hash-verified installs into each fork's .venv
+make mcp-forks     # once; hash-verified envs into the app-data mcp-envs/ folder (not in-tree .venv)
 pnpm dev:all
 ```
 
@@ -199,9 +199,16 @@ kicad overlay: registered [7 tools]
 
 ### Traps
 
-- **`make mcp-forks` uses `python -m venv --copies`, not `uv venv`,** deliberately: uv symlinks the
-  interpreter to the system python and the companion refuses it
-  (_"REFUSED private interpreter … resolves outside"_). It must be a real copy inside the tree.
+- **`make mcp-forks` needs `uv` and a CPython 3.12 or 3.13.** It runs `solus-companion runtime
+provision --all --python <base>`, where `<base>` is `SOLUS_MCP_FORK_PYTHON` (default `python3.12`,
+  resolved on PATH). Envs go to the app-data `mcp-envs/` folder, the same place a packaged app uses.
+  A worktree that needs its own envs sets `SOLUS_COMPANION_MCP_ENVS_ROOT` to an absolute path. In-tree
+  `<fork>/.venv` folders are ignored.
+- **Envs are real `venv --copies` copies, not `uv venv` symlinks,** by design. The companion refuses
+  an interpreter that resolves outside its env (_"REFUSED private interpreter … resolves outside"_).
+- **Dev runs need the forks root.** `make mcp-forks` also needs `SOLUS_COMPANION_INTEGRATIONS_ROOT`
+  set to this repo's `integrations/mcp` until `scripts/install-mcp-forks.sh` exports it itself
+  (`mcp-fork-runtime.md` §12). Without it, provisioning fails with `internal`.
 - The companion **does not spawn until a project is selected** — its bridge URL is project-scoped
   and baked in at spawn. No project ⇒ no companion ⇒ "Bridge offline".
 - `altium` will fail with `SOLUS_MCP_WORKSPACE is not set`; `fusion` needs Autodesk Fusion running

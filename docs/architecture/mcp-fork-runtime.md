@@ -1,6 +1,8 @@
 # MCP fork runtime — Python environments on the customer machine
 
-**Status:** interface frozen for SOLUSDEV-329 (T0). **Governs:** ADR-031 amendment 2026-11-19,
+**Status:** interface frozen for SOLUSDEV-329 (T0); reconciled with the implementation 2026-11-19
+(T8). Where the code settled a detail this doc left open, the text below records the code's behaviour.
+**Governs:** ADR-031 amendment 2026-11-19,
 ADR-034 amendment 2026-11-19. **Related:** `docs/contracts/bridge-protocol.md` (status frame),
 `docs/contracts/local-state.md` (`config.json`), `docs/wireflows/settings.md` (Python for local
 tools), `apps/desktop/docs/companion-packaging.md`.
@@ -50,21 +52,38 @@ machine state (`~/.solus/config.json` → `mcp_runtime`, §8).
    managed one (`managed`). Accepted only if a health probe
    `<python> -I -c "<fixed probe>"` reports `implementation == "cpython"` and `(major, minor) in
 {(3,12),(3,13)}`. Refused: other versions, PyPy, the Microsoft Store alias
-   (`…\WindowsApps\python*.exe`), the Xcode stub (`/usr/bin/python3` resolving into
-   `CommandLineTools`/`Xcode` with version < 3.12 is simply unsupported).
+   (`…\WindowsApps\python*.exe`). Code: `python_unsupported_version` for other versions, `python_not_cpython`
+   for PyPy, `python_store_alias` for the Store alias.
+   - **`auto`** (neither `--python` nor `--managed`) = `best_candidate`: the first supported
+     candidate in detection order, with a 3.12.x candidate sorted ahead of 3.13.x. No supported
+     candidate → `python_not_found`.
+   - **Xcode stub:** on macOS, `/usr/bin/python3` is reported `python_unsupported_version` **without
+     being executed** when neither `Library/Developer/CommandLineTools` nor `Applications/Xcode.app`
+     exists under the system root. Running the stub would pop Apple's install dialog. With developer
+     tools installed it is probed like any other candidate.
 2. `<python> -I -m venv --copies <tmp>` where `<tmp>` is a sibling of `<data>/mcp-envs/<fork>`.
-3. `<tmp-python> -I -m pip --isolated install --require-hashes --only-binary=:all: --no-deps
+3. **Health check, before pip.** The copy's interpreter runs the probe immediately after venv
+   creation and must resolve inside `<tmp>`. Failure → `venv_copies_unhealthy` (§6), env discarded.
+   This fails fast, before any network use.
+4. `<tmp-python> -I -m pip --isolated install --require-hashes --only-binary=:all: --no-deps
 --no-input --disable-pip-version-check --index-url https://pypi.org/simple -r <lock>` where
    `<lock>` is the fork's shipped `requirements.lock.txt`.
-4. Post-create health check: the env's interpreter runs the probe again and must resolve inside
-   `<tmp>`. Failure → `venv_copies_unhealthy` (§6), env discarded.
 5. Write `solus-stamp.json` (atomic: temp + rename), then atomically swap `<tmp>` into place
    (old env removed only after the new one is complete).
 
-All subprocesses: argv lists only, never a shell; child env built from scratch — `PIP_*`,
-`PYTHON*`, `VIRTUAL_ENV`, `CONDA_*` never forwarded; `PATH` a fixed system constant; timeouts per
-step (venv 120 s, pip 600 s per fork); stdout/stderr captured with a 64 KiB cap and redacted before
-any of it reaches an error message. One fork failing never stops the others.
+All subprocesses: argv lists only, never a shell. **Child env is built from scratch**
+(`scrubbed_env`, `runtime/proc.py`), not filtered from the parent:
+
+- POSIX: only `HOME`, `TMPDIR`, `LANG` are kept, plus a fixed `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
+- Windows: an allowlist (`SYSTEMROOT`, `WINDIR`, `TEMP`, `TMP`, `USERPROFILE`, `LOCALAPPDATA`,
+  `APPDATA`) with a fixed `PATH` built from `SYSTEMROOT`.
+- So `PIP_*`, `PYTHON*`, `VIRTUAL_ENV`, `CONDA_*` are never forwarded, and **proxy variables
+  (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, …) are not
+  forwarded either.** Known limitation: a user behind a proxy or TLS-intercepting CA gets
+  `network_unreachable`. Open follow-up (§12).
+
+Timeouts per step (venv 120 s, pip 600 s per fork); stdout/stderr captured with a 64 KiB cap and
+redacted before any of it reaches an error message. One fork failing never stops the others.
 
 ## 4. Stamp — `solus-stamp.json` (schema v1)
 
@@ -130,6 +149,30 @@ The only provisioning entry point, for desktop main and `make mcp-forks` alike. 
 Common flags: `--envs-root PATH` (dev/test only; mirrors the env override). Forks not supported on
 the host platform (`platform.json`) are skipped and reported `fork_result` `skipped`.
 
+**Settled behaviour (code, 2026-11-19):**
+
+- **Base selection in `provision`.** `--python PATH` and `--managed` are mutually exclusive. With
+  **neither** flag the mode is `auto`: the best supported candidate, 3.12 preferred (§3 step 1).
+  The desktop's `auto` mode sends neither flag; `path` sends `--python`; `managed` sends `--managed`.
+- **Usage errors exit 3 with empty stdout.** Covered: neither `--fork` nor `--all`; both `--fork`/`--all`
+  forms with an unknown name; a fork name that is not a fork directory; a fork directory with no
+  `requirements.lock.txt` (treated as unknown, not as skipped); a relative `--python` or
+  `--envs-root`; `--python` together with `--managed`. Nothing is written before a usage error.
+- **No integrations root.** `provision` (and `status`) with no forks tree found fails: an `error`
+  line with `error_code` `internal`, a `done` with outcome `failed`, exit 2. It never reports `ok`
+  for a run that could build nothing, and it writes nothing. The root comes from
+  `SOLUS_COMPANION_INTEGRATIONS_ROOT` when set, else a packaged `mcp/` beside the binary.
+  Dev desktop sets the variable for the CLI (`runtimeCliEnv`, §9); see §12 for `make mcp-forks`.
+- **Oversize candidate lines.** A line over 4096 bytes is **withheld** (not sent, not truncated)
+  and logged to stderr. The emitter never truncates a path; a truncated path would be a lie
+  the desktop might act on. `clip()` applies only to `message` fields.
+- **Cancellation.** SIGINT / SIGTERM / CTRL_BREAK raise `Cancelled` in the build. The in-progress
+  fork emits `fork_result` with `outcome` **`failed`** and `error_code` `cancelled` (the
+  `fork_result` outcome enum has no `cancelled`; the run-level `done` carries `cancelled`). Forks
+  not yet started are not reported. Exit 130.
+- **`install-managed` output.** `progress*`, then either one `error` plus `done` `failed`, or a
+  `done` `ok` with `ok: 1`. It emits no `fork_result`.
+
 ### Output — JSON Lines on stdout
 
 One JSON object per line, UTF-8, each line ≤ 4096 bytes including `\n`. Nothing else is written to
@@ -194,11 +237,28 @@ against the release's published `SHA256SUMS`. Until then the manifest carries pl
 (all zeros) and `install-managed` refuses with `managed_hash_mismatch` — never a real-looking
 invented hash.
 
+The shipped manifest (`runtime/managed_manifest.json`) adds one Solus field, **`verified`**
+(bool, default `false`), that is the explicit form of the gate. Shipped state today:
+`verified: false`, `release: "PLACEHOLDER"`, all hashes zero.
+
+**Refusal order in `install-managed` (code):**
+
+1. No asset for this platform → `managed_download_failed`.
+2. `verified` is not `true`, **or** this platform's asset `sha256` is all zeros →
+   `managed_hash_mismatch`. This happens **before any network call and before any write**.
+   The zero check looks at the current platform's asset only; a placeholder on another platform
+   does not block this one. Flipping the flag and hashes is a human gate, together.
+3. Download (byte cap enforced while streaming), SHA-256 check, vetted extract, swap.
+
+On success the interpreter is `<data>/mcp-python/<release>/python/bin/python3`
+(`python/python.exe` on Windows). `provision --managed` uses that path. The managed root is
+`<envs-root>/../mcp-python` (§2), so `--envs-root` moves it too.
+
 Download: HTTPS only, redirects only to `https` GitHub release hosts, streamed to a temp file with
 the byte cap enforced while reading, SHA-256 verified **before** extraction. Extraction: tar
 `filter="data"` semantics — no absolute paths, no `..`, no links pointing outside the target, no
 device files; any refusal → `managed_extract_refused`, temp tree removed. Result lands in
-`<data>/mcp-python/<release>/` (owner-only) and is then used as `--python` for `provision`.
+`<data>/mcp-python/<release>/` (owner-only) and is then used by `provision --managed`.
 
 ## 8. Machine state — `~/.solus/config.json` → `mcp_runtime`
 
@@ -217,19 +277,44 @@ All channels are `ipcMain.handle`, sender-gated to the app's own windows (same g
 Main spawns the CLI via `resolveCompanionCommand` with `execFile`-style argv; at most one
 `provision`/`install-managed` run at a time (a second call rejects `busy`).
 
-| Channel                     | Request                                                            | Response                                                                       |
-| --------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `mcpRuntime:detect`         | —                                                                  | `{ candidates: Candidate[] }`                                                  |
-| `mcpRuntime:status`         | —                                                                  | `{ forks: ForkStatus[] }`                                                      |
-| `mcpRuntime:getChoice`      | —                                                                  | `{ mode: 'auto'\|'path'\|'managed', path: string \| null, writable: boolean }` |
-| `mcpRuntime:choose`         | `{ mode, path? }` (`path` absolute, ≤ 4096)                        | `{ ok: true } \| { ok: false, error_code }` — `path` is re-probed in main      |
-| `mcpRuntime:provision`      | `{ trigger: 'settings'\|'first_run'\|'repair', forks?: string[] }` | `{ runId: string }` — then progress events, final `done`                       |
-| `mcpRuntime:installManaged` | `{ consent: true }` (literal)                                      | `{ runId: string }`                                                            |
-| `mcpRuntime:cancel`         | `{ runId }`                                                        | `{ ok: boolean }`                                                              |
+| Channel                     | Request                                                            | Response                                                                                 |
+| --------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `mcpRuntime:detect`         | —                                                                  | `{ candidates: Candidate[] }`                                                            |
+| `mcpRuntime:status`         | —                                                                  | `{ forks: ForkStatus[] }`                                                                |
+| `mcpRuntime:getChoice`      | —                                                                  | `{ mode: 'auto'\|'path'\|'managed', path: string \| null, writable: boolean }`           |
+| `mcpRuntime:choose`         | `{ mode, path? }` (`path` absolute, ≤ 4096)                        | `{ ok: true, version_minor } \| { ok: false, error_code }` — `path` is re-probed in main |
+| `mcpRuntime:provision`      | `{ trigger: 'settings'\|'first_run'\|'repair', forks?: string[] }` | `{ runId: string }` — then progress events, final `done`                                 |
+| `mcpRuntime:installManaged` | `{ consent: true }` (literal)                                      | `{ runId: string }`                                                                      |
+| `mcpRuntime:cancel`         | `{ runId }`                                                        | `{ ok: boolean }`                                                                        |
 
 Push channel `mcpRuntime:progress` (main → renderer): `{ runId, event }` where `event` is one
 parsed CLI object (§6) with `v` removed. Renderer types mirror §6 exactly. After a `done` with
 `ok > 0`, main respawns the companion so the newly trusted forks launch.
+
+**Settled behaviour (code, 2026-11-19):**
+
+- **Main's own probe.** The CLI has no "probe this one path" subcommand. To validate a user-picked
+  path, main runs its own fixed probe (`apps/desktop/src/main/mcpRuntime/probe.ts`):
+  `<path> -I -c <fixed code>`, argv only, no shell, a from-scratch env (`PATH` only; `SYSTEMROOT`
+  on Windows), a 10 s timeout and a 4 KiB output cap. The output is parsed strictly and only the
+  version is kept. It refuses the Store alias (`python_store_alias`) by path and by realpath.
+- **`choose` results.** `{ mode: 'path' }` with a path returns `{ ok: true, version_minor }`, where
+  `version_minor` is `'3.12'`/`'3.13'` (null for `auto`; `'3.12'` for `managed`). `version_minor` is
+  additive to §9's shape and feeds `python_tools.interpreter_chosen`.
+- **Picker.** `{ mode: 'path' }` without a path opens main's file picker
+  (`dialog.showOpenDialog`, `.exe` filter on Windows). Cancelling the picker returns
+  `{ ok: false, error_code: 'cancelled' }`. A picked path that fails the probe returns the
+  probe's code, and the choice is **not** saved.
+- **Error mapping.** Any failure without a §6 code maps to `internal`. A malformed request
+  (`choose`, `provision`, `installManaged`) is rejected or returns `internal`. An unauthorised
+  sender is rejected.
+- **Concurrency.** A second `provision` or `installManaged` while one is running rejects `busy`.
+  If the companion command cannot be resolved, a call rejects `unavailable`.
+- **Renderer-held state.** The "choice changed → needs setup" marking is computed in the renderer
+  (`forksNeedingSetup(forks, choiceChanged)` in `pythonTools/pythonToolsRun.ts`). Main persists no
+  per-fork stale flag; after a changed choice every OS-supported fork is queued for setup.
+- **Guide-mode "Learn more"** expands in-app text (`LEARN_MORE` in `pythonToolsCopy.ts`). There is
+  no docs URL yet: `docs.solusforge.com` does not exist.
 
 ## 10. Client events (`POST /api/v1/events`, ADR-011)
 
@@ -259,6 +344,27 @@ JSON-strict (integers are integers).
 - **Microsoft Store Python** is refused (`python_store_alias`): app-execution aliases and AppData
   redirection make its paths unstable.
 - **PyPI-only.** Users behind a mirror or blocking proxy get `network_unreachable`; there is no
-  index override in this cycle.
+  index override in this cycle. Proxy variables are not forwarded to setup children either
+  (§3, "child env"); see §12.
 - **Launcher changes are guarded by review only.** The tree-hash test covers `upstream/` and
   `vendor/`, not `bin/`; both-devs re-sign is the gate.
+
+## 12. Open follow-ups (not blocking this cycle)
+
+- **Proxy support.** Setup children get no proxy variables (§3). A packaged build behind a
+  corporate proxy or TLS-intercepting CA cannot run `provision`. Needs a decision on which
+  variables to admit (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`/`_DIR`,
+  `REQUESTS_CA_BUNDLE`) and how to validate them. The same gap is recorded for the packaged
+  companion in `apps/desktop/docs/companion-packaging.md`.
+- **Dev entry point.** `scripts/install-mcp-forks.sh` runs `runtime provision` through `uv run`,
+  whose interpreter is `.venv/bin/python`. With no integrations root from the environment, the
+  companion finds no `mcp/` beside it and fails with `internal` (§6). The script must export
+  `SOLUS_COMPANION_INTEGRATIONS_ROOT` to the repo's `integrations/mcp`. Until it does,
+  `make mcp-forks` needs that variable set in the caller's shell.
+- **Managed Python go-live.** Real release tag, asset names and SHA-256 values, then
+  `verified: true` (§7). Human gate. Until then Settings can show the managed offer, and install
+  fails with `managed_hash_mismatch`.
+- **Windows launchers.** `launch.cmd` exists for `kicad`, `code` and `local`. Not verified on
+  Windows.
+- **Help link.** Guide-mode "Learn more" is in-app text. A docs page needs `docs.solusforge.com`
+  (not yet built) or a path under the marketing site.

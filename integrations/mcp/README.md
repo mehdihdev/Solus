@@ -89,20 +89,29 @@ re-validate the composed name in `discover_mcp_tools` so the bound is enforced m
   resolves it against its verified install root and **refuses any command that does not resolve
   inside `integrations/mcp/`**.
 - Dependencies are materialized at companion **install/update time** from the fork's committed
-  lockfile with hash verification (`pip install --require-hashes` / `npm ci --ignore-scripts`)
-  into a per-tool private env at **`<tool>/.venv/`**. Never at launch. `bin/launch` performs
-  **zero network I/O**.
+  lockfile with hash verification (`pip install --require-hashes --only-binary=:all:` for Python;
+  `npm ci --ignore-scripts` for Node) into a per-tool private env. Never at launch. `bin/launch`
+  performs **zero network I/O**.
+  - **Python forks** build into the per-user app-data folder, `mcp-envs/<tool>/` (macOS
+    `~/Library/Application Support/Solus`, Windows `%LOCALAPPDATA%\Solus`, Linux
+    `$XDG_DATA_HOME/solus`), by `solus-companion runtime provision`. Setup is owned by the
+    companion, not by the fork. An in-tree `<tool>/.venv/` is **ignored**.
+  - **Dev:** `make mcp-forks` (needs `uv` and a CPython 3.12 or 3.13 named by
+    `SOLUS_MCP_FORK_PYTHON`, default `python3.12`). Set `SOLUS_COMPANION_MCP_ENVS_ROOT` to an
+    absolute path to isolate a worktree's envs.
+  - The trust rule and stamp are in `docs/architecture/mcp-fork-runtime.md` §4–§5.
 - **The companion tells the fork where its interpreter is** (CAD-00b). `bin/launch` may not
   resolve one itself: PATH resolution is forbidden, and a PyInstaller-frozen companion's
-  `sys.executable` is the *companion binary*, so a launcher that re-execs it re-execs the
-  companion. The companion discovers `<tool>/.venv/bin/python`, verifies it resolves inside the
-  integrations root and is executable, and passes it as **`SOLUS_MCP_PYTHON`**. A launcher with
+  `sys.executable` is the _companion binary_, so a launcher that re-execs it re-execs the
+  companion. The companion finds the tool's env interpreter under `mcp-envs/<tool>/`, verifies it
+  is owner-only, its stamp matches the shipped lock, and it resolves inside its own env, and passes
+  it as **`SOLUS_MCP_PYTHON`** (absolute only; launchers never read PATH). A launcher with
   no interpreter exits 78 rather than falling back to an ambient `python3`. See
   `packages/companion/tests/fixtures/mcp_root/mock/bin/launch` for the worked example.
 - **cwd is the tool's own directory**, set by the companion.
 - **The env allowlist is `<tool>/solus/env.allow`** — one variable NAME per line, `#` comments
   allowed, Solus-authored and reviewed with the fork. Only those names are inherited from the
-  host; everything else in the companion's environment stays out. Values Solus *sets*
+  host; everything else in the companion's environment stays out. Values Solus _sets_
   (`SOLUS_MCP_PYTHON`, and delivered license credentials once the bridge carries them) are
   applied last, so a hostile ambient value cannot redirect a fork.
 
@@ -158,10 +167,10 @@ machine — but their endpoint URL is pinned in the spec and changing it is a re
 Every catalog spec (`MCP_SERVER_CATALOG` in
 `packages/api/src/solus_api/agent/tools/mcp_servers.py`) carries a `license_tier`:
 
-| tier       | servers (current roster)                                           | what it means                                                                                                                                                                                               |
-| ---------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `free`     | `kicad`, `onshape`, `fusion` (personal/free license), `brave`      | Usable on any plan. No customer license credential; zero extra checks at invoke time.                                                                                                                       |
-| `byo_paid` | `altium`, `solidworks`, `autocad`                                  | **Bring your own license.** The customer's own paid vendor license, plan-entitled (`byo_paid_tools` limit — BASIC blocked, PRO unlimited, ENTERPRISE per deal) AND license-credential gated at invoke time. |
+| tier       | servers (current roster)                                      | what it means                                                                                                                                                                                               |
+| ---------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `free`     | `kicad`, `onshape`, `fusion` (personal/free license), `brave` | Usable on any plan. No customer license credential; zero extra checks at invoke time.                                                                                                                       |
+| `byo_paid` | `altium`, `solidworks`, `autocad`                             | **Bring your own license.** The customer's own paid vendor license, plan-entitled (`byo_paid_tools` limit — BASIC blocked, PRO unlimited, ENTERPRISE per deal) AND license-credential gated at invoke time. |
 
 **License credentials are the CUSTOMER's own.** They are captured in the Solus companion
 (the `credential_submit` bridge frame — see `docs/contracts/bridge-protocol.md` once the
@@ -221,7 +230,7 @@ The companion runs **inside the customer's network**. A companion that will dial
 an SSRF primitive reachable through whatever can influence an allowlist file, with the cloud
 metadata endpoint (`169.254.169.254`) as the classic target. So a `url:` is validated at discovery
 and again at connect: `http`/`https` only, host matched exactly against the loopback names or inside
-`127.0.0.0/8`. A hostname that merely *starts* with `127.0.0.1` is a different host and is refused.
+`127.0.0.0/8`. A hostname that merely _starts_ with `127.0.0.1` is a different host and is refused.
 A non-loopback url refuses the whole server rather than downgrading it to stdio.
 
 ### Why the companion is a LICENSING requirement, not an optimisation
@@ -231,7 +240,7 @@ This is the durable answer to "why not just run Fusion in the cloud and skip the
 **Autodesk prohibits hosting or multiplexing a licensed seat.** Running Fusion server-side and
 exposing it to multiple Solus users through one installation would breach the EULA regardless of how
 the networking is arranged. Solus is permitted to drive a customer's own locally licensed instance
-as an external client calling *their* loopback — which is precisely what the bridge already does, by
+as an external client calling _their_ loopback — which is precisely what the bridge already does, by
 construction.
 
 The legal route for any future **cloud-side** Fusion automation is the **Fusion Automation API via

@@ -68,6 +68,24 @@ The latest token is remembered (in memory only) and replayed on respawn.
 - Copies the vendored MCP tree beside the binary (excluding `*.template.md`
   scaffolding).
 - Build per-platform — PyInstaller does not cross-compile.
+- **Fork runtime packaging (SOLUSDEV-329, `docs/architecture/mcp-fork-runtime.md`):**
+  - `--collect-data solus_companion` bundles the package's data files, including
+    `runtime/managed_manifest.json`. The managed Python manifest is therefore inside the signed
+    binary, and it is the only source of URL, hash and size for the managed download.
+  - The `mcp/` tree is copied with `--exclude .venv/ --exclude __pycache__/ --exclude node_modules/
+--exclude .pytest_cache/`, on top of the existing `*.template.md` exclusion. Developer trees
+    never ship.
+  - **No venvs ship.** Fork envs are built on the customer machine at setup time into app-data
+    `mcp-envs/` (owner-only). A packaged build never sets `SOLUS_COMPANION_MCP_ENVS_ROOT`.
+  - **Managed manifest hash gate.** The shipped `managed_manifest.json` has `verified: false`, a
+    `PLACEHOLDER` release and all-zero hashes. `install-managed` refuses with
+    `managed_hash_mismatch` before any network call. Flipping `verified` to `true` with real
+    hashes checked against the release's `SHA256SUMS` is a human gate, done in the same change.
+  - **Launchers.** `bin/launch.cmd` now exists for `kicad`, `code` and `local` (Windows). They are
+    **unverified on Windows**; the Windows run is part of E2.
+  - The packaged companion's `runtime …` CLI runs with the allowlisted environment described
+    below; the setup child gets only `HOME`/`TMPDIR`/`LANG` on POSIX and an allowlist on Windows.
+    Proxy variables are not forwarded (known limitation, `mcp-fork-runtime.md` §12).
 - If a future dependency hides imports from the analyzer, add
   `--hidden-import` / `--copy-metadata` flags in the script.
 
@@ -122,7 +140,7 @@ call to main over the stdin/stdout pipe main created for it
 - **Request.** One stdout line `{"type":"drive_request","id":N,"argv":[…]}`,
   flushed; ids increase. argv is `identify`, `capture` or `act` with its flags.
 - **Reply.** Main answers on stdin with `{"type":"drive_reply","id":N,
-  "reply":{…}}`; `config.apply_token_line` routes it to the pending call. ONE
+"reply":{…}}`; `config.apply_token_line` routes it to the pending call. ONE
   deadline covers the call. A reply over 24 MiB as JSON fails the call
   (`helper_output`); the reply must be one JSON object with an `ok` flag.
   Unknown or late ids are dropped. Agent-side failures arrive as replies with
