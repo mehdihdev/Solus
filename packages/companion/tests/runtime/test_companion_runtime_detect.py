@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import types
 from collections.abc import Mapping
 from pathlib import Path
@@ -17,6 +19,7 @@ from solus_companion.runtime.detect import (
     parse_py_launcher,
     windows_registry_pythons,
 )
+from solus_companion.runtime.errors import MESSAGES
 from solus_companion.runtime.probe import PROBE_SCRIPT, ProbeReport, is_store_alias, judge
 from solus_companion.runtime.proc import ProcResult
 
@@ -49,6 +52,34 @@ def test_unknown_implementation_is_refused() -> None:
     verdict = judge(_report("3.12.1", "graalpy"))
     assert verdict.reason == "python_not_cpython"
     assert verdict.implementation == "unknown"
+
+
+def test_a_venv_interpreter_is_refused_as_a_base() -> None:
+    report = ProbeReport(implementation="cpython", version="3.12.7", executable="/v/python", venv=True)
+    verdict = judge(report)
+    assert (verdict.supported, verdict.reason) == (False, "python_is_venv")
+    assert verdict.version == "3.12.7" and verdict.implementation == "cpython"
+
+
+def test_a_report_without_the_venv_key_is_not_a_venv() -> None:
+    report = ProbeReport.model_validate(
+        {"implementation": "cpython", "version": "3.12.7", "executable": "/x/python"}
+    )
+    assert report.venv is False and judge(report).supported
+
+
+def test_the_real_probe_reports_whether_it_runs_in_a_venv() -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", PROBE_SCRIPT], capture_output=True, text=True, check=True
+    )
+    report = ProbeReport.model_validate_json(result.stdout)
+    assert report.venv is (sys.prefix != sys.base_prefix)
+
+
+def test_venv_message_tells_the_user_what_to_pick() -> None:
+    assert MESSAGES["python_is_venv"] == (
+        "This Python is a virtual environment; choose the Python it was created from."
+    )
 
 
 def test_no_report_is_a_probe_failure() -> None:

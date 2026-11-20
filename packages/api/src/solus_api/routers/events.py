@@ -174,6 +174,7 @@ PythonToolsErrorCode = Literal[
     "python_not_cpython",
     "python_store_alias",
     "python_probe_failed",
+    "python_is_venv",
     "managed_not_installed",
     "venv_failed",
     "venv_copies_unhealthy",

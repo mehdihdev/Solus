@@ -190,7 +190,7 @@ class EnvBuilder:
         if python.is_symlink() or not python.is_file():
             return False
         report: ProbeReport | None = run_probe(str(python), self._runner, self._child_env)
-        if report is None or not judge(report).supported:
+        if report is None or not judge(report, allow_venv=True).supported:
             return False
         inside = tmp.resolve()
         return all(
