@@ -31,6 +31,10 @@ logger = logging.getLogger("solus.companion.runtime")
 VENV_TIMEOUT_SECONDS = 120.0
 PIP_TIMEOUT_SECONDS = 600.0
 PYPI_INDEX = "https://pypi.org/simple"
+#: pip's defaults (5 retries is the default count, 15 s socket timeout) dropped the
+#: KiCad lock's large wheels on ordinary connections; retries apply per request.
+PIP_RETRIES = "5"
+PIP_SOCKET_TIMEOUT_SECONDS = "60"
 OUTPUT_TAIL_CHARS = 64 * 1024
 
 _NETWORK_MARKERS = (
@@ -44,6 +48,12 @@ _NETWORK_MARKERS = (
     "proxyerror",
     "sslerror",
     "certificate verify failed",
+    # Dropped or stalled transfers mid-download (seen live on large wheels).
+    "connection timed out",
+    "incomplete-download",
+    "connection broken",
+    "connection reset",
+    "remotedisconnected",
 )
 _HASH_MARKERS = ("do not match the hashes", "hash mismatch")
 _WHEEL_MARKERS = ("no matching distribution found", "could not find a version that satisfies")
@@ -100,6 +110,7 @@ def pip_argv(python: Path, lock: Path) -> list[str]:
     return [
         str(python), "-I", "-m", "pip", "--isolated", "install", "--require-hashes",
         "--only-binary=:all:", "--no-deps", "--no-input", "--disable-pip-version-check",
+        "--retries", PIP_RETRIES, "--timeout", PIP_SOCKET_TIMEOUT_SECONDS,
         "--index-url", PYPI_INDEX, "-r", str(lock),
     ]  # fmt: skip
 

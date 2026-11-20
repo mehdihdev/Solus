@@ -116,6 +116,10 @@ def test_exact_argv_and_timeouts(tmp_path: Path) -> None:
         "--no-deps",
         "--no-input",
         "--disable-pip-version-check",
+        "--retries",
+        "5",
+        "--timeout",
+        "60",
         "--index-url",
         PYPI_INDEX,
         "-r",
@@ -194,6 +198,16 @@ def test_stale_build_dirs_from_a_crash_are_swept(tmp_path: Path) -> None:
             "(from versions: none)"
             "\nERROR: No matching distribution found for x==1",
             "wheel_unavailable",
+        ),
+        # SOLUSDEV-329: both seen live on the KiCad lock (large numpy/pandas wheels).
+        (
+            "WARNING: Connection timed out while downloading.\nerror: incomplete-download",
+            "network_unreachable",
+        ),
+        (
+            "pip._vendor.urllib3.exceptions.ProtocolError: (\"Connection broken: "
+            "BrokenPipeError(32, 'Broken pipe')\", BrokenPipeError(32, 'Broken pipe'))",
+            "network_unreachable",
         ),
         ("OSError: [Errno 28] No space left on device", "disk_full"),
         ("ERROR: something else entirely", "pip_failed"),
