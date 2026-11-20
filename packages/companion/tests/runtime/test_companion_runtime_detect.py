@@ -148,6 +148,28 @@ def test_path_candidates_are_probed_argv_only_and_deduped_by_realpath(tmp_path: 
     assert timeout > 0 and "PYTHONPATH" not in env
 
 
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_relative_path_entries_are_never_probed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    """`.` or `bin` on PATH would resolve against the cwd: skip them entirely."""
+    monkeypatch.chdir(tmp_path)
+    name = "python3.12.exe" if platform == "win32" else "python3.12"
+    planted = write_exe(tmp_path / "bin" / name)
+    write_exe(tmp_path / name)
+    runner = _probing({os.path.realpath(planted): "3.12.7"})
+    sep = ";" if platform == "win32" else ":"
+    host = HostView(
+        platform=platform,
+        env={"PATH": sep.join([".", "bin", ""])},
+        home=tmp_path / "home",
+        system_root=tmp_path / "sys",
+    )
+
+    assert [c for c in Detector(runner, host).detect() if c.source == "path"] == []
+    assert runner.calls == []
+
+
 def test_known_locations_include_pyenv_and_conda(tmp_path: Path) -> None:
     home = tmp_path / "home"
     pyenv = write_exe(home / ".pyenv" / "versions" / "3.12.4" / "bin" / "python3")
