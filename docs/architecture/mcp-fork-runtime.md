@@ -53,7 +53,9 @@ machine state (`~/.solus/config.json` → `mcp_runtime`, §8).
    `<python> -I -c "<fixed probe>"` reports `implementation == "cpython"` and `(major, minor) in
 {(3,12),(3,13)}`. Refused: other versions, PyPy, the Microsoft Store alias
    (`…\WindowsApps\python*.exe`). Code: `python_unsupported_version` for other versions, `python_not_cpython`
-   for PyPy, `python_store_alias` for the Store alias.
+   for PyPy, `python_store_alias` for the Store alias, `python_is_venv` for an interpreter that is
+   itself a virtual environment (`sys.prefix != sys.base_prefix`; the probe reports `venv`). A venv
+   base would tie every fork env to a directory the user may delete or rebuild.
    - **`auto`** (neither `--python` nor `--managed`) = `best_candidate`: the first supported
      candidate in detection order, with a 3.12.x candidate sorted ahead of 3.13.x. No supported
      candidate → `python_not_found`.
@@ -194,7 +196,7 @@ reading; they MUST NOT render raw line text.
 `done` as the last line.
 
 **Error codes:** `python_not_found`, `python_unsupported_version`, `python_not_cpython`,
-`python_store_alias`, `python_probe_failed`, `managed_not_installed`, `venv_failed`,
+`python_store_alias`, `python_is_venv`, `python_probe_failed`, `managed_not_installed`, `venv_failed`,
 `venv_copies_unhealthy`, `pip_failed`, `network_unreachable`, `hash_mismatch`,
 `wheel_unavailable`, `managed_download_failed`, `managed_hash_mismatch`, `managed_too_large`,
 `managed_extract_refused`, `not_owner_only`, `disk_full`, `timeout`, `cancelled`, `internal`.
@@ -284,7 +286,7 @@ Main spawns the CLI via `resolveCompanionCommand` with `execFile`-style argv; at
 | `mcpRuntime:getChoice`      | —                                                                  | `{ mode: 'auto'\|'path'\|'managed', path: string \| null, writable: boolean }`           |
 | `mcpRuntime:choose`         | `{ mode, path? }` (`path` absolute, ≤ 4096)                        | `{ ok: true, version_minor } \| { ok: false, error_code }` — `path` is re-probed in main |
 | `mcpRuntime:provision`      | `{ trigger: 'settings'\|'first_run'\|'repair', forks?: string[] }` | `{ runId: string }` — then progress events, final `done`                                 |
-| `mcpRuntime:installManaged` | `{ consent: true }` (literal)                                      | `{ runId: string }`                                                                      |
+| `mcpRuntime:installManaged` | `{ consent: true }` (literal)                                      | `{ runId: string } \| { runId: null, error_code: 'cancelled' }` (main's own dialog, §9 notes) |
 | `mcpRuntime:cancel`         | `{ runId }`                                                        | `{ ok: boolean }`                                                                        |
 
 Push channel `mcpRuntime:progress` (main → renderer): `{ runId, event }` where `event` is one
@@ -297,7 +299,17 @@ parsed CLI object (§6) with `v` removed. Renderer types mirror §6 exactly. Aft
   path, main runs its own fixed probe (`apps/desktop/src/main/mcpRuntime/probe.ts`):
   `<path> -I -c <fixed code>`, argv only, no shell, a from-scratch env (`PATH` only; `SYSTEMROOT`
   on Windows), a 10 s timeout and a 4 KiB output cap. The output is parsed strictly and only the
-  version is kept. It refuses the Store alias (`python_store_alias`) by path and by realpath.
+  version is kept. It refuses the Store alias (`python_store_alias`) by path and by realpath, and
+  a virtual environment (`python_is_venv`).
+- **What main will execute (Phase 4).** A `path` sent by the renderer is accepted only if its
+  realpath equals a *supported* candidate from main's most recent `detect`; anything else is
+  refused (`python_not_found`) and nothing is probed or spawned. A path that did not come from
+  `detect` can only arrive through main's own file picker — a user gesture. So a compromised
+  renderer cannot make main run an arbitrary binary. The saved `config.json` path is user-owned
+  local state and is trusted on later provisions.
+- **Managed consent lives in main.** `installManaged {consent: true}` is not sufficient: main shows
+  its own `dialog.showMessageBox` naming the download and its size first. Declining (or a dialog
+  failure) returns `{ runId: null, error_code: 'cancelled' }` and nothing runs.
 - **`choose` results.** `{ mode: 'path' }` with a path returns `{ ok: true, version_minor }`, where
   `version_minor` is `'3.12'`/`'3.13'` (null for `auto`; `'3.12'` for `managed`). `version_minor` is
   additive to §9's shape and feeds `python_tools.interpreter_chosen`.
@@ -308,6 +320,8 @@ parsed CLI object (§6) with `v` removed. Renderer types mirror §6 exactly. Aft
 - **Error mapping.** Any failure without a §6 code maps to `internal`. A malformed request
   (`choose`, `provision`, `installManaged`) is rejected or returns `internal`. An unauthorised
   sender is rejected.
+- **`first_run` is reserved.** Accepted by the IPC and the event schema for a future first-run
+  prompt; nothing sends it this cycle.
 - **Concurrency.** A second `provision` or `installManaged` while one is running rejects `busy`.
   If the companion command cannot be resolved, a call rejects `unavailable`.
 - **Renderer-held state.** The "choice changed → needs setup" marking is computed in the renderer
