@@ -99,9 +99,16 @@ def test_launcher_refuses_a_relative_interpreter(tmp_path: Path) -> None:
     launcher = Path(__file__).resolve().parents[1] / "bin/launch"
     result = subprocess.run(
         ["/bin/sh", str(launcher)],
-        env={"PATH": f"{tmp_path}:/usr/bin:/bin", "SOLUS_MCP_PYTHON": "python3",
-             "SOLUS_MCP_WORKSPACE": str(tmp_path)},
-        cwd=tmp_path, capture_output=True, text=True, timeout=20, check=False,
+        env={
+            "PATH": f"{tmp_path}:/usr/bin:/bin",
+            "SOLUS_MCP_PYTHON": "python3",
+            "SOLUS_MCP_WORKSPACE": str(tmp_path),
+        },
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
     )
     assert result.returncode == 78
     assert not (tmp_path / "ran").exists()

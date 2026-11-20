@@ -86,10 +86,20 @@ def test_launch_refuses_a_relative_interpreter_even_when_it_resolves(tmp_path: P
     decoy = tmp_path / "python3"
     decoy.write_text("#!/bin/sh\ntouch ran\n")
     decoy.chmod(0o755)
-    env = {"PATH": f"{tmp_path}:/usr/bin:/bin", "SOLUS_MCP_PYTHON": "python3",
-           "SOLUS_MCP_WORKSPACE": str(tmp_path)}
-    result = subprocess.run([str(LAUNCH)], env=env, cwd=tmp_path, capture_output=True,
-                            text=True, timeout=20, check=False)
+    env = {
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
+        "SOLUS_MCP_PYTHON": "python3",
+        "SOLUS_MCP_WORKSPACE": str(tmp_path),
+    }
+    result = subprocess.run(
+        [str(LAUNCH)],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
     assert result.returncode == 78
     assert not (tmp_path / "ran").exists()
 
