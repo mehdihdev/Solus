@@ -55,7 +55,9 @@ def test_unknown_implementation_is_refused() -> None:
 
 
 def test_a_venv_interpreter_is_refused_as_a_base() -> None:
-    report = ProbeReport(implementation="cpython", version="3.12.7", executable="/v/python", venv=True)
+    report = ProbeReport(
+        implementation="cpython", version="3.12.7", executable="/v/python", venv=True
+    )
     verdict = judge(report)
     assert (verdict.supported, verdict.reason) == (False, "python_is_venv")
     assert verdict.version == "3.12.7" and verdict.implementation == "cpython"
