@@ -12,8 +12,8 @@ function deps(stdout: string, over: Partial<ProbeDeps> = {}): ProbeDeps {
   }
 }
 
-const out = (implementation: string, version: string): string =>
-  `${JSON.stringify({ implementation, version })}\n`
+const out = (implementation: string, version: string, is_venv = false): string =>
+  `${JSON.stringify({ implementation, version, is_venv })}\n`
 
 describe('probeInterpreter', () => {
   it('accepts CPython 3.12 and 3.13 and reports the minor version', async () => {
@@ -84,5 +84,23 @@ describe('probeInterpreter', () => {
     ).resolves.toEqual(failed)
     await expect(probeInterpreter('/x', deps('hello'))).resolves.toEqual(failed)
     await expect(probeInterpreter('/x', deps(out('cpython', '3.12')))).resolves.toEqual(failed)
+  })
+
+  it('refuses a virtual environment with python_is_venv', async () => {
+    await expect(
+      probeInterpreter('/home/dev/.venv/bin/python3.12', deps(out('cpython', '3.12.7', true)))
+    ).resolves.toEqual({ ok: false, error_code: 'python_is_venv' })
+  })
+
+  it('the fixed probe reports whether the interpreter is a venv', () => {
+    expect(PROBE_CODE).toContain('sys.prefix!=sys.base_prefix')
+  })
+
+  it('treats output without is_venv as a probe failure', async () => {
+    const stdout = `${JSON.stringify({ implementation: 'cpython', version: '3.12.7' })}\n`
+    await expect(probeInterpreter('/x', deps(stdout))).resolves.toEqual({
+      ok: false,
+      error_code: 'python_probe_failed'
+    })
   })
 })
