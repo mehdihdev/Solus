@@ -11,7 +11,7 @@ import os
 import shutil
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -240,9 +240,27 @@ class EnvBuilder:
 
     def _sweep(self, fork: str) -> None:
         """Leftovers from a crashed or killed earlier run of THIS fork."""
-        for prefix in (f".{fork}.build-", f".{fork}.old-"):
-            for stale in self._envs.glob(prefix + "*"):
-                remove_path(stale)
+        for stale in self._envs.glob(f".{fork}.build-*"):
+            remove_path(stale)
+        recover_swap(self._envs / fork, sorted(self._envs.glob(f".{fork}.old-*")))
+
+
+def _present(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def recover_swap(dest: Path, leftovers: Sequence[Path]) -> None:
+    """A run killed between "old moved aside" and "new moved in" leaves `dest`
+    missing and the old tree aside: put the newest one back. Any other
+    leftover (or every one, when `dest` is present) is garbage."""
+    pending = [p for p in leftovers if _present(p)]
+    if pending and not _present(dest):
+        newest = max(pending, key=lambda p: p.lstat().st_mtime)
+        os.replace(newest, dest)
+        logger.warning("restored %s after an interrupted swap", dest.name)
+        pending.remove(newest)
+    for stale in pending:
+        remove_path(stale)
 
 
 def remove_path(path: Path) -> None:

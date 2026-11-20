@@ -177,6 +177,35 @@ def test_stale_build_dirs_from_a_crash_are_swept(tmp_path: Path) -> None:
     assert sorted(p.name for p in envs.iterdir()) == [".code.build-alive", "kicad"]
 
 
+def test_an_interrupted_swap_restores_the_old_env(tmp_path: Path) -> None:
+    """Killed between "old env aside" and "new env in": the next run puts the
+    old env back before building, so a failed rebuild still leaves it usable."""
+    envs = tmp_path / "envs"
+    fork = _fork(tmp_path / "mcp")
+    trusted_env(envs, "kicad", fork.lock)
+    os.replace(envs / "kicad", envs / ".kicad.old-dead")
+    failing = ProvisionScript(pip={"kicad": ProcResult(1, "", "ERROR: something odd")})
+
+    outcome = _builder(envs, FakeRunner(failing)).build(fork, _base())
+
+    assert outcome.outcome == "failed"
+    assert sorted(p.name for p in envs.iterdir()) == ["kicad"]
+    assert evaluate_trust("kicad", fork.lock, envs, platform="darwin", policy=POLICY).ready
+
+
+def test_an_interrupted_swap_leftover_is_removed_when_the_env_exists(tmp_path: Path) -> None:
+    envs = tmp_path / "envs"
+    fork = _fork(tmp_path / "mcp")
+    trusted_env(envs, "kicad", fork.lock)
+    (envs / ".kicad.old-dead" / "marker").parent.mkdir()
+    failing = ProvisionScript(pip={"kicad": ProcResult(1, "", "ERROR: something odd")})
+
+    _builder(envs, FakeRunner(failing)).build(fork, _base())
+
+    assert sorted(p.name for p in envs.iterdir()) == ["kicad"]
+    assert evaluate_trust("kicad", fork.lock, envs, platform="darwin", policy=POLICY).ready
+
+
 @pytest.mark.parametrize(
     ("stderr", "code"),
     [
@@ -205,7 +234,7 @@ def test_stale_build_dirs_from_a_crash_are_swept(tmp_path: Path) -> None:
             "network_unreachable",
         ),
         (
-            "pip._vendor.urllib3.exceptions.ProtocolError: (\"Connection broken: "
+            'pip._vendor.urllib3.exceptions.ProtocolError: ("Connection broken: '
             "BrokenPipeError(32, 'Broken pipe')\", BrokenPipeError(32, 'Broken pipe'))",
             "network_unreachable",
         ),

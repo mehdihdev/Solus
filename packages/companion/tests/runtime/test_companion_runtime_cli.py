@@ -294,6 +294,18 @@ def test_provision_managed_requires_an_installed_managed_python(machine: Env) ->
     assert [e.error_code for e in _of(lines, ErrorLine)] == ["managed_not_installed"]
 
 
+def test_provision_managed_restores_a_release_left_aside_by_a_killed_install(
+    machine: Env,
+) -> None:
+    root = machine.envs.parent / "mcp-python"
+    aside = write_exe(root / f".{machine.manifest.release}.old" / "python" / "bin" / "python3")
+    managed = root / machine.manifest.release / "python" / "bin" / "python3"
+    machine.versions[str(managed)] = ("3.12.7", "cpython")
+    code, _lines = machine.run("provision", "--fork", "kicad", "--managed")
+    assert code == 0
+    assert managed.is_file() and not aside.exists()
+
+
 def test_provision_managed_uses_the_installed_release(machine: Env) -> None:
     managed = write_exe(
         machine.envs.parent / "mcp-python" / machine.manifest.release / "python" / "bin" / "python3"

@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 from solus_companion.runtime.errors import RuntimeSetupError
 from solus_companion.runtime.ownership import OwnerOnly
 from solus_companion.runtime.protocol import ProgressLine, RuntimeLine
-from solus_companion.runtime.provision import remove_path
+from solus_companion.runtime.provision import recover_swap, remove_path
 
 logger = logging.getLogger("solus.companion.runtime")
 
@@ -171,6 +171,12 @@ def safe_extract(archive: Path, dest: Path) -> None:
         raise _refuse() from exc
 
 
+def recover_release(python_root: Path, release: str) -> None:
+    """Undo a swap a killed install left half done (`.<release>.old` aside)."""
+    if python_root.is_dir():
+        recover_swap(python_root / release, [python_root / f".{release}.old"])
+
+
 class ManagedInstaller:
     def __init__(
         self,
@@ -198,6 +204,7 @@ class ManagedInstaller:
         if not self._manifest.verified or asset.sha256 == ZERO_HASH:
             raise RuntimeSetupError("managed_hash_mismatch")
         self._policy.ensure(self._root)
+        recover_release(self._root, self._manifest.release)
         work = Path(tempfile.mkdtemp(prefix=".managed-", dir=self._root))
         try:
             archive = work / "python.tar.gz"
