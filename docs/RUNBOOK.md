@@ -206,9 +206,9 @@ provision --all --python <base>`, where `<base>` is `SOLUS_MCP_FORK_PYTHON` (def
   `<fork>/.venv` folders are ignored.
 - **Envs are real `venv --copies` copies, not `uv venv` symlinks,** by design. The companion refuses
   an interpreter that resolves outside its env (_"REFUSED private interpreter … resolves outside"_).
-- **Dev runs need the forks root.** `make mcp-forks` also needs `SOLUS_COMPANION_INTEGRATIONS_ROOT`
-  set to this repo's `integrations/mcp` until `scripts/install-mcp-forks.sh` exports it itself
-  (`mcp-fork-runtime.md` §12). Without it, provisioning fails with `internal`.
+- **Forks root.** `make mcp-forks` points the CLI at this repo's `integrations/mcp` (override with
+  `SOLUS_COMPANION_INTEGRATIONS_ROOT`). A `runtime provision` run with no forks tree fails with
+  `internal` rather than reporting success.
 - The companion **does not spawn until a project is selected** — its bridge URL is project-scoped
   and baked in at spawn. No project ⇒ no companion ⇒ "Bridge offline".
 - `altium` will fail with `SOLUS_MCP_WORKSPACE is not set`; `fusion` needs Autodesk Fusion running

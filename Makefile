@@ -34,7 +34,7 @@ typecheck:
 test:
 	uv run pytest -q -n auto && pnpm test
 
-mcp-forks: ## materialize the vendored MCP forks' private virtualenvs (hash-verified; ADR-031)
+mcp-forks: ## build the MCP forks' envs in app-data mcp-envs (hash-verified; ADR-031 amendment 2026-11-19)
 	bash scripts/install-mcp-forks.sh
 
 companion-bin: ## build the companion binary + vendored MCP servers into dist/companion (BRG-04)

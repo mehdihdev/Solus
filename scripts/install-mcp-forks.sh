@@ -1,90 +1,45 @@
 #!/usr/bin/env bash
-# Materialize the fork-private dependency trees the vendored MCP servers launch
-# from: a `.venv/` per Python fork, a `node_modules/` per Node fork.
+# Build the vendored MCP forks' runtimes for development.
 #
-# ADR-031 splits this out deliberately: `bin/launch` does ZERO network I/O and
-# ZERO installs, and resolves a fixed `<fork>/.venv/bin/python3`. Something has
-# to create that interpreter, and this is it — the "companion install/update
-# step" the fork READMEs and `bin/launch` both point at. Without it every
-# vendored server dies with
-#   /usr/bin/env: '<fork>/.venv/bin/python3': No such file or directory
-# and the companion retries it three times before giving up, so the bridge
-# connects with no usable tools.
+# Python forks (ADR-031 amendment 2026-11-19, docs/architecture/mcp-fork-runtime.md):
+# each fork's env lives in the per-user app-data `mcp-envs/<fork>/` — the same
+# place a packaged Solus builds it from Settings → Python for local tools — and is
+# built by the companion's own `runtime provision`, so dev and prod share one
+# code path and one trust rule. An in-tree `<fork>/.venv` is ignored by the
+# companion now. Set SOLUS_COMPANION_MCP_ENVS_ROOT to isolate a worktree.
 #
-# Hash-verified, always: the lockfiles carry `--hash=sha256:` for every wheel
-# and `--require-hashes` makes pip refuse anything that does not match. These
-# are third-party CAD integrations running on an engineer's machine with access
-# to their designs; an unverified install here is the supply-chain hole the
-# vendoring rules exist to close.
+# Hash-verified, always: `runtime provision` installs with --require-hashes
+# --only-binary=:all: --no-deps from each fork's committed lockfile.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 command -v uv >/dev/null 2>&1 || { echo "[mcp-forks] missing 'uv' — please install it."; exit 1; }
 
-# The interpreter the forks are locked against. Kept explicit rather than
-# inherited so a developer's shell python cannot change what gets installed.
+# The base interpreter (CPython 3.12 or 3.13). Explicit so a developer's shell
+# python cannot silently change what the envs are built from.
 BASE_PYTHON="${SOLUS_MCP_FORK_PYTHON:-python3.12}"
-command -v "$BASE_PYTHON" >/dev/null 2>&1 || {
-  echo "[mcp-forks] missing '$BASE_PYTHON' — set SOLUS_MCP_FORK_PYTHON to a 3.12 interpreter."
+BASE_PYTHON_PATH="$(command -v "$BASE_PYTHON" || true)"
+[ -n "$BASE_PYTHON_PATH" ] || {
+  echo "[mcp-forks] missing '$BASE_PYTHON' — set SOLUS_MCP_FORK_PYTHON to a 3.12/3.13 interpreter."
   exit 1
 }
 
+# The companion CLI finds the forks beside its binary when packaged; in the
+# repo it must be told (it fails, never "succeeds", without a forks tree).
+export SOLUS_COMPANION_INTEGRATIONS_ROOT="${SOLUS_COMPANION_INTEGRATIONS_ROOT:-$ROOT/integrations/mcp}"
+
 installed=0
 skipped=0
-for lock in integrations/mcp/*/requirements.lock.txt; do
-  [ -e "$lock" ] || continue
-  fork="$(dirname "$lock")"
-  name="$(basename "$fork")"
-
-  # A lockfile without a POSIX launcher is nothing this platform can run
-  # (Windows-only CAD tools ship `launch.cmd` only).
-  if [ ! -f "$fork/bin/launch" ]; then
-    echo "[mcp-forks] $name: no POSIX launcher — skipping"
-    skipped=$((skipped + 1))
-    continue
-  fi
-
-  venv="$fork/.venv"
-  stamp="$venv/.solus-lock-sha256"
-  want="$(sha256sum "$lock" | cut -d' ' -f1)"
-
-  # Idempotent: re-running is free, and a changed lockfile forces a rebuild.
-  # The venv is REPLACED rather than updated — an incrementally-patched
-  # environment is not the one the hashes describe.
-  if [ -x "$venv/bin/python3" ] && [ "$(cat "$stamp" 2>/dev/null || true)" = "$want" ]; then
-    echo "[mcp-forks] $name: up to date"
-    skipped=$((skipped + 1))
-    continue
-  fi
-
-  echo "[mcp-forks] $name: materializing $venv ($BASE_PYTHON, hash-verified)…"
-  rm -rf "$venv"
-  # `--copies`, and NOT `uv venv`, on purpose. uv symlinks the interpreter out
-  # to the system python, and the companion REFUSES that: it fully resolves
-  # `.venv/bin/python3` and requires the result to live inside the integrations
-  # root ("REFUSED private interpreter … resolves outside", config.py). The
-  # private interpreter is meant to be part of the verified tree, so it must be
-  # a real copy. uv still does the installing below — it is only the venv
-  # bootstrap that has to be stdlib.
-  "$BASE_PYTHON" -m venv --copies "$venv"
-  uv pip install --quiet --python "$venv/bin/python3" --require-hashes -r "$lock"
-
-  # bin/launch resolves exactly this path, and the companion re-resolves it
-  # against the install root — check both, or the failure resurfaces at spawn
-  # as the error this script exists to prevent.
-  [ -x "$venv/bin/python3" ] || { echo "[mcp-forks] $name: FAILED — no $venv/bin/python3"; exit 1; }
-  case "$(readlink -f "$venv/bin/python3")" in
-    "$ROOT"/integrations/mcp/*) ;;
-    *)
-      echo "[mcp-forks] $name: FAILED — interpreter resolves outside the fork tree;"
-      echo "            the companion would refuse it. Is $BASE_PYTHON a real interpreter?"
-      exit 1
-      ;;
-  esac
-  echo "$want" >"$stamp"
-  installed=$((installed + 1))
-done
+echo "[mcp-forks] building Python fork envs from $BASE_PYTHON_PATH (hash-verified)…"
+python_rc=0
+uv run --package solus-companion python -m solus_companion runtime provision --all \
+  --python "$BASE_PYTHON_PATH" || python_rc=$?
+if [ "$python_rc" -ne 0 ]; then
+  echo "[mcp-forks] Python fork provisioning failed (exit $python_rc) — see the JSON lines above."
+  exit "$python_rc"
+fi
+installed=$((installed + 1))
 
 # ---------------------------------------------------------------- Node forks --
 # Same contract as the Python forks above, different ecosystem: `bin/launch`

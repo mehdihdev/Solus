@@ -162,7 +162,7 @@ the host platform (`platform.json`) are skipped and reported `fork_result` `skip
   line with `error_code` `internal`, a `done` with outcome `failed`, exit 2. It never reports `ok`
   for a run that could build nothing, and it writes nothing. The root comes from
   `SOLUS_COMPANION_INTEGRATIONS_ROOT` when set, else a packaged `mcp/` beside the binary.
-  Dev desktop sets the variable for the CLI (`runtimeCliEnv`, §9); see §12 for `make mcp-forks`.
+  Dev desktop sets the variable for the CLI (`runtimeCliEnv`, §9); `make mcp-forks` exports it to the repo's `integrations/mcp`.
 - **Oversize candidate lines.** A line over 4096 bytes is **withheld** (not sent, not truncated)
   and logged to stderr. The emitter never truncates a path; a truncated path would be a lie
   the desktop might act on. `clip()` applies only to `message` fields.
@@ -356,11 +356,10 @@ JSON-strict (integers are integers).
   variables to admit (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE`/`_DIR`,
   `REQUESTS_CA_BUNDLE`) and how to validate them. The same gap is recorded for the packaged
   companion in `apps/desktop/docs/companion-packaging.md`.
-- **Dev entry point.** `scripts/install-mcp-forks.sh` runs `runtime provision` through `uv run`,
-  whose interpreter is `.venv/bin/python`. With no integrations root from the environment, the
-  companion finds no `mcp/` beside it and fails with `internal` (§6). The script must export
-  `SOLUS_COMPANION_INTEGRATIONS_ROOT` to the repo's `integrations/mcp`. Until it does,
-  `make mcp-forks` needs that variable set in the caller's shell.
+- **Transient network failures.** A dropped connection mid-download (seen live: `BrokenPipeError`
+  on the KiCad lock) is reported as `pip_failed`, not `network_unreachable`, and is not retried.
+  Repair re-runs it. Classify `ProtocolError`/connection-reset text as `network_unreachable` and
+  retry once.
 - **Managed Python go-live.** Real release tag, asset names and SHA-256 values, then
   `verified: true` (§7). Human gate. Until then Settings can show the managed offer, and install
   fails with `managed_hash_mismatch`.

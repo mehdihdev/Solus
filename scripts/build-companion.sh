@@ -50,11 +50,16 @@ uv run --package solus-companion --with "pyinstaller==$PYINSTALLER_VERSION" pyin
   --workpath dist/companion-build \
   --specpath dist/companion-build \
   -p packages/companion/src \
+  --collect-data solus_companion \
   --noconfirm \
   packages/companion/src/solus_companion/__main__.py
 
 # Vendored MCP servers ride along; *.template.md are repo scaffolding, not payload.
-rsync -a --delete --exclude '*.template.md' integrations/mcp/ "$out/mcp/"
+# Developer-only trees never ship: fork envs live in the user's app-data
+# mcp-envs (ADR-031 amendment 2026-11-19), and the companion ignores an in-tree
+# .venv anyway. --collect-data above bundles runtime/managed_manifest.json.
+rsync -a --delete --exclude '*.template.md' --exclude '.venv/' --exclude '__pycache__/' \
+  --exclude 'node_modules/' --exclude '.pytest_cache/' integrations/mcp/ "$out/mcp/"
 
 # macOS signing (sol-drive.md §5): hardened runtime, the companion's own
 # identifier, verified against the Solus team's Developer ID requirement.
