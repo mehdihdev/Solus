@@ -154,11 +154,36 @@ function useRun(
   return { run, start, failed }
 }
 
+type ManagedOffer = 'auto' | 'open' | 'declined'
+
+/** Pure: whether the managed Python is installed and whether its offer shows. */
+export function managedOfferView(
+  candidates: readonly Candidate[],
+  choiceMode: string | undefined,
+  offer: ManagedOffer
+): { managedInstalled: boolean; offerOpen: boolean } {
+  const managedInstalled = candidates.some((c) => c.source === 'managed' && c.supported)
+  const noneSupported = candidates.every((c) => !c.supported)
+  const offerOpen =
+    offer === 'open' || (offer === 'auto' && noneSupported && choiceMode !== 'managed')
+  return { managedInstalled, offerOpen }
+}
+
+/** Pure: the python_tools.setup_finished payload for a finished provision run. */
+function setupFinishedReport(done: RunView): Parameters<typeof reportSetupFinished>[0] {
+  return {
+    outcome: done.done?.outcome ?? 'failed',
+    failedForks: done.done?.failed ?? 0,
+    errorCode: firstFailingCode(done),
+    trigger: done.trigger
+  }
+}
+
 export function usePythonTools(bridge: McpRuntimeBridge | null): PythonTools {
   const { phase, loaded, reload, refreshStatus } = useLoad(bridge)
   const [chooseError, setChooseError] = useState<RuntimeErrorCode | null>(null)
   const [choiceChanged, setChoiceChanged] = useState(false)
-  const [offer, setOffer] = useState<'auto' | 'open' | 'declined'>('auto')
+  const [offer, setOffer] = useState<ManagedOffer>('auto')
 
   const adoptChoice = useCallback(
     (result: ChooseResult, source: InterpreterSource) => {
@@ -190,12 +215,7 @@ export function usePythonTools(bridge: McpRuntimeBridge | null): PythonTools {
         if (done.done?.outcome === 'ok') choose({ mode: 'managed' }, 'managed')
         return
       }
-      reportSetupFinished({
-        outcome: done.done?.outcome ?? 'failed',
-        failedForks: done.done?.failed ?? 0,
-        errorCode: firstFailingCode(done),
-        trigger: done.trigger
-      })
+      reportSetupFinished(setupFinishedReport(done))
       // Old envs keep passing trust, so only a fully ok run on the new base may
       // drop the "choice changed" marking; cancelled/failed/partial keep it.
       if (done.done?.outcome === 'ok') setChoiceChanged(false)
@@ -211,10 +231,7 @@ export function usePythonTools(bridge: McpRuntimeBridge | null): PythonTools {
     () => forksNeedingSetup(loaded?.forks ?? [], choiceChanged),
     [loaded?.forks, choiceChanged]
   )
-  const managedInstalled = candidates.some((c) => c.source === 'managed' && c.supported)
-  const noneSupported = candidates.every((c) => !c.supported)
-  const offerOpen =
-    offer === 'open' || (offer === 'auto' && noneSupported && loaded?.choice.mode !== 'managed')
+  const { managedInstalled, offerOpen } = managedOfferView(candidates, loaded?.choice.mode, offer)
 
   const provision = (trigger: ProvisionTrigger, forkList?: string[]): void => {
     if (!bridge) return
