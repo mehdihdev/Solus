@@ -794,3 +794,8 @@ on a real Windows machine.
 ### Sign-off
 
 None — PENDING re-review by both developers (record the result in PROVENANCE.md).
+
+- **Lockfile (added later the same day).** `pyperclip` 1.9.0 → 1.11.0 in `requirements.lock.txt`:
+  1.9.0 has no wheel, so the fork could not install under `--only-binary=:all:` anywhere. Pure
+  Python, same upstream (asweigart/pyperclip, BSD-3-Clause); fastmcp's constraint is `>=1.9.0`.
+  Part of the same PENDING re-review.
