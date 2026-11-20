@@ -163,6 +163,9 @@ class RuntimeCommands:
         self._out.emit((tally or Tally()).done("failed"))
         return EXIT_FAILED
 
+    def fail_without_forks_tree(self) -> int:
+        return self._fail("internal")
+
     def _detector(self) -> Detector:
         return Detector(self._deps.runner, self._deps.host, managed_root=python_root(self._envs))
 
@@ -321,6 +324,9 @@ def _dispatch(args: argparse.Namespace, deps: CliDeps, emitter: Emitter) -> int:
             return commands.install_managed()
     # provision: every usage check happens BEFORE anything is emitted or written.
     python = _absolute(args.python, "--python") if args.python is not None else None
+    if deps.integrations_root is None:
+        # No forks tree: never report "ok" for a run that could build nothing.
+        return commands.fail_without_forks_tree()
     forks = commands.select_forks(None if args.all else args.fork)
     with cancel_on_signals():
         return commands.provision(forks, python, args.managed)

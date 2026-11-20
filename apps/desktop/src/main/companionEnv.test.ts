@@ -486,6 +486,20 @@ describe('runtimeCliEnv (SOLUSDEV-329, mcp-fork-runtime.md §2/§6)', () => {
     SOLUS_COMPANION_URL: 'wss://x/api/v1/projects/p/bridge'
   }
 
+  it('dev points the CLI at the repo forks tree, or provision has nothing to build', () => {
+    expect(runtimeCliEnv(inherited, false, '/repo/integrations/mcp').SOLUS_COMPANION_INTEGRATIONS_ROOT).toBe(
+      '/repo/integrations/mcp'
+    )
+    const explicit = { ...inherited, SOLUS_COMPANION_INTEGRATIONS_ROOT: '/mine' }
+    expect(runtimeCliEnv(explicit, false, '/repo/integrations/mcp').SOLUS_COMPANION_INTEGRATIONS_ROOT).toBe('/mine')
+  })
+
+  it('packaged ignores a dev forks root (the binary finds mcp/ beside itself)', () => {
+    expect(runtimeCliEnv(inherited, true, '/repo/integrations/mcp')).not.toHaveProperty(
+      'SOLUS_COMPANION_INTEGRATIONS_ROOT'
+    )
+  })
+
   it('dev passes the per-worktree envs-root override through', () => {
     expect(runtimeCliEnv(inherited, false).SOLUS_COMPANION_MCP_ENVS_ROOT).toBe('/tmp/wt-envs')
   })

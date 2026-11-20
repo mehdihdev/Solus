@@ -247,7 +247,14 @@ function allowedHosts(configuredUrl: string | undefined): string {
  *  No bridge variables: the CLI dials nothing. */
 export function runtimeCliEnv(
   inherited: Record<string, string | undefined>,
-  packaged: boolean
+  packaged: boolean,
+  devIntegrationsRoot: string | null = null
 ): Record<string, string | undefined> {
-  return packaged ? allowlisted(inherited) : { ...inherited }
+  if (packaged) return allowlisted(inherited)
+  // Dev: the CLI is the repo's companion, with no mcp/ beside it — without the
+  // forks root `provision` has nothing to build (the companion child gets the
+  // same value from companionEnv).
+  const env = { ...inherited }
+  fillAbsent(env, 'SOLUS_COMPANION_INTEGRATIONS_ROOT', devIntegrationsRoot)
+  return env
 }

@@ -202,6 +202,22 @@ def test_status_without_an_integrations_root_fails(machine: Env, monkeypatch) ->
     assert cli.main(["status"], deps=no_root, stdout=out) == 2
 
 
+def test_provision_without_an_integrations_root_fails_instead_of_reporting_ok(  # type: ignore[no-untyped-def]
+    machine: Env, monkeypatch
+) -> None:
+    """SOLUSDEV-329: with no forks tree found, `provision --all` used to emit
+    done/ok with zero forks — a silent no-op the desktop showed as success."""
+    monkeypatch.delenv("SOLUS_COMPANION_INTEGRATIONS_ROOT", raising=False)
+    deps = machine.deps()
+    out = io.BytesIO()
+    no_root = cli.CliDeps(**{**deps.__dict__, "integrations_root": None})
+    code = cli.main(
+        ["provision", "--all", "--python", str(machine.python)], deps=no_root, stdout=out
+    )
+    assert code == 2
+    assert b'"outcome":"ok"' not in out.getvalue()
+
+
 # ---------------------------------------------------------------- provision
 
 

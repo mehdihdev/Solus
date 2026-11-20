@@ -4,10 +4,10 @@
 import { app, dialog, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
 import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { statSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { killTree, resolveCompanionCommand, respawnCompanion } from '../companion'
-import { runtimeCliEnv } from '../companionEnv'
+import { findIntegrationsRoot, runtimeCliEnv } from '../companionEnv'
 import { realLocalStateDeps } from '../localState'
 import { createMcpRuntimeIpc, registerMcpRuntimeIpc, type IpcMainLike } from './ipc'
 import { probeInterpreter } from './probe'
@@ -49,7 +49,12 @@ export function registerMcpRuntime(wiring: McpRuntimeWiring): void {
         platform: process.platform,
         env: process.env
       }),
-    env: () => runtimeCliEnv(process.env, app.isPackaged),
+    env: () =>
+      runtimeCliEnv(
+        process.env,
+        app.isPackaged,
+        app.isPackaged ? null : findIntegrationsRoot(app.getAppPath(), existsSync)
+      ),
     run: { spawn: (command, args, options) => spawn(command, args, options), kill: killTree },
     settings: createRuntimeSettings(realLocalStateDeps),
     probe: (path) =>
