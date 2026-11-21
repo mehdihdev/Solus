@@ -13,6 +13,8 @@ import { SolChat } from '../SolChat'
 import { openCitation } from '../SolScreen'
 import { SOL_SEND_MODE } from '../solWindowStore'
 import { useSolChat } from '../useSolChat'
+import { useSolConversations } from '../useSolConversations'
+import { ChatSwitcher } from './ChatSwitcher'
 import { closeSidebar, toggleSidebar } from './sidebarActions'
 import { sidebarCopy } from './sidebarCopy'
 import type { SidebarTrigger } from './sidebarEvents'
@@ -70,25 +72,13 @@ function SolSidebarPanel({
   const copy = sidebarCopy(screen, focusedName)
   const pinIds = pins.map((pin) => pin.id)
   const ask = useChipSend(projectId, chat, pinIds)
-  const solBridge = getDesktopSolBridge()
+  const { expand, popOut } = useSidebarExits(presence, screen, navigate)
   useFocusComposerOnOpen(ref, presence.phase)
 
   const close = (via: SidebarTrigger): void => {
     closeSidebar(screen, via)
     returnFocusToToggle()
   }
-  const expand = (): void =>
-    presence.exit('expanding', SIDEBAR_EXPAND_MS, () => {
-      navigate('sol')
-      closeSidebar(screen, 'header', 'expand')
-    })
-  const popOut = solBridge
-    ? (): void =>
-        presence.exit('popping', SIDEBAR_POP_MS, () => {
-          closeSidebar(screen, 'header', 'pop_out')
-          void solBridge.open()
-        })
-    : undefined
 
   return (
     <aside
@@ -111,6 +101,7 @@ function SolSidebarPanel({
           onExpand={expand}
           onClose={() => close('header')}
         />
+        {projectId && <SidebarChatSwitcher projectId={projectId} chat={chat} onShowAll={expand} />}
         <SolChat
           projectId={projectId}
           layout="sidebar"
@@ -126,6 +117,51 @@ function SolSidebarPanel({
         />
       </div>
     </aside>
+  )
+}
+
+/** The two ways the panel leaves for another SOL surface: morph into the SOL page, or shrink
+ *  into the pill (Electron only — undefined where there is no SOL window bridge). */
+function useSidebarExits(
+  presence: ReturnType<typeof useSidebarPresence>,
+  screen: string,
+  navigate: (screen: MainScreen) => void
+): { expand: () => void; popOut: (() => void) | undefined } {
+  const solBridge = getDesktopSolBridge()
+  const expand = (): void =>
+    presence.exit('expanding', SIDEBAR_EXPAND_MS, () => {
+      navigate('sol')
+      closeSidebar(screen, 'header', 'expand')
+    })
+  const popOut = solBridge
+    ? (): void =>
+        presence.exit('popping', SIDEBAR_POP_MS, () => {
+          closeSidebar(screen, 'header', 'pop_out')
+          void solBridge.open()
+        })
+    : undefined
+  return { expand, popOut }
+}
+
+/** The chat switcher on the shared session: picking or starting a chat moves every SOL surface. */
+function SidebarChatSwitcher({
+  projectId,
+  chat,
+  onShowAll
+}: {
+  projectId: string
+  chat: ReturnType<typeof useSolChat>
+  onShowAll: () => void
+}): React.JSX.Element {
+  const conversations = useSolConversations(projectId, chat.activeConversationId)
+  return (
+    <ChatSwitcher
+      data={conversations}
+      activeConversationId={chat.activeConversationId}
+      onSelect={chat.selectConversation}
+      onNewChat={chat.startNewChat}
+      onShowAll={onShowAll}
+    />
   )
 }
 

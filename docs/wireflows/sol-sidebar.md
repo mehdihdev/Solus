@@ -52,6 +52,20 @@ Drawn in the Solus tokens (dark by default, follows the person's theme and accen
     to the SOL page on the same conversation. The sidebar closes (it does not reappear when the
     person leaves the SOL page).
   - **Close** (×).
+- **Chat switcher (40px row under the header; shown when a project is open):** the open chat's
+  title (one line, ellipsised; `New chat` before the first send) with a ▾, and a **+** that
+  starts a new chat. Clicking the title (or ↓ on it) drops a list over the thread: a **Search
+  chats** field (focused on open, filters titles as you type), a **New chat** row, then this
+  project's chats grouped TODAY / THIS WEEK / EARLIER exactly as on the SOL page, each with its
+  relative time and a check on the open one. ↑/↓ move, ↵ opens, Esc closes the list only (the
+  sidebar stays open) and returns focus to the title; a press outside or tabbing away closes it.
+  Footer: key hints and **All chats**, which expands to the SOL page (rename / delete live
+  there). Picking a chat or New chat uses the shared chat session, so the SOL page and the pill
+  follow. The list refreshes each time it opens. States: loading (spinner), offline (`Chats
+unavailable — offline.`), none yet (`No chats yet. Ask SOL anything to start one.`), no match
+  (`No chats match.`). **Fit:** the list sits inside the panel 8px from each side, so its width
+  follows the panel (320–480px); its height stops above the composer at any window height (at
+  most 460px) and the rows scroll inside it — it is never clipped by the window.
 - **Thread:** the shared `SolChat` surface in its `sidebar` layout — the page's message rendering
   (markdown, Thinking block, confirmation cards, plan cards, reasoning block, citation chips that
   open the surface they name), tightened for 360px. Citation chips behave as on the page
@@ -107,16 +121,18 @@ things arriving and `--sol-ease-in` `cubic-bezier(0.4, 0, 0.9, 0.6)` for things 
 is always quicker than arriving. Under the OS reduced-motion setting every transition jumps to
 its end state.
 
-| Moment          | Motion                                                                                   |
-| --------------- | ---------------------------------------------------------------------------------------- |
-| Open            | width 0 → W, 340ms ease-out; content fades in with a 24px slide, 60ms later              |
-| Close           | content out first, width → 0, 220ms ease-in                                              |
-| Message arrives | fade + 8px rise, 320ms ease-out (as in the pill)                                         |
-| Greeting, chips | greeting 60ms after open; chips 120ms after the greeting                                 |
-| Thinking        | the SOL page's Thinking block unchanged (shimmer label, pulsing step dot, 200ms fold)    |
-| Orb             | glow breathes 4s while idle, 1.1s while SOL works; the toggle's orb mirrors it           |
-| Expand to page  | the panel grows to fill the screen area, 420ms ease-out; then the SOL page's screen-in   |
-| Pop out         | the panel content shrinks toward the bottom-right, 260ms ease-in; then the pill's own in |
+| Moment          | Motion                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Open            | width 0 → W, 340ms ease-out; content fades in with a 24px slide, 60ms later                                                       |
+| Close           | content out first, width → 0, 220ms ease-in                                                                                       |
+| Message arrives | fade + 8px rise, 320ms ease-out (as in the pill)                                                                                  |
+| Greeting, chips | greeting 60ms after open; chips 120ms after the greeting                                                                          |
+| Thinking        | the SOL page's Thinking block unchanged (shimmer label, pulsing step dot, 200ms fold)                                             |
+| Orb             | glow breathes 4s while idle, 1.1s while SOL works; the toggle's orb mirrors it                                                    |
+| Expand to page  | the panel grows to fill the screen area, 420ms ease-out; then the SOL page's screen-in                                            |
+| Switcher list   | drops in 200ms ease-out (fade, 6px slide, 0.98 → 1 scale from the top); rows rise 4px, 16ms apart (first 8); leaves 130ms ease-in |
+| Switcher title  | ▾ turns 180° as the list opens (200ms); a newly picked title fades up 3px, 220ms                                                  |
+| Pop out         | the panel content shrinks toward the bottom-right, 260ms ease-in; then the pill's own in                                          |
 
 ## 6. Per-screen copy (Solus-authored)
 
@@ -139,4 +155,4 @@ enums only, never message text. `screen` is one of `home`, `workspace`, `bench`,
 
 - Closed (default) · Open + empty (greeting + chips) · Open + thread · Working (Thinking block,
   Stop in the composer) · Needs your OK (confirmation card; nothing runs until Approve) ·
-  Offline (`SOL HISTORY UNAVAILABLE — OFFLINE`) · No project (the chat surface's note).
+  Chat list open · Offline (`SOL HISTORY UNAVAILABLE — OFFLINE`) · No project (the chat surface's note).

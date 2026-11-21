@@ -4,6 +4,8 @@ export const SIDEBAR_OPEN_MS = 340
 export const SIDEBAR_CLOSE_MS = 220
 export const SIDEBAR_EXPAND_MS = 420
 export const SIDEBAR_POP_MS = 260
+/** The chat switcher's list leaves in 130ms (it drops in over 200ms; solSidebar.css). */
+export const SWITCHER_CLOSE_MS = 130
 /** Below this window width the sidebar overlays the screen instead of docking. */
 export const SIDEBAR_DOCK_MIN_WINDOW = 1100
 /** Keyboard resize step on the left-edge handle. */

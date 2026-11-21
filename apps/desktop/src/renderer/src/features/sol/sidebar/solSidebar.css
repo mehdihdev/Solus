@@ -38,6 +38,7 @@
 
 /* The content keeps the open width while the frame animates, so text never reflows mid-motion. */
 .sol-sb-inner {
+  position: relative;
   flex: none;
   width: var(--sb-w);
   min-height: 0;
@@ -172,6 +173,252 @@
   }
 }
 
+/* The chat switcher (sol-sidebar.md §3): the open chat's title under the header; it drops a
+   searchable list of this project's chats. The list is placed against .sol-sb-inner, never
+   past its edges: its width follows the panel (320–480px) and its height stops above the
+   composer at any window height, scrolling inside. */
+.sol-sb-switch {
+  --sb-switch-h: 40px;
+  height: var(--sb-switch-h);
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--bd);
+}
+.sol-sb-switch-trigger {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--tx);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+.sol-sb-switch-trigger:hover,
+.sol-sb-switch-trigger:focus-visible,
+.sol-sb-switch-trigger[aria-expanded='true'] {
+  background: var(--sur2);
+  border-color: var(--bd);
+}
+.sol-sb-switch-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  animation: sol-sb-title-in 220ms var(--sol-ease-out) both;
+}
+.sol-sb-switch-chev {
+  flex: none;
+  color: var(--mut);
+  transition: transform 200ms var(--sol-ease-out);
+}
+.sol-sb-switch-trigger[aria-expanded='true'] .sol-sb-switch-chev {
+  transform: rotate(180deg);
+}
+
+.sol-sb-switch-pop {
+  position: absolute;
+  z-index: 5;
+  top: calc(44px + var(--sb-switch-h) + 4px);
+  left: 8px;
+  right: 8px;
+  /* Never below the panel's bottom: leave the composer's band clear, cap on tall windows. */
+  max-height: min(460px, calc(100% - 44px - var(--sb-switch-h) - 72px));
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sur);
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  box-shadow: 0 14px 34px -10px color-mix(in srgb, var(--bg) 85%, transparent);
+  overflow: hidden;
+  transform-origin: 50% 0;
+  animation: sol-sb-pop-in 200ms var(--sol-ease-out) both;
+}
+.sol-sb-switch-pop[data-closing] {
+  pointer-events: none;
+  animation: sol-sb-pop-out 130ms var(--sol-ease-in) both;
+}
+.sol-sb-switch-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--bd);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--mut);
+}
+.sol-sb-switch-search:focus-within {
+  border-color: color-mix(in srgb, var(--acc) 55%, var(--bd));
+}
+.sol-sb-switch-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--tx);
+  font: inherit;
+  font-size: 12.5px;
+}
+.sol-sb-switch-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 4px 6px;
+}
+.sol-sb-switch-new,
+.sol-sb-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 30px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.sol-sb-switch-new {
+  color: var(--acc);
+}
+.sol-sb-switch-row {
+  color: var(--tx);
+  animation: sol-sb-row-in 220ms var(--sol-ease-out) both;
+  animation-delay: calc(var(--i, 0) * 16ms + 40ms);
+}
+.sol-sb-switch-new:hover,
+.sol-sb-switch-new:focus-visible,
+.sol-sb-switch-row:hover,
+.sol-sb-switch-row[data-lit] {
+  background: var(--sur2);
+}
+.sol-sb-switch-row[aria-selected='true'] .sol-sb-switch-row-title {
+  font-weight: 600;
+}
+.sol-sb-switch-check {
+  width: 12px;
+  flex: none;
+  display: inline-flex;
+  color: var(--acc);
+}
+.sol-sb-switch-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sol-sb-switch-when {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--mut);
+}
+.sol-sb-switch-group {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--mut);
+  padding: 10px 8px 4px;
+}
+.sol-sb-switch-note {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  padding: 12px 8px;
+  font-size: 12px;
+  color: var(--mut);
+}
+.sol-sb-switch-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--bd);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--mut);
+}
+.sol-sb-switch-all {
+  border: 0;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--acc);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.sol-sb-switch-all:hover,
+.sol-sb-switch-all:focus-visible {
+  color: var(--tx);
+}
+@keyframes sol-sb-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sol-sb-pop-out {
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes sol-sb-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sol-sb-title-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* The left-edge resize handle: a 6px grab strip whose accent line shows on hover or focus. */
 .sol-sb-resize {
   position: absolute;
@@ -278,7 +525,14 @@ body.sol-sb-resizing .sol-sb-inner {
   }
   .sol-sb-greeting,
   .sol-sb-chips,
-  .sol-orb::after {
+  .sol-orb::after,
+  .sol-sb-switch-title,
+  .sol-sb-switch-pop,
+  .sol-sb-switch-row {
     animation: none;
+  }
+  .sol-sb-switch-chev,
+  .sol-sb-switch-trigger {
+    transition: none;
   }
 }

@@ -89,7 +89,7 @@ describe('SolSidebarHost — presence', () => {
     expect(within(panel()).getByText('WORKSPACE · imu')).toBeInTheDocument()
   })
 
-  it('follows the person to the next screen, with that screen\'s copy', () => {
+  it("follows the person to the next screen, with that screen's copy", () => {
     open()
     const { rerender } = host({ name: 'workspace' })
     rerender(<SolSidebarHost route={{ name: 'bench' }} navigate={navigate} />)
@@ -243,5 +243,62 @@ describe('SolSidebarHost — width and fit', () => {
       window.dispatchEvent(new Event('resize'))
     })
     expect(panel()).toHaveAttribute('data-fit', 'overlay')
+  })
+})
+
+describe('SolSidebarHost — chat switcher', () => {
+  const at = new Date().toISOString()
+  const conv = (id: string, title: string): solApi.SolConversation => ({
+    id,
+    project_id: 'p1',
+    title,
+    created_by: 'u1',
+    created_at: at,
+    updated_at: at
+  })
+
+  it('switches the shared chat session to the picked conversation', async () => {
+    vi.mocked(solApi.listSolConversations).mockResolvedValue([
+      conv('c1', 'IMU drops out'),
+      conv('c2', 'Gripper torque')
+    ])
+    open()
+    host()
+    fireEvent.click(within(panel()).getByRole('button', { name: /Switch chat/ }))
+    fireEvent.click(await within(panel()).findByRole('option', { name: /Gripper torque/ }))
+    await waitFor(() => expect(useSolSessionStore.getState().conversationByProject.p1).toBe('c2'))
+    expect(within(panel()).getByRole('button', { name: /Switch chat/ })).toHaveTextContent(
+      'Gripper torque'
+    )
+  })
+
+  it('Escape in the list closes the list, not the sidebar', async () => {
+    open()
+    host()
+    fireEvent.click(within(panel()).getByRole('button', { name: /Switch chat/ }))
+    fireEvent.keyDown(within(panel()).getByRole('combobox', { name: 'Search chats' }), {
+      key: 'Escape'
+    })
+    expect(isOpen()).toBe(true)
+  })
+
+  it('All chats opens the SOL page', async () => {
+    vi.useFakeTimers()
+    open()
+    host()
+    fireEvent.click(within(panel()).getByRole('button', { name: /Switch chat/ }))
+    fireEvent.click(within(panel()).getByRole('button', { name: 'All chats' }))
+    act(() => {
+      vi.runAllTimers()
+    })
+    vi.useRealTimers()
+    expect(navigate).toHaveBeenCalledWith('sol')
+  })
+
+  it('is not drawn without a project', () => {
+    useWorkspaceStore.setState({ project: null })
+    open()
+    host()
+    expect(within(panel()).queryByRole('button', { name: /Switch chat/ })).toBeNull()
   })
 })
